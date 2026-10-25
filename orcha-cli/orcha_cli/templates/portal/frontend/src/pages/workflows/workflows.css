@@ -1,0 +1,30 @@
+.wf-page, .wf-draft { max-width: 960px; margin: 0 auto; color: var(--v2-text); font-size: 14px; line-height: 1.5; }
+.wf-page h2, .wf-draft h2 { font-size: 18px; line-height: 1.5; font-weight: 600; margin: 0 0 16px; }
+.wf-page h3 { font-size: 16px; line-height: 1.5; }
+.wf-page p, .wf-draft p { max-width: 76ch; margin: 8px 0; overflow-wrap: anywhere; }
+.wf-draft section, .wf-summary, .wf-evidence { margin: 24px 0; }
+.wf-draft label { display: grid; gap: 6px; margin: 12px 0; }
+.wf-draft input:not([type="checkbox"]), .wf-draft textarea, .wf-draft select { width: 100%; box-sizing: border-box; font: inherit; color: var(--v2-text); background: var(--v2-surface); border: 1px solid var(--v2-border-strong); border-radius: 6px; padding: 8px 10px; }
+.wf-draft textarea { resize: vertical; }
+.wf-task-draft { margin: 16px 0; padding: 16px; border: 1px solid var(--v2-border-strong); border-radius: 8px; min-width: 0; }
+.wf-task-draft > legend { font-weight: 600; padding: 0 6px; }
+.wf-dependencies { margin: 12px 0; padding: 8px 0; border: 0; }
+.wf-draft .wf-choice { display: flex; align-items: flex-start; gap: 8px; }
+.wf-choice input { margin-top: 5px; accent-color: var(--v2-accent); }
+.wf-choice small { display: block; font-size: 13px; color: var(--v2-text-2); }
+.wf-actions { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin: 12px 0; }
+.wf-notice { padding: 12px 16px; border-left: 3px solid var(--v2-accent); background: var(--v2-hover); }
+.wf-muted { color: var(--v2-text-2); }
+.wf-summary dl { display: flex; flex-wrap: wrap; gap: 16px 32px; }
+.wf-summary dt { color: var(--v2-text-2); font-size: 13px; }
+.wf-summary dd { margin: 0; }
+.wf-progress progress { width: min(100%, 360px); height: 6px; accent-color: var(--v2-accent); }
+.wf-task-list { margin: 0; padding: 0; list-style: none; }
+.wf-task-list > li { padding: 16px 0; border-bottom: 1px solid var(--v2-border-strong); }
+.wf-task-list > li > a { font-weight: 600; }
+.wf-warning { border-left: 3px solid var(--v2-text-2); padding-left: 12px; }
+.wf-graph { overflow: auto; max-height: 600px; margin: 16px 0; color: var(--v2-text-2); }
+.wf-graph rect { fill: var(--v2-surface); stroke: var(--v2-border-strong); }
+.wf-graph text { fill: var(--v2-text); font-size: 13px; }
+.wf-page :focus-visible, .wf-draft :focus-visible { outline: 2px solid var(--v2-accent); outline-offset: 3px; }
+@media (max-width: 720px) { .wf-page, .wf-draft { font-size: 16px; } .wf-task-draft { padding: 12px; } .wf-draft .wf-choice { padding: 8px 0; } }

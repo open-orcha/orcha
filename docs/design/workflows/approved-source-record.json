@@ -1,0 +1,60 @@
+{
+  "verified_on": "2026-10-25",
+  "manifest_version": 9,
+  "sources": [
+    {
+      "name": "workflows-visual-overview.pdf",
+      "version": 11,
+      "url": "http://localhost:8004/api/tasks/a3c748a8-8424-4277-91b1-ee8caab07e86/deliverables/49ef7ef8-1a1b-4c26-bdfa-997711e2613c/versions/11/raw",
+      "sha256": "9675ed550ed786e28d33aafda95dffb958a43c3e207e3f569883ad6db5d6d1aa"
+    },
+    {
+      "name": "workflows-visual-overview-source.txt",
+      "version": 11,
+      "url": "http://localhost:8004/api/tasks/a3c748a8-8424-4277-91b1-ee8caab07e86/deliverables/c2b47b04-3000-4ea5-9774-343958091762/versions/11/raw",
+      "sha256": "f5d363971c412c5f1814d8a06f1d3ba00566362d403a4daec876e750cdf442d3"
+    },
+    {
+      "name": "workflows-plan.md",
+      "version": 13,
+      "url": "http://localhost:8004/api/tasks/a3c748a8-8424-4277-91b1-ee8caab07e86/deliverables/2c70d770-c31e-439e-a9eb-e1d70e35626d/versions/13/raw",
+      "sha256": "f28d5794d6763594453a3ec06bb4550e30f366f790d6bbb525a044a09c6e6fd5"
+    },
+    {
+      "name": "workflows-question-coverage.txt",
+      "version": 8,
+      "url": "http://localhost:8004/api/tasks/a3c748a8-8424-4277-91b1-ee8caab07e86/deliverables/c8530141-a5c5-47ef-9b54-2ed4e8300db4/versions/8/raw",
+      "sha256": "1c6e9ebd168501e6882eddf86770a17bcaac363d2741539b4a754d71e4ef8907"
+    },
+    {
+      "name": "workflows-visual-overview-checks.txt",
+      "version": 11,
+      "url": "http://localhost:8004/api/tasks/a3c748a8-8424-4277-91b1-ee8caab07e86/deliverables/67ded1b3-dadf-49b6-a893-a02f2fd68e94/versions/11/raw",
+      "sha256": "8ba511d8011114d5f4ab2adc41b5e5dff016c539213ca449e94d41b7787362dd"
+    },
+    {
+      "name": "workflows-ui-plan.md",
+      "version": 7,
+      "url": "http://localhost:8004/api/tasks/a3c748a8-8424-4277-91b1-ee8caab07e86/deliverables/c9fd0f7c-a50c-442d-a327-31ac128ee567/versions/7/raw",
+      "sha256": "e744c1c2a30ae98d20a835e337ab2f44949a153b938682e533ebdf93ea522a5d"
+    },
+    {
+      "name": "workflows-ui-wireframes.md",
+      "version": 7,
+      "url": "http://localhost:8004/api/tasks/a3c748a8-8424-4277-91b1-ee8caab07e86/deliverables/513950e8-7830-4be1-9938-0214fe793aff/versions/7/raw",
+      "sha256": "4218d2609a3a25fd27575f1c80e3a66dc745ff956f51bf67c07f6432e80df96e"
+    },
+    {
+      "name": "workflows-ui-feedback-delta.md",
+      "version": 5,
+      "url": "http://localhost:8004/api/tasks/a3c748a8-8424-4277-91b1-ee8caab07e86/deliverables/cdd2d239-7248-46ce-9074-3b6e225cffc7/versions/5/raw",
+      "sha256": "5d0d8953cbf930dfb86f02b0782b7c481431277d257ed548ca20b02c59ceb20e"
+    },
+    {
+      "name": "workflows-ui-handoff.md",
+      "version": 5,
+      "url": "http://localhost:8004/api/tasks/a3c748a8-8424-4277-91b1-ee8caab07e86/deliverables/0389f64d-c7c3-404f-bad1-492feb556f9c/versions/5/raw",
+      "sha256": "e47c5ba5486f99da147efcc3c7547355b7fba49d41500b2228f788ba8f0e1a9c"
+    }
+  ]
+}

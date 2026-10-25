@@ -17,6 +17,7 @@ import { StatusGlyph } from "./primitives/StatusIcon";
 const I: Record<string, string> = {
   home: '<path d="M3 9.5 10 4l7 5.5V17a1 1 0 0 1-1 1h-3v-5H7v5H4a1 1 0 0 1-1-1z"/>',
   agents: '<circle cx="7" cy="7.5" r="2.6"/><circle cx="13.5" cy="8" r="2.1"/><path d="M2.6 16c.4-2.4 2.2-3.8 4.4-3.8s4 1.4 4.4 3.8M12 12.5c2 .1 3.4 1.4 3.8 3.5"/>',
+  workflows: '<rect x="2" y="7" width="5" height="6" rx="1"/><rect x="13" y="2" width="5" height="6" rx="1"/><rect x="13" y="12" width="5" height="6" rx="1"/><path d="M7 10h3V5h3M10 10v5h3"/>',
   tasks: '<rect x="3.2" y="3.2" width="13.6" height="13.6" rx="3"/><path d="M6.6 10l2.2 2.2 4.6-4.8"/>',
   requests: '<path d="M5 7h9l-2.4-2.4M15 13H6l2.4 2.4"/>',
   live: '<path d="M2.5 10h3l2-5 3 10 2-7 1.5 2h3.5"/>',

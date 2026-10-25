@@ -13,6 +13,7 @@ import react from "@vitejs/plugin-react";
 export const PAGE_ROUTES = [
   "/", "/tasks", "/agents", "/requests", "/settings", "/onboarding",
   "/projects", "/code", "/metrics", "/github", "/members", "/auth/device",
+  "/workflows", "/workflows/new", "/workflows/:workflowId",
   "/needs", "/activity", "/org", "/routines",
 ];
 const pageRoutesPlugin = () => ({
@@ -20,7 +21,7 @@ const pageRoutesPlugin = () => ({
   configureServer(server: { middlewares: { use: (fn: (req: { url?: string }, res: unknown, next: () => void) => void) => void } }) {
     server.middlewares.use((req, _res, next) => {
       const [path, q] = (req.url || "").split("?");
-      if (PAGE_ROUTES.includes(path)) req.url = "/assets/dist/index.html" + (q ? "?" + q : "");
+      if (PAGE_ROUTES.includes(path) || /^\/workflows\/[^/]+$/.test(path)) req.url = "/assets/dist/index.html" + (q ? "?" + q : "");
       next();
     });
   },
@@ -72,6 +73,7 @@ export default defineConfig({
     // is excluded — that's this app's own build output.
     proxy: {
       // ws: dictation streams audio over a WebSocket (/api/containers/{cid}/voice/stream)
+      "/openapi.json": process.env.ORCHA_PORTAL || "http://localhost:8000",
       "/api": { target: process.env.ORCHA_PORTAL || "http://localhost:8000", ws: true },
       "^/assets/(?!dist/)": process.env.ORCHA_PORTAL || "http://localhost:8000",
     },

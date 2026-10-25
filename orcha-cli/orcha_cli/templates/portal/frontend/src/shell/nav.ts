@@ -22,6 +22,7 @@ export interface Section {
 
 const CORE: Section[] = [
   { key: "home", label: "Overview", href: "/", icon: "home" },
+  { key: "workflows", label: "Workflows", href: "/workflows", icon: "workflows" },
   { key: "tasks", label: "Tasks", href: "/tasks", icon: "tasks" },
   { key: "routines", label: "Routines", href: "/routines", icon: "routines" },
   { key: "agents", label: "Agents", href: "/agents", icon: "agents" },
@@ -29,8 +30,8 @@ const CORE: Section[] = [
   { key: "requests", label: "Requests", href: "/requests", icon: "requests" },
 ];
 
-// Brief §4 order: Overview, Tasks, Routines, Agents, Org, Requests, Code, GitHub, Activity, Metrics.
-const RANK: Record<string, number> = { home: 0, tasks: 1, routines: 1.5, agents: 2, org: 2.5, requests: 3, code: 4, github: 5, activity: 6, metrics: 7 };
+// Brief §4 order: Overview, Workflows, Tasks, Routines, Agents, Org, Requests, Code, GitHub, Activity, Metrics.
+const RANK: Record<string, number> = { home: 0, workflows: 0.5, tasks: 1, routines: 1.5, agents: 2, org: 2.5, requests: 3, code: 4, github: 5, activity: 6, metrics: 7 };
 
 export function projectSections(): Section[] {
   const ext = extensions.nav.map((n) => ({ key: n.key, label: n.label, href: n.href, icon: n.ico }));
