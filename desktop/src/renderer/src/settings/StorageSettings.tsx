@@ -25,7 +25,10 @@ export function totalSize(items: readonly StorageItem[]): number | null {
  *  have a stack (portal images, finished sandboxes, networks, data volumes) with sizes, a
  *  Remove per item and "Remove all". Project data is never part of "Remove all": each volume
  *  needs its own explicit confirmation. */
-export default function StorageSettings() {
+export default function StorageSettings({ projectNames }: {
+  /** Stack project → its sidebar name, for the agent worktrees list. */
+  projectNames?: Readonly<Record<string, string>>
+} = {}) {
   const api = window.orchaDesktop
   const { data: report, error: scanError, scanning, slow, scan } = useBoundedScan<StorageReport>(api.storageScan)
   const [working, setWorking] = useState<Set<string>>(new Set())
@@ -65,7 +68,7 @@ export default function StorageSettings() {
         still have are never listed.
       </p>
 
-      <AgentWorktreesStorage />
+      <AgentWorktreesStorage projectNames={projectNames} />
 
       <div className="mb-4 flex items-center gap-2">
         <Button

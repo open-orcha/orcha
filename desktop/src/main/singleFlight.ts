@@ -17,3 +17,17 @@ export function singleFlight<T>(fn: () => Promise<T>): (() => Promise<T>) & { in
   scan.invalidate = (): void => { running = null }
   return scan
 }
+
+/** `singleFlight` per key (one `orcha worktrees list` per project folder at a time). */
+export function singleFlightBy<A, T>(key: (a: A) => string, fn: (a: A) => Promise<T>): (a: A) => Promise<T> {
+  const running = new Map<string, Promise<T>>()
+  return (a) => {
+    const k = key(a)
+    let p = running.get(k)
+    if (!p) {
+      p = fn(a).finally(() => running.delete(k))
+      running.set(k, p)
+    }
+    return p
+  }
+}

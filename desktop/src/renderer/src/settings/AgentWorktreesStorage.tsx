@@ -3,7 +3,8 @@ import { FolderGit2, FolderOpen, Loader2, RefreshCw } from 'lucide-react'
 import { Button } from '../ui/Button'
 import ErrorNotice from '../components/ErrorNotice'
 import { formatBytes } from '../host/removeProject'
-import { STILL_LOOKING, useBoundedScan } from './useBoundedScan'
+import { STILL_LOOKING } from './useBoundedScan'
+import { useWorktreeScan } from './useWorktreeScan'
 import type {
   AgentWorktree,
   AgentWorktreeCleanResult,
@@ -37,6 +38,21 @@ export function stateSummary(items: readonly AgentWorktree[]): string {
     .join(' · ')
 }
 
+/** Why the "Not Embodent" worktrees are kept, in words: "10 on a branch Orcha didn’t create ·
+ *  7 detached HEAD" (pure, tested). Embodent never removes these — it didn’t make them. */
+export function notEmbodentWhy(items: readonly AgentWorktree[]): string {
+  const counts = new Map<string, number>()
+  for (const i of items) {
+    if (i.state !== 'not-quorate') continue
+    const reason = i.reason ?? ''
+    const why = /^branch .+ is not an Orcha branch$/.test(reason)
+      ? 'on a branch Orcha didn’t create'
+      : reason.split(' — ')[0] || 'not made by Orcha'
+    counts.set(why, (counts.get(why) ?? 0) + 1)
+  }
+  return [...counts].sort((a, b) => b[1] - a[1]).map(([why, n]) => `${n} ${why}`).join(' · ')
+}
+
 const size = (n: number | null | undefined): string => formatBytes(n ?? null) ?? '—'
 
 interface Preview {
@@ -49,9 +65,12 @@ interface Preview {
 /** Settings › Storage › Agent worktrees — every project's agent worktrees (classified by the
  *  Orcha CLI, the same rules the notifier uses), what can be reclaimed, and a clean-up that
  *  always previews first (a dry run grouped by what will happen) before it changes anything. */
-export default function AgentWorktreesStorage() {
+export default function AgentWorktreesStorage({ projectNames }: {
+  /** Stack project → the name the sidebar shows for it (absent: the folder's short name). */
+  projectNames?: Readonly<Record<string, string>>
+} = {}) {
   const api = window.orchaDesktop
-  const { data: projects, error: scanError, scanning, slow, scan } = useBoundedScan<ProjectWorktrees[]>(api.storageWorktrees)
+  const { projects: listed, results, error: scanError, scanning, slow, scan } = useWorktreeScan()
   const [actionError, setError] = useState<unknown>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [preview, setPreview] = useState<Preview | null>(null)
@@ -94,40 +113,61 @@ export default function AgentWorktreesStorage() {
   }
 
   const error = actionError ?? scanError
-  const all = projects ?? []
-  const total = all.reduce((n, p) => n + p.reclaimable_bytes, 0)
+  const all = listed ?? []
+  const landed = all.filter((p) => results[p.folder])
+  const total = landed.reduce((n, p) => n + results[p.folder].reclaimable_bytes, 0)
+  const label = (p: { project: string; projectShort: string }): string => projectNames?.[p.project] ?? p.projectShort
 
   return (
     <div className="mb-8" data-testid="storage-worktrees">
       <div className="mb-1.5 flex items-center gap-2 text-[12px] font-medium text-text-3">
         <FolderGit2 className="h-3.5 w-3.5" aria-hidden="true" />
         Agent worktrees
-        {projects && <span className="tabular-nums">· {size(total)} reclaimable</span>}
+        {listed && <span className="tabular-nums">· {size(total)} reclaimable{landed.length < all.length ? ' so far' : ''}</span>}
         <Button variant="ghost" size="sm" className="ml-auto" onClick={() => { setError(null); void scan() }} disabled={(scanning && !slow) || !!busy} aria-label="Scan worktrees again">
           <RefreshCw className={scanning ? 'animate-spin' : ''} /> Scan
         </Button>
       </div>
       <p className="mb-2 text-[12px] text-text-3">
         Agents work in git worktrees inside each project’s .orcha-worktrees folder. Clean ones hold only Embodent’s own files; output is saved to its task before a worktree with output goes; unmerged commits are kept.
+        Automatic clean-up, on in every project unless you turn it off in its Settings, removes finished clean worktrees and, after their grace period, ones with output; it never removes unmerged or uncommitted work.
       </p>
       {error != null && (
         <div className="mb-2 rounded-md border border-border px-3 py-2">
           <ErrorNotice error={error} prefix="Couldn’t check agent worktrees" wrap />
         </div>
       )}
-      {!projects && scanning && (
+      {!listed && scanning && (
         <p className="flex items-center gap-2 text-[13px] text-text-3" role="status">
           <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" /> Looking at agent worktrees…{slow ? ` ${STILL_LOOKING}` : ''}
         </p>
       )}
-      {projects && all.length === 0 && (
+      {listed && scanning && all.length > 0 && (
+        <p className="mb-2 flex items-center gap-2 text-[12px] text-text-3" role="status" data-testid="storage-wt-progress">
+          <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" /> Checked {landed.length} of {all.length} project{all.length === 1 ? '' : 's'}…{slow ? ` ${STILL_LOOKING}` : ''}
+        </p>
+      )}
+      {listed && !scanning && all.length === 0 && (
         <p className="rounded-[10px] border border-border px-4 py-4 text-center text-[13px] text-text-3" data-testid="storage-worktrees-empty">
           No agent worktrees in your projects.
         </p>
       )}
       <ul className="divide-y divide-border rounded-[10px] border border-border" aria-label="Agent worktrees by project">
-        {all.map((p) => {
+        {all.map((row) => {
+          const p = results[row.folder]
+          if (!p) {
+            return (
+              <li key={row.folder} className="flex items-center gap-3 px-4 py-3" data-testid={`storage-wt-${row.projectShort}`}>
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-[13px] font-medium text-text">{label(row)}</div>
+                  <div className="truncate text-[12px] text-text-3" title={row.folder}>Checking…</div>
+                </div>
+                <Loader2 className="h-3.5 w-3.5 animate-spin text-text-3" aria-hidden="true" />
+              </li>
+            )
+          }
           const clean = p.items.filter((i) => i.state === 'clean').length
+          const why = notEmbodentWhy(p.items)
           const isOpen = open.has(p.folder)
           return (
             <li key={p.folder} className="px-4 py-3" data-testid={`storage-wt-${p.projectShort}`}>
@@ -138,7 +178,7 @@ export default function AgentWorktreesStorage() {
                   aria-expanded={isOpen}
                   onClick={() => setOpen((s) => { const n = new Set(s); if (n.has(p.folder)) n.delete(p.folder); else n.add(p.folder); return n })}
                 >
-                  <div className="truncate text-[13px] font-medium text-text">{p.projectShort}</div>
+                  <div className="truncate text-[13px] font-medium text-text">{label(p)}</div>
                   <div className="truncate text-[12px] text-text-3" title={p.folder}>
                     {p.error ? p.error : `${p.items.length} worktree${p.items.length === 1 ? '' : 's'} · ${stateSummary(p.items) || 'none'}`}
                   </div>
@@ -151,9 +191,14 @@ export default function AgentWorktreesStorage() {
                   {busy === p.folder && !preview ? 'Checking…' : 'Clean up existing…'}
                 </Button>
               </div>
+              {why && (
+                <p className="mt-1 text-[12px] text-text-3" data-testid={`storage-wt-why-${p.projectShort}`}>
+                  Not Embodent, so never removed: {why}
+                </p>
+              )}
               {reports[p.folder] && <p className="mt-1.5 text-[12px] text-ok" role="status">{reports[p.folder]}</p>}
               {isOpen && p.items.length > 0 && (
-                <ul className="mt-2 flex flex-col gap-1" aria-label={`Worktrees of ${p.projectShort}`}>
+                <ul className="mt-2 flex flex-col gap-1" aria-label={`Worktrees of ${label(p)}`}>
                   {p.items.map((w) => (
                     <li key={w.path} className="flex items-center gap-3 text-[12.5px]">
                       <span className={`w-[124px] shrink-0 ${STATE_CLASS[w.state]}`}>{STATE_LABEL[w.state]}</span>

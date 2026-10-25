@@ -15,6 +15,7 @@ import {
   firstDecision,
   rowKey,
   sectionForPath,
+  sidebarNames,
   totalAttention,
   type ProjectRow
 } from './host/projectModel'
@@ -252,6 +253,8 @@ function AppShell() {
       }),
     [stacks, cards, attention, pinned, order, activeProject, activeCid, embed, live?.attention]
   )
+
+  const projectNames = useMemo(() => sidebarNames(rows), [rows])
 
   const activeKey = useMemo(() => {
     if (activeProject === null) return null
@@ -1006,6 +1009,7 @@ function AppShell() {
       onClose={() => closeOverlays()}
       onTestLaunch={(id) => openTerminal(id, undefined, { probe: true })}
       notificationsProject={settingsRow?.name ?? null}
+      projectNames={projectNames}
       usage={usage}
       onOpenStats={() => openStats('overview')}
       onOpenNotificationSettings={

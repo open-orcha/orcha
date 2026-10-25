@@ -3,8 +3,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import StorageSettings from './StorageSettings'
-import { stateSummary } from './AgentWorktreesStorage'
-import { SCAN_TIMEOUT_MS } from './useBoundedScan'
+import { notEmbodentWhy, stateSummary } from './AgentWorktreesStorage'
+import { SCAN_SLOW_MS, SCAN_TIMEOUT_MS } from './useBoundedScan'
 import type { AgentWorktree, AgentWorktreeCleanResult, ProjectWorktrees } from '../../../shared/types'
 
 const F = '/Users/me/fleet-mate'
@@ -139,5 +139,96 @@ describe('Settings › Storage › Agent worktrees', () => {
     render(<StorageSettings />)
     await screen.findByTestId('settings-storage')
     expect(screen.queryByTestId('storage-worktrees')).toBeNull()
+  })
+})
+
+describe('Settings › Storage › Agent worktrees, project by project (Verdikt: opaque 25 s scan)', () => {
+  const G = '/Users/me/garden'
+  const GARDEN: ProjectWorktrees = {
+    project: 'orcha-garden', projectShort: 'garden', folder: G, reclaimable_bytes: 0,
+    items: [
+      wt('feat-a', 'not-quorate', 1_000, { branch: 'feat/a', reason: 'branch feat/a is not an Orcha branch' }),
+      wt('feat-b', 'not-quorate', 1_000, { branch: 'fix/b', reason: 'branch fix/b is not an Orcha branch' }),
+      wt('det', 'not-quorate', 1_000, { branch: null, reason: 'detached HEAD — not an Orcha branch' })
+    ]
+  }
+  const LIST = [
+    { project: 'orcha-fleet-mate', projectShort: 'fleet-mate', folder: F },
+    { project: 'orcha-garden', projectShort: 'garden', folder: G }
+  ]
+  const streamed = (): { releaseGarden(): void } => {
+    let releaseGarden = (): void => {}
+    api.storageWorktrees.mockReturnValue(new Promise(() => {})) // the one-shot scan is not used
+    api.storageWorktreeProjects = vi.fn().mockResolvedValue(LIST)
+    api.storageProjectWorktrees = vi.fn((folder: string) =>
+      folder === F ? Promise.resolve(PROJECTS[0]) : new Promise((resolve) => { releaseGarden = () => resolve(GARDEN) })
+    )
+    return { releaseGarden: () => releaseGarden() }
+  }
+
+  it('shows each project as soon as its own scan answers, with how many are done', async () => {
+    const { releaseGarden } = streamed()
+    render(<StorageSettings />)
+    const fleet = await screen.findByTestId('storage-wt-fleet-mate')
+    expect(fleet).toHaveTextContent('5 worktrees · 2 clean')
+    expect(screen.getByTestId('storage-wt-garden')).toHaveTextContent('Checking…')
+    expect(screen.getByTestId('storage-wt-progress')).toHaveTextContent('Checked 1 of 2 projects…')
+    expect(screen.getByTestId('storage-worktrees')).toHaveTextContent('2.3 GB reclaimable so far')
+    await act(async () => releaseGarden())
+    expect(await screen.findByText(/3 worktrees · 3 not embodent/)).toBeInTheDocument()
+    expect(screen.queryByTestId('storage-wt-progress')).toBeNull()
+    expect(screen.getByTestId('storage-worktrees')).not.toHaveTextContent('so far')
+    expect(api.storageProjectWorktrees).toHaveBeenCalledWith(G)
+  })
+
+  it('a project that never answers gets its own error after the limit; the others still show', async () => {
+    vi.useFakeTimers()
+    streamed()
+    render(<StorageSettings />)
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(SCAN_TIMEOUT_MS)
+    })
+    vi.useRealTimers()
+    expect(screen.getByTestId('storage-wt-fleet-mate')).toHaveTextContent('5 worktrees')
+    expect(screen.getByTestId('storage-wt-garden')).toHaveTextContent('No answer after 60 seconds')
+    expect(screen.getByRole('button', { name: 'Scan worktrees again' })).toBeEnabled()
+  })
+
+  it('a slow project says "Still looking" and Scan works again; it is not an error yet', async () => {
+    vi.useFakeTimers()
+    streamed()
+    render(<StorageSettings />)
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(SCAN_SLOW_MS)
+    })
+    vi.useRealTimers()
+    expect(screen.getByTestId('storage-wt-progress')).toHaveTextContent('Checked 1 of 2 projects… Still looking.')
+    expect(screen.getByTestId('storage-wt-garden')).toHaveTextContent('Checking…')
+    expect(screen.getByRole('button', { name: 'Scan worktrees again' })).toBeEnabled()
+  })
+
+  it('names projects the way the sidebar does', async () => {
+    render(<StorageSettings projectNames={{ 'orcha-fleet-mate': 'Fleet Mate' }} />)
+    const row = await screen.findByTestId('storage-wt-fleet-mate')
+    expect(row).toHaveTextContent('Fleet Mate')
+    expect(row).not.toHaveTextContent('fleet-mate')
+    await userEvent.click(within(row).getByRole('button', { expanded: false }))
+    expect(within(row).getByRole('list', { name: 'Worktrees of Fleet Mate' })).toBeInTheDocument()
+  })
+
+  it('says why the "Not Embodent" worktrees are kept, and what automatic clean-up never removes', async () => {
+    api.storageWorktrees.mockResolvedValue([PROJECTS[0], GARDEN])
+    render(<StorageSettings />)
+    expect(await screen.findByTestId('storage-wt-why-garden')).toHaveTextContent(
+      'Not Embodent, so never removed: 2 on a branch Orcha didn’t create · 1 detached HEAD'
+    )
+    expect(screen.queryByTestId('storage-wt-why-fleet-mate')).toBeNull()
+    expect(screen.getByTestId('storage-worktrees')).toHaveTextContent('it never removes unmerged or uncommitted work')
+  })
+
+  it('groups the "Not Embodent" reasons (pure)', () => {
+    expect(notEmbodentWhy(GARDEN.items)).toBe('2 on a branch Orcha didn’t create · 1 detached HEAD')
+    expect(notEmbodentWhy([wt('x', 'not-quorate', 1, { reason: 'not registered with git — left alone' })])).toBe('1 not registered with git')
+    expect(notEmbodentWhy(ITEMS)).toBe('')
   })
 })

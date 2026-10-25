@@ -189,6 +189,18 @@ export function buildProjectRows(input: {
     .map(({ r }) => r)
 }
 
+/** Stack project → the name(s) its sidebar rows show ("CalPro Android"; a project with several
+ *  containers lists each, in sidebar order), so other screens name projects the same way. */
+export function sidebarNames(rows: readonly Pick<ProjectRow, 'name' | 'stack'>[]): Record<string, string> {
+  const names = new Map<string, string[]>()
+  for (const r of rows) {
+    const list = names.get(r.stack.project) ?? []
+    if (!list.includes(r.name)) list.push(r.name)
+    names.set(r.stack.project, list)
+  }
+  return Object.fromEntries([...names].map(([project, list]) => [project, list.join(', ')]))
+}
+
 /** Status band a row belongs to — the ONE rule the Projects manager (filter pills, bands,
  *  health chip) and the tray share, so "Starting" / "Paused" read the same everywhere. A
  *  paused or still-starting project is never counted as "Running" (desktop r1 review). */

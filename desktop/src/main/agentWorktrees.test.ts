@@ -5,7 +5,9 @@ import {
   isAgentWorktreePath,
   knownFolder,
   parseCleanRequest,
-  scanAgentWorktrees
+  scanAgentWorktrees,
+  scanProjectWorktrees,
+  worktreeProjects
 } from './agentWorktrees'
 
 const A = '/Users/me/acme'
@@ -53,6 +55,14 @@ describe('agent worktrees (desktop → orcha worktrees --json)', () => {
     const out = await scan
     expect(out.map((p) => p.projectShort)).toEqual(['acme', 'beta'])
     expect(out[0].items).toHaveLength(3)
+  })
+
+  it('lists the projects with worktrees, then scans one project on its own (Settings shows each as it lands)', async () => {
+    expect(worktreeProjects(PROJECTS, (f) => f === B)).toEqual([PROJECTS[1]])
+    const run = vi.fn(async () => ({ stdout: JSON.stringify({ ok: true, items }) }))
+    const out = await scanProjectWorktrees({ ...PROJECTS[0], folder: A }, run)
+    expect(run.mock.calls.map((c) => (c as unknown as [string, string[]])[1].join(' '))).toEqual([`worktrees list --json --project ${A}`])
+    expect(out).toMatchObject({ project: 'orcha-acme', projectShort: 'acme', folder: A, reclaimable_bytes: 2_500 })
   })
 
   it('only accepts known project folders and paths directly inside their .orcha-worktrees', () => {

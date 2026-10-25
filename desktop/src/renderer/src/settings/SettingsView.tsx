@@ -50,7 +50,8 @@ export default function SettingsView({
   initialSection = 'agents',
   usage,
   onOpenStats,
-  onOpenVoiceSettings
+  onOpenVoiceSettings,
+  projectNames
 }: {
   onClose(): void
   onTestLaunch?: (id: AgentId) => void
@@ -64,6 +65,8 @@ export default function SettingsView({
   onOpenStats?: () => void
   /** Opens portal Settings › Voice in the running project (absent: none running). */
   onOpenVoiceSettings?: () => void
+  /** Stack project → its sidebar name (Settings › Storage names projects the same way). */
+  projectNames?: Readonly<Record<string, string>>
 }) {
   const [section, setSection] = useState<Section>(initialSection)
   /** Settings › Appearance needs the theme bridge (absent on an older preload: hidden). */
@@ -148,7 +151,7 @@ export default function SettingsView({
             ) : section === 'voice' ? (
               <VoiceSettings project={notificationsProject} onOpenProjectVoice={onOpenVoiceSettings} />
             ) : section === 'storage' && hasStorage ? (
-              <StorageSettings />
+              <StorageSettings projectNames={projectNames} />
             ) : section === 'usage' && usage ? (
               <section data-testid="settings-usage">
                 <h2 className="text-[24px] font-semibold tracking-[-0.01em] text-text">Usage</h2>

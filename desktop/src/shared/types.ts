@@ -151,6 +151,13 @@ export interface AgentWorktree {
   last_activity_at?: string | null
 }
 
+/** A known project that has agent worktrees (listed before any of them is measured). */
+export interface WorktreeProject {
+  project: string
+  projectShort: string
+  folder: string
+}
+
 export interface ProjectWorktrees {
   project: string
   projectShort: string
@@ -482,6 +489,9 @@ export interface OrchaDesktopApi {
   storageRemove?(item: { kind: StorageItemKind; name: string; confirm?: string }): Promise<void>
   /** Settings › Storage › Agent worktrees: every known project's worktrees, classified. */
   storageWorktrees?(): Promise<ProjectWorktrees[]>
+  /** The projects with agent worktrees (fast), then each one's worktrees on its own. */
+  storageWorktreeProjects?(): Promise<WorktreeProject[]>
+  storageProjectWorktrees?(folder: string): Promise<ProjectWorktrees>
   /** Preview (dryRun) or run a clean-up of one project's worktrees. */
   storageCleanWorktrees?(req: WorktreeCleanRequest): Promise<AgentWorktreeCleanResult>
   /** Show one agent worktree in Finder (must be inside a known project's .orcha-worktrees). */
