@@ -1,0 +1,418 @@
+"""Workflows API. Registered while the write/admission capability stays disabled.
+
+The ordinary actor-ID fallback is intentionally absent. A verified proxy member or
+an authenticated work token supplies identity, never an actor field in a request.
+"""
+
+from fastapi import Request, Query
+
+from portal_backend.application import app
+from portal_backend.database import db_cursor
+from portal_backend.identity_routes import (
+    proxy_login,
+    require_member_read,
+    _proxy_trusted,
+)
+from portal_backend.schemas import workflows as model
+from portal_backend import workflow_service as service
+from portal_backend.workflow_graph import conflict, validate_graph
+from portal_backend.worker_auth import require_work_lane
+
+HOOKS = service.WorkflowHooks()
+
+
+def resolve_actor(cur, request, cid, *, allow_agent=False):
+    token = request.headers.get("X-Orcha-Run-Token")
+    if allow_agent and token:
+        cur.execute(
+            "SELECT agent_id FROM embodiment_tokens WHERE run_token=%s AND revoked_at IS NULL AND lane='work'",
+            (token,),
+        )
+        row = cur.fetchone()
+        if not row:
+            conflict(
+                "work_lane_required",
+                "An authenticated work session is required.",
+                status=403,
+            )
+        aid = str(row["agent_id"])
+        require_work_lane(cur, aid, token, request)
+        actor = service.WorkflowActor(aid, True, True)
+        service.WorkflowService(cur, HOOKS).actor(actor, cid)
+        return actor
+    if token:
+        conflict(
+            "human_required",
+            "A worker token cannot authorize a human action.",
+            status=403,
+        )
+    login = proxy_login(request)
+    if not login:
+        conflict(
+            (
+                "verified_sign_in_required"
+                if _proxy_trusted()
+                else "local_workflow_writes_unavailable"
+            ),
+            "Connect through verified sign-in to change workflows.",
+            status=403,
+        )
+    cur.execute(
+        "SELECT id FROM agents WHERE container_id=%s AND kind='human' AND terminated_at IS NULL AND member_role<>'viewer' AND lower(github_login)=lower(%s)",
+        (cid, login),
+    )
+    rows = cur.fetchall()
+    if len(rows) != 1:
+        conflict(
+            "verified_member_required",
+            "A unique current project membership is required.",
+            status=403,
+        )
+    return service.WorkflowActor(str(rows[0]["id"]), True)
+
+
+def read_context(cur, request, wid):
+    svc = service.WorkflowService(cur, HOOKS)
+    w = svc.workflow(wid)
+    require_member_read(cur, request, w["container_id"])
+    actor = None
+    if proxy_login(request):
+        try:
+            actor = resolve_actor(cur, request, w["container_id"])
+        except Exception as exc:
+            from fastapi import HTTPException
+
+            if not isinstance(exc, HTTPException):
+                raise
+    return svc, w, actor
+
+
+@app.get("/api/containers/{cid}/workflows/capability", response_model=model.Capability)
+def workflow_capability(cid: str, request: Request):
+    with db_cursor(readonly=True) as (_, cur):
+        require_member_read(cur, request, cid)
+        if not service.WORKFLOWS_INTEGRATED:
+            return model.Capability()
+        try:
+            resolve_actor(cur, request, cid)
+            return model.Capability(workflow_human_write=True, reason=None)
+        except Exception as exc:
+            from fastapi import HTTPException
+
+            if not isinstance(exc, HTTPException):
+                raise
+            return model.Capability(reason=exc.detail["code"])
+
+
+@app.get("/api/containers/{cid}/workflows", response_model=model.WorkflowList)
+def list_workflows(
+    cid: str,
+    request: Request,
+    status: str | None = None,
+    cursor: str | None = None,
+    limit: int = Query(default=50, ge=1, le=200),
+):
+    with db_cursor(readonly=True) as (_, cur):
+        require_member_read(cur, request, cid)
+        svc = service.WorkflowService(cur, HOOKS)
+        query = "SELECT id FROM workflows WHERE container_id=%s"
+        params = [cid]
+        if status:
+            query += " AND status=%s"
+            params.append(status)
+        if cursor:
+            query += " AND id>%s"
+            params.append(cursor)
+        query += " ORDER BY id LIMIT %s"
+        params.append(limit + 1)
+        rows = svc.rows(query, tuple(params))
+        actor = None
+        if proxy_login(request):
+            from fastapi import HTTPException
+
+            try:
+                actor = resolve_actor(cur, request, cid)
+            except HTTPException:
+                pass
+        return {
+            "workflows": [svc.detail(r["id"], actor) for r in rows[:limit]],
+            "capability": workflow_capability(cid, request),
+            "next_cursor": rows[limit - 1]["id"] if len(rows) > limit else None,
+        }
+
+
+@app.post("/api/containers/{cid}/workflows/preview", response_model=model.Preview)
+def preview_workflow(cid: str, body: model.WorkflowDraft, request: Request):
+    with db_cursor(readonly=True) as (_, cur):
+        require_member_read(cur, request, cid)
+        resolve_actor(cur, request, cid)
+        svc = service.WorkflowService(cur, HOOKS)
+        preview = svc.preview_import(cid, body.existing_task_ids)
+        keys = [t.client_key for t in body.tasks]
+        if len(set(keys)) != len(keys) or set(keys) & set(body.existing_task_ids):
+            conflict(
+                "duplicate_client_key",
+                "Each task needs a distinct local key.",
+                status=422,
+            )
+        ids = (
+            set(keys) | set(body.existing_task_ids) | set(preview["required_task_ids"])
+        )
+        dependencies = {t.client_key: t.depends_on for t in body.tasks}
+        for row in svc.rows(
+            "SELECT d.* FROM task_dependencies d JOIN tasks t ON t.id=d.task_id WHERE t.container_id=%s",
+            (cid,),
+        ):
+            if row["task_id"] in ids:
+                dependencies.setdefault(row["task_id"], []).append(row["depends_on_id"])
+        validate_graph(ids, dependencies)
+        return preview
+
+
+@app.post(
+    "/api/containers/{cid}/workflows",
+    response_model=model.WorkflowDetail,
+    status_code=201,
+)
+def create_workflow(cid: str, body: model.WorkflowCreate, request: Request):
+    service.require_capability()
+    with db_cursor() as (_, cur):
+        actor = resolve_actor(cur, request, cid)
+        return service.WorkflowService(cur, HOOKS).mutate(
+            cid, actor, "create", body.model_dump(mode="json")
+        )
+
+
+@app.get("/api/workflows/{wid}", response_model=model.WorkflowDetail)
+def get_workflow(wid: str, request: Request):
+    with db_cursor(readonly=True) as (_, cur):
+        svc, _, actor = read_context(cur, request, wid)
+        return svc.detail(wid, actor)
+
+
+@app.get("/api/workflows/{wid}/completion-check", response_model=model.CompletionCheck)
+def workflow_completion(wid: str, request: Request):
+    with db_cursor(readonly=True) as (_, cur):
+        svc, _, _ = read_context(cur, request, wid)
+        return svc.snapshot(wid)["completion"]
+
+
+@app.get("/api/workflows/{wid}/tasks", response_model=list[model.WorkflowTask])
+def workflow_tasks(wid: str, request: Request):
+    return get_workflow(wid, request)["tasks"]
+
+
+@app.get("/api/workflows/{wid}/dependencies", response_model=dict[str, list[str]])
+def workflow_dependencies(wid: str, request: Request):
+    with db_cursor(readonly=True) as (_, cur):
+        svc, _, _ = read_context(cur, request, wid)
+        return svc.snapshot(wid)["dependencies"]
+
+
+@app.get("/api/workflows/{wid}/start-check", response_model=model.WorkflowDetail)
+@app.get("/api/workflows/{wid}/release-check", response_model=model.WorkflowDetail)
+@app.get("/api/workflows/{wid}/cancellation-check", response_model=model.WorkflowDetail)
+def workflow_impact(wid: str, request: Request):
+    """Full authoritative snapshot; selected IDs/revisions are echoed by the mutation."""
+    return get_workflow(wid, request)
+
+
+@app.post("/api/workflows/{wid}/import-preview", response_model=model.Preview)
+def workflow_import_preview(wid: str, body: model.ImportPreview, request: Request):
+    with db_cursor(readonly=True) as (_, cur):
+        svc, w, _ = read_context(cur, request, wid)
+        actor = resolve_actor(cur, request, w["container_id"])
+        svc.owner(w, actor)
+        return svc.preview_import(w["container_id"], body.task_ids)
+
+
+@app.get(
+    "/api/containers/{cid}/workflow-operations/{idempotency_key}",
+    response_model=model.Receipt,
+)
+def workflow_receipt(cid: str, idempotency_key: str, operation: str, request: Request):
+    with db_cursor(readonly=True) as (_, cur):
+        actor = resolve_actor(cur, request, cid, allow_agent=True)
+        row = service.WorkflowService(cur, HOOKS).receipt(
+            cid, actor, operation, idempotency_key
+        )
+        return {
+            "status": "saved" if row else "not_found",
+            "operation": operation,
+            "idempotency_key": idempotency_key,
+            "result": row["result"] if row else None,
+        }
+
+
+def _workflow_action(path, operation, body_model, *, method="POST", allow_agent=False):
+    def endpoint(wid: str, request: Request, body):
+        service.require_capability()
+        with db_cursor() as (_, cur):
+            svc = service.WorkflowService(cur, HOOKS)
+            w = svc.workflow(wid)
+            actor = resolve_actor(
+                cur, request, w["container_id"], allow_agent=allow_agent
+            )
+            return svc.mutate(
+                w["container_id"],
+                actor,
+                operation,
+                body.model_dump(mode="json"),
+                wid=wid,
+            )
+
+    endpoint.__name__ = "workflow_" + operation
+    endpoint.__annotations__["body"] = body_model
+    app.add_api_route(
+        path, endpoint, methods=[method], response_model=model.WorkflowDetail
+    )
+
+
+def _task_action(path, operation, body_model, *, allow_agent=False):
+    def endpoint(tid: str, request: Request, body):
+        service.require_capability()
+        with db_cursor() as (_, cur):
+            svc = service.WorkflowService(cur, HOOKS)
+            t = svc.one(
+                "SELECT workflow_id,container_id FROM tasks WHERE id=%s", (tid,)
+            )
+            if not t or not t["workflow_id"]:
+                conflict(
+                    "workflow_task_required", "A workflow task is required.", status=404
+                )
+            actor = resolve_actor(
+                cur, request, t["container_id"], allow_agent=allow_agent
+            )
+            return svc.mutate(
+                t["container_id"],
+                actor,
+                operation,
+                body.model_dump(mode="json"),
+                wid=t["workflow_id"],
+                tid=tid,
+            )
+
+    endpoint.__name__ = "workflow_task_" + operation
+    endpoint.__annotations__["body"] = body_model
+    app.add_api_route(
+        path, endpoint, methods=["POST"], response_model=model.WorkflowDetail
+    )
+
+
+for name in ("pause", "resume", "cancel", "finish"):
+    _workflow_action("/api/workflows/{wid}/" + name, name, model.Mutation)
+_workflow_action("/api/workflows/{wid}", "patch", model.WorkflowPatch, method="PATCH")
+_workflow_action(
+    "/api/workflows/{wid}/tasks", "add_tasks", model.TaskBatch, allow_agent=True
+)
+_workflow_action("/api/workflows/{wid}/import", "import", model.ImportTasks)
+_workflow_action("/api/workflows/{wid}/start", "start", model.ReleaseTasks)
+_workflow_action("/api/workflows/{wid}/release", "release", model.ReleaseTasks)
+_workflow_action("/api/workflows/{wid}/goal/accept", "accept_goal", model.AcceptBasis)
+_workflow_action(
+    "/api/workflows/{wid}/transfer-owner", "transfer_owner", model.TransferOwner
+)
+_workflow_action(
+    "/api/workflows/{wid}/review-rounds",
+    "review_round",
+    model.ReviewRound,
+    allow_agent=True,
+)
+for path, operation, body_model in [
+    ("prepare", "prepare", model.PrepareTask),
+    ("hold", "hold", model.TaskMutation),
+    ("stop", "stop", model.TaskMutation),
+    ("retry", "retry", model.RetryTask),
+    ("reissue-stop", "reissue_stop", model.TaskMutation),
+    ("release-lost-worker", "release_lost_worker", model.TaskMutation),
+    ("withdraw-from-scope", "withdraw", model.TaskMutation),
+    ("external-result", "external_result", model.OutsideResult),
+]:
+    _task_action("/api/tasks/{tid}/" + path, operation, body_model)
+
+
+@app.put("/api/tasks/{tid}/dependencies", response_model=model.WorkflowDetail)
+def edit_workflow_dependencies(tid: str, body: model.DependencyEdit, request: Request):
+    service.require_capability()
+    with db_cursor() as (_, cur):
+        svc = service.WorkflowService(cur, HOOKS)
+        t = svc.one("SELECT workflow_id,container_id FROM tasks WHERE id=%s", (tid,))
+        if not t or not t["workflow_id"]:
+            conflict(
+                "workflow_task_required", "A workflow task is required.", status=404
+            )
+        actor = resolve_actor(cur, request, t["container_id"])
+        return svc.mutate(
+            t["container_id"],
+            actor,
+            "dependencies",
+            body.model_dump(mode="json"),
+            wid=t["workflow_id"],
+            tid=tid,
+        )
+
+
+@app.post(
+    "/api/workflows/{wid}/objectives/{oid}/accept", response_model=model.WorkflowDetail
+)
+def accept_workflow_objective(
+    wid: str, oid: str, body: model.AcceptBasis, request: Request
+):
+    service.require_capability()
+    with db_cursor() as (_, cur):
+        svc = service.WorkflowService(cur, HOOKS)
+        w = svc.workflow(wid)
+        actor = resolve_actor(cur, request, w["container_id"])
+        return svc.mutate(
+            w["container_id"],
+            actor,
+            "accept_objective",
+            dict(body.model_dump(mode="json"), objective_id=oid),
+            wid=wid,
+        )
+
+
+@app.post(
+    "/api/tasks/{tid}/external-result/{eid}/withdraw",
+    response_model=model.WorkflowDetail,
+)
+def withdraw_outside_result(
+    tid: str, eid: str, body: model.TaskMutation, request: Request
+):
+    service.require_capability()
+    with db_cursor() as (_, cur):
+        svc = service.WorkflowService(cur, HOOKS)
+        t = svc.one("SELECT workflow_id,container_id FROM tasks WHERE id=%s", (tid,))
+        if not t or not t["workflow_id"]:
+            conflict(
+                "workflow_task_required", "A workflow task is required.", status=404
+            )
+        actor = resolve_actor(cur, request, t["container_id"])
+        return svc.mutate(
+            t["container_id"],
+            actor,
+            "withdraw_evidence",
+            dict(body.model_dump(mode="json"), evidence_id=eid),
+            wid=t["workflow_id"],
+            tid=tid,
+        )
+
+
+@app.post(
+    "/api/workflows/{wid}/review-loops/{tid}/resolve",
+    response_model=model.WorkflowDetail,
+)
+def resolve_workflow_review(wid: str, tid: str, body: model.Mutation, request: Request):
+    service.require_capability()
+    with db_cursor() as (_, cur):
+        svc = service.WorkflowService(cur, HOOKS)
+        w = svc.workflow(wid)
+        actor = resolve_actor(cur, request, w["container_id"])
+        return svc.mutate(
+            w["container_id"],
+            actor,
+            "resolve_loop",
+            body.model_dump(mode="json"),
+            wid=wid,
+            tid=tid,
+        )
