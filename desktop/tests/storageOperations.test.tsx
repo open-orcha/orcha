@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
 import { it, expect, vi } from 'vitest'
 import { act, fireEvent, render, screen, within } from '@testing-library/react'
-import StorageSettings from './StorageSettings'
-import { storageOperations, worktreeOperations } from '../../../main/storageOperations'
-import type { Run } from '../../../main/agentWorktrees'
-import type { AgentWorktree, WorktreeCleanRequest } from '../../../shared/types'
+import StorageSettings from '../src/renderer/src/settings/StorageSettings'
+import { storageOperations, worktreeOperations } from '../src/main/storageOperations'
+import type { Run } from '../src/main/agentWorktrees'
+import type { AgentWorktree, WorktreeCleanRequest } from '../src/shared/types'
 
 it('refresh after cleanup must not reuse the inventory captured before cleanup', async () => {
   const folder = '/projects/small'
