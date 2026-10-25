@@ -304,6 +304,17 @@ function GateCardBubble({ meta, onPair }: { meta: any; onPair?: () => void }) {
 // pick it up right now (no runtime / wakes paused / agent busy). The agent's own turn is
 // the only "response".
 type Delivery = "sent" | "delivered" | "saved" | "queued" | "unknown" | null;
+// GH #301: the backend's explanation for a chat whose worker cannot start (the project
+// folder has no usable Git repository of its own), plus the one-click project-local fix.
+type StartupBlocked = {
+  reason: string;
+  blocker?: string | null;
+  at?: number;
+  setup_available?: boolean;
+  setup?: { state: "requested" | "done" | "failed"; detail?: string | null; at?: number } | null;
+};
+// same words as the notifier's explanation (notifier_startup_preflight.SETUP_LABEL)
+export const SETUP_LABEL = "Set up Git for this project";
 const DELIVERY_TEXT: Record<Exclude<Delivery, null>, string> = {
   sent: "sent · awaiting reply",
   // D16: a run started on this conversation after the turn was saved — the agent has it
@@ -936,6 +947,8 @@ export function Conversation({
   const [awaiting, setAwaiting] = useState(false); // optimistic until the reply lands
   const [presence, setPresence] = useState<string | null>(freshCache ? freshCache.presence : null);
   const [presenceReason, setPresenceReason] = useState<string | null>(freshCache ? freshCache.presenceReason : null);
+  const [startupBlocked, setStartupBlocked] = useState<StartupBlocked | null>(null);
+  const [setupBusy, setSetupBusy] = useState(false);
   // dup-send guard + optimistic pending bubble (vanilla conversation-composer.js)
   const [sending, setSending] = useState(false);
   const [pendingLocal, setPendingLocalRaw] = useState<PendingLocal | null>(null);
@@ -981,6 +994,7 @@ export function Conversation({
       setConvStatus(d.conversation ? d.conversation.status || null : null);
       setPresence(d.presence || null);
       setPresenceReason(d.presence_reason || null); // top-level (Vault)
+      setStartupBlocked(d.startup_blocked || null);
       const t: ConvTurn[] = d.turns || [];
       setTurns(t);
       lastSeqRef.current = t.length ? t[t.length - 1].seq : 0;
@@ -1005,6 +1019,7 @@ export function Conversation({
       .then((d) => {
         setPresence(d.presence || null);
         setPresenceReason(d.presence_reason || null);
+        setStartupBlocked(d.startup_blocked || null);
       })
       .catch(() => { /* not live yet -> keep status-derived */ });
   }, []);
@@ -1310,6 +1325,33 @@ export function Conversation({
     return true;
   };
   const onComposerSend = useCallback((v: string, done: Staged[], all: Staged[]) => latest.current.trySend(v, done, all), []);
+  // GH #301: the human's explicit "set up Git" click; the notifier on the host does the
+  // project-local work and the next read shows the outcome.
+  const requestSetup = async () => {
+    const h = actingHuman(snap);
+    if (!h) {
+      toast(noHumanMsg, "danger");
+      return;
+    }
+    setSetupBusy(true);
+    try {
+      const r = await fetch("/api/agents/" + encodeURIComponent(agent.id) + "/conversation/repository-setup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ actor_agent_id: h.id }),
+      });
+      const d: any = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        toast((d && typeof d.detail === "string" && d.detail) || "Couldn't request the setup (error " + r.status + ").", "danger");
+        return;
+      }
+      setStartupBlocked((b) => (b ? { ...b, setup: d.setup || { state: "requested" } } : b));
+    } catch {
+      toast("Couldn't reach Embodent — it may be restarting.", "danger");
+    } finally {
+      setSetupBusy(false);
+    }
+  };
   // the ONE place a turn is POSTed (fresh sends and Retry both land here).
   const submitTurn = async (v: string, atts: { id: string; name: string }[], keepStaged: Staged[], h: Agent) => {
     sendingRef.current = true;
@@ -1433,7 +1475,7 @@ export function Conversation({
   const wakesPaused = !!(snap?.container && snap.container.wakes_enabled === false);
   const offline = connection === "offline" || stale;
   // ONE decision for both the indicator and the human turn's delivery label.
-  const replyState = (): { kind: "thinking" | "queued" | "unknown"; reason?: string } => {
+  const replyState = (): { kind: "thinking" | "queued" | "unknown" | "blocked"; reason?: string } => {
     // lost the project connection: we cannot know whether the agent is working
     if (offline) return { kind: "unknown", reason: "Connection to the project was lost — reply status is unknown until it reconnects." };
     // §3b lock: the agent is in a live terminal and the conversation is paused — no
@@ -1445,6 +1487,9 @@ export function Conversation({
     if (!served) {
       return { kind: "queued", reason: "Message queued — this project has no agent runtime yet. It is delivered once a workspace binds on the host." };
     }
+    // GH #301: startup is blocked by the project's Git setup — say why and how to fix it,
+    // never "answered on the next wake" (that wake cannot start a worker).
+    if (startupBlocked && awaitingReply) return { kind: "blocked", reason: startupBlocked.reason };
     // resident actively working the human's turn → thinking dots; busy on another
     // (task) lease → an honest "queued" notice (never fake "thinking…").
     if (p.k === "busy") return { kind: "queued" };
@@ -1463,6 +1508,7 @@ export function Conversation({
     // already say it — a third "queued" note would repeat the same fact (D12)
     if (!served) return null;
     if (r.kind === "thinking") return thinking();
+    if (r.kind === "blocked" && startupBlocked) return blockedNotice(startupBlocked);
     return queued(r.reason);
   };
   // Cold-start honesty: when the thread has NO agent turn yet, this reply rides
@@ -1491,6 +1537,47 @@ export function Conversation({
         }
       >
         {cold ? <div className="conv-coldnote">starting the agent’s session — the first reply can take a minute</div> : null}
+      </ChatBubble>
+    );
+  };
+  const blockedNotice = (b: StartupBlocked) => {
+    const setup = b.setup || null;
+    const canAsk = !!b.setup_available && (!setup || setup.state !== "requested") && !readOnly;
+    return (
+      <ChatBubble
+        key="ind:blocked"
+        dataKey="ind:blocked"
+        from="agent"
+        className="turn agent conv-indicator"
+        author={
+          <>
+            {agent.alias} <span className="tt">can’t start yet</span>
+          </>
+        }
+      >
+        <div className="conv-queued conv-blocked" role="status">
+          <Icon name="alert" cls="" />
+          <span>{b.reason}</span>
+        </div>
+        {setup && setup.state === "requested" ? (
+          <div className="conv-blocked-setup">Setup requested — Orcha on this computer is doing it now. Your message is answered once {agent.alias} can start.</div>
+        ) : null}
+        {setup && setup.state === "done" ? (
+          <div className="conv-blocked-setup">{(setup.detail || "Setup finished.") + " Starting " + agent.alias + "…"}</div>
+        ) : null}
+        {setup && setup.state === "failed" ? (
+          <div className="conv-blocked-setup conv-blocked-failed">{"Setup didn’t finish: " + (setup.detail || "no reason was reported.")}</div>
+        ) : null}
+        {canAsk ? (
+          <div className="conv-blocked-actions">
+            <button type="button" className="btn" disabled={setupBusy} onClick={() => void requestSetup()}>
+              {SETUP_LABEL}
+            </button>
+            <span className="conv-blocked-note">
+              Creates a Git repository in this project’s folder (only if it has none) with one empty first commit. Your files, staged changes and any parent repository stay as they are.
+            </span>
+          </div>
+        ) : null}
       </ChatBubble>
     );
   };
@@ -1613,8 +1700,8 @@ export function Conversation({
       // project, or the status is unknown) carries the word + the reason —
       // the turn then only says "saved"; with no runtime there is no tail
       // note, so the turn keeps "saved · queued" (reason in its tooltip)
-      const tailNote = !pendingLocal && (rs.kind === "unknown" || (rs.kind === "queued" && served));
-      delivery = rs.kind === "thinking" ? "sent" : tailNote ? "saved" : rs.kind;
+      const tailNote = !pendingLocal && (rs.kind === "unknown" || ((rs.kind === "queued" || rs.kind === "blocked") && served));
+      delivery = rs.kind === "thinking" ? "sent" : tailNote ? "saved" : rs.kind === "blocked" ? "queued" : rs.kind;
       deliveryWhy = tailNote ? undefined : rs.reason;
       // D16: a run that started on this conversation after the turn was saved has it
       const ls = shownRun ? Date.parse(shownRun.started_at || shownRun.started || "") : NaN;

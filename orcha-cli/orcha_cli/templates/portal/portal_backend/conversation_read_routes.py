@@ -4,6 +4,7 @@ from fastapi import HTTPException, Request
 
 from portal_backend.agent_status import log_event
 from portal_backend.application import app
+from portal_backend.conversation_startup_routes import startup_block as _startup_block
 from portal_backend.database import db_cursor
 from portal_backend.guards import require_agent as _require_agent
 from portal_backend.guards import require_kind as _require_kind
@@ -85,7 +86,9 @@ def get_agent_conversation(aid: str, request: Request, limit: int = 50):
             (conversation["id"], limit),
         )
         turns = list(reversed(cur.fetchall()))
-    return {"conversation": conversation, "turns": turns}
+        # GH #301: why a waiting message is not being answered, when startup is blocked.
+        blocked = _startup_block(cur, aid, conversation)
+    return {"conversation": conversation, "turns": turns, "startup_blocked": blocked}
 
 
 @app.get("/api/conversations/{conv_id}")
@@ -95,12 +98,14 @@ def get_conversation(conv_id: str, request: Request):
     with db_cursor() as (_, cur):
         cur.execute("SELECT * FROM conversations WHERE id=%s", (conv_id,))
         conversation = cur.fetchone()
+        blocked = None
         if conversation:
             # Access model: conversation content is project-isolated (non-member 403).
             _require_member_read(cur, request, str(conversation["container_id"]))
+            blocked = _startup_block(cur, str(conversation["agent_id"]), conversation)
     if not conversation:
         raise HTTPException(404, f"conversation {conv_id} not found")
-    return {"conversation": conversation}
+    return {"conversation": conversation, "startup_blocked": blocked}
 
 
 @app.get("/api/conversations/{conv_id}/turns")

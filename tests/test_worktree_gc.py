@@ -90,6 +90,23 @@ def _worktree(base: pathlib.Path, name: str, branch: str, *, scaffold=True) -> p
     return wt
 
 
+def _age(*worktrees, secs=3600.0):
+    """Make worktrees look idle for ``secs``: the folder, its files and its git admin files
+    (what ``gc.last_activity`` reads). The housekeeping thread never removes anything used in
+    the last ``ngc.RECENT_ACTIVITY_S`` (GH #315), so sweep tests age what they expect gone."""
+    old = time.time() - secs
+    for wt in worktrees:
+        paths = [str(wt)]
+        for dirpath, dirs, files in os.walk(wt):
+            paths += [os.path.join(dirpath, n) for n in dirs + files]
+        adm = gc.admin_dir(wt)
+        if adm:
+            paths += [os.path.join(adm, n) for n in ("logs/HEAD", "index", "HEAD")]
+        for path in paths:
+            if os.path.lexists(path):
+                os.utime(path, (old, old), follow_symlinks=False)
+
+
 def _row(base, wt, **kw):
     rows = gc.inventory(str(base), include_process_cwds=False, **kw)
     return next(r for r in rows if gc._real(r["path"]) == gc._real(wt))
@@ -420,11 +437,7 @@ def test_first_sweep_handles_pre_existing_worktrees(project, gc_state):
     (ahead / "h.txt").write_text("x")
     _git(["add", "h.txt"], ahead)
     _git(["commit", "-qm", "w"], ahead)
-    for wt in (clean, done_task_wt, no_task, ahead):
-        for dirpath, dirs, files in os.walk(wt):
-            for n in dirs + files:
-                os.utime(os.path.join(dirpath, n), (old, old), follow_symlinks=False)
-        os.utime(wt, (old, old))
+    _age(clean, done_task_wt, no_task, ahead, secs=time.time() - old)
     portal = FakePortal(context={str(done_task_wt): {
         "task_id": TASK, "task_status": "completed",
         "task_ended_at": "2026-08-01T00:00:00+00:00", "run_id": "r9", "run_task_id": TASK}})
@@ -459,6 +472,7 @@ def test_grace_counts_from_task_end_when_that_is_later(project, gc_state):
     ended = time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(now - 2 * 86400))
     portal = FakePortal(context={str(wt): {"task_id": TASK, "task_status": "cancelled",
                                            "task_ended_at": ended}})
+    _age(wt)
     gc_state.settings = {"auto_cleanup": True, "grace_days": 7}
     ngc.sweep("http://p", "c1", str(project), gc_state, set(), post=portal, upload=Uploads(), now=now)
     assert wt.exists()
@@ -480,6 +494,7 @@ def test_open_task_worktree_with_output_is_never_removed_by_the_sweep(project, g
 
 def test_service_loop_first_pass_then_hourly(project, gc_state):
     wt = _worktree(project, "Atlas-7", "orcha/wk-Atlas-1790000000019")
+    _age(wt)
     portal = FakePortal()
     t = [0.0]
     gc_state.started = 0.0
@@ -492,6 +507,7 @@ def test_service_loop_first_pass_then_hourly(project, gc_state):
     inv = [b for u, b in portal.posts if u.endswith("/inventory")]
     assert inv and inv[-1]["items"] == []
     wt2 = _worktree(project, "Atlas-8", "orcha/wk-Atlas-1790000000020")
+    _age(wt2)
     t[0] += 60
     ngc.service_worktrees("http://p", "c1", gc_state, str(project), post=portal, clock=lambda: t[0])
     assert wt2.exists()  # not due yet
@@ -548,6 +564,7 @@ def test_bulk_clean_up_previews_then_runs(project, gc_state):
         _git(["add", "c.txt"], wt)
         _git(["commit", "-qm", "w"], wt)
     busy = _worktree(project, "live-Atlas", "orcha/live-Atlas")
+    _age(clean, out, keep, opt_in, busy)
     rows = gc.inventory(str(project), busy={str(busy)}, include_process_cwds=False)
     preview = ngc.bulk_clean(str(project), rows, {}, {str(busy)},
                              unmerged_paths=[str(opt_in)], dry_run=True)
@@ -655,3 +672,113 @@ def test_per_wake_worktrees_do_not_accumulate(project, gc_state):
         ngc.after_run("http://p", _worker(project, wt, branch), {}, post=FakePortal())
         time.sleep(0.002)
     assert gc.inventory(str(project), include_process_cwds=False) == []
+
+
+# ------------------------------------------------------------------ GH #315: housekeeping runs
+# on its own thread, beside the loop that starts workers, so it must never take a worktree a
+# worker is starting in (code review of PR #316).
+
+def test_sweep_keeps_a_fresh_worker_worktree_that_has_no_process_yet(project, gc_state):
+    """provision_disposable makes orcha/wk-<agent>-<ms>, then carry + token + Popen; until the
+    run is posted, nothing marks it busy. The sweep keeps anything used in the last 15 minutes,
+    and removes it once it has been idle that long.
+    Mutation: drop the recently_active check from plan_row → RED (fresh worktree removed)."""
+    gc_state.settings = {"auto_cleanup": True, "grace_days": 7}
+    wt, branch = wbase.provision_disposable(str(project), "Atlas", _Services(project))
+    portal = FakePortal()
+    summary = ngc.sweep("http://p", "c1", str(project), gc_state, set(), post=portal,
+                        upload=Uploads())
+    assert pathlib.Path(wt).exists() and summary["removed"] == []
+    assert branch in _branches(project)
+    # kept by the plan itself (no removal attempted, so no "kept" event), not only by the last look
+    assert portal.events() == []
+    row = _row(project, wt)
+    action, why = ngc.plan_row(row, None, gc_state.settings, time.time(), time.time())
+    assert action == "keep" and "used in the last 15 minutes" in why
+    _age(pathlib.Path(wt), secs=ngc.RECENT_ACTIVITY_S + 60)
+    summary = ngc.sweep("http://p", "c1", str(project), gc_state, set(), post=portal,
+                        upload=Uploads())
+    assert summary["removed"] == [wt] and not pathlib.Path(wt).exists()
+
+
+def test_a_worker_that_starts_while_the_worktree_is_measured_keeps_it(project, monkeypatch):
+    """The process check is taken again right before `git worktree remove`, after classify and
+    du (which can take minutes), not only before them.
+    Mutation: drop the late recent_use() call in remove_worktree → RED (folder removed)."""
+    wt = _worktree(project, "Atlas-31", "orcha/wk-Atlas-1790000000315")
+    _age(wt)
+    calls = []
+
+    def _cwds():  # nothing in the folder at the first look; a worker has started by the last
+        calls.append(1)
+        return set() if len(calls) == 1 else {str(gc._real(wt))}
+
+    monkeypatch.setattr(gc, "process_cwds", _cwds)
+    res = gc.remove_worktree(str(project), str(wt))
+    assert res["outcome"] == "refused" and res["state"] == gc.STATE_IN_USE and wt.exists()
+    assert "orcha/wk-Atlas-1790000000315" in _branches(project)
+    assert len(calls) == 2
+
+
+def test_a_chat_that_reuses_an_idle_worktree_mid_sweep_keeps_it(project, gc_state, monkeypatch):
+    """A resident worktree idle for 2 days is due to go; a new chat reuses it while the sweep is
+    still classifying. Reuse stamps the folder (overlay_runtime_config), and the last look
+    before the removal re-reads its activity.
+    Mutations: drop os.utime from overlay_runtime_config, or pass no quiet_for from the sweep
+    → RED (the reused worktree is removed)."""
+    gc_state.settings = {"auto_cleanup": True, "grace_days": 7}
+    wt = _worktree(project, "resident-c315", "orcha/resident-c315")
+    _age(wt, secs=2 * 86400)
+    real_changes = gc.real_changes
+
+    def _reused_meanwhile(base, path, **kw):
+        if gc._real(path) == gc._real(wt):
+            wbase.overlay_runtime_config(project, wt)  # what provision_resident does on reuse
+        return real_changes(base, path, **kw)
+
+    monkeypatch.setattr(gc, "real_changes", _reused_meanwhile)
+    portal = FakePortal()
+    summary = ngc.sweep("http://p", "c1", str(project), gc_state, set(), post=portal,
+                        upload=Uploads())
+    assert wt.exists() and summary["removed"] == []
+    kept = [e for e in portal.events() if e["kind"] == "kept"]
+    assert kept and "used in the last 15 minutes" in kept[0]["reason"]
+
+
+def test_portal_clean_up_keeps_recently_used_worktrees_but_the_cli_does_not(project, gc_state):
+    """The portal's "Clean up" runs on the housekeeping thread → recently used rows are kept
+    (preview and run alike); `orcha worktrees clean` from a terminal is unchanged.
+    Mutation: drop quiet_for from run_action's bulk_clean call → RED."""
+    fresh = _worktree(project, "Atlas-32", "orcha/wk-Atlas-1790000000316")
+    old = _worktree(project, "Probe-32", "orcha/wk-Probe-1790000000317")
+    _age(old)
+    portal = FakePortal(actions=[{"id": "c1", "action": "clean_up", "include_output": True}],
+                        settings={"auto_cleanup": False, "grace_days": 7})
+    gc_state.started = 0.0
+    ngc.service_worktrees("http://p", "c1", gc_state, str(project), post=portal, clock=lambda: 100.0)
+    result = portal.results()[0][1]["result"]
+    assert [e["name"] for e in result["removed"]] == ["Probe-32"]
+    assert [e["name"] for e in result["kept"]] == ["Atlas-32"]
+    assert "used in the last 15 minutes" in result["kept"][0]["reason"]
+    assert fresh.exists() and not old.exists()
+    assert [e["path"] for e in portal.events()] == [str(old)]  # kept up front: no removal tried
+    rows = gc.inventory(str(project), include_process_cwds=False)
+    preview = ngc.bulk_clean(str(project), rows, {}, set(), dry_run=True,
+                             quiet_for=ngc.RECENT_ACTIVITY_S)
+    assert preview["removed"] == [] and [e["name"] for e in preview["kept"]] == ["Atlas-32"]
+    assert [e["name"] for e in ngc.bulk_clean(str(project), rows, {}, set(), dry_run=True)["removed"]] \
+        == ["Atlas-32"]
+
+
+def test_a_worktree_already_removed_by_the_other_side_posts_no_kept_event(project, gc_state):
+    """after_run (loop) and the sweep (housekeeping thread) can both reach a finished wake's
+    worktree; the loser must not post a "kept — git worktree remove failed" event.
+    Mutation: drop the already-gone branch in _remove → RED (a kept event)."""
+    wt = _worktree(project, "Atlas-33", "orcha/wk-Atlas-1790000000318")
+    _age(wt)
+    row = _row(project, wt)
+    _git(["worktree", "remove", "--force", str(wt)], project)
+    portal = FakePortal()
+    res = ngc._remove(str(project), "http://p", "c1", row, None, set(), trigger="sweep",
+                      quiet=True, post=portal, upload=Uploads(), quiet_for=ngc.RECENT_ACTIVITY_S)
+    assert res["outcome"] != "removed" and portal.events() == []

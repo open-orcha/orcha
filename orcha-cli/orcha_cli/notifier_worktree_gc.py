@@ -2,8 +2,9 @@
 migration 067; the classification and every git operation live in ``worktree_gc``).
 
 Worktrees live on the HOST, so — like Verdikt previews — the portal only records settings and
-requests and this daemon does the git work and reports back. Each daemon tick
-(``service_worktrees``, never raises):
+requests and this daemon does the git work and reports back. Each housekeeping pass
+(``service_worktrees``, never raises — run on the daemon's own housekeeping thread, never inline
+before the wake scan; GH #315, ``notifier_housekeeper``):
 
   1. every ~10 s claims pending requests from the portal
      (``POST /api/containers/{cid}/agent-worktrees/claim``) — the answer also carries the
@@ -26,6 +27,9 @@ Rules (``plan_row``):
                    period, counted from the later of the task's end (or last activity when there
                    is no task) and when this daemon first saw it — then removed.
   * ``unmerged`` / ``in-use`` / ``not-quorate``: never removed automatically.
+  * nothing used in the last ``RECENT_ACTIVITY_S`` is removed by the sweep or a portal
+    "Clean up": they run on the housekeeping thread beside the loop that starts workers, so a
+    worker may be starting in that folder (GH #315). ``after_run`` runs on the loop itself.
 Every removal is logged as a project event.
 """
 
@@ -46,6 +50,7 @@ SWEEP_EVERY_S = 3600.0
 FIRST_SWEEP_DELAY_S = 30.0
 REPORT_EVERY_S = 600.0
 CLEAN_IDLE_S = 24 * 3600.0
+RECENT_ACTIVITY_S = 15 * 60.0
 TERMINAL = ("completed", "cancelled")
 DEFAULT_SETTINGS = {"auto_cleanup": True, "grace_days": 7}
 
@@ -177,6 +182,21 @@ def _last_activity(row) -> Optional[float]:
 def plan_row(row: dict, ctx: Optional[dict], settings: dict, first_seen: float,
              now: float) -> tuple[str, str]:
     """('remove'|'preserve'|'keep', why) for one inventory row under the automatic rules."""
+    action, why = _plan_row(row, ctx, settings, first_seen, now)
+    if action == "remove" and recently_active(row, now):
+        return "keep", f"{why}, but used in the last {int(RECENT_ACTIVITY_S // 60)} minutes"
+    return action, why
+
+
+def recently_active(row: dict, now: float) -> bool:
+    """Active within RECENT_ACTIVITY_S (or no activity stamp at all) — not removed by the
+    housekeeping thread: a worker may be starting in it (GH #315)."""
+    act = _last_activity(row)
+    return act is None or now - act < RECENT_ACTIVITY_S
+
+
+def _plan_row(row: dict, ctx: Optional[dict], settings: dict, first_seen: float,
+              now: float) -> tuple[str, str]:
     state = row["state"]
     if state in (gc.STATE_NOT_QUORATE, gc.STATE_IN_USE, gc.STATE_UNMERGED):
         return "keep", row.get("reason") or state
@@ -210,15 +230,20 @@ def plan_row(row: dict, ctx: Optional[dict], settings: dict, first_seen: float,
 
 
 def _remove(project_cwd, api_base, cid, row, ctx, busy, *, trigger, quiet, post, upload,
-            allow_unmerged=False, keep_branch=False) -> dict:
+            allow_unmerged=False, keep_branch=False, quiet_for=0.0) -> dict:
     task_id = (ctx or {}).get("task_id")
     run_id = (ctx or {}).get("run_id") if (ctx or {}).get("run_task_id") in (None, task_id) else None
     result = gc.remove_worktree(project_cwd, row["path"], busy=busy, allow_unmerged=allow_unmerged,
                                 keep_branch=keep_branch, task_id=task_id, run_id=run_id,
-                                upload=upload)
+                                upload=upload, quiet_for=quiet_for)
     if result.get("outcome") == "removed":
         _log(quiet, f"removed {row['name']} ({result.get('reason')}; "
                     f"{gc.human_bytes(result.get('freed_bytes'))} freed; branch {result.get('branch_note')})")
+    elif not os.path.isdir(row["path"]):
+        # The loop's after_run and the housekeeping thread can both reach a finished wake's
+        # worktree; the one that finds it gone posts no "kept" event that reads like a failure.
+        _log(quiet, f"{row['name']} was already removed")
+        return result
     else:
         _log(quiet, f"kept {row['name']} — {result.get('reason')}")
     report_event(api_base, cid, result, trigger, post=post)
@@ -242,7 +267,7 @@ def sweep(api_base, cid, project_cwd, state: GcState, busy: set[str], *, quiet=T
         action, why = plan_row(row, ctx, settings, seen.get(row["path"], now), now)
         if action == "remove":
             res = _remove(project_cwd, api_base, cid, row, ctx, busy, trigger="sweep",
-                          quiet=quiet, post=post, upload=upload)
+                          quiet=quiet, post=post, upload=upload, quiet_for=RECENT_ACTIVITY_S)
             if res.get("outcome") == "removed":
                 summary["removed"].append(row["path"])
                 summary["freed_bytes"] += int(res.get("freed_bytes") or 0)
@@ -388,17 +413,20 @@ def run_action(api_base, cid, project_cwd, action: dict, busy: set[str], *, quie
             project_cwd, rows, contexts, busy,
             include_output=bool(action.get("include_output", True)),
             unmerged_paths=action.get("unmerged_paths") or [],
-            api_base=api_base, cid=cid, quiet=quiet, post=post, upload=upload)}
+            api_base=api_base, cid=cid, quiet=quiet, post=post, upload=upload,
+            quiet_for=RECENT_ACTIVITY_S)}
     return {"status": "failed", "error": f"unknown action {kind!r}"}
 
 
 def bulk_clean(project_cwd, rows, contexts, busy, *, include_output=True, unmerged_paths=(),
                api_base=None, cid=None, quiet=True, post=_default_post, upload=None,
-               dry_run=False, trigger="manual") -> dict:
+               dry_run=False, trigger="manual", quiet_for=0.0) -> dict:
     """"Clean up existing worktrees": clean → removed; has-output → output saved to the task
     (or saved-output), then removed; unmerged → kept unless listed in ``unmerged_paths``
-    (then the worktree goes and the branch stays); in-use / not-quorate → skipped."""
+    (then the worktree goes and the branch stays); in-use / not-quorate → skipped.
+    ``quiet_for`` > 0 (the daemon's housekeeping thread) also keeps anything used that recently."""
     wanted_unmerged = {gc._real(p) for p in unmerged_paths}
+    now = time.time()
     out = {"removed": [], "kept": [], "skipped": [], "freed_bytes": 0, "dry_run": dry_run}
     for row in rows:
         state = row["state"]
@@ -416,6 +444,11 @@ def bulk_clean(project_cwd, rows, contexts, busy, *, include_output=True, unmerg
         if state == gc.STATE_HAS_OUTPUT and not include_output:
             out["kept"].append(dict(entry, reason="has output — kept"))
             continue
+        act = _last_activity(row)
+        if quiet_for > 0 and (act is None or now - act < quiet_for):
+            out["kept"].append(dict(entry, reason=f"used in the last {int(quiet_for // 60)} "
+                                                  "minutes — kept"))
+            continue
         if dry_run:
             out["removed"].append(dict(entry, would=True, saves=row.get("output", []) + row.get("modified", []),
                                        keep_branch=keep_branch))
@@ -425,11 +458,12 @@ def bulk_clean(project_cwd, rows, contexts, busy, *, include_output=True, unmerg
         if api_base and cid:
             res = _remove(project_cwd, api_base, cid, row, ctx, busy, trigger=trigger, quiet=quiet,
                           post=post, upload=upload, allow_unmerged=allow_unmerged,
-                          keep_branch=keep_branch)
+                          keep_branch=keep_branch, quiet_for=quiet_for)
         else:
             res = gc.remove_worktree(project_cwd, row["path"], busy=busy,
                                      allow_unmerged=allow_unmerged, keep_branch=keep_branch,
-                                     task_id=(ctx or {}).get("task_id"), upload=upload)
+                                     task_id=(ctx or {}).get("task_id"), upload=upload,
+                                     quiet_for=quiet_for)
         if res.get("outcome") == "removed":
             out["removed"].append(dict(entry, branch_note=res.get("branch_note"),
                                        preserved=res.get("preserved")))
@@ -466,8 +500,13 @@ def report_inventory(api_base, cid, project_cwd, state: GcState, busy: set[str],
 def service_worktrees(api_base: str, cid: str, state: GcState, project_cwd: Optional[str], *,
                       live_workers=None, live_residents=None, previews=None, quiet: bool = True,
                       dry_run: bool = False, post=_default_post, upload=None,
-                      clock=time.monotonic) -> None:
-    """The per-tick entry point (see the module docstring). Never raises."""
+                      clock=time.monotonic, timer=None, busy=None) -> None:
+    """The per-pass entry point (see the module docstring). Never raises.
+
+    GH #315: the daemon runs this on its housekeeping thread (``notifier_housekeeper``), so
+    ``busy`` carries the loop's own busy worktrees as a snapshot taken on the loop thread, and
+    ``timer`` (a ``StageTimer``) records claim / actions / sweep / inventory seconds."""
+    lap = timer.lap if timer is not None else (lambda name: None)
     if dry_run or not project_cwd:
         return
     try:
@@ -485,7 +524,9 @@ def service_worktrees(api_base: str, cid: str, state: GcState, project_cwd: Opti
                                       "grace_days": int(settings.get("grace_days", 7))}
                 state.remote_busy = {p for p in (res.get("busy_worktrees") or []) if p}
                 actions = [a for a in (res.get("actions") or []) if isinstance(a, dict)]
-        busy = local_busy(live_workers, live_residents, previews) | state.remote_busy
+        lap("claim")
+        own = local_busy(live_workers, live_residents, previews) if busy is None else set(busy)
+        busy = own | state.remote_busy
         for action in actions:
             try:
                 body = run_action(api_base, cid, project_cwd, action, busy, quiet=quiet,
@@ -494,13 +535,18 @@ def service_worktrees(api_base: str, cid: str, state: GcState, project_cwd: Opti
                 body = {"status": "failed", "error": f"{exc}"[:500]}
             post(f"{api_base}/api/agent-worktrees/actions/{action.get('id')}/result", body)
             state.report_due = True
+        lap("actions")
         if state.settings and state.settings.get("auto_cleanup"):
             due = (state.last_sweep is None and now - state.started >= FIRST_SWEEP_DELAY_S) or \
                   (state.last_sweep is not None and now - state.last_sweep >= SWEEP_EVERY_S)
             if due:
                 state.last_sweep = now
                 sweep(api_base, cid, project_cwd, state, busy, quiet=quiet, post=post, upload=upload)
+        lap("sweep")
         if state.settings is not None and (state.report_due or now - state.last_report >= REPORT_EVERY_S):
-            report_inventory(api_base, cid, project_cwd, state, busy, post=post)
+            rows = report_inventory(api_base, cid, project_cwd, state, busy, post=post)
+            if timer is not None and rows is not None:
+                timer.note("worktrees", len(rows))
+        lap("inventory")
     except Exception as exc:  # noqa: BLE001 - a daemon must not die on housekeeping
         _log(quiet, f"housekeeping error (continuing): {exc}")
