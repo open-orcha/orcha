@@ -15,6 +15,7 @@ from portal_backend.provider_keys import (
     provider_key_enc,
 )
 from portal_backend.wake_backoff import apply_wake_backoff
+from portal_backend.run_failure_backoff import apply_failure_backoff
 from portal_backend.wake_candidate_builder import build_wake_candidate
 from portal_backend.wake_scan_queries import list_wake_agents
 
@@ -125,6 +126,7 @@ def wake_scan(
         # to the human once suppression gets serious. NEVER cancels work or touches task state —
         # only paces the wake cadence. Runs on this same cursor so its writes land in the same
         # commit as the scan's own bookkeeping below.
+        candidates = apply_failure_backoff(cur, cid, candidates, notify=not browser)
         candidates = apply_wake_backoff(cur, cid, candidates)
         if browser:
             conn.rollback()  # PS-38: a browser read leaves no trace

@@ -37,6 +37,8 @@ def list_agent_runs(
 ):
     """A2: this agent's worker runs, newest first (what B1 renders). Optional ?task_id= filter.
 
+    Rows include nullable failure_reason: the final provider error extracted from saved output.
+
     GH #144: the ?task_id= filter is a per-task FEED, so it joins worker_run_tasks (every task a run
     touched) instead of the single worker_runs.task_id pin — a session that spanned this task shows
     up here even if its pin settled on another task."""

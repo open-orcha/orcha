@@ -43,6 +43,7 @@ import { agentByAlias, identitySelfHuman, useActingAuthority, useSnapshot } from
 import type { Agent, Snapshot } from "../../types";
 import { StopRunButton } from "../agents/runlog";
 import { AgentFilter } from "./AgentFilter";
+import { FailurePauses } from "./FailurePauses";
 import { EVENT_KIND_LABEL, EVENT_KIND_FILTERS, answerNoun, askPhrase, collapseEvents, filterEvents, foldedSameTask, matchesEventKind, parseEventKind, projectEvents, type ProjectEvent } from "./events";
 import { groupByDay } from "./feed";
 import { RunLogView } from "./RunLogView";
@@ -442,6 +443,7 @@ export function ActivityPage() {
           {data.carried ? "Their last-known runs are kept; other agents' runs are current." : "Other agents' runs are shown."}
         </div>
       ) : null}
+      {cid ? <FailurePauses key={cid} cid={cid} humanId={offline ? null : authority.human?.id ?? null} nonce={nonce} onResume={() => setNonce((n) => n + 1)} /> : null}
       {listBody}
       {data.loadedAt && aiAgents.length && !agentMissing && data.runs.length ? (
         <p className="act-scope">
