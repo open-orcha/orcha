@@ -267,6 +267,15 @@ async def test_opening_plan_message_enqueues_once(
     assert r.status_code == 201
     assert _outbox(db) == []
 
+    # A coordinator's opening brief is context, not the assigned developer's plan.
+    coordinator = await make_agent("coordinator", "lead")
+    r = await client.post(
+        f"/api/tasks/{t['task_id']}/messages",
+        json={"author_agent_id": coordinator["agent_id"], "body": "Opening brief: build the widget"},
+    )
+    assert r.status_code == 201
+    assert _outbox(db) == []
+
     # the agent's OPENING plan → exactly one plan_approval row
     r = await client.post(
         f"/api/tasks/{t['task_id']}/messages",

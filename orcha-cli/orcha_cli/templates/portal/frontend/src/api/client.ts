@@ -196,7 +196,7 @@ export function mapSnapshot(rawIn: any): Snapshot {
     started_at: t.started_at || null,
     completed_at: t.completed_at || null,
     message_summary: t.message_summary || { count: 0, last: null },
-    plan_message: t.plan_message || null,
+    plan_message: t.plan_message,
     thread: mapThread(t.messages, agents),
   }));
 

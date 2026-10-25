@@ -28,7 +28,11 @@ def _classify_notification(event_name, payload, *, requester_is_human=False):
     if event_name in _NOTIF_SUPPRESSED:
         return None
 
-    if event_name == "request_created":
+    if event_name == "decision_made" and payload.get("subject_type") == "task_close" and payload.get("message"):
+        # The stop instruction is carried by the decision itself, preserving the
+        # old directed prompt's priority without a second notification.
+        spec = {**_NOTIF_TAXONOMY["prompt"], "link_kind": "task", "link_field": "subject_id"}
+    elif event_name == "request_created":
         # A fresh incoming request addressed to me. A HUMAN requester is a live-human-convo rung
         # (the operator is talking to me); an AGENT requester is the ordinary request-in rung.
         if requester_is_human:

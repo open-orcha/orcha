@@ -10,7 +10,6 @@ from portal_backend.decision_routing import (
     _route_close_reason,
 )
 from portal_backend.event_acknowledgement import _ack_events_handled
-from portal_backend.events import poke_path_forward as _poke_path_forward
 from portal_backend.guards import (
     reject_if_retired as _reject_if_retired,
     require_container_active as _require_container_active,
@@ -145,16 +144,8 @@ def cancel_task(tid: str, body: TaskCancel, request: Request):
                     reason,
                     body.actor_agent_id,
                     owner,
-                )
-                # ISS-42 (B12): the routed decision wakes the owner but carries no surfaced content,
-                # so a cancelled owner would wake to nothing actionable (the dead-end). Poke them with
-                # the reason + closure so they re-engage knowing it's closed and what they can do next.
-                _poke_path_forward(
-                    cur,
-                    t["container_id"],
-                    owner,
-                    body.actor_agent_id,
-                    f'Your task "{t["title"]}" (id {tid}) was cancelled by '
+                    # Deliver the stop instruction WITH the decision, once per owner.
+                    message=f'Your task "{t["title"]}" (id {tid}) was cancelled by '
                     f"{'a human' if is_human else 'the orchestrator'}: {reason}. It's "
                     f"closed — no further work is needed on it. If a follow-up is warranted, propose a "
                     f"new task (/orcha-task-new) or raise it with your coordinator.",

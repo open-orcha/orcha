@@ -38,7 +38,7 @@ def collect_directed_messages(
         # ABOVE conv_delivered_ts — the resident crashed / never booted — still surface.
         """SELECT e.ts, e.event_name, e.payload FROM agent_events e
            WHERE e.event_key = %s AND e.ts > %s
-             AND e.event_name IN ('prompt', 'task_message', 'task_assigned',
+             AND e.event_name IN ('prompt', 'decision_made', 'task_message', 'task_assigned',
                                    'task_created_unassigned', 'conversation_turn')
              AND NOT EXISTS (SELECT 1 FROM agent_event_acks a
                               WHERE a.agent_id = %s AND a.event_id = e.id)

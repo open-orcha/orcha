@@ -180,7 +180,7 @@ _NOTIF_TAXONOMY = {
 # (digest_snapshotted, container-scoped so it doesn't even reach an agent key — suppressed defensively)
 # and the live-conversation channel (conversation_turn — that is the chat transcript, delivered to the
 # agent's OWN key, and is NOT a notification). The classifier returns None for these (dropped).
-_NOTIF_SUPPRESSED = ("digest_snapshotted", "conversation_turn")
+_NOTIF_SUPPRESSED = ("digest_snapshotted", "conversation_turn", "task_result_mirrored")
 
 # payload fields carrying a short human-readable preview, in priority order.
 _NOTIF_PREVIEW_FIELDS = ("preview", "message", "reason", "feedback", "title")

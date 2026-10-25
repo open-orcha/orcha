@@ -61,7 +61,8 @@ def _post_decision_to_thread(
 
 
 def _route_close_reason(
-    cur, container_id, subject_type, subject_id, reason, actor_agent_id, target_agent_id
+    cur, container_id, subject_type, subject_id, reason, actor_agent_id, target_agent_id,
+    *, message=None,
 ):
     """B7/B0: persist a human's close/cancel REASON as a decision and route it to the
     OWNING agent so it learns WHY its item was force-closed on its next wake. Reuses the
@@ -94,6 +95,7 @@ def _route_close_reason(
                 "subject_id": str(subject_id),
                 "decision": "reject",
                 "reason": reason,
+                **({"message": message, "from_agent_id": actor_agent_id} if message else {}),
             },
         )
     # NB: the task-thread mirror (ISS-48) is posted ONCE by the caller, not here — this helper

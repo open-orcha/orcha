@@ -20,6 +20,7 @@ from portal_backend.review_routing import (
     pending_prereview_for_request as _pending_prereview_for_request,
 )
 from portal_backend.schemas.requests import RequestRespond
+from portal_backend.result_notifications import coalesce_result_messages
 
 
 @app.get("/api/requests/{rid}")
@@ -162,5 +163,6 @@ def respond_request(rid: str, body: RequestRespond, request: Request):
                 else None,
             },
         )
+        coalesce_result_messages(cur, r, body.response)
         conn.commit()
     return {"request_id": rid, "status": "answered", "unblocks_parent": unblocks_parent}

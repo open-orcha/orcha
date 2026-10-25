@@ -23,6 +23,7 @@ from portal_backend.identity_routes import trusted_actor as _trusted_actor
 from portal_backend.push_outbox import push_plan_approval as _push_plan_approval
 from portal_backend.provider_keys import container_llm_key as _container_llm_key
 from portal_backend.schemas.task_operations import TaskMessage
+from portal_backend.result_notifications import answered_result_for_message, lock_result_requests
 
 
 @app.post("/api/tasks/{tid}/messages", status_code=201)
@@ -68,6 +69,8 @@ def post_message(tid: str, body: TaskMessage, request: Request):
         # the JSONB only ever holds real, this-task files — never client-fabricated paths.
         llm_key = _container_llm_key(cur, str(t["container_id"]))
         attachments = _validate_attachment_refs(tid, body.attachments, api_key=llm_key)
+        if author_kind == "ai" and not attachments:
+            lock_result_requests(cur, tid, body.author_agent_id)
         cur.execute(
             "INSERT INTO task_messages (task_id, author_id, body, attachments) "
             "VALUES (%s, %s, %s, %s) RETURNING id",
@@ -106,6 +109,10 @@ def post_message(tid: str, body: TaskMessage, request: Request):
             target = str(row["agent_id"])
             if target == body.author_agent_id:
                 continue  # don't wake yourself for your own message
+            if author_kind == "ai" and not attachments and answered_result_for_message(
+                cur, tid, body.author_agent_id, target, body.body
+            ):
+                continue  # request_answered already delivers this exact result to this recipient
             notified += 1
             _publish_event(
                 cur,

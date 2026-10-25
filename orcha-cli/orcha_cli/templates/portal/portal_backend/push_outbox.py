@@ -157,16 +157,19 @@ def push_plan_approval(container_id, task_id, message_id) -> None:
     still in_progress, and no plan_approval decision exists yet. A later
     progress note on the same thread never re-fires."""
     try:
+        from portal_backend.task_list_query import plan_author_sql
+
         with db_cursor() as (conn, cur):
             if not _seeded(cur, container_id):
                 return
             cur.execute(
-                """SELECT t.title FROM tasks t
+                f"""SELECT t.title FROM tasks t
                    WHERE t.id=%(tid)s AND t.container_id=%(cid)s
                      AND t.status='in_progress'
                      AND %(mid)s = (SELECT m.id FROM task_messages m
                                      JOIN agents ma ON ma.id = m.author_id
                                     WHERE m.task_id=t.id AND ma.kind <> 'human'
+                                      AND {plan_author_sql('m')}
                                     ORDER BY m.created_at ASC, m.id ASC LIMIT 1)
                      AND NOT EXISTS (SELECT 1 FROM decisions d
                                       WHERE d.subject_type='plan_approval'

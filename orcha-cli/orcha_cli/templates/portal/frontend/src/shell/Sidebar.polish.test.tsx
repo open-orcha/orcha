@@ -33,7 +33,7 @@ function snapshot() {
     tasks: [
       // a plan awaiting the human: counted by the Needs-you nav, NOT by the row measure
       { id: "t1", title: "Plan the thing", status: "in_progress", assignee: "lead", assignees: ["lead"], plan_decision: null,
-        messages: [{ kind: "plan", from: "lead", at: iso(60_000), body: "## Plan\n- a" }] },
+        messages: [{ author_id: "a1", author_alias: "lead", is_human: false, created_at: iso(60_000), body: "## Plan\n- a" }] },
       { id: "t2", title: "Ship login", status: "needs_verification", assignees: ["mira"] },
     ],
     requests: [

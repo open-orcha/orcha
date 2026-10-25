@@ -150,6 +150,8 @@ def _drain_class(cur, event_name: str, payload: Optional[dict], target_id=None) 
         return {"bucket": _DRAIN_FYI, "task_id": None}
     if event_name == "decision_made":
         st, sid = payload.get("subject_type"), payload.get("subject_id")
+        if st == "task_close" and payload.get("message"):
+            return {"bucket": _DRAIN_TASKLESS_ACTIONABLE, "task_id": None}
         if (
             st == "plan_approval"
             and sid

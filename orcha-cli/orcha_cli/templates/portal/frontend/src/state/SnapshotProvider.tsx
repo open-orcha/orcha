@@ -777,10 +777,11 @@ export function autLevel(snap: Snapshot | null): string {
 }
 
 export function planMessageOf(t: Task): { body: string; from: string | null; at?: string; is_human: boolean } | null {
-  if (t.plan_message) {
-    return { body: t.plan_message.body, from: t.plan_message.author_alias || null, at: t.plan_message.at, is_human: false };
+  if (t.plan_message !== undefined) {
+    return t.plan_message ? { body: t.plan_message.body, from: t.plan_message.author_alias || null, at: t.plan_message.at, is_human: false } : null;
   }
-  const m = (t.thread || []).filter((x) => !x.is_human);
+  const owners = t.assignees?.length ? t.assignees : t.assignee ? [t.assignee] : [];
+  const m = (t.thread || []).filter((x) => !x.is_human && x.from && (!owners.length || owners.includes(x.from)));
   return m.length ? { body: m[0].body, from: m[0].from, at: m[0].at, is_human: false } : null;
 }
 export function pendingPlan(t: Task): boolean {
