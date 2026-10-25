@@ -126,6 +126,7 @@ KIND_TO_CATEGORY = {
     "request_answer": "requests",          # desktop: open request waiting on a human
     "request_close": "requests",           # desktop: answered request a human raised
     "request_answered": "requests",
+    "request_overdue": "requests",
     "request_closed": "requests",
     "task_request_accepted": "requests",
     # escalations & blockers

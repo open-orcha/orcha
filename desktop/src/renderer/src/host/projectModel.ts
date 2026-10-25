@@ -240,10 +240,19 @@ export function totalAttention(rows: ProjectRow[]): { count: number | null; part
   return { count: known === 0 ? null : count, partial, unknown }
 }
 
+/** Overdue decisions first, oldest deadline first; preserve the existing order otherwise. */
+export function orderAttention(items: AttentionItem[], now = Date.now()): AttentionItem[] {
+  const deadline = (i: AttentionItem): number => {
+    const at = Date.parse(i.expiresAt ?? '')
+    return i.kind === 'request_answer' && Number.isFinite(at) && at <= now ? at : Infinity
+  }
+  return [...items].sort((a, b) => deadline(a) - deadline(b))
+}
+
 /** The oldest-listed decision item to open when "Needs you" is clicked with no V2 project
  *  open (works with any portal version: it's a plain /tasks or /requests deep link). */
 export function firstDecision(items: AttentionItem[]): AttentionItem | null {
-  return items.find(isDecisionItem) ?? null
+  return orderAttention(items).find(isDecisionItem) ?? null
 }
 
 /** The portal's project sections. The host sidebar does NOT render these (design directive

@@ -141,7 +141,12 @@ export function selectAttention(snap: Snapshot | null, actingHumanId: string | n
     }
   }
 
-  items.sort((a, b) => KIND_ORDER[a.kind] - KIND_ORDER[b.kind] || ts(a.since) - ts(b.since));
+  const now = Date.now();
+  const overdueDeadline = (i: AttentionItem): number => {
+    const at = ts(i.request?.expires_at ?? null);
+    return i.kind === "request" && at <= now ? at : Infinity;
+  };
+  items.sort((a, b) => overdueDeadline(a) - overdueDeadline(b) || KIND_ORDER[a.kind] - KIND_ORDER[b.kind] || ts(a.since) - ts(b.since));
   const partial =
     (snap.task_total != null && snap.task_total > (snap.tasks ?? []).length) ||
     (snap.request_total != null && snap.request_total > (snap.requests ?? []).length);

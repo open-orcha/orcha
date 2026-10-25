@@ -344,3 +344,11 @@ class ContainerLimitsResponse(BaseModel):
     )
     min_max_auto_agents: int = MAX_AUTO_AGENTS_MIN
     max_max_auto_agents: int = MAX_AUTO_AGENTS_MAX
+
+
+class SweepExpiredResponse(BaseModel):
+    """Expiry outcomes; reminders preserve the recipient and open request status."""
+    escalated_count: int
+    request_ids: list[str]
+    reminded_count: int
+    reminded_request_ids: list[str]
