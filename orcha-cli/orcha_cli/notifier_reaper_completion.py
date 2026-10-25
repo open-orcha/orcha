@@ -6,6 +6,7 @@ import json
 
 from . import notifier_deliverables
 from . import notifier_worktree_gc
+from . import notifier_workflow
 
 
 def _save_task_result(api_base, aid, worker, diff, failed_drains, services):
@@ -83,6 +84,7 @@ def handle_exited(
             pid=proc.pid,
             drain_desc="drained",
         )
+        notifier_workflow.confirm_exit(api_base, aid, worker)
         return
     if services._finish_run(
         api_base,
@@ -93,6 +95,7 @@ def handle_exited(
         diff,
     ):
         services._reap_sandbox_artifacts(worker)  # I4: clean completion — reap once stamped
+        notifier_workflow.confirm_exit(api_base, aid, worker)
     if is_task_bound:
         # Non-code deliverables: upload <cwd>/.orcha/outputs/* to the task (no-op when the
         # folder is absent; best-effort, never raises; before the checkpoint commit).
@@ -168,6 +171,7 @@ def handle_human_stop(api_base, aid, worker, live_workers, renew, quiet, service
     ):
         # I4 (force-rm: takes a still-stopping container down with it, post-stamp)
         services._reap_sandbox_artifacts(worker)
+        notifier_workflow.confirm_exit(api_base, aid, worker)
     services._safe_teardown_worktree(
         worker.get("base_cwd"), worker.get("worktree"), worker.get("branch")
     )

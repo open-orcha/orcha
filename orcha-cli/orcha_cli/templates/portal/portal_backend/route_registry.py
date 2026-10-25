@@ -102,6 +102,7 @@ from portal_backend import (
     worker_run_finish_routes,
     worker_run_read_routes,
     worker_run_start_routes,
+    workflow_worker_routes,
 )
 
 ROUTE_MODULES = (

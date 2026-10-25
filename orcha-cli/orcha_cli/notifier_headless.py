@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import pathlib
+import json
+import sys
 from typing import Optional
 
 # Remote-runner spec §3.2–3.4: sandbox wake execution. Imported as a module so
@@ -53,6 +55,7 @@ def spawn_headless(
     conversation: bool = False,
     spawn_info: Optional[dict] = None,
     sandbox_sidecar: bool = False,
+    workflow_launch: Optional[dict] = None,
     services,
 ) -> tuple[bool, str, object]:
     """Launch a one-shot worker while resolving patchable services through the facade.
@@ -80,7 +83,7 @@ def spawn_headless(
             "--dangerously-bypass-approvals-and-sandbox",
             "--skip-git-repo-check",
         ]
-        if codex_supports_hook_trust_bypass(executable, services):
+        if not workflow_launch and codex_supports_hook_trust_bypass(executable, services):
             # Project hooks (<repo>/.codex/hooks.json — the per-file edit lock) need
             # persisted trust or this flag; a headless worker cannot answer the prompt.
             argv.append("--dangerously-bypass-hook-trust")
@@ -169,6 +172,8 @@ def spawn_headless(
     # client lives as long as the container and exits with its exit code, and the
     # `-e KEY` passthrough flags pick their values from the env built below.
     sandbox_cfg = _sandbox.SandboxConfig.load(cwd)
+    if workflow_launch and sandbox_cfg.enabled:
+        return False, "(workflow remote launch is not integrated)", None
     if sandbox_cfg.enabled:
         reason = _sandbox.preflight(sandbox_cfg, cwd)
         if reason is not None:
@@ -262,6 +267,8 @@ def spawn_headless(
         return False, repr_, None
 
     env = personal_session.strip(dict(services.os.environ))
+    env.pop("ORCHA_WORKFLOW_RUNNER_CREDENTIALS", None)
+    env.pop("ORCHA_WORKFLOW_RUNNER_TOKEN", None)
     if alias:
         env["ORCHA_ALIAS"] = alias
     if run_token:
@@ -285,7 +292,14 @@ def spawn_headless(
             out = open(log_path, "ab")
         except OSError:
             out = services.subprocess.DEVNULL
+    proc = None
     try:
+        configuration = {**workflow_launch, "command": argv} if workflow_launch else None
+        if workflow_launch:
+            # Use an absolute trusted module path: the task checkout must not be
+            # able to substitute an importable bootstrap before activation.
+            from . import workflow_bootstrap
+            argv = [sys.executable, str(pathlib.Path(workflow_bootstrap.__file__).resolve())]
         proc = services.subprocess.Popen(
             argv,
             cwd=cwd,
@@ -296,11 +310,17 @@ def spawn_headless(
                 if out is not services.subprocess.DEVNULL
                 else services.subprocess.DEVNULL
             ),
-            stdin=services.subprocess.DEVNULL,
+            stdin=services.subprocess.PIPE if workflow_launch else services.subprocess.DEVNULL,
             start_new_session=True,
         )
+        if workflow_launch:
+            proc.stdin.write(json.dumps(configuration).encode())
+            proc.stdin.close()
         return True, repr_, proc
     except (OSError, services.subprocess.SubprocessError):
+        if workflow_launch and proc is not None:
+            # Retain the process handle even if delivery/acknowledgment is unknown.
+            return True, repr_, proc
         return False, repr_, None
     finally:
         if out is not services.subprocess.DEVNULL:

@@ -194,6 +194,9 @@ def process_candidate(
     prompt = services.build_wake_prompt(candidate)
     kind = services.select_transport(candidate)
     event = services.derive_wake_event(candidate)
+    if candidate.get("workflow_id") and kind != "ephemeral":
+        # tmux/resident/manual workers have no inert activation boundary yet.
+        return None
     if kind == "ephemeral" and not dry_run:
         skipped = _grade_ephemeral(
             api_base, candidate, event, context, quiet, services
