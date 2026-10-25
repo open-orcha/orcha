@@ -36,13 +36,12 @@ def test_pages_detect_plan_from_plan_message_not_thread():
     # V2: the shell's bell / notification centre no longer detects plans itself — it
     # reads the ONE shared attention selector (state/attention.ts), which routes
     # through planMessageOf. Pin both halves so the guarantee can't silently regress.
-    for fname in (("pages", "tasks", "TaskDetail.tsx"), ("pages", "agents", "AgentsPage.tsx"), ("state", "attention.ts")):
+    for fname in (("pages", "tasks", "TaskDetail.tsx"), ("pages", "agents", "AgentsPage.tsx"),
+                  ("pages", "home", "HomePage.tsx"), ("state", "attention.ts")):
         src = (SRC.joinpath(*fname)).read_text()
         assert "planMessageOf" in src, f"{fname[-1]} doesn't use the shared plan detector"
     shell = (SRC / "shell" / "Shell.tsx").read_text()
     assert "useAttention()" in shell, "Shell's needs-you zone bypasses the shared attention selector"
-    home = (SRC / "pages" / "home" / "HomePage.tsx").read_text()
-    assert "if (t.plan_message) return t.plan_message.body" in home, "home plan text doesn't read plan_message first"
 
 
 def test_home_activity_feed_uses_message_summary():
