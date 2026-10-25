@@ -962,6 +962,34 @@ describe('App — Settings › Agents wiring', () => {
     fireEvent.keyDown(view, { key: 'Escape' })
     await waitFor(() => expect(screen.queryByTestId('settings-view')).not.toBeInTheDocument())
   })
+
+  it('Storage uses the sidebar names through App and Settings, including a stopped project', async () => {
+    stub([
+      runningStack,
+      { ...runningStack, project: 'orcha-stopped', projectShort: 'stopped', running: false, portalStatus: 'Down' }
+    ], demoGet, demoAttention)
+    withAgents(['claude'])
+    Object.assign(window.orchaDesktop, {
+      storageScan: vi.fn().mockResolvedValue({ items: [], inUse: [] }),
+      storageWorktrees: vi.fn().mockResolvedValue([
+        { project: 'orcha-x', projectShort: 'x', folder: '/Users/me/x', items: [], reclaimable_bytes: 0 },
+        { project: 'orcha-stopped', projectShort: 'stopped', folder: '/Users/me/stopped', items: [], reclaimable_bytes: 0 }
+      ]),
+      storageCleanWorktrees: vi.fn()
+    })
+    render(<App />)
+    const sidebar = await screen.findByTestId('host-sidebar')
+    await within(sidebar).findByRole('button', { name: /^Second/ })
+    expect(within(sidebar).getByRole('button', { name: /^Demo/ })).toBeInTheDocument()
+    expect(within(sidebar).getByRole('button', { name: /^stopped/ })).toBeInTheDocument()
+    const user = userEvent.setup()
+    await user.click(within(sidebar).getByTestId('sidebar-settings'))
+    await user.click(screen.getByTestId('settings-nav-storage'))
+    const live = await screen.findByTestId('storage-wt-x')
+    expect(within(live).getByRole('button', { expanded: false })).toHaveTextContent('Demo, Second')
+    const stopped = screen.getByTestId('storage-wt-stopped')
+    expect(within(stopped).getByRole('button', { expanded: false })).toHaveTextContent('stopped')
+  })
 })
 
 describe('App — Remove project…', () => {
