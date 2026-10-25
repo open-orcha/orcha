@@ -1,0 +1,271 @@
+"""Typed Workflows contracts. OpenAPI generated from these models is authoritative."""
+
+from datetime import datetime
+from typing import Annotated, Literal
+
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+
+Name = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)
+]
+Text = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=4000)
+]
+Key = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)
+]
+
+
+class Input(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class Blocker(BaseModel):
+    code: str
+    message: str
+    task_id: str | None = None
+
+
+class Capability(BaseModel):
+    workflow_read: bool = True
+    workflow_human_write: bool = False
+    reason: str | None = "integration_required"
+
+
+class AvailableAction(BaseModel):
+    action: str
+    enabled: bool
+    reason: str | None = None
+
+
+class EvidenceItem(Input):
+    item_id: str
+    deliverable_id: str
+    deliverable_version: int = Field(ge=1)
+    sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+
+class EvidenceReference(Input):
+    evidence_set_id: str
+    items: list[EvidenceItem] = Field(min_length=1)
+
+
+class EvidenceBasis(Input):
+    narrative: Text
+    task_revisions: dict[str, int] = Field(default_factory=dict)
+    evidence_sets: list[EvidenceReference] = Field(default_factory=list)
+
+
+class NewTask(Input):
+    client_key: Key
+    title: Name
+    description: str = Field(default="", max_length=4000)
+    definition_of_done: str = Field(default="", max_length=4000)
+    assignee_id: str | None = None
+    priority: int = 100
+    depends_on: list[str] = Field(default_factory=list, max_length=3)
+
+
+class NewObjective(Input):
+    title: Name
+    criteria: Text
+
+
+class WorkflowDraft(Input):
+    title: Name
+    goal: Text
+    execution_mode: Literal["serial", "parallel"] = "serial"
+    objectives: list[NewObjective] = Field(default_factory=list, max_length=50)
+    tasks: list[NewTask] = Field(default_factory=list, max_length=200)
+    existing_task_ids: list[str] = Field(default_factory=list, max_length=200)
+    import_acceptances: dict[str, EvidenceReference] = Field(default_factory=dict)
+
+
+class WorkflowCreate(WorkflowDraft):
+    idempotency_key: Key
+    preview_digest: str | None = None
+
+
+class Mutation(Input):
+    expected_revision: int = Field(ge=1)
+    idempotency_key: Key
+    reason: str = Field(default="", max_length=4000)
+
+
+class TaskMutation(Mutation):
+    expected_work_revision: int = Field(ge=1)
+
+
+class WorkflowPatch(Mutation):
+    title: Name | None = None
+    goal: Text | None = None
+    execution_mode: Literal["serial", "parallel"] | None = None
+    task_limit: int | None = Field(default=None, ge=1)
+    round_limit: int | None = Field(default=None, ge=1)
+
+
+class TaskBatch(Mutation):
+    tasks: list[NewTask] = Field(min_length=1, max_length=200)
+
+
+class ImportPreview(Input):
+    task_ids: list[str] = Field(min_length=1, max_length=200)
+    acceptances: dict[str, EvidenceReference] = Field(default_factory=dict)
+
+
+class ImportTasks(ImportPreview, Mutation):
+    preview_digest: str
+
+
+class ReleaseTasks(Mutation):
+    task_ids: list[str] = Field(default_factory=list, max_length=200)
+    task_revisions: dict[str, int] = Field(default_factory=dict)
+    holds: list[Literal["start", "human"]] = Field(
+        default_factory=lambda: ["start"], min_length=1, max_length=2
+    )
+
+
+class PrepareTask(TaskMutation):
+    title: Name | None = None
+    description: str | None = Field(default=None, max_length=4000)
+    definition_of_done: Text | None = None
+    assignee_id: str | None = None
+
+
+class DependencyEdit(TaskMutation):
+    depends_on: list[str] = Field(max_length=3)
+
+
+class RetryTask(TaskMutation):
+    assignee_id: str | None = None
+
+
+class OutsideResult(TaskMutation):
+    evidence: EvidenceBasis
+    produced_by: str | None = Field(default=None, max_length=200)
+
+
+class AcceptTask(TaskMutation):
+    evidence: EvidenceReference
+
+
+class AcceptBasis(Mutation):
+    evidence: EvidenceBasis
+
+
+class TransferOwner(Mutation):
+    new_owner_id: str
+
+
+class ReviewRound(Mutation):
+    loop_key: Key
+    review_task_id: str
+    reviewed_artifact: EvidenceReference
+    outcome: Literal["changes_requested", "accepted", "inconclusive"]
+    correction: NewTask | None = None
+    next_review: NewTask | None = None
+
+
+class MoveTasks(Mutation):
+    task_ids: list[str] = Field(min_length=1)
+    destination_workflow_id: str | None = None
+    destination_revision: int | None = Field(default=None, ge=1)
+
+
+class DisplayState(BaseModel):
+    label: str
+    release_available: bool = False
+    release_available_at: datetime | None = None
+    warning: str | None = None
+
+
+class WorkflowTask(BaseModel):
+    id: str
+    title: str
+    description: str | None = None
+    definition_of_done: str
+    status: str
+    work_revision: int
+    preparation_state: str | None
+    start_hold: bool
+    human_hold_by: str | None
+    human_hold_reason: str | None
+    awaiting_owner_decision: str | None
+    withdrawn_at: datetime | None
+    priority: int
+    assignee_ids: list[str]
+    depends_on: list[str]
+    can_start: bool
+    blockers: list[Blocker]
+    display_state: DisplayState
+    available_actions: list[AvailableAction]
+
+
+class Progress(BaseModel):
+    accepted: int
+    total: int
+    percent: int | None
+    withdrawn: int
+    objectives_accepted: int
+    objectives_total: int
+
+
+class CompletionCheck(BaseModel):
+    can_finish: bool
+    blockers: list[Blocker]
+
+
+class Objective(BaseModel):
+    id: str
+    title: str
+    criteria: str
+    revision: int
+    accepted_revision: int | None
+    evidence: EvidenceBasis | None = None
+
+
+class WorkflowDetail(BaseModel):
+    id: str
+    container_id: str
+    title: str
+    goal: str
+    owner_human_id: str
+    status: Literal["active", "paused", "completed", "cancelled"]
+    execution_mode: Literal["serial", "parallel"]
+    launch_enabled: bool
+    revision: int
+    graph_revision: int
+    scope_revision: int
+    goal_revision: int
+    goal_accepted_revision: int | None
+    task_limit: int
+    round_limit: int
+    limit_reached: bool
+    capability: Capability
+    available_actions: list[AvailableAction]
+    progress: Progress
+    completion: CompletionCheck
+    tasks: list[WorkflowTask]
+    objectives: list[Objective]
+
+
+class WorkflowList(BaseModel):
+    workflows: list[WorkflowDetail]
+    capability: Capability
+    next_cursor: str | None = None
+
+
+class Preview(BaseModel):
+    graph_revision: int
+    preview_digest: str
+    selected_task_ids: list[str]
+    required_task_ids: list[str]
+    blockers: list[Blocker]
+    save_starts_work: Literal[False] = False
+
+
+class Receipt(BaseModel):
+    status: Literal["saved", "not_found"]
+    operation: str
+    idempotency_key: str
+    result: WorkflowDetail | None = None
