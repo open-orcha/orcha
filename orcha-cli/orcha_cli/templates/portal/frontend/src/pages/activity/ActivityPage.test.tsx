@@ -106,6 +106,20 @@ describe("ActivityPage", () => {
     expect(calls.some((c) => c.url.startsWith("/api/agents/h1/runs"))).toBe(false);
   });
 
+  it("shows the real provider error in the failed row without opening the inspector", async () => {
+    const reason = "API Error: Can't reach the API server — check your internet or DNS (ENOTFOUND)";
+    const original = RUNS_A2[0];
+    RUNS_A2[0] = { ...original, failure_reason: reason } as typeof original;
+    try {
+      mount("/activity?state=failed");
+      await waitFor(() => expect(rows().length).toBe(2));
+      const row = rows().find((r) => r.textContent?.includes("scout"))!;
+      expect(row.textContent).toContain(reason);
+      expect(row.textContent).not.toContain("non-zero exit code");
+      expect(screen.queryByRole("region", { name: "Run r-scout" })).toBeNull();
+    } finally { RUNS_A2[0] = original; }
+  });
+
   it("the state filter lives in the URL and filters by outcome bucket", async () => {
     mount("/activity?state=failed");
     await waitFor(() => expect(rows().length).toBe(2));

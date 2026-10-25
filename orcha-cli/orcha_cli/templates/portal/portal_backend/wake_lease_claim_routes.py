@@ -6,6 +6,7 @@ from portal_backend import sql
 from portal_backend.agent_status import log_event
 from portal_backend.application import app
 from portal_backend.budget_routes import agent_budget_block
+from portal_backend.run_failure_backoff import failure_block
 from portal_backend.database import db_cursor
 from portal_backend.guards import require_agent, valid_uuid
 from portal_backend.identity_routes import require_machine_lane_member
@@ -87,6 +88,10 @@ def wake_claim(aid: str, body: WakeClaim, request: Request):
                     "budget_paused": True,
                     "lane": lane,
                 }
+        if lane == "work" and body.lease_kind != "live":
+            failure_reason = failure_block(cur, aid)
+            if failure_reason:
+                return {"agent_id": aid, "claimed": False, "reason": failure_reason, "lane": lane}
         lease_until = sql.from_now(body.lease_ttl)
         if lane == "conversation":
             cur.execute(

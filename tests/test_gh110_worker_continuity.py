@@ -55,8 +55,8 @@ class _ExitedProc:
 
 
 def _task_worker(work, wt, branch, log_path, runtime, *, task_id, wake_ack_ts=42.0):
-    # GH #58 (R5): mirrors the spawn-path shape — no pending_ack_ts stash anymore; wake_ack_ts is
-    # the bounded-release cursor _drain_task_failure advances to at FAILED_DRAIN_MAX.
+    # Mirrors the spawn-path shape. A failed drain must not consume wake_ack_ts,
+    # even at the retry bound: the durable API circuit now pauses retries.
     return {"proc": _ExitedProc(), "run_id": "RUN-1", "log_path": str(log_path),
             "worktree": wt, "branch": branch, "base_cwd": str(work),
             "task_worktree": True, "started_ts": 1.0, "wake_ack_ts": wake_ack_ts,
@@ -283,7 +283,7 @@ def test_continuity_digest_synthesized_and_no_clobber(tmp_path, monkeypatch):
 
 # ---------- bound test (R3a/R5): the withheld cursor is bounded + survives live_workers.pop ----------
 
-def test_failed_drain_bound_advances_cursor_after_N_and_clears_on_success(tmp_path, monkeypatch):
+def test_failed_drain_bound_preserves_cursor_and_clears_on_success(tmp_path, monkeypatch):
     work = _make_repo(tmp_path)
     wt, branch = notifier._provision_task_worktree(str(work), "Andrew", "flaky")
     fd, hold = {}, {}                                                 # DAEMON-SCOPE — survives across wakes
@@ -308,12 +308,12 @@ def test_failed_drain_bound_advances_cursor_after_N_and_clears_on_success(tmp_pa
     one_wake(_success_log(tmp_path), monkeypatch)
     assert ("agent-X", "flaky") not in fd                            # cleared on success
 
-    # now FAILED_DRAIN_MAX consecutive fails → on the Nth, advance the cursor + surface a failure
+    # At the bound, surface the failure but preserve pending work for human Resume.
     posts = None
     for i in range(notifier.FAILED_DRAIN_MAX):
         posts = one_wake(_rate_limit_log(tmp_path, f"rlx{i}.log"), monkeypatch)
     ack = next(b for u, b in posts if u.endswith("/wake-ack"))
-    assert ack.get("delivered_ts") == 42.0                          # force-advanced to wake_ack_ts at the bound
+    assert "delivered_ts" not in ack                               # never consume failed work
     assert any("failed to finish" in (b.get("body") or "").lower()
                for u, b in posts if u.endswith("/messages"))        # human-visible failure line
     assert ("agent-X", "flaky") not in fd                           # counter cleared after release
@@ -543,21 +543,17 @@ def test_codex_lingering_terminal_failure_preserved_and_cursor_withheld(tmp_path
     assert fd[("agent-X", "fail-task")] == 1                         # failed drain counted, not cleared
 
 
-# ---------- GH #58 R5 blocker: a REAL tick()-spawned worker still stops the failure hot-loop ----------
+# ---------- A real tick()-spawned worker preserves work at the circuit-breaker bound ----------
 
 @pytest.mark.asyncio
-async def test_tick_spawned_task_worker_bound_release_advances_real_cursor(
+async def test_tick_spawned_task_worker_bound_release_preserves_real_cursor(
         tmp_path, client, container, make_agent, make_task, db, monkeypatch):
-    """PR #167 R5 blocker: the spawn path retired the pending_ack_ts stash, so a worker produced by
-    the REAL tick() (not a hand-seeded live-worker dict) reached FAILED_DRAIN_MAX with no release
-    cursor — the bound-hit wake-ack posted delivered_ts=None ("no advance"), left the same events
-    pending, and the identical failure cycle restarted from zero instead of stopping.
+    """Real wake-scan + tick create the worker; then real reap runs through the drain bound.
 
-    Drives the real wake-scan + tick() to build the tracked worker, then reaps that worker (only
-    proc/log_path overridden to simulate each Codex-429 exit) through FAILED_DRAIN_MAX drains.
-
-    TEETH: drop wake_ack_ts from tick's live_workers entry (the old shape) and the bound-hit ack
-    has no real delivered_ts → the final asserts flip red."""
+    Even though the worker carries a valid cursor, failed work must stay pending. The API's
+    durable failure circuit prevents loops; the full API pause/resume path is covered in
+    test_run_failure_recovery. Reintroducing cursor consumption fails this test.
+    """
     work = _make_repo(tmp_path)
     andy = await make_agent("TickAndy")
     poster = await make_agent("TickPoster")
@@ -605,7 +601,7 @@ async def test_tick_spawned_task_worker_bound_release_advances_real_cursor(
     assert spawned is not None, "tick must track TickAndy's ephemeral task worker"
     assert spawned["task_worktree"] is True                        # durable per-(agent+task) worktree
     cursor = spawned.get("wake_ack_ts")
-    assert cursor is not None                                      # the bounded-release cursor EXISTS
+    assert cursor is not None                                      # proves there IS a cursor to preserve
 
     # now drive THAT worker shape through FAILED_DRAIN_MAX consecutive Codex-429 drains
     fd, hold = {}, {}
@@ -624,8 +620,7 @@ async def test_tick_spawned_task_worker_bound_release_advances_real_cursor(
             assert "delivered_ts" not in ack                       # withheld → retry next wake
 
     assert ack["kind"] == "worker_drain_failed_released"
-    assert ack.get("delivered_ts") == cursor                       # released on the REAL stashed cursor
-    assert ack.get("delivered_ts") is not None                     # ...not a None no-advance
+    assert "delivered_ts" not in ack                               # release lease, preserve directive
     assert (andy["agent_id"], tid) not in fd                       # counter cleared after release
 
 

@@ -6,7 +6,9 @@ from portal_backend.agent_status import log_event
 from portal_backend.codex_pricing import estimate_codex_cost_usd
 from portal_backend.model_policy import resolve_model_runtime
 from portal_backend.application import app
-from portal_backend import stream_signal
+from portal_backend import stream_signal, sql
+from portal_backend.run_failure_backoff import record_run_outcome
+from portal_backend.run_restart_recovery import requeue_interrupted_run
 from portal_backend.database import db_cursor
 from portal_backend.events import publish_event
 from portal_backend.guards import require_kind, valid_uuid
@@ -70,8 +72,7 @@ def finish_worker_run(run_id: str, body: WorkerRunFinish, request: Request):
         )
     with db_cursor() as (conn, cur):
         cur.execute(
-            "SELECT run_id, agent_id, task_id, wake_kind, wake_event, conversation_id, runtime "
-            "FROM worker_runs WHERE run_id=%s",
+            "SELECT * FROM worker_runs WHERE run_id=%s" + sql.for_update(),
             (run_id,),
         )
         existing = cur.fetchone()
@@ -118,6 +119,10 @@ def finish_worker_run(run_id: str, body: WorkerRunFinish, request: Request):
             ),
         )
         row = cur.fetchone()
+        existing["task_id"] = existing["task_id"] or late_task_id
+        if existing["status"] in ("running", "orphaned"):
+            record_run_outcome(cur, existing, body)
+            requeue_interrupted_run(cur, existing, body)
         revoke_tokens_for_runs(cur, [run_id])
         prune_old_run_detail(cur, row["agent_id"])
         # Live chat: a container-wide (never agent-targeted — it must not wake anyone)

@@ -1,7 +1,7 @@
 {
   "name": "orcha-desktop",
-  "version": "1.2.0",
-  "description": "Embodent — desktop stack manager for orcha-* Docker stacks (Orcha#237)",
+  "version": "1.2.1",
+  "description": "Embodent \u2014 desktop stack manager for orcha-* Docker stacks (Orcha#237)",
   "main": "./out/main/index.js",
   "author": "Orcha",
   "private": true,

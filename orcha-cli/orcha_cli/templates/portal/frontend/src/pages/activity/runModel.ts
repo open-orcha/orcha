@@ -73,7 +73,7 @@ export interface RunOutcome {
   reason: string | null;
 }
 
-export function runOutcome(r: Pick<Run, "status" | "exit_code" | "kill_reason">): RunOutcome {
+export function runOutcome(r: Pick<Run, "status" | "exit_code" | "kill_reason" | "failure_reason">): RunOutcome {
   const st = r.status || "unknown";
   const exit = r.exit_code;
   const cause = killCause(r.kill_reason);
@@ -81,24 +81,24 @@ export function runOutcome(r: Pick<Run, "status" | "exit_code" | "kill_reason">)
     case "running":
       return { bucket: "running", label: "Running", dot: "working", reason: null };
     case "exited":
-      if (exit != null && exit !== 0) return { bucket: "failed", label: "Exited · exit " + exit, dot: "failed", reason: "non-zero exit code " + exit };
+      if (exit != null && exit !== 0) return { bucket: "failed", label: "Exited · exit " + exit, dot: "failed", reason: r.failure_reason || "non-zero exit code " + exit };
       return { bucket: "finished", label: exit != null ? "Exited · exit " + exit : "Exited", dot: "completed", reason: null };
     case "killed":
       if (cause === "human_stop") return { bucket: "failed", label: "Stopped", dot: "cancelled", reason: causeText(cause) };
       return { bucket: "failed", label: "Killed", dot: "failed", reason: cause ? causeText(cause) : "killed (no reason recorded)" };
     case "rate_limited":
-      return { bucket: "failed", label: "Rate limited", dot: "blocked", reason: "the model provider rate-limited this run" };
+      return { bucket: "failed", label: "Rate limited", dot: "blocked", reason: r.failure_reason || "the model provider rate-limited this run" };
     case "orphaned":
       return { bucket: "failed", label: "Orphaned", dot: "terminated", reason: cause ? causeText(cause) : "the worker process was lost" };
     case "failed":
-      return { bucket: "failed", label: "Failed", dot: "failed", reason: cause ? causeText(cause) : exit != null ? "exit " + exit : null };
+      return { bucket: "failed", label: "Failed", dot: "failed", reason: r.failure_reason || (cause ? causeText(cause) : exit != null ? "exit " + exit : null) };
     default:
       // forward-compat: an unknown status is shown verbatim, never as success
       return { bucket: "failed", label: st, dot: st, reason: null };
   }
 }
 
-export function matchesState(r: Pick<Run, "status" | "exit_code" | "kill_reason">, f: RunStateFilter): boolean {
+export function matchesState(r: Pick<Run, "status" | "exit_code" | "kill_reason" | "failure_reason">, f: RunStateFilter): boolean {
   return f === "all" || runOutcome(r).bucket === f;
 }
 
@@ -175,7 +175,7 @@ export function reasonTone(r: Pick<Run, "status" | "kill_reason">): "muted" | "w
 }
 
 /** True when the backend status adds information the outcome label doesn't already say. */
-export function rawStatusDiffers(r: Pick<Run, "status" | "exit_code" | "kill_reason">): boolean {
+export function rawStatusDiffers(r: Pick<Run, "status" | "exit_code" | "kill_reason" | "failure_reason">): boolean {
   const st = (r.status || "").replace(/_/g, " ").toLowerCase();
   if (!st) return false;
   return !runOutcome(r).label.toLowerCase().startsWith(st);

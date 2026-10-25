@@ -4,6 +4,7 @@ from typing import Optional
 
 from portal_backend import sql
 from portal_backend.container_metrics_routes import OUTPUT_TAIL_BYTES
+from portal_backend.run_failure_text import failure_reason
 
 # Retention: each agent keeps full detail (output, diff, streamed line log) for its newest
 # runs only. Older finished runs keep their row and stats; see prune_old_run_detail.
@@ -37,6 +38,7 @@ def run_row(row: dict) -> dict:
         "base_cwd": row.get("base_cwd"),
         "sandbox_container_id": row.get("sandbox_container_id"),
         "output": row.get("output"),
+        "failure_reason": failure_reason(row),
         "diff": row.get("diff"),
         "kill_reason": row.get("kill_reason"),
         "started_at": (row["started_at"].isoformat() if row["started_at"] else None),
