@@ -47,6 +47,8 @@ def start_worker_run(aid: str, body: WorkerRunStart, request: Request):
         ):
             task_id = infer_agent_active_task(cur, aid)
             lazy_attributed = task_id is not None
+        from portal_backend.workflow_worker_auth import refuse_legacy_workflow_run
+        refuse_legacy_workflow_run(cur, task_id, aid)
         if body.conversation_id is not None:
             cur.execute(
                 "SELECT agent_id FROM conversations WHERE id=%s",

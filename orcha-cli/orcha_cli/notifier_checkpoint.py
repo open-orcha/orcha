@@ -13,6 +13,12 @@ def checkpoint_and_respawn(
     services,
 ) -> None:
     """Gracefully checkpoint a progressing worker and replace its process."""
+    if worker.get("workflow"):
+        # Continuation must use confirm-stopped -> continue-reserve -> bootstrap.
+        # The legacy replacement below mints a token before spawning, so refuse it.
+        worker["workflow_checkpoint_unsupported"] = True
+        worker["respawns"] = services.HARD_CAP_RESPAWN_MAX
+        return
     process = worker["proc"]
     context = worker.get("respawn_ctx") or {}
     base_cwd = worker.get("base_cwd")
