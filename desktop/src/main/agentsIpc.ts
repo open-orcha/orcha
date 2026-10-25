@@ -36,7 +36,7 @@ export interface AgentsControllerDeps {
   load(): { prefs: AgentPrefs; migrated: boolean }
   save(prefs: AgentPrefs): void
   openExternal(url: string): Promise<void>
-  copyText(text: string): void
+  copyText(text: string): Promise<void>
   /** Prefs or detection changed (push to the renderer, rebuild the app menu). */
   onChange(s: AgentsSnapshot): void
 }
@@ -118,10 +118,10 @@ export function createAgentsController(deps: AgentsControllerDeps) {
       if (!url) throw new AgentsRequestError('INVALID')
       await deps.openExternal(url)
     },
-    copyInstall(f: SenderFacts, raw: unknown): void {
+    async copyInstall(f: SenderFacts, raw: unknown): Promise<void> {
       guard(f)
       if (!isAgentId(raw)) throw new AgentsRequestError('INVALID')
-      deps.copyText(agentDef(raw).install)
+      await deps.copyText(agentDef(raw).install)
     },
     /** What main runs for an agent tab (terminalIpc): resolved path + composed argv. */
     launchFor(id: AgentId, probe: boolean): AgentLaunch {

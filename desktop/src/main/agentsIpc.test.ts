@@ -21,7 +21,7 @@ function setup(opts: { prefs?: AgentPrefs; migrated?: boolean; installed?: strin
   })
   const save = vi.fn()
   const openExternal = vi.fn().mockResolvedValue(undefined)
-  const copyText = vi.fn()
+  const copyText = vi.fn<(text: string) => Promise<void>>().mockResolvedValue(undefined)
   const onChange = vi.fn()
   const ctl = createAgentsController({
     detector,
@@ -36,14 +36,15 @@ function setup(opts: { prefs?: AgentPrefs; migrated?: boolean; installed?: strin
 
 describe('agents controller', () => {
   it('only the manager window main frame may call it', async () => {
-    const { ctl } = setup()
+    const { ctl, copyText } = setup()
     for (const f of [PORTAL, IFRAME]) {
       await expect(ctl.get(f)).rejects.toBeInstanceOf(AgentsRequestError)
       await expect(ctl.refresh(f)).rejects.toBeInstanceOf(AgentsRequestError)
       expect(() => ctl.update(f, { op: 'permissionMode', mode: 'manual' })).toThrow(AgentsRequestError)
       await expect(ctl.openDocs(f, 'claude')).rejects.toBeInstanceOf(AgentsRequestError)
-      expect(() => ctl.copyInstall(f, 'claude')).toThrow(AgentsRequestError)
+      await expect(ctl.copyInstall(f, 'claude')).rejects.toMatchObject({ code: 'FORBIDDEN' })
     }
+    expect(copyText).not.toHaveBeenCalled()
   })
 
   it('get runs the first detection and reports installed/paths', async () => {
@@ -120,11 +121,39 @@ describe('agents controller', () => {
     expect(openExternal).toHaveBeenCalledTimes(1)
   })
 
-  it('copyInstall copies the official command for an id (never renderer text)', () => {
+  it('copyInstall copies the official command for an id (never renderer text)', async () => {
     const { ctl, copyText } = setup()
-    ctl.copyInstall(HOST, 'gemini')
+    await ctl.copyInstall(HOST, 'gemini')
     expect(copyText).toHaveBeenCalledWith('npm install -g @google/gemini-cli')
-    expect(() => ctl.copyInstall(HOST, 'rm -rf /')).toThrow(AgentsRequestError)
+    await expect(ctl.copyInstall(HOST, 'rm -rf /')).rejects.toMatchObject({ code: 'INVALID' })
+    expect(copyText).toHaveBeenCalledTimes(1)
+  })
+
+  it('copyInstall waits for the clipboard write before reporting success', async () => {
+    const { ctl, copyText } = setup()
+    let finishWrite!: () => void
+    copyText.mockReturnValueOnce(new Promise<void>((resolve) => { finishWrite = resolve }))
+    const copied = vi.fn()
+    const copying = Promise.resolve(ctl.copyInstall(HOST, 'gemini')).then(copied)
+
+    await Promise.resolve()
+    expect(copyText).toHaveBeenCalledWith('npm install -g @google/gemini-cli')
+    expect(copied).not.toHaveBeenCalled()
+
+    finishWrite()
+    await copying
+    expect(copied).toHaveBeenCalledTimes(1)
+  })
+
+  it('copyInstall propagates clipboard write rejection to the caller', async () => {
+    const { ctl, copyText } = setup()
+    const error = new Error('Clipboard unavailable')
+    const write = Promise.reject(error)
+    // Keep the regression run safe even when the controller drops the promise.
+    void write.catch(() => {})
+    copyText.mockReturnValueOnce(write)
+
+    await expect(Promise.resolve(ctl.copyInstall(HOST, 'gemini'))).rejects.toBe(error)
   })
 })
 
