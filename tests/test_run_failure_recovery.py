@@ -1,9 +1,14 @@
 """Retry storms, visible provider errors, and restart recovery on a disposable DB."""
 
 import json
+import types
+from contextlib import closing
 
 import pytest
+from fastapi.testclient import TestClient
 
+import main
+from orcha_cli.notifier_worker_results import drain_task_failure
 from portal_backend import sql
 
 ERROR = "API Error: Can't reach the API server — check your internet or DNS (ENOTFOUND)"
@@ -129,3 +134,117 @@ def test_error_extraction_ignores_tool_failures_and_retry_noise():
     tool = json.dumps({"type": "user", "message": {"content": [{"type": "tool_result", "content": "Error: test failed"}]}})
     assert last_error(tool) is None
     assert last_error(OUTPUT + "\n" + tool + '\n{"type":"system","subtype":"api_retry"}') == ERROR
+
+
+async def test_late_human_notice_is_claimed_once_even_with_stale_scan_state(client, container, make_agent, db, monkeypatch):
+    from portal_backend import run_failure_backoff as breaker
+    from portal_backend.database import db_cursor
+    aid = (await make_agent("Builder"))["agent_id"]
+    with monkeypatch.context() as patch:
+        patch.setattr(breaker, "find_actionable_human", lambda *a, **kw: None)
+        for _ in range(3):
+            await finish(client, aid)
+    await make_agent("owner", kind="human")
+    with db_cursor() as (conn, cur):
+        stale = breaker.failure_state(cur, aid)
+        assert stale["notified_at"] is None
+        breaker.notify_failure(cur, container["id"], aid, stale, ERROR)
+        breaker.notify_failure(cur, container["id"], aid, stale, ERROR)
+        conn.commit()
+    assert len(db.execute("SELECT id FROM requests WHERE requester_id=%s", (aid,))) == 1
+
+
+@pytest.mark.parametrize("status,code", [("failed", 1), ("rate_limited", 0), ("rate_limited", None)])
+async def test_real_failed_drain_preserves_task_through_pause_and_resume(
+    client, container, make_agent, make_task, db, status, code,
+):
+    human = (await make_agent("owner", kind="human"))["agent_id"]
+    aid = (await make_agent("Builder"))["agent_id"]
+    tid = (await make_task("Build", "Reviewed", assignee_alias="Builder"))["id"]
+    db.execute("UPDATE tasks SET status='in_progress' WHERE id=%s", (tid,))
+    failed_drains = {}
+    # conftest has already migrated the scratch DB; do not run application startup again.
+    with closing(TestClient(main.app)) as sync:
+        def post(url, body):
+            response = sync.post(url, json=body)
+            assert response.status_code < 300, response.text
+            return response.json()
+
+        # Exercise the real finish, ack, scan and resume routes. Only local process/artifact
+        # housekeeping is replaced: this test never starts a notifier or a worker.
+        services = types.SimpleNamespace(
+            _finish_run=lambda base, rid, status, code, log, diff, **kw: post(
+                f"/api/runs/{rid}/finish", {"status": status, "exit_code": code, "output": OUTPUT, **kw},
+            ),
+            _post_json=post, _reap_sandbox_artifacts=lambda w: None,
+            _saved_ref=lambda *a: {}, _record_task_saved_ref=lambda *a: None,
+            _retire_headless=lambda *a: None, _parse_rate_limit_reset=lambda *a: 30,
+            FAILED_DRAIN_MAX=3,
+        )
+        for n in range(3):
+            candidate = await scan(client, container["id"], aid)
+            assert candidate["should_wake"], candidate
+            assert candidate["context_task_id"] == tid
+            run = await client.post(f"/api/agents/{aid}/runs", json={"task_id": tid})
+            assert run.status_code == 201
+            worker = {"run_id": run.json()["run_id"], "wake_ack_ts": candidate["ack_through_ts"]}
+            drain_task_failure(
+                "", worker, aid, tid, status, code, None, failed_drains=failed_drains,
+                agent_hold_until={}, now=0, quiet=True, lane="work", live_workers={},
+                pid=1, drain_desc="drained", services=services,
+            )
+            state = db.execute("SELECT strikes FROM wake_backoff WHERE agent_id=%s AND wake_key='run_failure'", (aid,))
+            assert state and state[0]["strikes"] == n + 1
+            db.execute("UPDATE wake_backoff SET suppressed_until=%s WHERE agent_id=%s", (sql.ago(1), aid))
+        paused = await scan(client, container["id"], aid)
+        assert paused["failure_paused"] and not paused["should_wake"]
+        response = await client.request(
+            "DELETE", f"/api/containers/{container['id']}/agents/{aid}/wake-backoff/run_failure",
+            json={"actor_agent_id": human},
+        )
+        assert response.status_code == 200, response.text
+        resumed = await scan(client, container["id"], aid)
+        assert resumed["should_wake"], resumed
+        assert resumed["context_task_id"] == tid
+        assert resumed["pending_events"] > 0
+        assert db.execute("SELECT status FROM tasks WHERE id=%s", (tid,))[0]["status"] == "in_progress"
+
+
+@pytest.mark.parametrize("status", ["failed", "rate_limited"])
+@pytest.mark.parametrize("code", [0, None])
+async def test_terminal_failure_with_no_error_exit_keeps_cause_for_late_notice(
+    client, container, make_agent, db, status, code,
+):
+    aid = (await make_agent("Builder"))["agent_id"]
+    for _ in range(3):
+        await finish(client, aid, status=status, code=code)
+    state = db.execute("SELECT * FROM wake_backoff WHERE agent_id=%s AND wake_key='run_failure'", (aid,))
+    assert state and state[0]["strikes"] == 3
+    assert not db.execute("SELECT id FROM requests WHERE requester_id=%s", (aid,))
+    await make_agent("owner", kind="human")
+    await scan(client, container["id"], aid)
+    notice = db.execute("SELECT payload FROM requests WHERE requester_id=%s", (aid,))
+    assert len(notice) == 1 and ERROR in notice[0]["payload"]
+
+
+@pytest.mark.parametrize("recipient_role,grants", [("owner", []), ("member", ["manage_autonomy"])])
+async def test_pause_notice_recipient_can_actually_resume(
+    client, container, make_agent, db, monkeypatch, recipient_role, grants,
+):
+    recipient = (await make_agent("resumer", kind="human"))["agent_id"]
+    member = (await make_agent("member", kind="human"))["agent_id"]
+    aid = (await make_agent("Builder"))["agent_id"]
+    db.execute("UPDATE agents SET github_login='resumer-login', member_role=%s, grants=%s WHERE id=%s",
+               (recipient_role, json.dumps(grants), recipient))
+    db.execute("UPDATE agents SET github_login='member-login', member_role='member', grants='[]', last_heartbeat_at=now() WHERE id=%s", (member,))
+    monkeypatch.setenv("ORCHA_TRUST_PROXY_USER", "1")
+    for _ in range(3):
+        await finish(client, aid)
+    notice = db.execute("SELECT target_id FROM requests WHERE requester_id=%s", (aid,))
+    assert len(notice) == 1 and str(notice[0]["target_id"]) == recipient
+    path = f"/api/containers/{container['id']}/agents/{aid}/wake-backoff/run_failure"
+    refused = await client.request("DELETE", path, headers={"X-Auth-Request-User": "member-login"}, json={"actor_agent_id": member})
+    assert refused.status_code == 403
+    resumed = await client.request("DELETE", path, headers={"X-Auth-Request-User": "resumer-login"}, json={"actor_agent_id": recipient})
+    assert resumed.status_code == 200, resumed.text
+    assert resumed.json()["released"] is True

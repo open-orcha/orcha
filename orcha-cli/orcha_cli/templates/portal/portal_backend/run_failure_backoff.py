@@ -39,7 +39,7 @@ def failure_block(cur, aid):
 def notify_failure(cur, cid, aid, state, error=None):
     if state["strikes"] < FAILURE_LIMIT or state["notified_at"] is not None:
         return
-    human = find_actionable_human(cur, cid)
+    human = find_actionable_human(cur, cid, grant="manage_autonomy")
     if not human:
         return  # a later scan can deliver the notice when a human is available
     cur.execute("SELECT alias FROM agents WHERE id=%s", (aid,))
@@ -47,7 +47,7 @@ def notify_failure(cur, cid, aid, state, error=None):
     if error is None:
         cur.execute(
             "SELECT output FROM worker_runs WHERE agent_id=%s AND lane='work' "
-            "AND status IN ('exited','failed','rate_limited') AND exit_code <> 0 "
+            "AND (status IN ('failed','rate_limited') OR (status='exited' AND exit_code <> 0)) "
             "ORDER BY ended_at DESC LIMIT 1", (aid,),
         )
         run = cur.fetchone()
@@ -57,6 +57,11 @@ def notify_failure(cur, cid, aid, state, error=None):
         f"Last error: {error or 'The worker failed without recording an error.'} "
         "Fix the cause, then open Activity and choose Resume automatic work. Pending work is saved."
     )
+    # Claim the notice atomically: two scans can observe the same unnotified pause.
+    cur.execute("UPDATE wake_backoff SET notified_at=now() WHERE agent_id=%s AND wake_key=%s "
+                "AND notified_at IS NULL RETURNING agent_id", (aid, FAILURE_KEY))
+    if cur.fetchone() is None:
+        return
     cur.execute(
         """INSERT INTO requests
            (container_id, type, requester_id, target_id, priority, status, payload, expires_at, chain_depth)
@@ -64,7 +69,6 @@ def notify_failure(cur, cid, aid, state, error=None):
         (cid, aid, human, payload, sql.from_now(7 * 86400)),
     )
     rid = str(cur.fetchone()["id"])
-    cur.execute("UPDATE wake_backoff SET notified_at=now() WHERE agent_id=%s AND wake_key=%s", (aid, FAILURE_KEY))
     log_event(cur, cid, "system", None, "request", rid, "created",
               {"reason": "run_failure_breaker", "agent_id": aid, "preview": payload[:120]})
     publish_event(cur, cid, human, "request_created",
@@ -83,8 +87,10 @@ def record_run_outcome(cur, run, body):
         cur.execute("DELETE FROM wake_backoff WHERE agent_id=%s AND wake_key=%s AND strikes < %s",
                     (aid, FAILURE_KEY, FAILURE_LIMIT))
         return
-    if body.status not in ("exited", "failed", "rate_limited") or (
-        body.status != "failed" and body.exit_code in (None, 0)
+    # Provider failures can end with a zero or missing process exit code (Codex 429).
+    # The terminal failure classification is authoritative in that case.
+    if body.status not in ("failed", "rate_limited") and not (
+        body.status == "exited" and body.exit_code not in (None, 0)
     ):
         return
     cur.execute(

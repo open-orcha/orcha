@@ -125,10 +125,12 @@ def drain_task_failure(
     services._record_task_saved_ref(api_base, worker, saved_ref, human)
 
     if attempts >= services.FAILED_DRAIN_MAX:
+        # The API's durable per-agent circuit now prevents the retry storm. Advancing
+        # the cursor here would erase unfinished work, leaving human Resume nothing
+        # to retry. Release only the lease; the task's directive stays pending.
         services._post_json(
             f"{api_base}/api/agents/{agent_id}/wake-ack",
             {
-                "delivered_ts": worker.get("wake_ack_ts"),
                 "kind": "worker_drain_failed_released",
                 "release_lease": True,
                 "lane": lane,
@@ -139,8 +141,8 @@ def drain_task_failure(
             worker,
             saved_ref,
             f"heads up: this worker has failed to finish {attempts} times "
-            "in a row — releasing it for now so it doesn't loop; the work "
-            "is saved on its branch",
+            "in a row — automatic work is paused; the work is saved on its branch. "
+            "Fix the cause, then resume automatic work in Activity.",
         )
         failed_drains.pop(key, None)
     else:
@@ -156,15 +158,10 @@ def drain_task_failure(
 
     services._retire_headless(api_base, live_workers, agent_id)
     if not quiet:
-        cursor = (
-            "advanced (bound hit)"
-            if attempts >= services.FAILED_DRAIN_MAX
-            else "withheld"
-        )
         print(
             f"[notifier] task worker for {agent_id} (pid {pid}) "
             f"{drain_desc} {status} ({attempts}/{services.FAILED_DRAIN_MAX}) "
-            f"— worktree PRESERVED, cursor {cursor}"
+            "— worktree PRESERVED, cursor withheld"
         )
 
 
