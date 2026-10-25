@@ -109,6 +109,12 @@ describe('sidebarNames (Settings › Storage names projects like the sidebar)', 
     const rows = buildProjectRows({ stacks: [A, B, S], cards, attention: null, pinned: new Set(), order: [], active: noActive })
     expect(sidebarNames(rows)).toEqual({ 'orcha-a': 'Alpha, Alpha Two', 'orcha-b': 'Beta', 'orcha-stopped': S.projectShort })
   })
+
+  it('lists a name once when two containers of a project share it', () => {
+    const twins = [{ stack: A, container: container('a1', 'Alpha') }, { stack: A, container: container('a2', 'Alpha') }]
+    const rows = buildProjectRows({ stacks: [A], cards: twins, attention: null, pinned: new Set(), order: [], active: noActive })
+    expect(sidebarNames(rows)).toEqual({ 'orcha-a': 'Alpha' })
+  })
 })
 
 describe('totalAttention', () => {
