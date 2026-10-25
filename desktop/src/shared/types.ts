@@ -635,6 +635,9 @@ export type AnalyzeProjectResult =
  *                     in the tray, but NOT counted in any "needs you" badge;
  *  - health         — stack up/down notification only (never in the polled list). */
 export interface AttentionItem {
+  /** Request deadline and durable reminder from the server (older portals omit them). */
+  expiresAt?: string
+  remindedAt?: string
   project: string
   projectShort: string
   kind: 'task_plan' | 'request_answer' | 'request_close' | 'task_verify' | 'health'

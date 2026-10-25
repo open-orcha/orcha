@@ -163,3 +163,18 @@ def test_budget_skip_line_prints_once_per_reason_and_rearms(capsys):
     _call(_paused("Project budget reached"))
     assert capsys.readouterr().out.count("[notifier] skip Atlas") == 1
     nwc._BUDGET_SKIP_LOGGED.clear()
+
+
+def test_notifier_reports_human_reminders(clock, capsys):
+    class Reminded(_Svc):
+        def _post_json(self, url, body):
+            self.posts.append(url)
+            return {"escalated_count": 0, "request_ids": [],
+                    "reminded_count": 2, "reminded_request_ids": ["r1", "r2"]}
+
+    svc = Reminded([{"agent_id": "owner", "member_role": "owner", "pending": False}])
+    sweep.maybe_sweep_expired("http://api", "cid", svc)
+    assert "reminded humans about 2 overdue request(s)" in capsys.readouterr().out
+    clock[0] += sweep.SWEEP_EVERY_SECS + 1
+    sweep.maybe_sweep_expired("http://api", "cid", svc, quiet=True)
+    assert capsys.readouterr().out == ""

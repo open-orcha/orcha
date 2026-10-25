@@ -5,7 +5,7 @@ import { Button } from '../ui/Button'
 import { cn } from '../ui/cn'
 import { OrchaMark } from '../components/OrchaMark'
 import { loadProjectCards, type ProjectCardData } from '../home/loadProjectCards'
-import { buildProjectRows, stackBand, type ProjectBand } from '../host/projectModel'
+import { buildProjectRows, stackBand, orderAttention, type ProjectBand } from '../host/projectModel'
 import UsagePopover from '../usage/UsagePopover'
 import { peakProvider } from '../usage/UsageIndicator'
 import { useUsage } from '../usage/useUsage'
@@ -49,7 +49,7 @@ export default function TrayPanel() {
       // rows + band rule (Starting / Paused match the Projects manager exactly).
       const c = window.orchaDesktop.portalGet ? await loadProjectCards(s, window.orchaDesktop.portalGet) : []
       setStacks(s)
-      setItems(a)
+      setItems(orderAttention(a))
       setCards(c)
     } catch {
       setStacks([])

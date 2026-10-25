@@ -163,3 +163,14 @@ describe("request titles are human-readable (D4)", () => {
     expect(title({ n: 1 }, "info")).toBe("Info request");
   });
 });
+
+it('overdue human requests sort first by deadline, ahead of plans and future requests', () => {
+  const s = snap('plan', { requests: [
+    { id: 'future', status: 'open', target_id: 'h1', expires_at: '2999-01-01T00:00:00Z' },
+    { id: 'recent', status: 'open', target_id: 'h1', expires_at: '2020-02-01T00:00:00Z' },
+    { id: 'old', status: 'open', target_id: 'h1', expires_at: '2020-01-01T00:00:00Z' },
+    { id: 'bad', status: 'open', target_id: 'h1', expires_at: 'invalid' },
+    { id: 'closed', status: 'closed', target_id: 'h1', expires_at: '2020-01-01T00:00:00Z' },
+  ] });
+  expect(keys(selectAttention(s, 'h1')).slice(0, 3)).toEqual(['request:old', 'request:recent', 'plan:tp']);
+})

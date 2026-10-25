@@ -196,6 +196,7 @@ def reap_terminal_task_worktrees(
     swept_tasks: set,
     quiet: bool,
     failed_drains: Optional[dict] = None,
+    deferred_tasks: Optional[dict] = None,
 ) -> int:
     return _orphan_cleanup.reap_terminal_task_worktrees(
         api_base,
@@ -206,6 +207,7 @@ def reap_terminal_task_worktrees(
         quiet,
         failed_drains,
         _compat(),
+        deferred_tasks,
     )
 
 

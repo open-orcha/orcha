@@ -30,7 +30,7 @@ beforeEach(() => {
     requests: [
       { id: "r1", type: "task", status: "escalated", escalated: true, priority: 1, requester_id: "a2", target_id: null, created_at: iso(-30),
         payload: JSON.stringify({ summary: "Blocked on missing credentials", task_id: "t9" }) },
-      { id: "r2", type: "question", status: "open", priority: 3, requester_id: "a1", target_id: "h1", created_at: iso(-10), payload: "Ship on Friday?" },
+      { id: "r2", type: "question", status: "open", priority: 3, requester_id: "a1", target_id: "h1", created_at: iso(-10), payload: "Ship on Friday?", expires_at: iso(-5), detail: { overdue_reminded_at: iso(-2) } },
     ],
   };
   window.scrollTo = vi.fn();
@@ -56,6 +56,16 @@ const mount = (entry: string) =>
 const detail = () => document.querySelector("#detailMain") as HTMLElement;
 
 describe("Needs you — round 4", () => {
+  it("shows the recorded overdue reminder and its date in the request card", async () => {
+    mount("/needs?item=request:r2");
+    await waitFor(() => expect(detail()?.querySelector(".rq-rail")).toBeTruthy());
+    const pane = within(detail());
+    expect(pane.getByText("Overdue reminder sent")).toBeInTheDocument();
+    expect(pane.getByText("Overdue since")).toBeInTheDocument();
+    expect(pane.getByText("Reminded at")).toBeInTheDocument();
+    expect(pane.getByRole("list", { name: "Request activity" }).textContent).toContain("Overdue reminder sent");
+  });
+
   it("escalated request: header kind is the request type; 'Escalated' is not repeated in the header or rail", async () => {
     mount("/needs?item=request:r1");
     await waitFor(() => expect(detail()?.querySelector(".nd-dkind")?.textContent).toBe("Task request"));

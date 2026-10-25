@@ -255,3 +255,12 @@ describe('#281: a live native runtime whose API fails is not "stopped"', () => {
     expect(row.unavailableReason).toBe('stopped')
   })
 })
+
+it('Needs you opens an overdue request before a plan or a future request', () => {
+  const base = { project: 'orcha-a', projectShort: 'a', title: 'Waiting', path: '/' }
+  const plan = { ...base, id: 'plan', kind: 'task_plan' as const }
+  const future = { ...base, id: 'future', kind: 'request_answer' as const, expiresAt: '2999-01-01T00:00:00Z' }
+  const overdue = { ...base, id: 'old', kind: 'request_answer' as const, expiresAt: '2020-01-01T00:00:00Z' }
+  expect(firstDecision([plan, future, overdue])).toEqual(overdue)
+  expect(firstDecision([plan, { ...overdue, expiresAt: 'invalid' }])).toEqual(plan)
+})

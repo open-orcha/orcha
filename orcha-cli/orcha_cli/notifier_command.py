@@ -169,6 +169,7 @@ def cmd_notifier(args, *, services) -> None:
     failed_drains: dict = {}       # {(agent_id, task_id): consecutive failed/rate-limited drains}
     agent_hold_until: dict = {}    # {agent_id: epoch-secs until the rate-limit hold-down lifts}
     swept_tasks: set = set()       # GH#110 §2c: terminal tasks whose durable worktree we reclaimed
+    deferred_tasks: dict = {}      # {task_id: monotonic re-check time} — dirty/live, held back
     reconcile_codex_conversation_runs(api_base, cid, live_residents, quiet=args.quiet,
                                       base_cwd=str(cwd))
     # Issue #36: seed the liveness clock now (the startup probe just ran) so the first in-loop
@@ -259,7 +260,8 @@ def cmd_notifier(args, *, services) -> None:
                 # (never touches a live worktree, preserves any dirty tree, keeps committed/PR
                 # branches). Daemon-scope swept_tasks bounds it to one pass per terminal task.
                 reap_terminal_task_worktrees(api_base, cid, project_cwd, live_workers,
-                                             swept_tasks, args.quiet, failed_drains=failed_drains)
+                                             swept_tasks, args.quiet, failed_drains=failed_drains,
+                                             deferred_tasks=deferred_tasks)
                 loop_timer.lap("reaps")
                 # E3: drive warm resident conversation sessions (capture replies, feed new turns,
                 # idle-reap) BEFORE tick() — a live resident holds the embodiment lease, so the
