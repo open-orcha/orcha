@@ -99,6 +99,7 @@ def start_candidate(
             reason=_preflight.ISOLATION_FAILED.format(base_cwd=base_cwd),
             release_lease=True,
             quiet=quiet,
+            blocker="isolation_failed",
         )
         return
     run_cwd = worktree or base_cwd or str(pathlib.Path.cwd())

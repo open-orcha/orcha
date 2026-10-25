@@ -38,6 +38,17 @@ class WakeAck(BaseModel):
         "sits inside an empty parent Git repository). Stored on the `woken` audit row so it "
         "survives a quiet notifier.",
     )
+    blocker: Optional[str] = Field(
+        default=None,
+        max_length=40,
+        description="GH #301: machine-readable startup blocker (ancestor_repo | no_commit | "
+        "isolation_failed) stored next to `detail`, so the chat can offer the matching fix.",
+    )
+    setup_available: Optional[bool] = Field(
+        default=None,
+        description="GH #301: the notifier checked that a project-local Git setup can clear "
+        "this blocker without touching a parent repository (the chat then offers it).",
+    )
     release_lease: bool = Field(
         default=False,
         description="R2.4: a one-shot worker that has finished draining sets this on its final "
