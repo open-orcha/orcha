@@ -143,6 +143,10 @@ describe('helpers', () => {
   it('sectionForPath maps portal paths to sidebar sections', () => {
     expect(sectionForPath('/')).toBe('overview')
     expect(sectionForPath('/tasks')).toBe('tasks')
+    expect(sectionForPath('/workflows')).toBe('workflows')
+    expect(sectionForPath('/workflows/new')).toBe('workflows')
+    expect(sectionForPath('/workflows/mobile-release')).toBe('workflows')
+    expect(sectionForPath('/workflows-extra')).toBeNull()
     expect(sectionForPath('/agents')).toBe('agents')
     expect(sectionForPath('/needs')).toBe('needs')
     expect(sectionForPath('/members')).toBe('settings')

@@ -1080,7 +1080,7 @@ export interface ShellProps {
 }
 
 const SECTION_HREF: Record<string, string> = {
-  home: "/", tasks: "/tasks", routines: "/routines", agents: "/agents", org: "/org", requests: "/requests", code: "/code", github: "/github",
+  home: "/", workflows: "/workflows", tasks: "/tasks", routines: "/routines", agents: "/agents", org: "/org", requests: "/requests", code: "/code", github: "/github",
   metrics: "/metrics", settings: "/settings", members: "/members", needs: "/needs", activity: "/activity",
 };
 

@@ -272,6 +272,7 @@ export function firstDecision(items: AttentionItem[]): AttentionItem | null {
  *  only to map a reported route to "Needs you" / "Settings" highlighting. */
 export const SECTIONS = [
   { key: 'overview', label: 'Overview', path: '/' },
+  { key: 'workflows', label: 'Workflows', path: '/workflows' },
   { key: 'tasks', label: 'Tasks', path: '/tasks' },
   { key: 'agents', label: 'Agents', path: '/agents' },
   { key: 'requests', label: 'Requests', path: '/requests' },

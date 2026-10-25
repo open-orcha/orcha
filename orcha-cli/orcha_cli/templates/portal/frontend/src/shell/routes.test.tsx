@@ -20,6 +20,7 @@ function Probe({ name }: { name: string }) {
 }
 vi.mock("../pages/home/HomePage", () => ({ HomePage: () => <Probe name="home" /> }));
 vi.mock("../pages/agents/AgentsPage", () => ({ AgentsPage: () => <Probe name="agents" /> }));
+vi.mock("../pages/workflows/WorkflowsPage", () => ({ WorkflowsPage: () => <Probe name="workflows" /> }));
 vi.mock("../pages/tasks/TasksPage", () => ({ TasksPage: () => <Probe name="tasks" /> }));
 vi.mock("../pages/requests/RequestsPage", () => ({ RequestsPage: () => <Probe name="requests" /> }));
 vi.mock("../pages/settings/SettingsPage", () => ({ SettingsPage: () => <Probe name="settings" /> }));
@@ -64,6 +65,9 @@ const LEGACY: [string, string][] = [
   ["/?cid=c1", "home"],
   ["/projects", "projects"],
   ["/tasks?task=t1&cid=c1", "tasks"],
+  ["/workflows?cid=c1", "workflows"],
+  ["/workflows/new?cid=c1", "workflows"],
+  ["/workflows/mobile-release?cid=c1", "workflows"],
   ["/requests?req=r1", "requests"],
   ["/agents?agent=Atlas", "agents"],
   ["/settings#tab=pairing", "settings"],
