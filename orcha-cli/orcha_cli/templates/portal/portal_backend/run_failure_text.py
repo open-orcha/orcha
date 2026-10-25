@@ -43,7 +43,7 @@ def last_error(output):
                 text = _text(item.get("message")) or _text(item.get("text"))
         elif kind == "assistant":
             candidate = _text(msg.get("message"))
-            if re.match(r"(?i)\s*(API Error:|Error:|Fatal:)", candidate):
+            if candidate.lstrip()[:10].lower().startswith(("api error:", "error:", "fatal:")):
                 text = candidate
         if text.strip():
             found = text

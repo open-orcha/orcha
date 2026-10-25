@@ -136,6 +136,22 @@ def test_error_extraction_ignores_tool_failures_and_retry_noise():
     assert last_error(OUTPUT + "\n" + tool + '\n{"type":"system","subtype":"api_retry"}') == ERROR
 
 
+@pytest.mark.parametrize("message,expected", [
+    ("aPi ErRoR: unavailable", "aPi ErRoR: unavailable"),
+    ("eRrOr: unavailable", "eRrOr: unavailable"),
+    ("fAtAl: unavailable", "fAtAl: unavailable"),
+    ("The tool returned Error: unavailable", None),
+    ("API Error reporting is enabled", None),
+])
+def test_assistant_error_prefix_after_large_whitespace(message, expected):
+    from portal_backend.run_failure_text import last_error
+
+    output = json.dumps({"type": "assistant", "message": {
+        "content": [{"type": "text", "text": " \t\n" * 100000 + message}],
+    }})
+    assert last_error(output) == expected
+
+
 async def test_late_human_notice_is_claimed_once_even_with_stale_scan_state(client, container, make_agent, db, monkeypatch):
     from portal_backend import run_failure_backoff as breaker
     from portal_backend.database import db_cursor
