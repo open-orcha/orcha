@@ -61,7 +61,7 @@ def test_linkify_is_applied_to_authored_text_surfaces():
     home = (SRC / "pages" / "home" / "HomePage.tsx").read_text()
     # the dashboard plan-approval card renders the FULL plan body → linkify (the last
     # full-text authored surface; "URLs clickable everywhere").
-    assert "<Linkified text={planText(t)}" in home, "home dashboard plan-text not linkified"
+    assert '<Linkified text={plan?.body || ""}' in home, "home dashboard plan-text not linkified"
     # ...but the update-feed preview text MUST NOT be linkified: it is a clipped one-line
     # preview next to the task link (Linear Pulse, D10) — the full, linkified text lives in
     # the task thread. It renders as plain JSX (auto-escaped), never <Linkified>.

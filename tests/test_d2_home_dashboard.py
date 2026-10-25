@@ -41,9 +41,10 @@ def test_home_action_queue_wiring():
     assert "actingHuman(" in html, "actions don't resolve the acting human"
     # review P1: the plan card shows the FULL plan body, rendered via the shared
     # esc-first linkifier (ISS-44), never truncated before approval.
-    assert "<Linkified text={planText(t)}" in html, \
+    assert "const plan = planMessageOf(t)" in html, "plan card must use the shared assignee selector"
+    assert '<Linkified text={plan?.body || ""}' in html, \
         "plan card must show the full plan, not a truncated summary"
-    assert "trunc(planText" not in html, "plan body must not be truncated before approval"
+    assert "trunc(plan" not in html, "plan body must not be truncated before approval"
     # review P2: one-shot — acted cards are suppressed immediately + not re-submittable
     assert "useState<Set<string>>" in html and "acted" in html, "no one-shot per-task acted cache"
     assert "!acted.has(t.id)" in html, "acted cards aren't suppressed on render"

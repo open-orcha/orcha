@@ -99,6 +99,8 @@ describe("HomePage gate actions (human-gated verify contract)", () => {
   afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
   it("shows and approves the assignee's plan in a legacy snapshot with a coordinator brief", async () => {
+    const planUrl = "https://example.com/implementation-plan";
+    const planBody = "Plan from forge: " + "Implement and test the complete workflow. ".repeat(30) + planUrl;
     const calls = stubFetch("plan");
     const originalFetch = global.fetch;
     global.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -109,7 +111,7 @@ describe("HomePage gate actions (human-gated verify contract)", () => {
           ...snapshot,
           tasks: [{ ...snapshot.tasks[0], status: "in_progress", messages: [
             { author_id: "a2", author_alias: "coordinator", is_human: false, body: "Opening brief from the coordinator" },
-            { author_id: "a1", author_alias: "forge", is_human: false, body: "Plan from forge: implement and test" },
+            { author_id: "a1", author_alias: "forge", is_human: false, body: planBody },
           ] }],
         }) } as unknown as Response;
       }
@@ -117,7 +119,8 @@ describe("HomePage gate actions (human-gated verify contract)", () => {
     }) as typeof fetch;
     mount();
     const plan = await screen.findByLabelText("Proposed plan for Ship the feature");
-    expect(within(plan).getByText("Plan from forge: implement and test")).toBeInTheDocument();
+    expect(plan).toHaveTextContent(planBody);
+    expect(within(plan).getByRole("link", { name: planUrl })).toHaveAttribute("href", planUrl);
     expect(within(plan).queryByText("Opening brief from the coordinator")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Approve plan" }));
     fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: /Approve/ }));
