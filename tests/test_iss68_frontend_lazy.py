@@ -21,7 +21,7 @@ def test_adapter_maps_summary_plan_and_exposes_threadof():
     with an empty eager thread, and threadOf lazy-GETs /api/tasks/{tid}/messages."""
     client = (SRC / "api" / "client.ts").read_text()
     assert 't.message_summary || { count: 0, last: null }' in client, "mapSnapshot doesn't default message_summary"
-    assert "t.plan_message || null" in client, "mapSnapshot doesn't map plan_message"
+    assert "plan_message: t.plan_message," in client, "mapSnapshot must preserve missing versus explicitly absent plans"
     assert "export async function threadOf" in client, "no lazy threadOf fetch"
     assert '"/api/tasks/" + encodeURIComponent(tid) + "/messages"' in client, "threadOf doesn't hit the messages route"
 
@@ -32,7 +32,7 @@ def test_pages_detect_plan_from_plan_message_not_thread():
     FIRST with a thread fallback, and every plan surface routes through it."""
     provider = (SRC / "state" / "SnapshotProvider.tsx").read_text()
     assert "export function planMessageOf" in provider, "no shared plan detector"
-    assert "if (t.plan_message)" in provider, "planMessageOf doesn't read plan_message first"
+    assert "if (t.plan_message !== undefined)" in provider, "planMessageOf must respect the server's explicit null plan"
     # V2: the shell's bell / notification centre no longer detects plans itself — it
     # reads the ONE shared attention selector (state/attention.ts), which routes
     # through planMessageOf. Pin both halves so the guarantee can't silently regress.
