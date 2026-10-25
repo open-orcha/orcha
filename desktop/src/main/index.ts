@@ -34,9 +34,9 @@ import { checkWorkerReady, nodeWorkerReadyDeps, nodeHostWorkerDeps, hostToolPath
 import { analyzeProject, nodeAnalyzeProjectDeps, type AnalyzeProjectResult } from './analyzeProject'
 import { resetStack } from './resetEngine'
 import { planRemoval, removeProject, type RemoveDeps } from './removeEngine'
-import { removeLeftover, scanStorage, storageDocker } from './storageScan'
-import { singleFlight } from './singleFlight'
-import { cleanAgentWorktrees, isAgentWorktreePath, knownFolder, parseCleanRequest, scanAgentWorktrees } from './agentWorktrees'
+import { storageDocker } from './storageScan'
+import { storageOperations, worktreeOperations } from './storageOperations'
+import { isAgentWorktreePath, knownFolder } from './agentWorktrees'
 import { dropKept, keptStatus, nodeDocker, nodeRemoveFs, nodeRun, recordKept } from './removeHost'
 import { buildAppMenuTemplate } from './appMenu'
 import { pinnedUserDataPath } from './userDataPath'
@@ -1322,17 +1322,17 @@ app.whenReady().then(() => {
 
   const storageDeps = () => ({ docker: storageDocker(nodeDocker), kept: () => keptStatus(app.getPath('userData')) })
   // One scan of each kind at a time: Scan during a slow scan joins it (singleFlight.ts).
-  const scanStorageOnce = singleFlight(() => scanStorage(storageDeps()))
+  const storage = storageOperations(storageDeps)
   ipcMain.handle('orcha:storage:scan', (event) =>
     asResult(async () => {
       if (!fromManager(event)) throw { code: 'INVALID_STORAGE_ITEM' } as const
-      return scanStorageOnce()
+      return storage.scan()
     })
   )
   ipcMain.handle('orcha:storage:remove', (event, raw: unknown) =>
     asResult(async () => {
       if (!fromManager(event)) throw { code: 'INVALID_STORAGE_ITEM' } as const
-      const done = await removeLeftover(raw, storageDeps())
+      const done = await storage.remove(raw)
       console.log(`[orcha-desktop] storage: removed ${done.kind} ${done.name}`)
       if (done.kind === 'volume' && done.project) {
         try {
@@ -1346,22 +1346,19 @@ app.whenReady().then(() => {
 
   // ---- Settings › Storage › Agent worktrees (agentWorktrees.ts → `orcha worktrees --json`) ----
   const worktreeRun = () => nodeRun({ ...scrubWorkerEnv(process.env), PATH: nodeHostWorkerDeps.pathEnv ?? hostToolPath() })
-  const scanWorktreesOnce = singleFlight(async () =>
-    scanAgentWorktrees(await listKnownProjects(), worktreeRun(), (f) => isDirectory(path.join(f, '.orcha-worktrees')))
-  )
+  const worktrees = worktreeOperations(listKnownProjects, worktreeRun, (f) => isDirectory(path.join(f, '.orcha-worktrees')))
   ipcMain.handle('orcha:storage:worktrees', (event) =>
     asResult(async () => {
       if (!fromManager(event)) throw { code: 'INVALID_WORKTREE' } as const
-      return scanWorktreesOnce()
+      return worktrees.scan()
     })
   )
   ipcMain.handle('orcha:storage:worktreesClean', (event, raw: unknown) =>
     asResult(async () => {
       if (!fromManager(event)) throw { code: 'INVALID_WORKTREE' } as const
-      const req = parseCleanRequest(raw, await listKnownProjects())
-      const res = await cleanAgentWorktrees(req, worktreeRun())
-      if (!req.dryRun) {
-        console.log(`[orcha-desktop] storage: cleaned ${res.removed.length} agent worktree(s) in ${req.folder} (${res.freed_bytes} bytes)`)
+      const res = await worktrees.clean(raw)
+      if (!res.dryRun) {
+        console.log(`[orcha-desktop] storage: cleaned ${res.removed.length} agent worktree(s) in ${res.folder} (${res.freed_bytes} bytes)`)
       }
       return res
     })
