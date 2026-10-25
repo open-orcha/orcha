@@ -11,6 +11,9 @@ headerless daemon lane. The route needs a human ``actor_agent_id`` (it only vali
 kind; the escalation target is chosen independently by the org chart), so the actor is
 the project's first owner, else its first live human, from ``GET /members``.
 
+The same sweep records overdue reminders for human recipients, at most daily. Desktop
+observes those durable timestamps to re-notify once without losing its deduplication.
+
 Never raises: an escalation hiccup must not stall agent wakes. Skipped in --dry-run.
 """
 from __future__ import annotations
@@ -44,7 +47,7 @@ def _sweep_actor(api_base, container_id, services) -> Optional[str]:
 
 
 def maybe_sweep_expired(api_base, container_id, services, *, quiet=False, dry_run=False):
-    """Escalate expired AI-held asks for one container, throttled; returns the reply or None."""
+    """Escalate AI-held asks and remind overdue humans for one container, throttled; returns the reply or None."""
     if dry_run:
         return None
     now = _monotonic()
@@ -68,4 +71,6 @@ def maybe_sweep_expired(api_base, container_id, services, *, quiet=False, dry_ru
             f"[notifier] escalated {result['escalated_count']} expired request(s) to a human: "
             + ", ".join(str(rid)[:8] for rid in result.get("request_ids") or [])
         )
+    if not quiet and isinstance(result, dict) and result.get("reminded_count"):
+        print(f"[notifier] reminded humans about {result['reminded_count']} overdue request(s)")
     return result

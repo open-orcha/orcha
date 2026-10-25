@@ -15,11 +15,12 @@ export interface PollerDeps {
   onUpdate?(items: AttentionItem[], stacks: Stack[], details: Map<string, StackAttention>): void
 }
 
-const key = (i: AttentionItem): string => `${i.project}:${i.kind}:${i.id}`
+const key = (i: AttentionItem): string => `${i.project}:${i.kind}:${i.id}:${i.kind === 'request_answer' ? i.remindedAt ?? '' : ''}`
 
 /** Polls stacks for human-attention items. First tick is a silent baseline;
  *  afterwards every newly-appearing item notifies exactly once (and again if
- *  it disappears and comes back). Health transitions notify directly. */
+ *  it disappears and comes back). A durable overdue-reminder timestamp also re-arms
+ *  an existing request once. Health transitions notify directly. */
 export class AttentionPoller {
   private seen = new Set<string>()
   private baselined = false

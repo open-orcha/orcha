@@ -264,3 +264,19 @@ describe('AttentionPoller — no notification flood when a stack drops and comes
     expect(notify.mock.calls[0][0]).toEqual(item('r4'))
   })
 })
+
+it('re-notifies an existing request once for each recorded overdue reminder, respecting mute', async () => {
+  const fetch = vi.fn(async () => detail([item('r1')]))
+  const { poller, notify, deps } = makePoller({ fetchStackAttention: fetch })
+  await poller.tick()
+  const reminded = { ...item('r1'), remindedAt: '2026-10-24T10:00:00Z' }
+  fetch.mockResolvedValue(detail([reminded]))
+  await poller.tick()
+  await poller.tick()
+  expect(notify).toHaveBeenCalledExactlyOnceWith(reminded)
+  Object.assign(deps, { gate: async () => false })
+  fetch.mockResolvedValue(detail([{ ...reminded, remindedAt: '2026-10-25T10:00:00Z' }]))
+  await poller.tick()
+  expect(notify).toHaveBeenCalledTimes(1)
+  expect(poller.current()).toHaveLength(1)
+})

@@ -160,3 +160,14 @@ describe('TrayPanel', () => {
     expect((await row('pay')).querySelector('[data-band]')?.getAttribute('data-band')).toBe('paused')
   })
 })
+
+
+it('puts overdue requests before other decisions in the visible tray queue', async () => {
+  window.orchaDesktop.listAttention = vi.fn().mockResolvedValue([
+    items[0], { ...items[1], expiresAt: '2020-01-01T00:00:00Z' }
+  ])
+  render(<TrayPanel />)
+  const overdue = await screen.findByText(items[1].title)
+  const verify = screen.getByText(items[0].title)
+  expect(overdue.compareDocumentPosition(verify) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+})

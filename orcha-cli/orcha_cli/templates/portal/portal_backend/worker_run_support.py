@@ -3,6 +3,14 @@
 from typing import Optional
 
 from portal_backend import sql
+from portal_backend.container_metrics_routes import OUTPUT_TAIL_BYTES
+
+# Retention: each agent keeps full detail (output, diff, streamed line log) for its newest
+# runs only. Older finished runs keep their row and stats; see prune_old_run_detail.
+RUN_DETAIL_KEEP_PER_AGENT = 20
+# Most runs pruned per call, so a large backlog drains over several finishes instead of
+# holding the write lock for one long delete.
+RUN_DETAIL_PRUNE_BATCH = 100
 
 
 def run_row(row: dict) -> dict:
@@ -28,7 +36,7 @@ def run_row(row: dict) -> dict:
         "branch": row.get("branch"),
         "base_cwd": row.get("base_cwd"),
         "sandbox_container_id": row.get("sandbox_container_id"),
-        "output": row["output"],
+        "output": row.get("output"),
         "diff": row.get("diff"),
         "kill_reason": row.get("kill_reason"),
         "started_at": (row["started_at"].isoformat() if row["started_at"] else None),
@@ -69,3 +77,35 @@ def revoke_tokens_for_runs(cur, run_ids) -> None:
             f"WHERE {sql.in_list('run_id')} AND revoked_at IS NULL",
             (sql.list_param(run_ids),),
         )
+
+
+def prune_old_run_detail(cur, agent_id) -> int:
+    """Clear the heavy detail of an agent's finished runs beyond its newest
+    RUN_DETAIL_KEEP_PER_AGENT: delete the line log, drop the diff, and cut output to its last
+    OUTPUT_TAIL_BYTES (the tail is where Metrics and Budgets read cost when a run reported no
+    usage columns). Status, tokens, cost, branch and worktree stay. Returns runs pruned."""
+    cur.execute(
+        """SELECT run_id FROM worker_runs wr
+           WHERE agent_id=%s AND ended_at IS NOT NULL
+             AND run_id NOT IN (SELECT run_id FROM worker_runs WHERE agent_id=%s
+                                ORDER BY started_at DESC LIMIT %s)
+             AND (diff IS NOT NULL OR length(output) > %s
+                  OR EXISTS (SELECT 1 FROM worker_run_lines l WHERE l.run_id = wr.run_id))
+           ORDER BY started_at LIMIT %s""",
+        (agent_id, agent_id, RUN_DETAIL_KEEP_PER_AGENT, OUTPUT_TAIL_BYTES,
+         RUN_DETAIL_PRUNE_BATCH),
+    )
+    run_ids = [str(row["run_id"]) for row in cur.fetchall()]
+    if not run_ids:
+        return 0
+    cur.execute(
+        f"DELETE FROM worker_run_lines WHERE {sql.in_list('run_id')}",
+        (sql.list_param(run_ids),),
+    )
+    tail_expr = sql.right("output", OUTPUT_TAIL_BYTES)
+    cur.execute(
+        f"""UPDATE worker_runs SET diff=NULL, output={tail_expr}
+             WHERE {sql.in_list('run_id')}""",
+        (sql.list_param(run_ids),),
+    )
+    return len(run_ids)

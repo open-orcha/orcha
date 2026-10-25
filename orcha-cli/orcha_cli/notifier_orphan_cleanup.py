@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime
 import json
 import os
+import time
 from collections import Counter
 from typing import Optional
 
@@ -458,8 +459,13 @@ def reap_terminal_task_worktrees(
     quiet: bool,
     failed_drains: Optional[dict],
     services,
+    deferred_tasks: Optional[dict] = None,
 ) -> int:
-    """Reclaim clean durable worktrees after their tasks become terminal."""
+    """Reclaim clean durable worktrees after their tasks become terminal.
+
+    deferred_tasks ({task_id: monotonic re-check time}) holds back a task whose worktree was
+    dirty or live, so it is re-checked every TERMINAL_DEFER_RECHECK_SECS instead of every loop
+    (each check is a /runs read per task)."""
     if not base_cwd or not services._is_git_repo(base_cwd):
         return 0
 
@@ -480,6 +486,7 @@ def reap_terminal_task_worktrees(
             quiet,
             failed_drains,
             services,
+            deferred_tasks,
         )
     return removed
 
@@ -494,6 +501,7 @@ def _reap_terminal_state(
     quiet: bool,
     failed_drains: Optional[dict],
     services,
+    deferred_tasks: Optional[dict] = None,
 ) -> int:
     """Page through one terminal state and reclaim each eligible worktree."""
     removed = 0
@@ -516,6 +524,7 @@ def _reap_terminal_state(
                 quiet,
                 failed_drains,
                 services,
+                deferred_tasks,
             )
         if not data.get("has_more") or not page_tasks:
             break
@@ -533,13 +542,18 @@ def _reap_terminal_task(
     quiet: bool,
     failed_drains: Optional[dict],
     services,
+    deferred_tasks: Optional[dict] = None,
 ) -> int:
     """Reclaim the distinct durable worktrees recorded for one terminal task."""
     task_id = task.get("id")
     if not task_id or task_id in swept_tasks:
         return 0
+    now = time.monotonic()
+    if deferred_tasks is not None and deferred_tasks.get(task_id, 0.0) > now:
+        return 0
 
-    runs = services._get_json(f"{api_base}/api/tasks/{task_id}/runs") or {}
+    # view=summary: only worktree/branch are needed, not each run's output + diff.
+    runs = services._get_json(f"{api_base}/api/tasks/{task_id}/runs?view=summary") or {}
     seen: set = set()
     defer_sweep = False
     removed = 0
@@ -583,4 +597,8 @@ def _reap_terminal_task(
             failed_drains.pop(key, None)
     if not defer_sweep:
         swept_tasks.add(task_id)
+        if deferred_tasks is not None:
+            deferred_tasks.pop(task_id, None)
+    elif deferred_tasks is not None:
+        deferred_tasks[task_id] = now + services._TERMINAL_DEFER_RECHECK_SECS
     return removed

@@ -102,6 +102,13 @@ _NOTIF_TAXONOMY = {
         "link_kind": "decision",
         "link_field": "decision_id",
     },
+    "request_overdue": {
+        "type": "request_overdue",
+        "zone": "earlier",  # a receipt for the requester, not a new request to answer
+        "priority": _NOTIF_PRI_ANSWER,
+        "link_kind": "request",
+        "link_field": "request_id",
+    },
     "request_escalated": {
         "type": "escalation",
         "zone": "needs_you",

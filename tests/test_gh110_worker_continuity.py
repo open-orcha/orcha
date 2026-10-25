@@ -627,3 +627,39 @@ async def test_tick_spawned_task_worker_bound_release_advances_real_cursor(
     assert ack.get("delivered_ts") == cursor                       # released on the REAL stashed cursor
     assert ack.get("delivered_ts") is not None                     # ...not a None no-advance
     assert (andy["agent_id"], tid) not in fd                       # counter cleared after release
+
+
+def test_terminal_reaper_rechecks_deferred_task_on_a_timer(tmp_path, monkeypatch):
+    # The openorcha stall: every worktree held an uncommitted .claude/settings.json, so every
+    # terminal task was deferred and its runs re-read on EVERY notifier loop (~4s). A deferred
+    # task now waits TERMINAL_DEFER_RECHECK_SECS before its runs are read again.
+    work = _make_repo(tmp_path)
+    wt_dirty, br_dirty = notifier._provision_task_worktree(str(work), "Andrew", "done-dirty")
+    (pathlib.Path(wt_dirty) / "uncommitted.txt").write_text("not saved\n")
+    run_reads = []
+
+    def fake_get(url, **k):
+        if "/runs" in url:
+            run_reads.append(url)
+            return {"runs": [{"worktree": wt_dirty, "branch": br_dirty, "base_cwd": str(work)}]}
+        if "status=completed" in url:
+            return {"tasks": [{"id": "TD"}]}
+        return {"tasks": []}
+    monkeypatch.setattr(notifier, "_get_json", fake_get)
+    clock = [1000.0]
+    monkeypatch.setattr(time, "monotonic", lambda: clock[0])
+
+    swept, deferred = set(), {}
+    for _ in range(3):                                             # three back-to-back loops
+        notifier.reap_terminal_task_worktrees("http://x", "CID", str(work), {}, swept,
+                                              quiet=True, deferred_tasks=deferred)
+    assert len(run_reads) == 1                                     # read once, then held back
+    assert run_reads[0].endswith("/api/tasks/TD/runs?view=summary")  # no output/diff payload
+    assert "TD" not in swept and "TD" in deferred                  # still deferred, not swept
+
+    clock[0] += notifier._TERMINAL_DEFER_RECHECK_SECS + 1          # the re-check comes due
+    (pathlib.Path(wt_dirty) / "uncommitted.txt").unlink()          # a human cleaned the tree
+    removed = notifier.reap_terminal_task_worktrees("http://x", "CID", str(work), {}, swept,
+                                                    quiet=True, deferred_tasks=deferred)
+    assert len(run_reads) == 2 and removed == 1
+    assert "TD" in swept and "TD" not in deferred

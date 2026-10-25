@@ -25,6 +25,10 @@ TERMINAL_TASK_STATES = ("completed", "cancelled")
 TERMINAL_SWEEP_MAX_PAGES = 200
 TERMINAL_SWEEP_PAGE_SIZE = 100
 
+# A terminal task whose worktree is dirty or still live is re-checked this often, not every
+# loop: a worktree usually stays dirty for days, and each check reads the task's runs.
+TERMINAL_DEFER_RECHECK_SECS = 600.0
+
 # A completed worker may linger briefly while its SessionEnd digest is written.
 GRACEFUL_EXIT_SECS = 180.0
 

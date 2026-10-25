@@ -1233,6 +1233,11 @@ export function RequestDetail({
                 <TimelineEvent icon="flag" actor={who(r.from)}>escalated to <b>a human</b></TimelineEvent>
               )
             ) : null}
+            {typeof r.detail?.overdue_reminded_at === "string" ? (
+              <TimelineEvent icon="flag" at={r.detail.overdue_reminded_at}>
+                Overdue reminder sent
+              </TimelineEvent>
+            ) : null}
             {pending && !hasResponse ? (
               <TimelineComment author={who(r.to)} avatar={<PartyAvatar snap={snap} alias={r.to} size={16} decorative />} meta={<><span className="rq-ok"><Icon name="check" cls="v2-ico" /></span>answered · syncing…</>} at={new Date(pending.at).toISOString()}>
                 <PayloadView value={pending.text} tasks={snap?.tasks} testClass="answer" />
@@ -1308,6 +1313,12 @@ export function RequestDetail({
           </Property>
           {r.created_at ? <Property label="Opened">{stamp(r.created_at)}</Property> : null}
           {r.responded_at ? <Property label="Responded">{stamp(r.responded_at)}</Property> : null}
+          {r.status === "open" && r.expires_at && Date.parse(r.expires_at) <= Date.now() ? (
+            <Property label="Overdue since">{stamp(r.expires_at)}</Property>
+          ) : null}
+          {typeof r.detail?.overdue_reminded_at === "string" ? (
+            <Property label="Reminded at">{stamp(r.detail.overdue_reminded_at)}</Property>
+          ) : null}
           {r.expires_at ? <Property label="Expires">{expiryStamp(r.expires_at, r.status === "open")}</Property> : null}
           {r.chain_depth ? <Property label="Chain depth"><span className="rq-num">{r.chain_depth}</span></Property> : null}
           {tl ? (

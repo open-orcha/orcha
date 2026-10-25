@@ -31,7 +31,8 @@ interface RequestRow {
   target_id: string | null
   requester_id: string | null
   type?: string | null
-  detail?: string | null
+  detail?: string | Record<string, unknown> | null
+  expires_at?: string | null
   payload?: unknown
 }
 interface TaskRow {
@@ -58,7 +59,7 @@ function requestTitle(r: RequestRow): string {
   if (typeof r.payload === 'string' && r.payload.trim() !== '') {
     return clip(r.payload.trim().split('\n')[0].trim())
   }
-  return clip(r.detail || r.type || 'request')
+  return clip((typeof r.detail === 'string' ? r.detail : null) || r.type || 'request')
 }
 
 export interface ComputeAttentionOptions {
@@ -120,7 +121,11 @@ export function computeAttention(
     const path = withCid(`/requests?req=${r.id}`, cid)
     const toHuman = r.target_id === null || humans.has(r.target_id)
     if ((r.status === 'open' && toHuman) || r.status === 'escalated') {
-      answers.push({ ...base, kind: 'request_answer', id: r.id, title, path })
+      const reminder = typeof r.detail === 'object' && r.detail !== null ? r.detail.overdue_reminded_at : null
+      answers.push({ ...base, kind: 'request_answer', id: r.id, title, path,
+        ...(typeof r.expires_at === 'string' ? { expiresAt: r.expires_at } : {}),
+        ...(typeof reminder === 'string' ? { remindedAt: reminder } : {})
+      })
     } else if (r.status === 'answered' && r.requester_id !== null && humans.has(r.requester_id)) {
       followUps.push({ ...base, kind: 'request_close', id: r.id, title, path })
     }

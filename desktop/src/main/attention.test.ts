@@ -446,3 +446,13 @@ describe('D13 palette parity: live agents carry the portal\'s roster slot', () =
     expect(new Set(live.map((a) => a.palette)).size).toBe(live.length)
   })
 })
+
+it('carries the server expiry and reminder to desktop attention without treating detail as text', () => {
+  const [r] = computeAttention(stack, AGENTS, [{
+    id: 'old', status: 'open', target_id: 'human-1', requester_id: 'ai-1', type: 'info',
+    expires_at: '2026-10-20T00:00:00Z', detail: { overdue_reminded_at: '2026-10-24T00:00:00Z' }
+  }], [])
+  expect(r.expiresAt).toBe('2026-10-20T00:00:00Z')
+  expect(r.remindedAt).toBe('2026-10-24T00:00:00Z')
+  expect(r.title).toBe('info')
+})
