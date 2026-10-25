@@ -32,6 +32,11 @@ class Capability(BaseModel):
     reason: str | None = "integration_required"
 
 
+class IntegrationCapability(BaseModel):
+    available: bool = False
+    reason: str | None = "integration_required"
+
+
 class AvailableAction(BaseModel):
     action: str
     enabled: bool
@@ -56,6 +61,13 @@ class EvidenceBasis(Input):
     evidence_sets: list[EvidenceReference] = Field(default_factory=list)
 
 
+class ImportAcceptance(Input):
+    """Explicit human acceptance of a completed standalone task's existing result."""
+
+    reviewed_result_digest: str = Field(pattern=r"^[a-f0-9]{64}$")
+    evidence: EvidenceBasis
+
+
 class NewTask(Input):
     client_key: Key
     title: Name
@@ -78,7 +90,7 @@ class WorkflowDraft(Input):
     objectives: list[NewObjective] = Field(default_factory=list, max_length=50)
     tasks: list[NewTask] = Field(default_factory=list, max_length=200)
     existing_task_ids: list[str] = Field(default_factory=list, max_length=200)
-    import_acceptances: dict[str, EvidenceReference] = Field(default_factory=dict)
+    import_acceptances: dict[str, ImportAcceptance] = Field(default_factory=dict)
 
 
 class WorkflowCreate(WorkflowDraft):
@@ -110,7 +122,7 @@ class TaskBatch(Mutation):
 
 class ImportPreview(Input):
     task_ids: list[str] = Field(min_length=1, max_length=200)
-    acceptances: dict[str, EvidenceReference] = Field(default_factory=dict)
+    acceptances: dict[str, ImportAcceptance] = Field(default_factory=dict)
 
 
 class ImportTasks(ImportPreview, Mutation):
@@ -145,6 +157,10 @@ class OutsideResult(TaskMutation):
     produced_by: str | None = Field(default=None, max_length=200)
 
 
+class AddEvidence(TaskMutation):
+    evidence: EvidenceBasis
+
+
 class AcceptTask(TaskMutation):
     evidence: EvidenceReference
 
@@ -160,6 +176,7 @@ class TransferOwner(Mutation):
 class ReviewRound(Mutation):
     loop_key: Key
     review_task_id: str
+    reviewed_task_id: str
     reviewed_artifact: EvidenceReference
     outcome: Literal["changes_requested", "accepted", "inconclusive"]
     correction: NewTask | None = None
@@ -186,6 +203,8 @@ class WorkflowTask(BaseModel):
     definition_of_done: str
     status: str
     work_revision: int
+    autonomy: Literal["off", "on"] = "off"
+    autonomy_revision: int = 1
     preparation_state: str | None
     start_hold: bool
     human_hold_by: str | None
@@ -199,6 +218,10 @@ class WorkflowTask(BaseModel):
     blockers: list[Blocker]
     display_state: DisplayState
     available_actions: list[AvailableAction]
+    outside_result_id: str | None = None
+    outside_result_state: str | None = None
+    current_evidence_set_id: str | None = None
+    evidence_state: str | None = None
 
 
 class Progress(BaseModel):
@@ -224,6 +247,29 @@ class Objective(BaseModel):
     evidence: EvidenceBasis | None = None
 
 
+class ReviewHistory(BaseModel):
+    id: str
+    loop_key: str
+    round_number: int
+    review_task_id: str
+    correction_task_id: str | None = None
+    outcome: str | None = None
+    reviewed_artifact: EvidenceReference
+    resolved_by_owner: str | None = None
+    resolved_reason: str | None = None
+
+
+class Activity(BaseModel):
+    id: str
+    task_id: str | None = None
+    actor_alias: str
+    actor_kind: str
+    event: str
+    revision: int
+    detail: dict
+    created_at: datetime
+
+
 class WorkflowDetail(BaseModel):
     id: str
     container_id: str
@@ -247,6 +293,13 @@ class WorkflowDetail(BaseModel):
     completion: CompletionCheck
     tasks: list[WorkflowTask]
     objectives: list[Objective]
+    review_rounds: list[ReviewHistory] = Field(default_factory=list)
+    activity: list[Activity] = Field(default_factory=list)
+    activity_truncated: bool = False
+    evidence_capability: IntegrationCapability = Field(
+        default_factory=IntegrationCapability
+    )
+    created_task_ids: dict[str, str] = Field(default_factory=dict)
 
 
 class WorkflowList(BaseModel):
@@ -255,13 +308,40 @@ class WorkflowList(BaseModel):
     next_cursor: str | None = None
 
 
+class ImportTaskImpact(BaseModel):
+    id: str
+    title: str
+    status: str
+    workflow_id: str | None = None
+    eligible: bool
+    requires_acceptance: bool
+    result_digest: str | None = None
+    preparation_state: Literal["draft", "prepared"]
+    start_hold: bool
+    human_hold_reason: str | None = None
+    assignee_ids: list[str]
+    depends_on: list[str]
+
+
 class Preview(BaseModel):
     graph_revision: int
     preview_digest: str
     selected_task_ids: list[str]
     required_task_ids: list[str]
     blockers: list[Blocker]
+    task_impacts: list[ImportTaskImpact] = Field(default_factory=list)
     save_starts_work: Literal[False] = False
+
+
+class ObjectiveEdit(Mutation):
+    title: Name
+    criteria: Text
+
+
+class ActivityPage(BaseModel):
+    activity: list[Activity]
+    next_before_at: datetime | None = None
+    next_before_id: str | None = None
 
 
 class Receipt(BaseModel):

@@ -9,7 +9,7 @@ fencing, verified identity and durable evidence have been integrated and reviewe
 import hashlib
 import json
 from dataclasses import dataclass
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from fastapi import HTTPException
 
@@ -56,12 +56,22 @@ def _digest(value):
     return hashlib.sha256(_json(value).encode()).hexdigest()
 
 
+def result_digest(result):
+    """sha256 of the canonical JSON of the stored tasks.result; None if nothing was saved."""
+    if isinstance(result, str):
+        try:
+            result = json.loads(result)
+        except ValueError:
+            pass
+    body = result.get("result") if isinstance(result, dict) else result
+    if body is None or body in ({}, []) or (isinstance(body, str) and not body.strip()):
+        return None
+    return _digest(result)
+
+
 def _row(row):
     # psycopg UUIDs must compare identically to API strings and SQLite UUIDs.
-    return {
-        k: str(v) if hasattr(v, "hex") and not isinstance(v, (str, bytes)) else v
-        for k, v in dict(row).items()
-    }
+    return {k: str(v) if isinstance(v, UUID) else v for k, v in dict(row).items()}
 
 
 @dataclass(frozen=True)
@@ -73,6 +83,8 @@ class WorkflowActor:
 
 class WorkflowHooks:
     """Installed by the integrated runtime; never take these facts from an API body."""
+
+    evidence_read_available = False
 
     def availability(self, cur, task):
         return {
@@ -98,6 +110,19 @@ class WorkflowHooks:
             "evidence_not_saved", "Durable outside evidence is not integrated yet."
         )
 
+    def capture_owner(self, cur, task, evidence, execution, actor):
+        conflict("evidence_not_saved", "Durable owner evidence is not integrated yet.")
+
+    def capture_import(
+        self, cur, task, evidence, execution, actor, reviewed_result_digest
+    ):
+        """Snapshot a completed standalone task's existing result for import.
+
+        Must verify reviewed_result_digest == result_digest(task["result"]) and
+        refuse when the result or required bytes are missing (no reconstruction).
+        """
+        conflict("evidence_not_saved", "Durable import evidence is not integrated yet.")
+
 
 def lock_container_graph(cur, cid):
     cur.execute(
@@ -116,6 +141,7 @@ class WorkflowService:
     def __init__(self, cur, hooks=None):
         self.cur = cur
         self.hooks = hooks or WorkflowHooks()
+        self.created_task_ids = {}
 
     def one(self, query, params=()):
         self.cur.execute(query, params)
@@ -363,6 +389,13 @@ class WorkflowService:
             row["display_state"] = task_display(
                 task, last, s["outside_evidence"].get(tid)
             )
+            outside = s["outside_evidence"].get(tid)
+            row["outside_result_id"] = outside["id"] if outside else None
+            row["outside_result_state"] = outside["state"] if outside else None
+            row["current_evidence_set_id"] = (
+                last["current_evidence_set_id"] if last else None
+            )
+            row["evidence_state"] = last["evidence_state"] if last else None
             states = {
                 "prepare": not live
                 and not task["started_at"]
@@ -379,8 +412,11 @@ class WorkflowService:
                     and live["state"] != "stopping"
                 ),
                 "release_lost_worker": row["display_state"]["release_available"],
+                "reissue_stop": bool(live and live["state"] == "stopping"),
                 "submit_outside_result": not live
-                and task["status"] not in {"completed", "cancelled"},
+                and task["status"] not in {"completed", "cancelled"}
+                and bool(task["definition_of_done"].strip())
+                and not outside,
                 "accept": task["status"] == "needs_verification",
                 "reject": task["status"] == "needs_verification",
             }
@@ -389,7 +425,13 @@ class WorkflowService:
                     "action": a,
                     "enabled": can_write
                     and allowed
-                    and w["status"] not in {"completed", "cancelled"},
+                    and (
+                        w["status"] not in {"completed", "cancelled"}
+                        or (
+                            w["status"] == "cancelled"
+                            and a in {"release_lost_worker", "reissue_stop"}
+                        )
+                    ),
                     "reason": (
                         reason
                         if not can_write
@@ -405,7 +447,19 @@ class WorkflowService:
         )
         w["graph_revision"] = guard["revision"] if guard else 1
         states = {
-            "start": w["status"] == "active" and not w["launch_enabled"],
+            "start": w["status"] == "active"
+            and not w["launch_enabled"]
+            and (
+                any(
+                    t["preparation_state"] == "prepared"
+                    and t["status"] not in {"completed", "cancelled"}
+                    for t in s["tasks"].values()
+                )
+                or (
+                    bool(s["tasks"])
+                    and all(accepted(t, s["acceptances"]) for t in s["tasks"].values())
+                )
+            ),
             "pause": w["status"] == "active" and w["launch_enabled"],
             "resume": w["status"] == "paused",
             "cancel": w["status"] in {"active", "paused"},
@@ -413,6 +467,10 @@ class WorkflowService:
             "add_tasks": w["status"] == "active",
             "import": w["status"] == "active",
         }
+        activity = self.rows(
+            "SELECT * FROM workflow_history WHERE workflow_id=%s ORDER BY created_at DESC,id DESC LIMIT 101",
+            (wid,),
+        )
         w.update(
             capability={
                 "workflow_read": True,
@@ -435,6 +493,18 @@ class WorkflowService:
             completion=s["completion"],
             tasks=tasks,
             objectives=s["objectives"],
+            review_rounds=s["review_rounds"],
+            activity=activity[:100],
+            activity_truncated=len(activity) > 100,
+            evidence_capability={
+                "available": self.hooks.evidence_read_available,
+                "reason": (
+                    None
+                    if self.hooks.evidence_read_available
+                    else "integration_required"
+                ),
+            },
+            created_task_ids=self.created_task_ids,
         )
         return WorkflowDetail.model_validate(w).model_dump(mode="json")
 
@@ -477,6 +547,8 @@ class WorkflowService:
         w["revision"] = revision
 
     def reconcile(self, wid):
+        require_capability()
+        self.lock(wid)
         s = self.snapshot(wid)
         for tid, task in s["tasks"].items():
             state = stored_status(
@@ -489,7 +561,12 @@ class WorkflowService:
             if state != task["status"]:
                 self.cur.execute("UPDATE tasks SET status=%s WHERE id=%s", (state, tid))
             if s["eligibility"][tid]["can_start"]:
-                self.notice(s["workflow"], "task_ready", tid, task["work_revision"])
+                kind = (
+                    "workflow_evidence_waiting"
+                    if s["eligibility"][tid]["source_kind"] == "evidence_review"
+                    else "task_ready"
+                )
+                self.notice(s["workflow"], kind, tid, task["work_revision"])
         if s["completion"]["can_finish"]:
             self.notice(
                 s["workflow"],
@@ -550,6 +627,14 @@ class WorkflowService:
         if operation == "create":
             wid = self.create(cid, actor, body)
         else:
+            if operation == "move" and body.get("destination_workflow_id"):
+                for lock_id in sorted({wid, body["destination_workflow_id"]}):
+                    target = self.workflow(lock_id)
+                    if target["container_id"] != cid:
+                        conflict(
+                            "workflow_unavailable", "Workflow not found.", status=404
+                        )
+                    self.lock(lock_id)
             w = self.lock(wid, body["expected_revision"])
             if w["container_id"] != cid:
                 conflict("workflow_unavailable", "Workflow not found.", status=404)
@@ -594,6 +679,12 @@ class WorkflowService:
         ):
             deps.setdefault(d["task_id"], []).append(d["depends_on_id"])
         closed = dependency_closure(task_ids, deps)
+        if not closed.issubset(all_tasks):
+            conflict(
+                "invalid_graph",
+                "The selected group has an unavailable prerequisite.",
+                status=422,
+            )
         blockers = []
         for tid in sorted(closed):
             t = all_tasks[tid]
@@ -608,6 +699,15 @@ class WorkflowService:
                         "code": "import_ineligible",
                         "message": t["title"]
                         + " cannot be imported in its current state.",
+                        "task_id": tid,
+                    }
+                )
+            if t["status"] == "completed" and not result_digest(t["result"]):
+                blockers.append(
+                    {
+                        "code": "import_result_missing",
+                        "message": t["title"]
+                        + " has no saved result to review, so it cannot be imported.",
                         "task_id": tid,
                     }
                 )
@@ -643,12 +743,48 @@ class WorkflowService:
                 "dependencies": {t: sorted(deps.get(t, [])) for t in sorted(closed)},
             }
         )
+        impacts = []
+        for tid in sorted(closed):
+            t = all_tasks[tid]
+            assignees = [
+                a["agent_id"]
+                for a in self.rows(
+                    "SELECT agent_id FROM agent_tasks WHERE task_id=%s AND assignment_status<>'done'",
+                    (tid,),
+                )
+            ]
+            complete = t["status"] == "completed"
+            impacts.append(
+                {
+                    "id": tid,
+                    "title": t["title"],
+                    "status": t["status"],
+                    "workflow_id": t["workflow_id"],
+                    "eligible": not any(b.get("task_id") == tid for b in blockers),
+                    "requires_acceptance": complete,
+                    "result_digest": result_digest(t["result"]) if complete else None,
+                    "preparation_state": (
+                        "prepared"
+                        if complete or (t["definition_of_done"].strip() and assignees)
+                        else "draft"
+                    ),
+                    "start_hold": not complete,
+                    "human_hold_reason": (
+                        "On hold before it joined this workflow"
+                        if t["status"] in {"not_ready", "blocked"}
+                        else None
+                    ),
+                    "assignee_ids": assignees,
+                    "depends_on": deps.get(tid, []),
+                }
+            )
         return {
             "graph_revision": revision,
             "preview_digest": digest,
             "selected_task_ids": task_ids,
             "required_task_ids": sorted(closed - set(task_ids)),
             "blockers": blockers,
+            "task_impacts": impacts,
             "save_starts_work": False,
         }
 
@@ -661,6 +797,17 @@ class WorkflowService:
         project = self.one("SELECT status FROM containers WHERE id=%s", (cid,))
         if project["status"] != "active":
             conflict("project_not_active", "Resume the project first.")
+        if body.get("existing_task_ids") and not body.get("preview_digest"):
+            conflict("preview_required", "Review the import preview before saving.")
+        if (
+            body.get("preview_digest")
+            and body["preview_digest"]
+            != self.preview_draft(cid, body)["preview_digest"]
+        ):
+            conflict(
+                "preview_changed",
+                "The workflow draft or imported work changed. Review it again.",
+            )
         wid = _id()
         self.cur.execute(
             "INSERT INTO workflows(id,container_id,owner_human_id,created_by_human_id,title,goal,execution_mode) VALUES (%s,%s,%s,%s,%s,%s,%s)",
@@ -680,7 +827,7 @@ class WorkflowService:
                 w,
                 actor,
                 body["existing_task_ids"],
-                body.get("preview_digest"),
+                self.preview_import(cid, body["existing_task_ids"])["preview_digest"],
                 body.get("import_acceptances", {}),
             )
         self._add(w, actor, body.get("tasks", []))
@@ -691,6 +838,38 @@ class WorkflowService:
             )
         self.audit(w, p, "workflow_created", {"title": w["title"]}, scope=True)
         return wid
+
+    def preview_draft(self, cid, body):
+        from portal_backend.schemas.workflows import WorkflowDraft
+
+        draft = WorkflowDraft.model_validate(
+            {k: v for k, v in body.items() if k in WorkflowDraft.model_fields}
+        ).model_dump(mode="json")
+        preview = self.preview_import(cid, draft["existing_task_ids"])
+        keys = [t["client_key"] for t in draft["tasks"]]
+        if len(set(keys)) != len(keys) or set(keys) & set(draft["existing_task_ids"]):
+            conflict(
+                "duplicate_client_key",
+                "Each task needs a distinct local key.",
+                status=422,
+            )
+        ids = (
+            set(keys)
+            | set(draft["existing_task_ids"])
+            | set(preview["required_task_ids"])
+        )
+        deps = {t["client_key"]: t["depends_on"] for t in draft["tasks"]}
+        for row in self.rows(
+            "SELECT d.* FROM task_dependencies d JOIN tasks t ON t.id=d.task_id WHERE t.container_id=%s",
+            (cid,),
+        ):
+            if row["task_id"] in ids:
+                deps.setdefault(row["task_id"], []).append(row["depends_on_id"])
+        validate_graph(ids, deps)
+        preview["preview_digest"] = _digest(
+            {"draft": draft, "import_digest": preview["preview_digest"]}
+        )
+        return preview
 
     def assign(self, task, aid):
         a = self.one(
@@ -795,6 +974,7 @@ class WorkflowService:
                     "INSERT INTO task_dependencies(task_id,depends_on_id) VALUES (%s,%s)",
                     (tid, prerequisite),
                 )
+        self.created_task_ids.update(ids)
         return ids
 
     def _import(self, w, actor, ids, digest, acceptances):
@@ -843,14 +1023,71 @@ class WorkflowService:
             if self.cur.rowcount != 1:
                 conflict("import_changed", "A selected task changed during import.")
             if completed:
-                ref = acceptances.get(tid)
-                if not ref:
-                    conflict(
-                        "import_acceptance_required",
-                        "Review and explicitly accept the imported result.",
-                        task_id=tid,
-                    )
-                self._record_acceptance(self.task(w["id"], tid), actor, ref, "import")
+                self._accept_import(w, actor, tid, acceptances.get(tid))
+
+    def _accept_import(self, w, actor, tid, acceptance):
+        """Explicit human acceptance of an imported completed result, same transaction.
+
+        Never treats completed status or legacy Full autonomy as acceptance.
+        """
+        if not acceptance:
+            conflict(
+                "import_acceptance_required",
+                "Review and explicitly accept the imported result.",
+                task_id=tid,
+            )
+        person = self.actor(actor, w["container_id"])
+        if person["kind"] != "human":
+            conflict(
+                "human_approval_required",
+                "A person must accept imported results.",
+                status=403,
+            )
+        task = self.task(w["id"], tid)
+        current = result_digest(task["result"])
+        if not current:
+            conflict(
+                "import_result_missing",
+                "This task has no saved result to review.",
+                task_id=tid,
+            )
+        if acceptance["reviewed_result_digest"] != current:
+            conflict(
+                "import_result_changed",
+                "The task result changed. Review it again.",
+                task_id=tid,
+            )
+        if not self.basis_valid(
+            acceptance["evidence"], self.snapshot(w["id"])["tasks"]
+        ):
+            conflict(
+                "evidence_version_stale",
+                "The supporting evidence changed or is unavailable.",
+            )
+        eid = _id()
+        generation = self.one(
+            "SELECT COALESCE(MAX(generation),0)+1 AS n FROM workflow_executions WHERE task_id=%s",
+            (tid,),
+        )["n"]
+        self.cur.execute(
+            "INSERT INTO workflow_executions(id,workflow_id,task_id,generation,work_revision,claimant_id,run_id,source_kind,exclusive,state) VALUES (%s,%s,%s,%s,%s,%s,NULL,'import_review',false,'awaiting_review')",
+            (eid, w["id"], tid, generation, task["work_revision"], person["id"]),
+        )
+        execution = self.one("SELECT * FROM workflow_executions WHERE id=%s", (eid,))
+        reference = self.hooks.capture_import(
+            self.cur,
+            task,
+            acceptance["evidence"],
+            execution,
+            person,
+            acceptance["reviewed_result_digest"],
+        )
+        now = sql.utcnow()
+        self.cur.execute(
+            "UPDATE workflow_executions SET current_evidence_set_id=%s,evidence_state='saved',worker_stopped_at=%s,state='released',released_at=%s,release_reason='imported result accepted' WHERE id=%s",
+            (reference["evidence_set_id"], now, now, eid),
+        )
+        self._record_acceptance(task, actor, reference, "import")
 
     def op_add_tasks(self, w, actor, b, tid):
         ids = self._add(w, actor, b["tasks"])
@@ -1101,6 +1338,13 @@ class WorkflowService:
                 conflict(
                     "review_only_run", "An outside result does not launch a worker."
                 )
+        if choice["source_kind"] == "evidence_review" and not self.basis_valid(
+            s["outside_evidence"][tid]["evidence"], s["tasks"]
+        ):
+            conflict(
+                "evidence_version_stale",
+                "The supporting outside evidence changed. Review it again.",
+            )
         generation = self.one(
             "SELECT COALESCE(max(generation),0)+1 AS n FROM workflow_executions WHERE task_id=%s",
             (tid,),
@@ -1242,6 +1486,61 @@ class WorkflowService:
             ),
         )
 
+    def accept_task(
+        self,
+        tid,
+        actor,
+        reference,
+        *,
+        expected_revision,
+        expected_work_revision,
+        idempotency_key,
+    ):
+        """Legacy verify/done adapter; exact revision + evidence + receipt, no shortcut."""
+        t = self.one("SELECT container_id,workflow_id FROM tasks WHERE id=%s", (tid,))
+        if not t or not t["workflow_id"]:
+            conflict("workflow_task_required", "A workflow task is required.")
+        return self.mutate(
+            t["container_id"],
+            actor,
+            "accept",
+            {
+                "expected_revision": expected_revision,
+                "expected_work_revision": expected_work_revision,
+                "idempotency_key": idempotency_key,
+                "evidence": reference,
+            },
+            wid=t["workflow_id"],
+            tid=tid,
+        )
+
+    def reject_task(
+        self,
+        tid,
+        actor,
+        reason,
+        *,
+        expected_revision,
+        expected_work_revision,
+        idempotency_key,
+    ):
+        t = self.one("SELECT container_id,workflow_id FROM tasks WHERE id=%s", (tid,))
+        if not t or not t["workflow_id"]:
+            conflict("workflow_task_required", "A workflow task is required.")
+        return self.mutate(
+            t["container_id"],
+            actor,
+            "reject",
+            {
+                "expected_revision": expected_revision,
+                "expected_work_revision": expected_work_revision,
+                "idempotency_key": idempotency_key,
+                "reason": reason,
+            },
+            wid=t["workflow_id"],
+            tid=tid,
+        )
+
     def op_accept(self, w, actor, b, tid):
         self.active(w, allow_paused=True)
         p = self.actor(actor, w["container_id"])
@@ -1306,7 +1605,13 @@ class WorkflowService:
             )
 
     def op_reject(self, w, actor, b, tid):
-        p = self.owner(w, actor)
+        p = self.actor(actor, w["container_id"])
+        if p["kind"] != "human":
+            conflict(
+                "human_reviewer_required",
+                "A verified human reviewer is required.",
+                status=403,
+            )
         self.active(w, allow_paused=True)
         t = self.task(w["id"], tid, b["expected_work_revision"])
         if t["status"] != "needs_verification":
@@ -1383,6 +1688,13 @@ class WorkflowService:
                     (sql.utcnow(), t["id"]),
                 )
             self._release_execution(e, reason)
+        self.audit(
+            w,
+            {"id": None, "kind": "system", "alias": "Worker runtime"},
+            "workflow_worker_stop_confirmed",
+            {"execution_id": e["id"], "generation": generation, "reason": reason},
+            t["id"],
+        )
         self.reconcile(w["id"])
         return self.one("SELECT * FROM workflow_executions WHERE id=%s", (e["id"],))
 
@@ -1541,6 +1853,11 @@ class WorkflowService:
             (tid,),
         ):
             conflict("owner_evidence_pending", "An outside result is already waiting.")
+        if not self.basis_valid(b["evidence"], self.snapshot(w["id"])["tasks"]):
+            conflict(
+                "evidence_version_stale",
+                "The supporting evidence changed or is unavailable.",
+            )
         eid = _id()
         self.cur.execute(
             "INSERT INTO task_outside_evidence(id,workflow_id,task_id,work_revision,submitted_by,evidence,produced_by,state,gate_reason_at_submit) VALUES (%s,%s,%s,%s,%s,%s,%s,'pending',%s)",
@@ -1719,7 +2036,8 @@ class WorkflowService:
                 "Start the workflow before expanding a review loop.",
             )
         review = self.task(w["id"], b["review_task_id"])
-        self.hooks.validate_evidence(self.cur, review, b["reviewed_artifact"])
+        reviewed = self.task(w["id"], b["reviewed_task_id"])
+        self.hooks.validate_evidence(self.cur, reviewed, b["reviewed_artifact"])
         previous = self.one(
             "SELECT * FROM workflow_review_rounds WHERE workflow_id=%s AND loop_key=%s ORDER BY round_number DESC LIMIT 1",
             (w["id"], b["loop_key"]),
@@ -1730,12 +2048,22 @@ class WorkflowService:
                 "Record the outcome against the latest review task.",
             )
         number = previous["round_number"] if previous else 1
-        if previous and previous["outcome"]:
+        expanding_recorded = bool(
+            previous
+            and previous["outcome"] == "changes_requested"
+            and b["outcome"] == "changes_requested"
+            and b.get("correction")
+            and previous["reviewed_artifact"] == b["reviewed_artifact"]
+        )
+        if previous and previous["outcome"] and not expanding_recorded:
             conflict(
                 "review_outcome_recorded", "The review outcome is already recorded."
             )
         pair = []
-        if b["outcome"] == "changes_requested":
+        limit_hit = False
+        if b["outcome"] == "changes_requested" and (
+            b.get("correction") or b.get("next_review")
+        ):
             if not b.get("correction") or not b.get("next_review"):
                 conflict(
                     "review_pair_required",
@@ -1753,18 +2081,19 @@ class WorkflowService:
                 self.notice(
                     w, "workflow_attention", review["id"], review["work_revision"]
                 )
-                return
-            correction = dict(b["correction"], depends_on=[review["id"]])
-            followup = dict(b["next_review"], depends_on=[correction["client_key"]])
-            pair = [correction, followup]
+                limit_hit = True
+            else:
+                correction = dict(b["correction"], depends_on=[review["id"]])
+                followup = dict(b["next_review"], depends_on=[correction["client_key"]])
+                pair = [correction, followup]
         ids = self._add(w, actor, pair)
         rid = previous["id"] if previous else _id()
-        if previous:
+        if previous and not previous["outcome"]:
             self.cur.execute(
                 "UPDATE workflow_review_rounds SET outcome=%s,reviewed_artifact=%s WHERE id=%s",
                 (b["outcome"], _json(b["reviewed_artifact"]), rid),
             )
-        else:
+        elif not previous:
             self.cur.execute(
                 "INSERT INTO workflow_review_rounds(id,workflow_id,loop_key,round_number,review_task_id,reviewed_artifact,outcome) VALUES (%s,%s,%s,%s,%s,%s,%s)",
                 (
@@ -1800,6 +2129,7 @@ class WorkflowService:
                 "round": number,
                 "outcome": b["outcome"],
                 "new_tasks": ids,
+                "limit_reached": limit_hit,
             },
             scope=True,
         )
@@ -1827,4 +2157,177 @@ class WorkflowService:
             "workflow_review_resolved_by_owner",
             {"review_task_id": tid, "reason": b["reason"]},
             scope=True,
+        )
+
+    def op_edit_objective(self, w, actor, b, tid):
+        p = self.owner(w, actor)
+        self.active(w, allow_paused=True)
+        o = self.one(
+            "SELECT * FROM workflow_objectives WHERE id=%s AND workflow_id=%s",
+            (b["objective_id"], w["id"]),
+        )
+        if not o:
+            conflict("objective_unavailable", "Objective not found.", status=404)
+        self.cur.execute(
+            "UPDATE workflow_objectives SET title=%s,criteria=%s,revision=revision+1,accepted_revision=NULL WHERE id=%s",
+            (b["title"], b["criteria"], o["id"]),
+        )
+        self.audit(
+            w,
+            p,
+            "workflow_objective_changed",
+            {"objective_id": o["id"], "previous_revision": o["revision"]},
+            scope=True,
+        )
+
+    def op_move(self, w, actor, b, tid):
+        """Move a closed, never-started component; one verified actor owns both sides."""
+        p = self.owner(w, actor)
+        self.active(w)
+        ids = b["task_ids"]
+        if len(set(ids)) != len(ids) or not ids or not b["reason"].strip():
+            conflict(
+                "invalid_move", "Select distinct tasks and give a reason.", status=422
+            )
+        destination = None
+        if b.get("destination_workflow_id"):
+            if b["destination_workflow_id"] == w["id"]:
+                conflict("same_workflow", "These tasks are already in that workflow.")
+            destination = self.lock(
+                b["destination_workflow_id"], b.get("destination_revision")
+            )
+            if destination["container_id"] != w["container_id"]:
+                conflict("workflow_unavailable", "Workflow not found.", status=404)
+            if not b.get("destination_revision"):
+                conflict(
+                    "revision_required", "Refresh both workflows before moving tasks."
+                )
+            self.owner(destination, actor)
+            self.active(destination)
+            count = self.one(
+                "SELECT count(*) AS n FROM tasks WHERE workflow_id=%s",
+                (destination["id"],),
+            )["n"]
+            if count + len(ids) > destination["task_limit"]:
+                conflict("task_limit", "The destination task limit would be exceeded.")
+        s = self.snapshot(w["id"])
+        if not set(ids).issubset(s["tasks"]):
+            conflict("task_unavailable", "A selected task is unavailable.", status=404)
+        if dependency_closure(ids, s["dependencies"]) != set(ids):
+            conflict(
+                "dependency_closure", "Move the complete connected group together."
+            )
+        for task_id in sorted(ids):
+            task = self.task(w["id"], task_id)
+            self.never_started(task)
+            if task["status"] in {"completed", "cancelled"} or self.one(
+                "SELECT id FROM task_outside_evidence WHERE task_id=%s LIMIT 1",
+                (task_id,),
+            ):
+                conflict(
+                    "task_history_present",
+                    "Tasks with result history stay in their workflow.",
+                )
+        for task_id in sorted(ids):
+            self.cur.execute(
+                "UPDATE tasks SET workflow_id=%s,start_hold=%s,status='not_ready' WHERE id=%s AND workflow_id=%s",
+                (
+                    destination["id"] if destination else None,
+                    bool(destination),
+                    task_id,
+                    w["id"],
+                ),
+            )
+            if self.cur.rowcount != 1:
+                conflict(
+                    "membership_changed",
+                    "A selected task moved. Refresh the selection.",
+                )
+            if not destination:
+                self.cur.execute(
+                    "UPDATE tasks SET preparation_state=NULL,human_hold_by=NULL,human_hold_at=NULL,human_hold_reason=NULL,awaiting_owner_decision=NULL,owner_decision_at=NULL WHERE id=%s",
+                    (task_id,),
+                )
+        detail = {
+            "task_ids": ids,
+            "destination_workflow_id": destination["id"] if destination else None,
+            "reason": b["reason"],
+            "start_held": True,
+        }
+        self.audit(
+            w,
+            p,
+            "workflow_tasks_moved" if destination else "workflow_tasks_removed",
+            detail,
+            scope=True,
+        )
+        if destination:
+            self.audit(
+                destination,
+                p,
+                "workflow_tasks_received",
+                dict(detail, source_workflow_id=w["id"]),
+                scope=True,
+            )
+            self.reconcile(destination["id"])
+
+    def op_add_evidence(self, w, actor, b, tid):
+        p = self.owner(w, actor)
+        self.active(w, allow_paused=True)
+        task = self.task(w["id"], tid, b["expected_work_revision"])
+        if task["status"] in {"completed", "cancelled"} or task["withdrawn_at"]:
+            conflict(
+                "task_terminal",
+                "Accepted, cancelled or withdrawn work cannot be replaced.",
+            )
+        execution = self.one(
+            "SELECT * FROM workflow_executions WHERE task_id=%s AND work_revision=%s ORDER BY generation DESC LIMIT 1",
+            (tid, task["work_revision"]),
+        )
+        if (
+            not execution
+            or execution["evidence_state"] != "missing"
+            or not execution["current_evidence_set_id"]
+        ):
+            conflict(
+                "missing_evidence_required",
+                "Only the current missing evidence can be replaced.",
+            )
+        if execution["run_id"]:
+            run = self.one(
+                "SELECT ended_at FROM worker_runs WHERE run_id=%s",
+                (execution["run_id"],),
+            )
+            if not run or not run["ended_at"]:
+                conflict(
+                    "worker_live",
+                    "Wait for the worker to end before replacing evidence.",
+                )
+        if not self.basis_valid(b["evidence"], self.snapshot(w["id"])["tasks"]):
+            conflict(
+                "evidence_version_stale",
+                "The supporting evidence changed or is unavailable.",
+            )
+        reference = self.hooks.capture_owner(
+            self.cur, task, b["evidence"], execution, p
+        )
+        if reference["evidence_set_id"] == execution["current_evidence_set_id"]:
+            conflict(
+                "evidence_rebind_refused",
+                "Replacement evidence needs a new immutable set.",
+            )
+        self.cur.execute(
+            "UPDATE workflow_executions SET current_evidence_set_id=%s,evidence_state='saved' WHERE id=%s",
+            (reference["evidence_set_id"], execution["id"]),
+        )
+        self.hooks.validate_evidence(self.cur, task, reference)
+        self.audit(
+            w,
+            p,
+            "workflow_evidence_replaced",
+            {
+                "previous_set_id": execution["current_evidence_set_id"],
+                "evidence": reference,
+            },
+            tid,
         )
