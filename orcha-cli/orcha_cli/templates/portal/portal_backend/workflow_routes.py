@@ -147,26 +147,7 @@ def preview_workflow(cid: str, body: model.WorkflowDraft, request: Request):
         require_member_read(cur, request, cid)
         resolve_actor(cur, request, cid)
         svc = service.WorkflowService(cur, HOOKS)
-        preview = svc.preview_import(cid, body.existing_task_ids)
-        keys = [t.client_key for t in body.tasks]
-        if len(set(keys)) != len(keys) or set(keys) & set(body.existing_task_ids):
-            conflict(
-                "duplicate_client_key",
-                "Each task needs a distinct local key.",
-                status=422,
-            )
-        ids = (
-            set(keys) | set(body.existing_task_ids) | set(preview["required_task_ids"])
-        )
-        dependencies = {t.client_key: t.depends_on for t in body.tasks}
-        for row in svc.rows(
-            "SELECT d.* FROM task_dependencies d JOIN tasks t ON t.id=d.task_id WHERE t.container_id=%s",
-            (cid,),
-        ):
-            if row["task_id"] in ids:
-                dependencies.setdefault(row["task_id"], []).append(row["depends_on_id"])
-        validate_graph(ids, dependencies)
-        return preview
+        return svc.preview_draft(cid, body.model_dump(mode="json"))
 
 
 @app.post(
@@ -264,7 +245,11 @@ def _workflow_action(path, operation, body_model, *, method="POST", allow_agent=
     endpoint.__name__ = "workflow_" + operation
     endpoint.__annotations__["body"] = body_model
     app.add_api_route(
-        path, endpoint, methods=[method], response_model=model.WorkflowDetail
+        path,
+        endpoint,
+        methods=[method],
+        response_model=model.WorkflowDetail,
+        openapi_extra={"x-workflow-operation": operation},
     )
 
 
@@ -295,7 +280,11 @@ def _task_action(path, operation, body_model, *, allow_agent=False):
     endpoint.__name__ = "workflow_task_" + operation
     endpoint.__annotations__["body"] = body_model
     app.add_api_route(
-        path, endpoint, methods=["POST"], response_model=model.WorkflowDetail
+        path,
+        endpoint,
+        methods=["POST"],
+        response_model=model.WorkflowDetail,
+        openapi_extra={"x-workflow-operation": operation},
     )
 
 
@@ -306,6 +295,7 @@ _workflow_action(
     "/api/workflows/{wid}/tasks", "add_tasks", model.TaskBatch, allow_agent=True
 )
 _workflow_action("/api/workflows/{wid}/import", "import", model.ImportTasks)
+_workflow_action("/api/workflows/{wid}/move", "move", model.MoveTasks)
 _workflow_action("/api/workflows/{wid}/start", "start", model.ReleaseTasks)
 _workflow_action("/api/workflows/{wid}/release", "release", model.ReleaseTasks)
 _workflow_action("/api/workflows/{wid}/goal/accept", "accept_goal", model.AcceptBasis)
@@ -412,6 +402,81 @@ def resolve_workflow_review(wid: str, tid: str, body: model.Mutation, request: R
             w["container_id"],
             actor,
             "resolve_loop",
+            body.model_dump(mode="json"),
+            wid=wid,
+            tid=tid,
+        )
+
+
+@app.patch(
+    "/api/workflows/{wid}/objectives/{oid}",
+    response_model=model.WorkflowDetail,
+    openapi_extra={"x-workflow-operation": "edit_objective"},
+)
+def edit_workflow_objective(
+    wid: str, oid: str, body: model.ObjectiveEdit, request: Request
+):
+    service.require_capability()
+    with db_cursor() as (_, cur):
+        svc = service.WorkflowService(cur, HOOKS)
+        w = svc.workflow(wid)
+        actor = resolve_actor(cur, request, w["container_id"])
+        return svc.mutate(
+            w["container_id"],
+            actor,
+            "edit_objective",
+            dict(body.model_dump(mode="json"), objective_id=oid),
+            wid=wid,
+        )
+
+
+@app.get("/api/workflows/{wid}/activity", response_model=model.ActivityPage)
+def workflow_activity(
+    wid: str,
+    request: Request,
+    before_at: str | None = None,
+    before_id: str | None = None,
+    limit: int = Query(default=50, ge=1, le=200),
+):
+    with db_cursor(readonly=True) as (_, cur):
+        svc, _, _ = read_context(cur, request, wid)
+        query = "SELECT * FROM workflow_history WHERE workflow_id=%s"
+        params = [wid]
+        if bool(before_at) != bool(before_id):
+            conflict(
+                "cursor_required", "Supply both activity cursor fields.", status=422
+            )
+        if before_at:
+            query += " AND (created_at<%s OR (created_at=%s AND id<%s))"
+            params.extend([before_at, before_at, before_id])
+        query += " ORDER BY created_at DESC,id DESC LIMIT %s"
+        params.append(limit + 1)
+        rows = svc.rows(query, tuple(params))
+        last = rows[limit - 1] if len(rows) > limit else None
+        return {
+            "activity": rows[:limit],
+            "next_before_at": last["created_at"] if last else None,
+            "next_before_id": last["id"] if last else None,
+        }
+
+
+@app.post(
+    "/api/workflows/{wid}/tasks/{tid}/evidence",
+    response_model=model.WorkflowDetail,
+    openapi_extra={"x-workflow-operation": "add_evidence"},
+)
+def add_workflow_evidence(
+    wid: str, tid: str, body: model.AddEvidence, request: Request
+):
+    service.require_capability()
+    with db_cursor() as (_, cur):
+        svc = service.WorkflowService(cur, HOOKS)
+        w = svc.workflow(wid)
+        actor = resolve_actor(cur, request, w["container_id"])
+        return svc.mutate(
+            w["container_id"],
+            actor,
+            "add_evidence",
             body.model_dump(mode="json"),
             wid=wid,
             tid=tid,
