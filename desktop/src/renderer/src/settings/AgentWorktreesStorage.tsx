@@ -3,7 +3,7 @@ import { FolderGit2, FolderOpen, Loader2, RefreshCw } from 'lucide-react'
 import { Button } from '../ui/Button'
 import ErrorNotice from '../components/ErrorNotice'
 import { formatBytes } from '../host/removeProject'
-import { useBoundedScan } from './useBoundedScan'
+import { STILL_LOOKING, useBoundedScan } from './useBoundedScan'
 import type {
   AgentWorktree,
   AgentWorktreeCleanResult,
@@ -51,7 +51,7 @@ interface Preview {
  *  always previews first (a dry run grouped by what will happen) before it changes anything. */
 export default function AgentWorktreesStorage() {
   const api = window.orchaDesktop
-  const { data: projects, error: scanError, scanning, scan } = useBoundedScan<ProjectWorktrees[]>(api.storageWorktrees)
+  const { data: projects, error: scanError, scanning, slow, scan } = useBoundedScan<ProjectWorktrees[]>(api.storageWorktrees)
   const [actionError, setError] = useState<unknown>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [preview, setPreview] = useState<Preview | null>(null)
@@ -77,6 +77,7 @@ export default function AgentWorktreesStorage() {
     if (!preview) return
     const { folder, scope, optIn } = preview
     setBusy(folder)
+    setError(null)
     try {
       const res = await api.storageCleanWorktrees!({ folder, dryRun: false, onlyClean: scope === 'clean', unmerged: [...optIn] })
       setReports((r) => ({
@@ -102,7 +103,7 @@ export default function AgentWorktreesStorage() {
         <FolderGit2 className="h-3.5 w-3.5" aria-hidden="true" />
         Agent worktrees
         {projects && <span className="tabular-nums">· {size(total)} reclaimable</span>}
-        <Button variant="ghost" size="sm" className="ml-auto" onClick={() => { setError(null); void scan() }} disabled={scanning || !!busy} aria-label="Scan worktrees again">
+        <Button variant="ghost" size="sm" className="ml-auto" onClick={() => { setError(null); void scan() }} disabled={(scanning && !slow) || !!busy} aria-label="Scan worktrees again">
           <RefreshCw className={scanning ? 'animate-spin' : ''} /> Scan
         </Button>
       </div>
@@ -116,7 +117,7 @@ export default function AgentWorktreesStorage() {
       )}
       {!projects && scanning && (
         <p className="flex items-center gap-2 text-[13px] text-text-3" role="status">
-          <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" /> Looking at agent worktrees…
+          <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" /> Looking at agent worktrees…{slow ? ` ${STILL_LOOKING}` : ''}
         </p>
       )}
       {projects && all.length === 0 && (

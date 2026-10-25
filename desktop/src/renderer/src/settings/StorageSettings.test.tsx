@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import StorageSettings, { totalSize } from './StorageSettings'
-import { SCAN_TIMEOUT_MS } from './useBoundedScan'
+import { SCAN_SLOW_MS, SCAN_TIMEOUT_MS } from './useBoundedScan'
 import type { StorageReport } from '../../../shared/types'
 
 const REPORT: StorageReport = {
@@ -37,12 +37,54 @@ describe('Settings › Storage', () => {
       vi.advanceTimersByTime(SCAN_TIMEOUT_MS)
     })
     vi.useRealTimers()
-    expect(SCAN_TIMEOUT_MS).toBeLessThanOrEqual(10_000)
+    expect(SCAN_SLOW_MS).toBeLessThanOrEqual(10_000)
     expect(screen.queryByText('Looking for leftovers…')).not.toBeInTheDocument()
-    expect(screen.getByText(/Couldn’t check Docker: No answer after 10 seconds/)).toBeInTheDocument()
+    expect(screen.getByText(/Couldn’t check Docker: No answer after 60 seconds/)).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: 'Scan again' }))
     expect(await screen.findByText('orcha-ehr-portal:latest')).toBeInTheDocument()
     expect(screen.queryByText(/No answer after/)).not.toBeInTheDocument()
+  })
+
+  it('a slow healthy scan says "Still looking", enables Scan, and pressing it never loses the answer (review: 12 s scans)', async () => {
+    vi.useFakeTimers()
+    let answer: (r: StorageReport) => void = () => {}
+    const healthy = new Promise<StorageReport>((r) => (answer = r))
+    api.storageScan.mockReturnValue(healthy) // main joins a repeat to the scan already running
+    render(<StorageSettings />)
+    expect(screen.getByRole('button', { name: 'Scan again' })).toBeDisabled()
+    await act(async () => {
+      vi.advanceTimersByTime(SCAN_SLOW_MS)
+    })
+    expect(screen.getByText(/Still looking\. Big projects can take a while\./)).toBeInTheDocument()
+    expect(screen.queryByText(/No answer after/)).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Scan again' })).toBeEnabled()
+    await act(async () => {
+      screen.getByRole('button', { name: 'Scan again' }).click()
+      vi.advanceTimersByTime(2_000)
+      answer(REPORT)
+    })
+    vi.useRealTimers()
+    expect(await screen.findByText('orcha-ehr-portal:latest')).toBeInTheDocument()
+    expect(screen.queryByText(/Still looking/)).not.toBeInTheDocument()
+  })
+
+  it('an older scan answering late is dropped and does not stop the newer scan’s spinner', async () => {
+    vi.useFakeTimers()
+    let oldAnswer: (r: StorageReport) => void = () => {}
+    api.storageScan
+      .mockReturnValueOnce(new Promise<StorageReport>((r) => (oldAnswer = r)))
+      .mockReturnValueOnce(new Promise(() => {}))
+    render(<StorageSettings />)
+    await act(async () => {
+      vi.advanceTimersByTime(SCAN_SLOW_MS)
+    })
+    await act(async () => {
+      screen.getByRole('button', { name: 'Scan again' }).click()
+    })
+    await act(async () => oldAnswer(REPORT))
+    vi.useRealTimers()
+    expect(screen.queryByText('orcha-ehr-portal:latest')).not.toBeInTheDocument()
+    expect(screen.getByText(/Looking for leftovers…/)).toBeInTheDocument()
   })
 
   it('a late answer to a timed-out scan still shows (and clears the timeout notice)', async () => {
@@ -54,7 +96,7 @@ describe('Settings › Storage', () => {
       vi.advanceTimersByTime(SCAN_TIMEOUT_MS)
     })
     vi.useRealTimers()
-    expect(screen.getByText(/No answer after 10 seconds/)).toBeInTheDocument()
+    expect(screen.getByText(/No answer after 60 seconds/)).toBeInTheDocument()
     await act(async () => answer(REPORT))
     expect(await screen.findByText('orcha-ehr-portal:latest')).toBeInTheDocument()
     expect(screen.queryByText(/No answer after/)).not.toBeInTheDocument()

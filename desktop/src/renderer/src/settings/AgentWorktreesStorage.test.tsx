@@ -59,10 +59,34 @@ describe('Settings › Storage › Agent worktrees', () => {
     })
     vi.useRealTimers()
     expect(screen.queryByText('Looking at agent worktrees…')).not.toBeInTheDocument()
-    expect(screen.getByText(/Couldn’t check agent worktrees: No answer after 10 seconds/)).toBeInTheDocument()
+    expect(screen.getByText(/Couldn’t check agent worktrees: No answer after 60 seconds/)).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: 'Scan worktrees again' }))
     expect(await screen.findByTestId('storage-wt-fleet-mate')).toBeInTheDocument()
     expect(screen.queryByText(/No answer after/)).not.toBeInTheDocument()
+  })
+
+  it('a failed clean-up shows its error; a successful retry clears it (review: error stuck after retry)', async () => {
+    api.storageCleanWorktrees.mockImplementation(async (req: { dryRun: boolean }) => (req.dryRun ? DRY : { ...DRY, dryRun: false }))
+    api.storageCleanWorktrees.mockImplementationOnce(async () => DRY).mockImplementationOnce(async () => { throw { code: 'WORKTREE_CLI', message: 'disk busy' } })
+    render(<StorageSettings />)
+    const row = await screen.findByTestId('storage-wt-fleet-mate')
+    await userEvent.click(within(row).getByRole('button', { name: 'Clean up existing…' }))
+    const preview = await within(row).findByTestId('storage-wt-preview')
+    await userEvent.click(within(preview).getByRole('button', { name: /^Clean up 3/ }))
+    expect(await screen.findByText(/disk busy/)).toBeInTheDocument()
+    await userEvent.click(within(row).getByRole('button', { name: /^Clean up 3/ }))
+    expect(await within(row).findByText(/^Removed 3 worktrees/)).toBeInTheDocument()
+    expect(screen.queryByText(/disk busy/)).not.toBeInTheDocument()
+  })
+
+  it('a clean-up error shows, and Scan clears it', async () => {
+    api.storageCleanWorktrees.mockRejectedValueOnce({ code: 'WORKTREE_CLI', message: 'disk busy' })
+    render(<StorageSettings />)
+    const row = await screen.findByTestId('storage-wt-fleet-mate')
+    await userEvent.click(within(row).getByRole('button', { name: 'Clean up existing…' }))
+    expect(await screen.findByText(/Couldn’t check agent worktrees: disk busy/)).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Scan worktrees again' }))
+    await waitFor(() => expect(screen.queryByText(/disk busy/)).not.toBeInTheDocument())
   })
 
   it('summarises states (pure)', () => {
