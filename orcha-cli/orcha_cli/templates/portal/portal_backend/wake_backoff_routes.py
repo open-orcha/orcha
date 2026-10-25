@@ -16,13 +16,15 @@ from portal_backend.database import db_cursor
 from portal_backend.guards import require_agent, require_container, require_kind, valid_uuid
 from portal_backend.identity_routes import enforce_grant, require_member_read, trusted_actor
 from portal_backend.schemas.agent_state import WakeBackoffRelease
+from portal_backend.run_failure_backoff import FAILURE_KEY, FAILURE_LIMIT
 
 
 @app.get("/api/containers/{cid}/wake-backoff")
 def list_wake_backoff(cid: str, request: Request):
     """Every active/historical breaker row for this container (agent alias joined in for
     display) — the UI's "wakes paused" listing. Ordered by strikes desc, then most recently
-    struck, so the noisiest/most-recent trigger surfaces first."""
+    struck, so the noisiest/most-recent trigger surfaces first. `run_failure` rows with
+    paused=true require human release; suppressed also covers a timed retry delay."""
     if not valid_uuid(cid):
         raise HTTPException(400, "container_id is not a valid UUID")
     with db_cursor() as (_, cur):
@@ -32,7 +34,8 @@ def list_wake_backoff(cid: str, request: Request):
         require_member_read(cur, request, cid)
         cur.execute(
             """SELECT wb.agent_id, a.alias, wb.wake_key, wb.strikes, wb.suppressed_until,
-                      wb.first_strike_at, wb.last_strike_at, wb.notified_at
+                      wb.first_strike_at, wb.last_strike_at, wb.notified_at,
+                      (wb.suppressed_until > now()) AS cooling
                  FROM wake_backoff wb
                  JOIN agents a ON a.id = wb.agent_id
                 WHERE wb.container_id=%s
@@ -51,7 +54,8 @@ def list_wake_backoff(cid: str, request: Request):
                 "suppressed_until": (
                     row["suppressed_until"].isoformat() if row["suppressed_until"] else None
                 ),
-                "suppressed": bool(row["suppressed_until"]),  # let the caller compute now()-relative
+                "suppressed": bool(row["cooling"]) or (row["wake_key"] == FAILURE_KEY and row["strikes"] >= FAILURE_LIMIT),
+                "paused": row["wake_key"] == FAILURE_KEY and row["strikes"] >= FAILURE_LIMIT,
                 "first_strike_at": row["first_strike_at"].isoformat() if row["first_strike_at"] else None,
                 "last_strike_at": row["last_strike_at"].isoformat() if row["last_strike_at"] else None,
                 "notified": row["notified_at"] is not None,

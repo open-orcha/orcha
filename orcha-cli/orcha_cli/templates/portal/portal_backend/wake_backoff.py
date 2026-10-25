@@ -29,6 +29,7 @@ import os
 from typing import Optional
 
 from portal_backend import sql
+from portal_backend.run_failure_backoff import FAILURE_KEY
 from portal_backend.agent_status import log_event
 from portal_backend.events import publish_event
 from portal_backend.guards import find_actionable_human
@@ -107,17 +108,20 @@ def recent_same_trigger_run(cur, agent_id: str, wake_key: str):
     """Return the agent's most recent COMPLETED worker_run whose wake_event matches
     wake_key and which ended within RECENT_RUN_WINDOW_SECS, or None.
 
-    'Completed' = status != 'running' (exited | killed | rate_limited | failed) with
-    ended_at set — a still-running run can't yet be judged to have changed nothing."""
+    Only clean exits count here. Failed runs have a separate per-agent circuit in
+    run_failure_backoff; a kill cannot be judged as successful work without progress."""
     cur.execute(
-        """SELECT run_id, ended_at FROM worker_runs
+        """SELECT run_id, ended_at, status, exit_code FROM worker_runs
              WHERE agent_id=%s AND wake_event=%s AND status <> 'running'
                AND ended_at IS NOT NULL
                AND ended_at >= %s
              ORDER BY ended_at DESC LIMIT 1""",
         (agent_id, wake_key, sql.ago(RECENT_RUN_WINDOW_SECS)),
     )
-    return cur.fetchone()
+    row = cur.fetchone()
+    if row and row["status"] == "exited" and row["exit_code"] in (None, 0):
+        return row
+    return None  # do not reach past a newer failure to count an older clean run
 
 
 def record_strike(cur, container_id: str, agent_id: str, wake_key: str) -> dict:
@@ -288,8 +292,8 @@ def apply_wake_backoff(cur, container_id: str, candidates: list) -> list:
     # Reset: any row for THIS container whose (agent_id, wake_key) was not re-struck this tick
     # (the candidate disappeared or stopped wanting a wake) is cleared outright.
     cur.execute(
-        "SELECT agent_id, wake_key FROM wake_backoff WHERE container_id=%s",
-        (container_id,),
+        "SELECT agent_id, wake_key FROM wake_backoff WHERE container_id=%s AND wake_key<>%s",
+        (container_id, FAILURE_KEY),
     )
     for row in cur.fetchall():
         key = (str(row["agent_id"]), row["wake_key"])

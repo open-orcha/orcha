@@ -10,6 +10,9 @@ missing.
 
 ## [Unreleased]
 
+### Fixed
+- Failed automatic runs now wait 30 then 60 seconds before retrying, pause after three failures, and raise one Needs you request with the cause. Activity shows the actual provider error and lets a human resume after fixing it. Unfinished task runs lost in a notifier restart are requeued once; stopped, completed, and reassigned work is left alone. Desktop version: 1.2.1.
+
 ### Added
 - **Bring agent changes into main / update a worktree from main** (GH #288).
   A human-triggered action per task worktree — in Settings › Agent worktrees,

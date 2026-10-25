@@ -141,6 +141,7 @@ export interface Run {
   ended_at?: string | null;
   ended?: string | null;
   kill_reason?: string | null;
+  failure_reason?: string | null;
   diff?: string | null;
   output?: string | null;
   agent_id?: string | null;

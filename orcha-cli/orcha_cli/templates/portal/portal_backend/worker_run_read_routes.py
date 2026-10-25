@@ -47,6 +47,8 @@ def list_agent_runs(
 ):
     """A2: this agent's worker runs, newest first (what B1 renders). Optional ?task_id= filter.
 
+    Rows include nullable failure_reason: the final provider error extracted from saved output.
+
     GH #144: the ?task_id= filter is a per-task FEED, so it joins worker_run_tasks (every task a run
     touched) instead of the single worker_runs.task_id pin — a session that spanned this task shows
     up here even if its pin settled on another task."""
@@ -90,8 +92,9 @@ def list_task_runs(
     worker_runs.task_id pin, so a run from a session that spanned this AND another task narrates
     here too — not only under whichever task ended up as its pin.
 
-    ?view=summary returns output and diff as null (often megabytes per run) — for callers that
-    only need status, worktree and branch, like the notifier's terminal-worktree sweep."""
+    ?view=summary returns output and diff as null (often megabytes per run), so failure_reason
+    is null too — for callers that only need status, worktree and branch, like the notifier's
+    terminal-worktree sweep."""
     if not valid_uuid(tid):
         raise HTTPException(400, "task_id is not a valid UUID")
     with db_cursor(readonly=True) as (_, cur):
