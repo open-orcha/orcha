@@ -39,25 +39,27 @@ async function cliJson(run: Run, args: string[], cwd: string): Promise<Record<st
 const sumReclaimable = (items: AgentWorktree[]): number =>
   items.reduce((n, i) => n + (i.state === 'clean' || i.state === 'has-output' ? i.size_bytes ?? 0 : 0), 0)
 
-/** Every known project's worktrees (folders without .orcha-worktrees are skipped quietly). */
+/** Every known project's worktrees (folders without .orcha-worktrees are skipped quietly).
+ *  Projects are scanned at the same time, not one after another: each `orcha worktrees list`
+ *  measures every worktree (several seconds on a busy project), so in sequence the screen
+ *  waited for the sum of them all. */
 export async function scanAgentWorktrees(
   projects: KnownFolder[],
   run: Run,
   hasWorktreesDir: (folder: string) => boolean
 ): Promise<ProjectWorktrees[]> {
-  const out: ProjectWorktrees[] = []
-  for (const p of projects) {
-    if (!p.folder || !hasWorktreesDir(p.folder)) continue
-    const res = await cliJson(run, ['worktrees', 'list', '--json', '--project', p.folder], p.folder)
-    if (!res || res.ok !== true || !Array.isArray(res.items)) {
-      out.push({ project: p.project, projectShort: p.projectShort, folder: p.folder, items: [], reclaimable_bytes: 0,
-        error: res && typeof res.error === 'string' ? res.error : CLI_OUTDATED })
-      continue
-    }
-    const items = res.items as AgentWorktree[]
-    out.push({ project: p.project, projectShort: p.projectShort, folder: p.folder, items, reclaimable_bytes: sumReclaimable(items) })
-  }
-  return out
+  const scanned = projects.filter((p): p is KnownFolder & { folder: string } => !!p.folder && hasWorktreesDir(p.folder))
+  return Promise.all(
+    scanned.map(async (p): Promise<ProjectWorktrees> => {
+      const res = await cliJson(run, ['worktrees', 'list', '--json', '--project', p.folder], p.folder)
+      if (!res || res.ok !== true || !Array.isArray(res.items)) {
+        return { project: p.project, projectShort: p.projectShort, folder: p.folder, items: [], reclaimable_bytes: 0,
+          error: res && typeof res.error === 'string' ? res.error : CLI_OUTDATED }
+      }
+      const items = res.items as AgentWorktree[]
+      return { project: p.project, projectShort: p.projectShort, folder: p.folder, items, reclaimable_bytes: sumReclaimable(items) }
+    })
+  )
 }
 
 /** The folder of a known project, or a thrown INVALID_WORKTREE. */

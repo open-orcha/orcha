@@ -96,8 +96,13 @@ export function findLeftovers(inp: StorageInputs): StorageReport {
   return { items, inUse: [...inUse].filter((p) => p.startsWith('orcha-')).sort() }
 }
 
+/** Sizes are optional: `docker system df -v` can take minutes on a big Docker install (it
+ *  measures every volume), and the leftovers list must not wait on it. */
+export const SIZES_TIMEOUT_MS = 5_000
+
 export interface StorageDeps {
-  docker(args: string[]): Promise<{ stdout: string }>
+  /** `timeoutMs` overrides the default budget for that one command. */
+  docker(args: string[], timeoutMs?: number): Promise<{ stdout: string }>
   kept(): Record<string, KeptData>
 }
 
@@ -117,7 +122,7 @@ export async function scanStorage(deps: StorageDeps): Promise<StorageReport> {
   }
   let sizes = parseDiskSizes('')
   try {
-    sizes = parseDiskSizes((await deps.docker(['system', 'df', '-v', '--format', '{{json .}}'])).stdout)
+    sizes = parseDiskSizes((await deps.docker(['system', 'df', '-v', '--format', '{{json .}}'], SIZES_TIMEOUT_MS)).stdout)
   } catch {
     // sizes are optional
   }

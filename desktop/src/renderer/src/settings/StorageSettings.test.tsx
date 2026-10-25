@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import StorageSettings, { totalSize } from './StorageSettings'
+import { SCAN_TIMEOUT_MS } from './useBoundedScan'
 import type { StorageReport } from '../../../shared/types'
 
 const REPORT: StorageReport = {
@@ -21,7 +22,44 @@ beforeEach(() => {
   window.orchaDesktop = api as unknown as typeof window.orchaDesktop
 })
 
+afterEach(() => {
+  vi.useRealTimers()
+})
+
 describe('Settings › Storage', () => {
+  it('a scan that never answers stops spinning, says so, and Scan again retries (Verdikt: scans never finish)', async () => {
+    vi.useFakeTimers()
+    api.storageScan.mockReturnValueOnce(new Promise(() => {})).mockResolvedValueOnce(REPORT)
+    render(<StorageSettings />)
+    expect(screen.getByText('Looking for leftovers…')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Scan again' })).toBeDisabled()
+    await act(async () => {
+      vi.advanceTimersByTime(SCAN_TIMEOUT_MS)
+    })
+    vi.useRealTimers()
+    expect(SCAN_TIMEOUT_MS).toBeLessThanOrEqual(10_000)
+    expect(screen.queryByText('Looking for leftovers…')).not.toBeInTheDocument()
+    expect(screen.getByText(/Couldn’t check Docker: No answer after 10 seconds/)).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Scan again' }))
+    expect(await screen.findByText('orcha-ehr-portal:latest')).toBeInTheDocument()
+    expect(screen.queryByText(/No answer after/)).not.toBeInTheDocument()
+  })
+
+  it('a late answer to a timed-out scan still shows (and clears the timeout notice)', async () => {
+    vi.useFakeTimers()
+    let answer: (r: StorageReport) => void = () => {}
+    api.storageScan.mockReturnValueOnce(new Promise<StorageReport>((r) => (answer = r)))
+    render(<StorageSettings />)
+    await act(async () => {
+      vi.advanceTimersByTime(SCAN_TIMEOUT_MS)
+    })
+    vi.useRealTimers()
+    expect(screen.getByText(/No answer after 10 seconds/)).toBeInTheDocument()
+    await act(async () => answer(REPORT))
+    expect(await screen.findByText('orcha-ehr-portal:latest')).toBeInTheDocument()
+    expect(screen.queryByText(/No answer after/)).not.toBeInTheDocument()
+  })
+
   it('lists leftovers by kind with sizes', async () => {
     render(<StorageSettings />)
     expect(await screen.findByText('orcha-ehr-portal:latest')).toBeInTheDocument()

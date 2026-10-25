@@ -37,6 +37,24 @@ describe('agent worktrees (desktop → orcha worktrees --json)', () => {
     expect(out[1]).toMatchObject({ projectShort: 'beta', items: [], error: CLI_OUTDATED })
   })
 
+  it('scans projects at the same time, keeping their order (not the sum of every project’s scan)', async () => {
+    const pending: Array<() => void> = []
+    const run = vi.fn(
+      (_cmd: string, args: string[]) =>
+        new Promise<{ stdout: string }>((resolve) => {
+          pending.push(() => resolve({ stdout: JSON.stringify({ ok: true, items: args.includes(A) ? items : [] }) }))
+        })
+    )
+    const scan = scanAgentWorktrees(PROJECTS, run, (f) => f === A || f === B)
+    await Promise.resolve()
+    expect(run).toHaveBeenCalledTimes(2) // B started before A answered
+    pending[1]()
+    pending[0]()
+    const out = await scan
+    expect(out.map((p) => p.projectShort)).toEqual(['acme', 'beta'])
+    expect(out[0].items).toHaveLength(3)
+  })
+
   it('only accepts known project folders and paths directly inside their .orcha-worktrees', () => {
     expect(knownFolder(PROJECTS, `${A}/`)).toBe(A)
     expect(() => knownFolder(PROJECTS, '/etc')).toThrow()

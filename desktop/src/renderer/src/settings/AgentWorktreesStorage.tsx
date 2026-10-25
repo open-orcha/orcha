@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useState, type ReactNode } from 'react'
+import { useState, type ReactNode } from 'react'
 import { FolderGit2, FolderOpen, Loader2, RefreshCw } from 'lucide-react'
 import { Button } from '../ui/Button'
 import ErrorNotice from '../components/ErrorNotice'
 import { formatBytes } from '../host/removeProject'
+import { useBoundedScan } from './useBoundedScan'
 import type {
   AgentWorktree,
   AgentWorktreeCleanResult,
@@ -50,29 +51,12 @@ interface Preview {
  *  always previews first (a dry run grouped by what will happen) before it changes anything. */
 export default function AgentWorktreesStorage() {
   const api = window.orchaDesktop
-  const [projects, setProjects] = useState<ProjectWorktrees[] | null>(null)
-  const [error, setError] = useState<unknown>(null)
-  const [scanning, setScanning] = useState(false)
+  const { data: projects, error: scanError, scanning, scan } = useBoundedScan<ProjectWorktrees[]>(api.storageWorktrees)
+  const [actionError, setError] = useState<unknown>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [preview, setPreview] = useState<Preview | null>(null)
   const [reports, setReports] = useState<Record<string, string>>({})
   const [open, setOpen] = useState<Set<string>>(new Set())
-
-  const scan = useCallback(async () => {
-    if (!api.storageWorktrees) return
-    setScanning(true)
-    setError(null)
-    try {
-      setProjects(await api.storageWorktrees())
-    } catch (err) {
-      setError(err)
-    } finally {
-      setScanning(false)
-    }
-  }, [api])
-  useEffect(() => {
-    void scan()
-  }, [scan])
 
   if (!api.storageWorktrees || !api.storageCleanWorktrees) return null
 
@@ -108,6 +92,7 @@ export default function AgentWorktreesStorage() {
     }
   }
 
+  const error = actionError ?? scanError
   const all = projects ?? []
   const total = all.reduce((n, p) => n + p.reclaimable_bytes, 0)
 
@@ -117,7 +102,7 @@ export default function AgentWorktreesStorage() {
         <FolderGit2 className="h-3.5 w-3.5" aria-hidden="true" />
         Agent worktrees
         {projects && <span className="tabular-nums">· {size(total)} reclaimable</span>}
-        <Button variant="ghost" size="sm" className="ml-auto" onClick={() => void scan()} disabled={scanning || !!busy} aria-label="Scan worktrees again">
+        <Button variant="ghost" size="sm" className="ml-auto" onClick={() => { setError(null); void scan() }} disabled={scanning || !!busy} aria-label="Scan worktrees again">
           <RefreshCw className={scanning ? 'animate-spin' : ''} /> Scan
         </Button>
       </div>

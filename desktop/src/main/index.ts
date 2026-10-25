@@ -1319,7 +1319,7 @@ app.whenReady().then(() => {
     })
   )
 
-  const storageDeps = () => ({ docker: (args: string[]) => nodeDocker(args, 60_000), kept: () => keptStatus(app.getPath('userData')) })
+  const storageDeps = () => ({ docker: (args: string[], timeoutMs = 60_000) => nodeDocker(args, timeoutMs), kept: () => keptStatus(app.getPath('userData')) })
   ipcMain.handle('orcha:storage:scan', (event) =>
     asResult(async () => {
       if (!fromManager(event)) throw { code: 'INVALID_STORAGE_ITEM' } as const
