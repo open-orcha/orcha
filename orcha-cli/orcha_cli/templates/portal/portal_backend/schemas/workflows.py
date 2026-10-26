@@ -42,7 +42,8 @@ class AvailableAction(BaseModel):
     enabled: bool
     reason: str | None = None
     # Who may act: workflow_owner, workflow_or_project_owner, verified_human,
-    # workflow_owner_or_participant, workflow_owner_or_agent or task_approval.
+    # workflow_owner_or_participant (an assigned agent, after Start) or
+    # task_approval (the task's own approval rule).
     permission: str | None = None
     # release only: the holds THIS reader may clear (start: workflow owner;
     # human: workflow owner or the person who set that safety hold).
