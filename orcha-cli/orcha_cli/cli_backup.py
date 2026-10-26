@@ -80,6 +80,26 @@ def _inside(path: pathlib.Path, directory: pathlib.Path) -> bool:
         return False
 
 
+def _same_file(left: pathlib.Path, right: pathlib.Path) -> bool:
+    """Return whether two existing paths name the same file, including symlinks."""
+    try:
+        return os.path.samefile(left, right)
+    except (FileNotFoundError, OSError):
+        return left.resolve() == right.resolve()
+
+
+def _discard_path(path: pathlib.Path) -> None:
+    if path.is_symlink() or path.is_file():
+        path.unlink(missing_ok=True)
+    elif path.exists():
+        shutil.rmtree(path)
+
+
+def _discard_database_files(path: pathlib.Path) -> None:
+    for suffix in DB_SUFFIXES:
+        _discard_path(path.with_name(path.name + suffix))
+
+
 def _sha256(path: pathlib.Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as stream:
@@ -381,6 +401,8 @@ def restore(root: pathlib.Path, source: pathlib.Path, *,
     source = pathlib.Path(source)
     if not source.is_file():
         raise BackupError(f"no backup file at {source}")
+    if _same_file(source, db):
+        raise BackupError("the restore source cannot be the live database")
     if _inside(source, _attachments(root)):
         raise BackupError("move the backup outside the live attachment tree before restoring it")
     check = _integrity(source)
@@ -392,38 +414,126 @@ def restore(root: pathlib.Path, source: pathlib.Path, *,
                           f"CLI ships {cli_tip:03d}). Update the orcha CLI first.")
     manifest = _load_backup_manifest(source)
     live_attachments = _attachments(root)
-    partial_attachments = live_attachments.with_name(live_attachments.name + ".partial")
-    if partial_attachments.exists():
-        shutil.rmtree(partial_attachments)
-    if manifest is None:
-        partial_attachments.mkdir(parents=True)
-    else:
-        _copy_attachment_tree(_attachment_backup(source), partial_attachments)
-        _verify_attachment_tree(partial_attachments, manifest["attachments"])
+    stage_id = uuid.uuid4().hex
+    partial = db.with_name(f".{db.name}.restore-{stage_id}.partial")
+    partial_attachments = live_attachments.with_name(
+        f".{live_attachments.name}.restore-{stage_id}.partial"
+    )
+    db.parent.mkdir(parents=True, exist_ok=True)
+    live_attachments.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        shutil.copyfile(source, partial)
+        staged_check = _integrity(partial)
+        if staged_check != "ok":
+            raise BackupError(
+                f"the staged database failed its integrity check: {staged_check}"
+            )
+        if (manifest is not None
+                and _sha256(partial) != manifest["database"]["sha256"]):
+            raise BackupError("the staged database does not match its hash manifest")
+        if manifest is None:
+            partial_attachments.mkdir(parents=True)
+        else:
+            _copy_attachment_tree(_attachment_backup(source), partial_attachments)
+            _verify_attachment_tree(partial_attachments, manifest["attachments"])
+    except (OSError, BackupError) as exc:
+        _discard_database_files(partial)
+        _discard_path(partial_attachments)
+        if isinstance(exc, BackupError):
+            raise
+        raise BackupError(
+            f"the restore could not be staged; nothing was changed: {exc}"
+        ) from exc
+
     kept = None
     stamp = _stamp(now)
+    kept_db_files: list[tuple[pathlib.Path, pathlib.Path]] = []
     if db.exists():
         kept = db.with_name(f"{db.name}.before-restore-{stamp}")
-        for suffix in DB_SUFFIXES:
-            side = db.with_name(db.name + suffix)
-            if side.exists():
-                os.replace(side, kept.with_name(kept.name + suffix))
     kept_attachments = None
     if live_attachments.exists():
         kept_attachments = live_attachments.with_name(
             f"{live_attachments.name}.before-restore-{stamp}"
         )
-        os.replace(live_attachments, kept_attachments)
-    db.parent.mkdir(parents=True, exist_ok=True)
-    partial = db.with_name(db.name + ".partial")
-    shutil.copyfile(source, partial)
-    os.replace(partial, db)
-    live_attachments.parent.mkdir(parents=True, exist_ok=True)
-    os.replace(partial_attachments, live_attachments)
-    check = _integrity(db)
-    if check != "ok":  # pragma: no cover - the source passed the same check a moment ago
-        raise BackupError(f"the restored database failed its integrity check: {check}")
-    audit = _restore_audit(root, db)
+    conflicts = []
+    if kept is not None:
+        conflicts.extend(
+            kept.with_name(kept.name + suffix)
+            for suffix in DB_SUFFIXES
+            if kept.with_name(kept.name + suffix).exists()
+        )
+    if kept_attachments is not None and kept_attachments.exists():
+        conflicts.append(kept_attachments)
+    if conflicts:
+        _discard_database_files(partial)
+        _discard_path(partial_attachments)
+        raise BackupError(
+            f"restore safety copy already exists at {conflicts[0]}; nothing was changed"
+        )
+
+    attachments_moved = False
+    database_installed = False
+    attachments_installed = False
+    try:
+        if kept is not None:
+            for suffix in DB_SUFFIXES:
+                side = db.with_name(db.name + suffix)
+                if side.exists():
+                    kept_side = kept.with_name(kept.name + suffix)
+                    os.replace(side, kept_side)
+                    kept_db_files.append((kept_side, side))
+        if kept_attachments is not None:
+            os.replace(live_attachments, kept_attachments)
+            attachments_moved = True
+
+        os.replace(partial, db)
+        database_installed = True
+        os.replace(partial_attachments, live_attachments)
+        attachments_installed = True
+
+        restored_check = _integrity(db)
+        if restored_check != "ok":  # pragma: no cover - staged copy passed moments ago
+            raise BackupError(
+                f"the restored database failed its integrity check: {restored_check}"
+            )
+        audit = _restore_audit(root, db)
+    except Exception as exc:
+        rollback_errors = []
+
+        def attempt_rollback(action) -> None:
+            try:
+                action()
+            except OSError as rollback_exc:  # pragma: no cover - double failure
+                rollback_errors.append(str(rollback_exc))
+
+        if attachments_installed:
+            attempt_rollback(lambda: _discard_path(live_attachments))
+        if database_installed:
+            attempt_rollback(lambda: _discard_database_files(db))
+        for kept_side, original_side in reversed(kept_db_files):
+            if kept_side.exists():
+                attempt_rollback(
+                    lambda old=kept_side, live=original_side: os.replace(old, live)
+                )
+        if (attachments_moved and kept_attachments is not None
+                and kept_attachments.exists()):
+            attempt_rollback(lambda: os.replace(kept_attachments, live_attachments))
+        attempt_rollback(lambda: _discard_database_files(partial))
+        attempt_rollback(lambda: _discard_path(partial_attachments))
+        if rollback_errors:
+            kept_hint = str(kept) if kept is not None else "the restore staging area"
+            raise BackupError(
+                "the restore failed and automatic rollback was incomplete; "
+                f"recover the previous files from {kept_hint}: {rollback_errors[0]}"
+            ) from exc
+        raise BackupError(
+            "the restore failed; the previous database and attachments were restored: "
+            f"{exc}"
+        ) from exc
+    finally:
+        _discard_database_files(partial)
+        _discard_path(partial_attachments)
+
     return {
         "restored": str(db),
         "from": str(source),
