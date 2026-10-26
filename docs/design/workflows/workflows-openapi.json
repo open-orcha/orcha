@@ -1011,9 +1011,9 @@
     },
     "/api/workflows/{wid}/cancellation-check": {
       "get": {
-        "summary": "Workflow Impact",
-        "description": "Full authoritative snapshot; selected IDs/revisions are echoed by the mutation.",
-        "operationId": "workflow_impact_api_workflows__wid__cancellation_check_get",
+        "summary": "Workflow Cancellation Check",
+        "description": "Counts by task state, accepted results kept and named workers to stop.",
+        "operationId": "workflow_cancellation_check_api_workflows__wid__cancellation_check_get",
         "parameters": [
           {
             "name": "wid",
@@ -1031,7 +1031,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/WorkflowDetail"
+                  "$ref": "#/components/schemas/WorkflowImpact"
                 }
               }
             }
@@ -1603,9 +1603,9 @@
     },
     "/api/workflows/{wid}/release-check": {
       "get": {
-        "summary": "Workflow Impact",
-        "description": "Full authoritative snapshot; selected IDs/revisions are echoed by the mutation.",
-        "operationId": "workflow_impact_api_workflows__wid__release_check_get",
+        "summary": "Workflow Release Check",
+        "description": "Per-task result of releasing the named holds on the selected tasks.",
+        "operationId": "workflow_release_check_api_workflows__wid__release_check_get",
         "parameters": [
           {
             "name": "wid",
@@ -1615,6 +1615,37 @@
               "type": "string",
               "title": "Wid"
             }
+          },
+          {
+            "name": "task_ids",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "title": "Task Ids"
+            }
+          },
+          {
+            "name": "holds",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "array",
+              "items": {
+                "enum": [
+                  "start",
+                  "human"
+                ],
+                "type": "string"
+              },
+              "default": [
+                "start"
+              ],
+              "title": "Holds"
+            }
           }
         ],
         "responses": {
@@ -1623,7 +1654,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/WorkflowDetail"
+                  "$ref": "#/components/schemas/WorkflowImpact"
                 }
               }
             }
@@ -1852,9 +1883,9 @@
     },
     "/api/workflows/{wid}/start-check": {
       "get": {
-        "summary": "Workflow Impact",
-        "description": "Full authoritative snapshot; selected IDs/revisions are echoed by the mutation.",
-        "operationId": "workflow_impact_api_workflows__wid__start_check_get",
+        "summary": "Workflow Start Check",
+        "description": "Per-task result of Start for the selected (default: all prepared) tasks;\nselected IDs/revisions are echoed by the mutation, which revalidates.",
+        "operationId": "workflow_start_check_api_workflows__wid__start_check_get",
         "parameters": [
           {
             "name": "wid",
@@ -1864,6 +1895,18 @@
               "type": "string",
               "title": "Wid"
             }
+          },
+          {
+            "name": "task_ids",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "title": "Task Ids"
+            }
           }
         ],
         "responses": {
@@ -1872,7 +1915,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/WorkflowDetail"
+                  "$ref": "#/components/schemas/WorkflowImpact"
                 }
               }
             }
@@ -2579,6 +2622,154 @@
         },
         "type": "object",
         "title": "HTTPValidationError"
+      },
+      "Impact": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "start",
+              "release",
+              "cancellation"
+            ],
+            "title": "Kind"
+          },
+          "revision": {
+            "type": "integer",
+            "title": "Revision"
+          },
+          "graph_revision": {
+            "type": "integer",
+            "title": "Graph Revision"
+          },
+          "scope_revision": {
+            "type": "integer",
+            "title": "Scope Revision"
+          },
+          "task_revisions": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Task Revisions"
+          },
+          "holds": {
+            "items": {
+              "type": "string",
+              "enum": [
+                "start",
+                "human"
+              ]
+            },
+            "type": "array",
+            "title": "Holds"
+          },
+          "tasks": {
+            "items": {
+              "$ref": "#/components/schemas/ImpactTask"
+            },
+            "type": "array",
+            "title": "Tasks"
+          },
+          "counts_by_state": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Counts By State"
+          },
+          "accepted_retained": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Accepted Retained"
+          },
+          "workers_to_stop": {
+            "items": {
+              "$ref": "#/components/schemas/WorkerToStop"
+            },
+            "type": "array",
+            "title": "Workers To Stop"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind",
+          "revision",
+          "graph_revision",
+          "scope_revision",
+          "task_revisions"
+        ],
+        "title": "Impact"
+      },
+      "ImpactTask": {
+        "properties": {
+          "task_id": {
+            "type": "string",
+            "title": "Task Id"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "work_revision": {
+            "type": "integer",
+            "title": "Work Revision"
+          },
+          "selected": {
+            "type": "boolean",
+            "title": "Selected"
+          },
+          "current_status": {
+            "type": "string",
+            "title": "Current Status"
+          },
+          "resulting_status": {
+            "type": "string",
+            "enum": [
+              "refused",
+              "unchanged",
+              "blocked",
+              "waiting_for_prerequisites",
+              "ready",
+              "takes_turn_alone"
+            ],
+            "title": "Resulting Status"
+          },
+          "can_start": {
+            "type": "boolean",
+            "title": "Can Start"
+          },
+          "refusal": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Blocker"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "blockers": {
+            "items": {
+              "$ref": "#/components/schemas/Blocker"
+            },
+            "type": "array",
+            "title": "Blockers"
+          }
+        },
+        "type": "object",
+        "required": [
+          "task_id",
+          "title",
+          "work_revision",
+          "selected",
+          "current_status",
+          "resulting_status",
+          "can_start"
+        ],
+        "title": "ImpactTask"
       },
       "ImportAcceptance": {
         "properties": {
@@ -3818,6 +4009,41 @@
         ],
         "title": "ValidationError"
       },
+      "WorkerToStop": {
+        "properties": {
+          "task_id": {
+            "type": "string",
+            "title": "Task Id"
+          },
+          "agent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Id"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "task_id"
+        ],
+        "title": "WorkerToStop"
+      },
       "WorkflowCreate": {
         "properties": {
           "title": {
@@ -4131,6 +4357,181 @@
           "goal"
         ],
         "title": "WorkflowDraft"
+      },
+      "WorkflowImpact": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "container_id": {
+            "type": "string",
+            "title": "Container Id"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "goal": {
+            "type": "string",
+            "title": "Goal"
+          },
+          "owner_human_id": {
+            "type": "string",
+            "title": "Owner Human Id"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "paused",
+              "completed",
+              "cancelled"
+            ],
+            "title": "Status"
+          },
+          "execution_mode": {
+            "type": "string",
+            "enum": [
+              "serial",
+              "parallel"
+            ],
+            "title": "Execution Mode"
+          },
+          "launch_enabled": {
+            "type": "boolean",
+            "title": "Launch Enabled"
+          },
+          "revision": {
+            "type": "integer",
+            "title": "Revision"
+          },
+          "graph_revision": {
+            "type": "integer",
+            "title": "Graph Revision"
+          },
+          "scope_revision": {
+            "type": "integer",
+            "title": "Scope Revision"
+          },
+          "goal_revision": {
+            "type": "integer",
+            "title": "Goal Revision"
+          },
+          "goal_accepted_revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Goal Accepted Revision"
+          },
+          "task_limit": {
+            "type": "integer",
+            "title": "Task Limit"
+          },
+          "round_limit": {
+            "type": "integer",
+            "title": "Round Limit"
+          },
+          "limit_reached": {
+            "type": "boolean",
+            "title": "Limit Reached"
+          },
+          "capability": {
+            "$ref": "#/components/schemas/Capability"
+          },
+          "available_actions": {
+            "items": {
+              "$ref": "#/components/schemas/AvailableAction"
+            },
+            "type": "array",
+            "title": "Available Actions"
+          },
+          "progress": {
+            "$ref": "#/components/schemas/Progress"
+          },
+          "completion": {
+            "$ref": "#/components/schemas/CompletionCheck"
+          },
+          "tasks": {
+            "items": {
+              "$ref": "#/components/schemas/WorkflowTask"
+            },
+            "type": "array",
+            "title": "Tasks"
+          },
+          "objectives": {
+            "items": {
+              "$ref": "#/components/schemas/Objective"
+            },
+            "type": "array",
+            "title": "Objectives"
+          },
+          "review_rounds": {
+            "items": {
+              "$ref": "#/components/schemas/ReviewHistory"
+            },
+            "type": "array",
+            "title": "Review Rounds"
+          },
+          "activity": {
+            "items": {
+              "$ref": "#/components/schemas/Activity"
+            },
+            "type": "array",
+            "title": "Activity"
+          },
+          "activity_truncated": {
+            "type": "boolean",
+            "title": "Activity Truncated",
+            "default": false
+          },
+          "evidence_capability": {
+            "$ref": "#/components/schemas/IntegrationCapability"
+          },
+          "created_task_ids": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Created Task Ids"
+          },
+          "impact": {
+            "$ref": "#/components/schemas/Impact"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "container_id",
+          "title",
+          "goal",
+          "owner_human_id",
+          "status",
+          "execution_mode",
+          "launch_enabled",
+          "revision",
+          "graph_revision",
+          "scope_revision",
+          "goal_revision",
+          "goal_accepted_revision",
+          "task_limit",
+          "round_limit",
+          "limit_reached",
+          "capability",
+          "available_actions",
+          "progress",
+          "completion",
+          "tasks",
+          "objectives",
+          "impact"
+        ],
+        "title": "WorkflowImpact",
+        "description": "The full detail plus what the previewed Start, release or cancel would do."
       },
       "WorkflowList": {
         "properties": {

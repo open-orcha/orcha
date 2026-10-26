@@ -4,6 +4,8 @@ The ordinary actor-ID fallback is intentionally absent. A verified proxy member 
 an authenticated work token supplies identity, never an actor field in a request.
 """
 
+from typing import Literal
+
 from fastapi import Request, Query
 
 from portal_backend.application import app
@@ -190,12 +192,42 @@ def workflow_dependencies(wid: str, request: Request):
         return svc.snapshot(wid)["dependencies"]
 
 
-@app.get("/api/workflows/{wid}/start-check", response_model=model.WorkflowDetail)
-@app.get("/api/workflows/{wid}/release-check", response_model=model.WorkflowDetail)
-@app.get("/api/workflows/{wid}/cancellation-check", response_model=model.WorkflowDetail)
-def workflow_impact(wid: str, request: Request):
-    """Full authoritative snapshot; selected IDs/revisions are echoed by the mutation."""
-    return get_workflow(wid, request)
+def _ids(values):
+    return [v for value in values for v in value.split(",") if v]
+
+
+def _impact(wid, request, kind, task_ids=(), holds=("start",)):
+    with db_cursor(readonly=True) as (_, cur):
+        svc, _, actor = read_context(cur, request, wid)
+        return svc.impact(wid, actor, kind, _ids(task_ids), list(holds))
+
+
+@app.get("/api/workflows/{wid}/start-check", response_model=model.WorkflowImpact)
+def workflow_start_check(
+    wid: str, request: Request, task_ids: list[str] = Query(default_factory=list)
+):
+    """Per-task result of Start for the selected (default: all prepared) tasks;
+    selected IDs/revisions are echoed by the mutation, which revalidates."""
+    return _impact(wid, request, "start", task_ids)
+
+
+@app.get("/api/workflows/{wid}/release-check", response_model=model.WorkflowImpact)
+def workflow_release_check(
+    wid: str,
+    request: Request,
+    task_ids: list[str] = Query(default_factory=list),
+    holds: list[Literal["start", "human"]] = Query(default=["start"]),
+):
+    """Per-task result of releasing the named holds on the selected tasks."""
+    return _impact(wid, request, "release", task_ids, holds)
+
+
+@app.get(
+    "/api/workflows/{wid}/cancellation-check", response_model=model.WorkflowImpact
+)
+def workflow_cancellation_check(wid: str, request: Request):
+    """Counts by task state, accepted results kept and named workers to stop."""
+    return _impact(wid, request, "cancellation")
 
 
 @app.post("/api/workflows/{wid}/import-preview", response_model=model.Preview)

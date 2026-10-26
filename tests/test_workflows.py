@@ -809,6 +809,72 @@ def test_task_is_woken_again_each_time_it_can_start_again(setup_workflow, monkey
     assert woken(second) == 2
 
 
+def test_check_routes_preview_what_each_task_would_become(setup_workflow):
+    _, actor, worker, _, hooks, execute = setup_workflow
+    w = create(setup_workflow, mode="parallel", count=3, dependencies={2: ["t0"]})
+    by_title = {t["title"]: t["id"] for t in w["tasks"]}
+    a, draft, after = (by_title[f"Task {i}"] for i in range(3))
+    for tid in (a, after):
+        w = execute("prepare", {}, w["id"], tid)
+
+    def check(kind, task_ids=(), holds=("start",)):
+        with db_cursor(readonly=True) as (_, cur):
+            impact = ws.WorkflowService(cur, hooks).impact(
+                w["id"], actor, kind, list(task_ids), list(holds)
+            )["impact"]
+        return impact, {t["task_id"]: t for t in impact["tasks"]}
+
+    # Start defaults to every prepared task; drafts stay held and say why.
+    impact, rows = check("start")
+    assert impact["task_revisions"] == {
+        t["id"]: t["work_revision"] for t in w["tasks"]
+    }
+    assert {tid for tid, r in rows.items() if r["selected"]} == {a, after}
+    assert rows[a]["resulting_status"] == "ready" and rows[a]["can_start"]
+    assert rows[after]["resulting_status"] == "waiting_for_prerequisites"
+    assert rows[draft]["resulting_status"] == "blocked"
+    assert "task_draft" in [b["code"] for b in rows[draft]["blockers"]]
+    _, rows = check("start", [draft])
+    assert rows[draft]["refusal"]["code"] == "task_not_prepared"
+    # The preview wrote nothing.
+    with db_cursor(readonly=True) as (_, cur):
+        assert not ws.WorkflowService(cur, hooks).workflow(w["id"])["launch_enabled"]
+
+    w = execute(
+        "start",
+        {"task_ids": [a], "task_revisions": {a: rows[a]["work_revision"]}},
+        w["id"],
+    )
+    w = execute("hold", {}, w["id"], a)
+    _, rows = check("release", [a], ["human"])
+    assert rows[a]["resulting_status"] == "ready" and rows[a]["can_start"]
+    _, rows = check("release", [a])
+    assert rows[a]["resulting_status"] == "blocked"
+    assert "human_hold" in [b["code"] for b in rows[a]["blockers"]]
+    _, rows = check("release", [after])
+    assert rows[after]["resulting_status"] == "waiting_for_prerequisites"
+    w = execute(
+        "release",
+        {
+            "task_ids": [a],
+            "holds": ["human"],
+            "task_revisions": {a: rows[a]["work_revision"]},
+        },
+        w["id"],
+    )
+
+    # Cancellation names the worker to stop and the accepted result kept.
+    e, ref = submit_result(setup_workflow, w, a)
+    impact, _ = check("cancellation")
+    assert impact["workers_to_stop"] == [
+        {"task_id": a, "agent_id": worker, "name": "Worker"}
+    ]
+    execute("accept", {"evidence": ref}, w["id"], a)
+    impact, _ = check("cancellation")
+    assert impact["accepted_retained"] == [a]
+    assert impact["counts_by_state"] == {"completed": 1, "not_ready": 2}
+
+
 def test_withdraw_cannot_remove_last_or_accepted_task(setup_workflow):
     w = create(setup_workflow, count=1)
     _, tasks, _ = actions_for(setup_workflow, w["id"], setup_workflow[1])

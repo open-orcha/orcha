@@ -319,6 +319,50 @@ class WorkflowDetail(BaseModel):
     created_task_ids: dict[str, str] = Field(default_factory=dict)
 
 
+class ImpactTask(BaseModel):
+    task_id: str
+    title: str
+    work_revision: int
+    selected: bool
+    current_status: str
+    resulting_status: Literal[
+        "refused",
+        "unchanged",
+        "blocked",
+        "waiting_for_prerequisites",
+        "ready",
+        "takes_turn_alone",
+    ]
+    can_start: bool
+    refusal: Blocker | None = None
+    blockers: list[Blocker] = Field(default_factory=list)
+
+
+class WorkerToStop(BaseModel):
+    task_id: str
+    agent_id: str | None = None
+    name: str | None = None
+
+
+class Impact(BaseModel):
+    kind: Literal["start", "release", "cancellation"]
+    revision: int
+    graph_revision: int
+    scope_revision: int
+    task_revisions: dict[str, int]
+    holds: list[Literal["start", "human"]] = Field(default_factory=list)
+    tasks: list[ImpactTask] = Field(default_factory=list)
+    counts_by_state: dict[str, int] = Field(default_factory=dict)
+    accepted_retained: list[str] = Field(default_factory=list)
+    workers_to_stop: list[WorkerToStop] = Field(default_factory=list)
+
+
+class WorkflowImpact(WorkflowDetail):
+    """The full detail plus what the previewed Start, release or cancel would do."""
+
+    impact: Impact
+
+
 class WorkflowList(BaseModel):
     workflows: list[WorkflowDetail]
     capability: Capability

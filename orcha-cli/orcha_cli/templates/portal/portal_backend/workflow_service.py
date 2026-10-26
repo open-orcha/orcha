@@ -920,6 +920,173 @@ class WorkflowService:
         )
         return WorkflowDetail.model_validate(w).model_dump(mode="json")
 
+    def impact(self, wid, actor, kind, task_ids=(), holds=("start",)):
+        """Read-only Start / release / cancellation preview (plan 8, 14.1).
+
+        Simulates the mutation on a copy of the snapshot and reports, per
+        task, what it would become; the mutation revalidates under lock.
+        """
+        out = self.detail(wid, actor)
+        s = self.snapshot(wid)
+        w, tasks, deps = s["workflow"], s["tasks"], s["dependencies"]
+        live = [e for e in s["executions"] if e["state"] in LIVE_EXECUTIONS]
+        impact = {
+            "kind": kind,
+            "revision": out["revision"],
+            "graph_revision": out["graph_revision"],
+            "scope_revision": out["scope_revision"],
+            "task_revisions": {tid: t["work_revision"] for tid, t in tasks.items()},
+            "holds": [] if kind == "cancellation" else list(holds),
+            "tasks": [],
+        }
+        if kind == "cancellation":
+            names = {
+                str(a["id"]): a["alias"]
+                for a in self.rows(
+                    "SELECT id,alias FROM agents WHERE container_id=%s",
+                    (w["container_id"],),
+                )
+            }
+            counts = {}
+            for t in tasks.values():
+                counts[t["status"]] = counts.get(t["status"], 0) + 1
+            impact["counts_by_state"] = counts
+            impact["accepted_retained"] = sorted(s["acceptances"])
+            impact["workers_to_stop"] = [
+                {
+                    "task_id": e["task_id"],
+                    "agent_id": e["claimant_id"],
+                    "name": names.get(str(e["claimant_id"])),
+                }
+                for e in live
+                if e["source_kind"] == "worker"
+            ]
+            out["impact"] = impact
+            return out
+        person = None
+        if actor and WORKFLOWS_INTEGRATED:
+            try:
+                person = self.actor(actor, w["container_id"])
+            except HTTPException:
+                pass
+        if kind == "start" and not task_ids:
+            task_ids = [
+                tid
+                for tid, t in tasks.items()
+                if t["preparation_state"] == "prepared"
+                and t["start_hold"]
+                and t["status"] not in {"completed", "cancelled"}
+            ]
+        start_holds = kind == "start" or "start" in holds
+        sim = {tid: dict(t) for tid, t in tasks.items()}
+        refused = {}
+        for tid in task_ids:
+            t = sim.get(tid)
+            reason = None
+            if t is None:
+                reason = ("task_not_in_workflow", "This task is not in the workflow.")
+            elif t["preparation_state"] != "prepared" or t["status"] in {
+                "completed",
+                "cancelled",
+            }:
+                reason = (
+                    "task_not_prepared",
+                    "Only prepared unfinished tasks can be released.",
+                )
+            elif any(e["task_id"] == tid for e in live):
+                reason = (
+                    "reservation_live",
+                    "Wait for the existing turn to be released.",
+                )
+            elif kind == "start" and w["launch_enabled"]:
+                reason = ("already_started", "The workflow was already started.")
+            elif (
+                kind == "release"
+                and start_holds
+                and t["start_hold"]
+                and not w["launch_enabled"]
+            ):
+                reason = ("workflow_not_started", "Use Start to release the first tasks.")
+            elif (
+                kind == "release"
+                and "human" in holds
+                and t["human_hold_by"]
+                and person
+                and person["id"] not in {w["owner_human_id"], t["human_hold_by"]}
+            ):
+                reason = (
+                    "hold_owner_required",
+                    "A project owner may release only their own safety hold.",
+                )
+            if reason:
+                refused[tid] = {"code": reason[0], "message": reason[1], "task_id": tid}
+                continue
+            if start_holds:
+                t["start_hold"] = False
+            if kind == "release" and "human" in holds:
+                t["human_hold_by"] = None
+        sim_w = dict(w, launch_enabled=True) if kind == "start" else w
+        for t in sim.values():
+            t["status"] = stored_status(
+                t, deps, sim, s["acceptances"], s["outside_evidence"]
+            )
+        eligibility = workflow_eligibility(
+            sim_w,
+            sim,
+            deps,
+            s["acceptances"],
+            s["executions"],
+            s["outside_evidence"],
+            {tid: self.hooks.availability(self.cur, t) for tid, t in sim.items()},
+        )
+        for tid, t in sim.items():
+            choice = eligibility[tid]
+            gates = [
+                b
+                for b in choice["blockers"]
+                if b["code"] not in {"workflow_turn", "prerequisites"}
+            ]
+            if tid in refused:
+                result = "refused"
+            elif t["status"] not in {"not_ready", "pending", "ready"}:
+                result = "unchanged"
+            elif t["status"] == "not_ready" or gates:
+                result = "blocked"
+            elif t["status"] == "pending":
+                result = "waiting_for_prerequisites"
+            else:
+                result = "takes_turn_alone" if choice["exclusive"] else "ready"
+            impact["tasks"].append(
+                {
+                    "task_id": tid,
+                    "title": t["title"],
+                    "work_revision": t["work_revision"],
+                    "selected": tid in task_ids,
+                    "current_status": tasks[tid]["status"],
+                    "resulting_status": result,
+                    "can_start": choice["can_start"] and tid not in refused,
+                    "refusal": refused.get(tid),
+                    "blockers": choice["blockers"],
+                }
+            )
+        impact["tasks"] += [
+            {
+                "task_id": tid,
+                "title": "",
+                "work_revision": 0,
+                "selected": True,
+                "current_status": "unknown",
+                "resulting_status": "refused",
+                "can_start": False,
+                "refusal": r,
+                "blockers": [],
+            }
+            for tid, r in refused.items()
+            if tid not in sim
+        ]
+        out["impact"] = impact
+        return out
+
     def audit(self, w, person, event, detail, tid=None, *, scope=False):
         revision = w["revision"] + 1
         self.cur.execute(
