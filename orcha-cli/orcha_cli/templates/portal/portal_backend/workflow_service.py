@@ -1677,9 +1677,17 @@ class WorkflowService:
                 "UPDATE workflows SET goal_revision=goal_revision+1 WHERE id=%s",
                 (w["id"],),
             )
-        if (b.get("task_limit", 0) or 0) > w["task_limit"] or (
-            b.get("round_limit", 0) or 0
-        ) > w["round_limit"]:
+        # The gate clears only once the limit that was reached is raised: the
+        # same test that set it (next round, or one more correction/review pair)
+        # must now pass against the new limits.
+        rounds = max((r["round_number"] for r in s["review_rounds"]), default=0)
+        task_limit = b.get("task_limit") or w["task_limit"]
+        round_limit = b.get("round_limit") or w["round_limit"]
+        if (
+            w["limit_reached"]
+            and rounds < round_limit
+            and len(s["tasks"]) + 2 <= task_limit
+        ):
             self.cur.execute(
                 "UPDATE workflows SET limit_reached=false WHERE id=%s", (w["id"],)
             )

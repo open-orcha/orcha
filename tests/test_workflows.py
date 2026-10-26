@@ -1013,6 +1013,65 @@ def test_review_rounds_are_fresh_acyclic_pairs_and_receipt_replay_is_exact(
     )
 
 
+@pytest.mark.parametrize(
+    "reached,other,too_low,raised",
+    [
+        ("task_limit", "round_limit", 3, 4),
+        ("round_limit", "task_limit", 1, 2),
+    ],
+)
+def test_limit_gate_clears_only_when_the_reached_limit_is_raised(
+    setup_workflow, reached, other, too_low, raised
+):
+    cid, actor, worker, _, hooks, execute = setup_workflow
+    w = prepare_and_start(
+        setup_workflow, create(setup_workflow, dependencies={1: ["t0"]})
+    )
+    w = execute("patch", {reached: too_low}, w["id"])
+    by_title = {t["title"]: t for t in w["tasks"]}
+    build, review = by_title["Task 0"], by_title["Task 1"]
+    e, ref = submit_result(setup_workflow, w, build["id"])
+    execute("accept", {"evidence": ref}, w["id"], build["id"])
+    with db_cursor() as (_, cur):
+        ws.WorkflowService(cur, hooks).release_confirmed(
+            e["id"], e["generation"], "exited"
+        )
+    out = execute(
+        "review_round",
+        {
+            "loop_key": "release",
+            "review_task_id": review["id"],
+            "reviewed_task_id": build["id"],
+            "reviewed_artifact": ref,
+            "outcome": "changes_requested",
+            "correction": {
+                "client_key": "fix",
+                "title": "Fix feedback",
+                "definition_of_done": "Address report",
+                "assignee_id": worker,
+            },
+            "next_review": {
+                "client_key": "again",
+                "title": "Review again",
+                "definition_of_done": "Review correction",
+                "assignee_id": worker,
+            },
+        },
+        w["id"],
+    )
+    # Another round, or one more correction/review pair, would pass the limit:
+    # nothing is added and the still-Active workflow shows the named gate.
+    assert out["status"] == "active" and out["limit_reached"] is True
+    assert len(out["tasks"]) == 2
+    # Raising the other limit, or re-saving the reached one, leaves the gate.
+    out = execute("patch", {other: 9}, w["id"])
+    assert out["limit_reached"] is True
+    out = execute("patch", {reached: too_low}, w["id"])
+    assert out["limit_reached"] is True
+    out = execute("patch", {reached: raised}, w["id"])
+    assert out["limit_reached"] is False
+
+
 def test_inconclusive_review_is_replaced_only_after_the_review_is_retried(
     setup_workflow,
 ):
