@@ -1129,7 +1129,11 @@ function ProtocolPanel({ t }: { t: Task }) {
   const noHuman = useNoHumanReason();
 
   const startEdit = () => {
-    if (!actor || blockLegacy) {
+    if (!actor) {
+      toast(noHuman, "danger");
+      return;
+    }
+    if (blockLegacy) {
       toast(noHuman, "danger");
       return;
     }
@@ -1145,7 +1149,8 @@ function ProtocolPanel({ t }: { t: Task }) {
 
   const save = async () => {
     const h = actor;
-    if (!h || !draft || blockLegacy) return;
+    if (!h || !draft) return;
+    if (blockLegacy) return;
     setSaving(true);
     // PARTIAL merge (Ledger contract): send all four; "" clears a key.
     let r: { ok: boolean; status: number; d: { protocol?: unknown; detail?: unknown } };
