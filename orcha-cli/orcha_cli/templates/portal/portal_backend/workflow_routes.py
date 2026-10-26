@@ -236,7 +236,7 @@ def workflow_import_preview(wid: str, body: model.ImportPreview, request: Reques
         svc, w, _ = read_context(cur, request, wid)
         actor = resolve_actor(cur, request, w["container_id"])
         svc.owner(w, actor)
-        return svc.preview_import(w["container_id"], body.task_ids)
+        return svc.preview_import(w["container_id"], body.task_ids, w)
 
 
 @app.get(

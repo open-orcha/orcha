@@ -160,6 +160,7 @@ def lock_container_graph(cur, cid):
 
 
 # §14.1: standalone not_ready/blocked imports become human-held with these reasons.
+RELEASABLE_IMPORTS = frozenset({"pending", "ready"})
 IMPORT_HOLD_REASONS = {
     "not_ready": "On hold before it joined this workflow",
     "blocked": "Blocked before it joined this workflow",
@@ -1265,7 +1266,7 @@ class WorkflowService:
         )
         return result
 
-    def preview_import(self, cid, task_ids):
+    def preview_import(self, cid, task_ids, workflow=None):
         if len(set(task_ids)) != len(task_ids):
             conflict("duplicate_task", "Select each task once.", status=422)
         all_tasks = {
@@ -1378,6 +1379,14 @@ class WorkflowService:
                         else "draft"
                     ),
                     "start_hold": not complete,
+                    "releasable": bool(
+                        workflow
+                        and workflow["status"] == "active"
+                        and workflow["launch_enabled"]
+                        and t["status"] in RELEASABLE_IMPORTS
+                        and t["definition_of_done"].strip()
+                        and assignees
+                    ),
                     "human_hold_reason": IMPORT_HOLD_REASONS.get(t["status"]),
                     "assignee_ids": assignees,
                     "depends_on": deps.get(tid, []),
@@ -1583,7 +1592,7 @@ class WorkflowService:
         self.created_task_ids.update(ids)
         return ids
 
-    def _import(self, w, actor, ids, digest, acceptances):
+    def _import(self, w, actor, ids, digest, acceptances, release=()):
         preview = self.preview_import(w["container_id"], ids)
         if preview["blockers"]:
             conflict(
@@ -1601,6 +1610,11 @@ class WorkflowService:
         )["n"]
         if existing + len(ids) > w["task_limit"]:
             conflict("task_limit", "The workflow task limit would be exceeded.")
+        release = set(release)
+        if len(release) != len(set(release) & set(ids)):
+            conflict("release_not_selected", "Only imported tasks can be released.", status=422)
+        if release and not w["launch_enabled"]:
+            conflict("workflow_not_started", "Use Start to release the first tasks.")
         original = {}
         for tid in sorted(ids):
             t = self.one("SELECT * FROM tasks WHERE id=%s" + sql.for_update(), (tid,))
@@ -1614,12 +1628,18 @@ class WorkflowService:
                 )
             )
             prepared = completed or bool(t["definition_of_done"].strip() and assigned)
+            if tid in release and not (prepared and t["status"] in RELEASABLE_IMPORTS):
+                conflict(
+                    "release_not_allowed",
+                    "Only a prepared task that was waiting can start when it joins.",
+                    task_id=tid,
+                )
             self.cur.execute(
                 "UPDATE tasks SET workflow_id=%s,preparation_state=%s,start_hold=%s,human_hold_by=%s,human_hold_at=%s,human_hold_reason=%s,status=%s WHERE id=%s AND workflow_id IS NULL AND status=%s",
                 (
                     w["id"],
                     "prepared" if prepared else "draft",
-                    not completed,
+                    not completed and tid not in release,
                     actor.id if held else None,
                     sql.utcnow() if held else None,
                     IMPORT_HOLD_REASONS.get(t["status"]),
@@ -1712,13 +1732,22 @@ class WorkflowService:
         p = self.owner(w, actor)
         self.active(w)
         original = self._import(
-            w, actor, b["task_ids"], b["preview_digest"], b.get("acceptances", {})
+            w,
+            actor,
+            b["task_ids"],
+            b["preview_digest"],
+            b.get("acceptances", {}),
+            b.get("release_task_ids", []),
         )
         self.audit(
             w,
             p,
             "workflow_tasks_imported",
-            {"task_ids": b["task_ids"], "original_states": original},
+            {
+                "task_ids": b["task_ids"],
+                "original_states": original,
+                "released_task_ids": sorted(b.get("release_task_ids", [])),
+            },
             scope=True,
         )
 

@@ -308,6 +308,58 @@ def test_import_requires_both_directions_and_preserves_manual_hold(setup_workflo
     )
 
 
+def test_import_starts_only_ticked_waiting_tasks_in_a_started_workflow(setup_workflow):
+    cid, actor, worker, _, hooks, execute = setup_workflow
+    tick, untick, held = uid(), uid(), uid()
+    with db_cursor() as (_, cur):
+        for tid, state in [(tick, "pending"), (untick, "pending"), (held, "not_ready")]:
+            cur.execute(
+                "INSERT INTO tasks(id,container_id,title,definition_of_done,status) VALUES (%s,%s,%s,'A result',%s)",
+                (tid, cid, state, state),
+            )
+            cur.execute(
+                "INSERT INTO agent_tasks(agent_id,task_id) VALUES (%s,%s)",
+                (worker, tid),
+            )
+    ids = [tick, untick, held]
+    preparing = create(setup_workflow, mode="parallel", count=1)
+    w = prepare_and_start(setup_workflow, create(setup_workflow, mode="parallel", count=1))
+
+    def preview(wid):
+        with db_cursor(readonly=True) as (_, cur):
+            svc = ws.WorkflowService(cur, hooks)
+            return svc.preview_import(cid, ids, svc.workflow(wid))
+
+    assert not any(t["releasable"] for t in preview(preparing["id"])["task_impacts"])
+    started = preview(w["id"])
+    assert {t["id"]: t["releasable"] for t in started["task_impacts"]} == {
+        tick: True,
+        untick: True,
+        held: False,
+    }
+    body = {"task_ids": ids, "preview_digest": started["preview_digest"]}
+    for wid, release, code in [
+        (preparing["id"], [tick], "workflow_not_started"),
+        (w["id"], [held], "release_not_allowed"),
+    ]:
+        with pytest.raises(HTTPException) as err:
+            execute("import", dict(body, release_task_ids=release), wid)
+        assert err.value.detail["code"] == code
+    w = execute("import", dict(body, release_task_ids=[tick]), w["id"])
+    byid = {t["id"]: t for t in w["tasks"]}
+    assert not byid[tick]["start_hold"] and byid[tick]["can_start"]
+    assert byid[untick]["start_hold"] and not byid[untick]["can_start"]
+    assert byid[held]["start_hold"] and byid[held]["human_hold_by"] == actor.id
+    with db_cursor(readonly=True) as (_, cur):
+        cur.execute(
+            "SELECT detail FROM workflow_history WHERE workflow_id=%s AND event='workflow_tasks_imported'",
+            (w["id"],),
+        )
+        detail = cur.fetchone()["detail"]
+    detail = json.loads(detail) if isinstance(detail, str) else detail
+    assert detail["released_task_ids"] == [tick]
+
+
 def test_import_names_blocked_tasks_and_audits_original_states(setup_workflow):
     cid, actor, worker, _, hooks, execute = setup_workflow
     held, blocked = uid(), uid()

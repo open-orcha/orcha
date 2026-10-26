@@ -2922,6 +2922,11 @@
             "type": "boolean",
             "title": "Start Hold"
           },
+          "releasable": {
+            "type": "boolean",
+            "title": "Releasable",
+            "default": false
+          },
           "human_hold_reason": {
             "anyOf": [
               {
@@ -3001,6 +3006,14 @@
           "preview_digest": {
             "type": "string",
             "title": "Preview Digest"
+          },
+          "release_task_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 200,
+            "title": "Release Task Ids"
           }
         },
         "additionalProperties": false,

@@ -135,6 +135,9 @@ class ImportPreview(Input):
 
 class ImportTasks(ImportPreview, Mutation):
     preview_digest: str
+    # Ticked "Start this task when it is ready" (plan 14.1 import mapping):
+    # only prepared tasks that were waiting, only in a started workflow.
+    release_task_ids: list[str] = Field(default_factory=list, max_length=200)
 
 
 class ReleaseTasks(Mutation):
@@ -385,6 +388,9 @@ class ImportTaskImpact(BaseModel):
     result_by_agent_id: str | None = None
     preparation_state: Literal["draft", "prepared"]
     start_hold: bool
+    # True when the owner may tick it to start on import; otherwise the
+    # preview says it will not run until released.
+    releasable: bool = False
     human_hold_reason: str | None = None
     assignee_ids: list[str]
     depends_on: list[str]
