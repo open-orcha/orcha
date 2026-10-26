@@ -17,7 +17,7 @@ import { ToastProvider } from "../components/ui";
 import { extensions } from "../extensions";
 import { SnapshotProvider, _setActingIdentity, _setActingAuth } from "../state/SnapshotProvider";
 import { _resetProjectsForTests } from "../state/projects";
-import { Shell, answeredConnectionText, autonomyImpact, bellAriaLabel, headerTabPage } from "./Shell";
+import { Shell, answeredConnectionText, bellAriaLabel, headerTabPage } from "./Shell";
 
 type Route = (url: string, init?: RequestInit) => Response | null;
 const json = (data: unknown, status = 200) =>
@@ -78,28 +78,13 @@ describe("bell accessible name agrees in number", () => {
 });
 
 describe("autonomy confirm copy never promises a resume", () => {
-  it("pure: wakes on vs off", () => {
-    expect(autonomyImpact("plan", false)).not.toMatch(/resume/i);
-    expect(autonomyImpact("plan", true)).toMatch(/applies once wakes are turned back on/);
-    expect(autonomyImpact("plan", true)).toMatch(/does not resume/);
-    expect(autonomyImpact("pr", false)).toBe("Agents execute approved plans up to an open PR. You still merge.");
-    expect(autonomyImpact("bogus", false)).toBe("");
-  });
-
-  it("while wakes are OFF, the Plan-only confirm says the level applies once wakes are on", async () => {
-    stubFetch({ container: { autonomy_level: "pr", wakes_enabled: false } });
-    mountShell("tasks", "Tasks");
+  it("resuming wakes preserves the separate task authority model", async () => {
+    stubFetch({ container: { autonomy_level: "pr", wakes_enabled: false } }); mountShell("tasks", "Tasks");
     await waitFor(() => expect(document.getElementById("execBtn")).toBeTruthy());
     fireEvent.click(document.getElementById("execBtn")!);
-    const plan = await waitFor(() => {
-      const b = Array.from(document.querySelectorAll('#autTop [role="radio"]')).find((x) => x.textContent === "Plan-only") as HTMLElement;
-      expect(b).toBeTruthy();
-      return b;
-    });
-    fireEvent.click(plan);
-    expect(await screen.findByText("Set autonomy to Plan-only?")).toBeInTheDocument();
-    const dlg = screen.getByText(/applies once wakes are turned back on/);
-    expect(dlg.textContent).not.toMatch(/Agents resume/);
+    fireEvent.click(await screen.findByRole("switch"));
+    expect(await screen.findByText("Eligible tasks resume waking with their own OFF/ON settings.")).toBeVisible();
+    expect(document.getElementById("autTop")).toBeNull();
   });
 });
 

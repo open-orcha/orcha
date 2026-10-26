@@ -9,6 +9,7 @@ import { WorkflowOperationNotice } from "./WorkflowOperationNotice";
 import { WorkflowTaskLink } from "./WorkflowTaskReturn";
 import { WorkflowEvidencePanel } from "./WorkflowEvidence";
 import { WorkflowAcceptance } from "./WorkflowAcceptance";
+import { acceptanceAttributionUnavailable, WorkflowTaskAcceptanceRecord } from "./WorkflowTaskAcceptanceRecord";
 import { useWorkflowForm } from "./workflowFormState";
 import { impactMatches, readWorkflowImpact, WorkflowImpactView } from "./WorkflowImpact";
 
@@ -57,7 +58,7 @@ export function WorkflowActions({ detail, scope, verified, stale, onSaved }: {
     || (action === "start" && selected.some((id) => !preview?.tasks.some((t) => t.id === id && startEligible(t))))
     || (action === "start" && (!checkedSelection || impact?.tasks?.some((t) => t.selected && (t.resulting_status === "refused" || t.refusal))))
     || (action === "cancel" && impact?.kind !== "cancellation")
-    || (action === "finish" && (preview?.evidence_capability?.available !== true || preview?.completion.can_finish !== true))
+    || (action === "finish" && (preview?.evidence_capability?.available !== true || preview?.completion.can_finish !== true || preview?.tasks.some(acceptanceAttributionUnavailable)))
     || (action === "cancel" && !reason.trim());
 
   async function confirm() {
@@ -114,7 +115,9 @@ export function WorkflowActions({ detail, scope, verified, stale, onSaved }: {
           <p>Goal: {preview.goal}</p><p>{preview.goal_accepted_revision === preview.goal_revision ? "Current goal accepted." : "The current goal still needs acceptance with saved evidence."}</p>
           <ul>{preview.objectives.map((o) => <li key={o.id}>{o.title} — {o.criteria} — {o.accepted_revision === o.revision ? "Accepted" : "Needs acceptance"}</li>)}</ul>
           <ul>{preview.completion.blockers.map((b, i) => <li key={i}>{b.message}{b.task_id && <> <WorkflowTaskLink cid={scope.project} taskId={b.task_id}>Open task</WorkflowTaskLink></>}</li>)}</ul>
+          {preview.tasks.some(acceptanceAttributionUnavailable) && <p>Finish is unavailable until the recorded result suppliers can be reviewed. This server version does not expose that attribution.</p>}
           <h3>Saved evidence</h3>
+          {preview.tasks.filter((t) => t.acceptance).map((t) => <WorkflowTaskAcceptanceRecord key={t.id} task={t} />)}
           <label>Inspect a task’s saved evidence<select value={evidenceTask} onChange={(e) => setEvidenceTask(e.target.value)}><option value="">Choose a task</option>{preview.tasks.map((t) => <option key={t.id} value={t.id}>{t.title}</option>)}</select></label>
           {evidenceTask && <WorkflowEvidencePanel key={evidenceTask} detail={preview} taskId={evidenceTask} />}
           {preview.evidence_capability?.available !== true && <p>Saved evidence review is unavailable on this connection, so finishing remains unavailable.</p>}
@@ -123,7 +126,7 @@ export function WorkflowActions({ detail, scope, verified, stale, onSaved }: {
             <WorkflowAcceptance detail={preview} scope={scope} verified={verified} stale={stale} objectiveId={objective.id} onSaved={(result) => { onSaved(result); setPreview(null); }} /></details>)}
           {preview.goal_accepted_revision !== preview.goal_revision && <details><summary>Review current goal</summary>
             <WorkflowAcceptance detail={preview} scope={scope} verified={verified} stale={stale} onSaved={(result) => { onSaved(result); setPreview(null); }} /></details>}
-          {preview.completion.can_finish && <p>All {preview.progress.total} required tasks and {preview.progress.objectives_total} objectives are accepted. Confirm Finish to make this workflow read-only.</p>}
+          {preview.completion.can_finish && <p>All {preview.progress.total} required tasks and {preview.progress.objectives_total} objectives are accepted.</p>}
           <p>Finishing makes this workflow read-only. Your project stays open. Only its verified human owner can finish it; task autonomy never finishes a workflow.</p>
         </>}
       </>}

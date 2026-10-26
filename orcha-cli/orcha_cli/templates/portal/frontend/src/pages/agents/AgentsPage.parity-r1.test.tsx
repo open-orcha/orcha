@@ -47,7 +47,7 @@ const SNAP = () => ({
   ],
   tasks: [
     { id: "11111111-aaaa-4bbb-8ccc-000000000001", title: "Plan-gated task", status: "in_progress", priority: 50, assignees: ["forge"], created_at: ago(60), plan_message: PLAN_MSG("forge") },
-    { id: "22222222-aaaa-4bbb-8ccc-000000000002", title: "Full-autonomy progress", status: "in_progress", priority: 50, assignees: ["infra"], created_at: ago(60), plan_message: PLAN_MSG("infra") },
+    { id: "22222222-aaaa-4bbb-8ccc-000000000002", title: "Task ON progress", autonomy: "on", status: "in_progress", priority: 50, assignees: ["infra"], created_at: ago(60), plan_message: PLAN_MSG("infra") },
     { id: "33333333-aaaa-4bbb-8ccc-000000000003", title: "Tune the wake scheduler", status: "in_progress", priority: 50, assignees: ["forge"], created_at: ago(90) },
   ],
   requests: [
@@ -206,8 +206,8 @@ describe("Requests tab (AA-048 + wave-4 row meta)", () => {
   });
 });
 
-describe("Plan waiting respects the plan author's autonomy (home EXTRA)", () => {
-  it("agent Tasks tab: a plan from a full-autonomy agent is not 'Plan waiting' / Needs you", async () => {
+describe("Plan waiting respects task autonomy (home EXTRA)", () => {
+  it("agent Tasks tab: a plan for an ON task is not 'Plan waiting' / Needs you", async () => {
     stubFetch();
     const { container } = mount("/agents?agent=infra&tab=tasks");
     await waitFor(() => expect(container.querySelector(".ag-trow")).toBeTruthy());
@@ -216,7 +216,7 @@ describe("Plan waiting respects the plan author's autonomy (home EXTRA)", () => 
     expect(detail.querySelector('[data-group="needs"]')).toBeNull();
     expect(detail.textContent).not.toContain("Plan awaiting your approval");
   });
-  it("…while a plan-autonomy agent's plan still is", async () => {
+  it("…while an OFF task plan still is", async () => {
     stubFetch();
     const { container } = mount("/agents?agent=forge&tab=tasks");
     await waitFor(() => expect(container.querySelector('[data-group="needs"]')).toBeTruthy());
@@ -237,7 +237,7 @@ describe("one live-pill precedence (wave-4) + presence", () => {
     const s2 = mapSnapshot(raw2);
     expect(cardLiveState(s2, s2.tasks.find((t) => t.title === "Tune the wake scheduler")!)).toBe("needs_review");
     // a full-autonomy author's plan is not "Waiting"
-    expect(cardLiveState(s2, s2.tasks.find((t) => t.title === "Full-autonomy progress")!)).not.toBe("waiting");
+    expect(cardLiveState(s2, s2.tasks.find((t) => t.title === "Task ON progress")!)).not.toBe("waiting");
     expect(cardLiveState(s2, s2.tasks.find((t) => t.title === "Plan-gated task")!)).toBe("waiting");
   });
   it("awaiting_request reads Waiting even when the wake scan is stale", () => {

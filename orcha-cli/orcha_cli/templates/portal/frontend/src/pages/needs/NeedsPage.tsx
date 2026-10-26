@@ -8,7 +8,7 @@
  * timeline and — for tasks — a "Leave a comment…" composer).
  *
  * - Items come ONLY from the shared selector `useAttention()` (plan approvals
- *   when autonomy is "plan", verifications unless autonomy is "full", requests
+ *   when task autonomy is OFF, every pending human verification, requests
  *   open to a human or escalated). Badge = unique entities waiting on YOU;
  *   items assigned to someone else are listed separately, never counted.
  * - Actionable decisions are separated from informational follow-ups
@@ -52,7 +52,7 @@ import { Timeline, TimelineEvent } from "../../components/primitives";
 import { Composer } from "../../components/primitives";
 import { attentionLabel, markAttentionDecided, useAttention, type AttentionItem } from "../../state/attention";
 import { useProjectMode } from "../../lib/projectMode";
-import { actingHuman, autLevel, planMessageOf, useActingAuthority, useSnapshot } from "../../state/SnapshotProvider";
+import { actingHuman, planMessageOf, useActingAuthority, useSnapshot } from "../../state/SnapshotProvider";
 import { orderProjects, useProjects } from "../../state/projects";
 import { switchProject, withCidForced } from "../../lib/scope";
 import { clockTime, relTime, shortId, trunc } from "../../lib/format";
@@ -752,7 +752,6 @@ function NeedsPageContent() {
   // proof-of-work one-liners for verify rows — refetched when the set of tasks awaiting verification changes
   const evKey = (snap?.tasks || []).filter((t) => t.status === "needs_verification").map((t) => t.id + ":" + (t.result ? 1 : 0)).join(",");
   const evSums = useEvidenceSummaries(cid, evKey);
-  const level = autLevel(snap);
   const projectName = snap?.container?.name || "this project";
   // counts come from the POST-optimistic list, so the pill, sidebar and group
   // band agree the moment a decision is made (the snapshot then confirms)
@@ -820,7 +819,7 @@ function NeedsPageContent() {
         title={`Nothing needs you in ${trunc(projectName, 40)}`}
         body={
           <>
-            No plan approvals{level !== "plan" ? ` (not required at autonomy “${level}”)` : ""}, verifications{level === "full" ? ` (not required at autonomy “full”)` : ""} or requests are waiting on a human.
+            No plans, finished results or requests are waiting for a person. Each task has its own OFF/ON setting.
             {attention.partial ? " Counted from the loaded tasks and requests only." : ""}
           </>
         }

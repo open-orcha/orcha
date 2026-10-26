@@ -11,18 +11,16 @@
  * (Project / Section / Object) · one primary action slot · compact secondary
  * slot · connection indicator (live / polling / reconnecting / offline + last
  * update) · persistent Paused indicator · "Execution controls" popover holding
- * the TWO independent controls — Notifier (wakes) and Autonomy (level), each
- * with its existing confirm copy (GH #148/#149) · notifications bell.
+ * the notifier wake control · notifications bell. Task authority lives on each task.
  * The theme toggle lives in Settings › Interface and the ⌘K palette.
  */
 import { UpdateNotice } from "./UpdateNotice";
-import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { sendJSON, getJSON } from "../api/client";
 import { relTime, trunc, esc } from "../lib/format";
 import { ensureCidInLocation } from "../lib/scope";
 import {
-  autLevel,
   identitySelfHuman,
   isAnsweredKind,
   NOT_MEMBER_REASON,
@@ -46,7 +44,6 @@ import { Sidebar } from "./Sidebar";
 import { ProjectTabs, isProjectSectionPage } from "./ProjectTabs";
 import { ProjectFace, useProjectPalette } from "./projectPalette";
 import { notifierState } from "../lib/notifier";
-import { autonomyDescFor, autonomyLabelFor, useProjectMode } from "../lib/projectMode";
 import { payloadTitle as payloadSummary } from "../components/primitives/Payload";
 import { HealthChip } from "../components/primitives/HealthChip";
 import { projectPauseLine, useContainerBudgets } from "../pages/agents/budget/budgetModel";
@@ -58,49 +55,7 @@ export { initTheme } from "./theme";
 /** The stored preference ("auto" | "light" | "dark"), default applied. */
 export { readThemePref as legacyThemePreference } from "./theme";
 
-/* ---- GH #148/#149: two orthogonal topbar controls ------------------------
- * NOT one fused 4-rung slider. NOTIFIER is the LIVE binary kill-switch
- * (containers.wakes_enabled via POST /api/containers/{cid}/wakes) — Paused
- * (red) vs Running (green), "does anything wake at all?". AUTONOMY is the
- * 3-level engine gearbox (containers.autonomy_level via POST
- * /api/containers/{cid}/autonomy, level ∈ plan|pr|full) — "how far may an
- * agent go once it acts?". They are orthogonal: pausing the notifier does
- * NOT change the level, so Autonomy keeps rendering (dimmed, still editable)
- * while paused, and setting the level never touches wakes_enabled. Labels,
- * tooltips, endpoints and payloads mirror the vanilla split
- * (app-autonomy.js / app-shell.js). */
-const AUT_LEVELS = [
-  { level: "plan", tone: "warn", label: "Plan-only",
-    meaning: "Agents wake & propose, but every plan stops at the approval gate — you approve before any execution.",
-    impact: "Agents propose plans, but you approve every plan before any execution." },
-  { level: "pr", tone: "info", label: "Build to PR",
-    meaning: "Agents execute approved plans up to an open PR; you still merge.",
-    impact: "Agents execute approved plans up to an open PR. You still merge." },
-  { level: "full", tone: "accent", label: "Full",
-    meaning: "Agents may carry approved work to its configured terminal state without further gates.",
-    impact: "Agents may carry approved work to completion without further gates." },
-] as const;
-
-/**
- * The confirm copy for switching to `level` (pure, tested). Autonomy never
- * touches wakes, so the copy must not promise agents "resume": while wakes are
- * OFF it says the level only applies once wakes are turned back on.
- */
-export function autonomyImpact(level: string, wakesPaused: boolean): string {
-  const rg = AUT_LEVELS.find((x) => x.level === level);
-  if (!rg) return "";
-  return wakesPaused
-    ? rg.impact + " Wakes are off, so this applies once wakes are turned back on — changing autonomy does not resume them."
-    : rg.impact;
-}
-
-/** Label for any stored level — unknown / legacy values are named explicitly. */
-export function autonomyLabel(level: string): { label: string; known: boolean } {
-  const rg = AUT_LEVELS.find((x) => x.level === level);
-  if (rg) return { label: rg.label, known: true };
-  return { label: `Custom (${level || "unset"})`, known: false };
-}
-
+/* Wake controls remain independent from task OFF/ON authority. */
 /** Compact age for a millisecond span: "45s" / "12m" / "3h" / "2d". */
 function spanText(ms: number): string {
   const a = Math.max(0, ms / 1000);
@@ -154,7 +109,7 @@ interface PendingAut { title: string; desc: string; primary: string; danger?: bo
  * with a trusted identity only an owner or a `manage_autonomy` holder may act
  * (a viewer never); with trust off (no identity) the backend does not gate, so
  * neither does the affordance. The server stays the enforcer either way. */
-export const EXEC_GRANT_REASON = "Changing wakes or autonomy needs the owner role or the manage_autonomy permission";
+export const EXEC_GRANT_REASON = "Changing wakes needs the owner role or the manage_autonomy permission";
 export function execControlDenial(identity: Identity | null | undefined): string | null {
   if (!identity) return null;
   if (identity.member_role === "viewer") return "Your role is viewer (read-only)";
@@ -188,7 +143,7 @@ function useShellAuthority() {
   return correctAuthorityReason(useActingAuthority(), snapshotErrorKind(error));
 }
 
-function useAutonomyActions() {
+function useWakeActions() {
   const { snap, refresh, identity, error } = useSnapshot();
   const toast = useToast();
   const authority = useShellAuthority();
@@ -211,19 +166,6 @@ function useAutonomyActions() {
       toast((enabled ? "Couldn't resume wakes" : "Couldn't pause wakes") + " — " + apiErrorText(e), "danger");
     }
   };
-  const setLevel = async (lvl: string, label: string) => {
-    const cid = snap?.container?.id;
-    if (!cid) { toast("No container", "danger"); return; }
-    try {
-      await sendJSON("POST", `/api/containers/${encodeURIComponent(cid)}/autonomy`, {
-        level: lvl, actor_agent_id: who ? who.id : null,
-      });
-      toast("Autonomy · " + label, "ok");
-      void refresh();
-    } catch (e) {
-      toast("Couldn't change autonomy \u2014 " + apiErrorText(e), "danger");
-    }
-  };
 
   // Offline: the displayed state may be stale, so execution changes are held
   // until the backend answers again (the confirm would otherwise race it).
@@ -234,7 +176,7 @@ function useAutonomyActions() {
       : kind === "not_found" ? "Project not found"
       : offline ? "Offline — reconnect to change execution controls"
       : grantDenied || authority.reason,
-    setWakes, setLevel,
+    setWakes,
   };
 }
 
@@ -242,7 +184,7 @@ function useAutonomyActions() {
  * (red) or Running (green). Running→Paused is destructive (halts all
  * wakes): danger confirm. Paused→Running is safe: light confirm. */
 function NotifierSwitch() {
-  const { snap, who, reason, setWakes } = useAutonomyActions();
+  const { snap, who, reason, setWakes } = useWakeActions();
   const toast = useToast();
   const [pending, setPending] = useState<PendingAut | null>(null);
   const paused = !!(snap?.container && (snap.container as { wakes_enabled?: boolean }).wakes_enabled === false);
@@ -252,7 +194,7 @@ function NotifierSwitch() {
   const click = () => {
     if (!canAct) { toast(denied, "warn"); return; }
     setPending(paused
-      ? { title: "Resume agent wakes?", desc: "Agents resume waking at the current autonomy level.", primary: "Resume", run: () => void setWakes(true) }
+      ? { title: "Resume agent wakes?", desc: "Eligible tasks resume waking with their own OFF/ON settings.", primary: "Resume", run: () => void setWakes(true) }
       : { title: "Pause all agent wakes?", desc: "Agents stop waking immediately. In-flight work finishes; nothing new starts. Humans & live terminals still work.", primary: "Pause all wakes", danger: true, run: () => void setWakes(false) });
   };
 
@@ -299,112 +241,7 @@ function NotifierSwitch() {
   );
 }
 
-/* AUTONOMY (#autTop): the 3-level segmented selector (plan|pr|full). The
- * active level lights in its spec tone; orthogonal to the notifier — it
- * renders the same whether Running or Paused, just dimmed (still editable)
- * while paused so you can pre-set it before resuming. */
-function AutonomyLevels() {
-  const { snap, who, reason, setLevel } = useAutonomyActions();
-  const { cid } = useSnapshot();
-  // General (non-code) projects word "Build to PR" as "Execute" (presentation only)
-  const mode = useProjectMode(cid).mode;
-  const labelOf = (rg: (typeof AUT_LEVELS)[number]) => autonomyLabelFor(rg.level, rg.label, mode);
-  const meaningOf = (rg: (typeof AUT_LEVELS)[number]) => autonomyDescFor(rg.level, rg.meaning, mode);
-  const toast = useToast();
-  const [pending, setPending] = useState<PendingAut | null>(null);
-  const paused = !!(snap?.container && (snap.container as { wakes_enabled?: boolean }).wakes_enabled === false);
-  const level = autLevel(snap);
-  const canAct = !!who;
-  const denied = reason || "Pick an acting human to change autonomy";
-  const groupRef = useRef<HTMLDivElement | null>(null);
-  const known = autonomyLabel(level);
-  const activeIdx = Math.max(0, AUT_LEVELS.findIndex((x) => x.level === level));
-  const [focusIdx, setFocusIdx] = useState(activeIdx);
-  useEffect(() => { setFocusIdx(activeIdx); }, [activeIdx]);
-
-  // roving tabindex (ARIA radiogroup): arrows/Home/End MOVE focus only; Enter/
-  // Space (native button activation) opens the same confirm as a click, so a
-  // level never changes without the confirm.
-  const onKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
-    const n = AUT_LEVELS.length;
-    let next: number | null = null;
-    if (e.key === "ArrowRight" || e.key === "ArrowDown") next = (focusIdx + 1) % n;
-    else if (e.key === "ArrowLeft" || e.key === "ArrowUp") next = (focusIdx - 1 + n) % n;
-    else if (e.key === "Home") next = 0;
-    else if (e.key === "End") next = n - 1;
-    if (next == null) return;
-    e.preventDefault();
-    setFocusIdx(next);
-    groupRef.current?.querySelectorAll<HTMLButtonElement>("button[role=radio]")[next]?.focus();
-  };
-
-  const click = (lvl: string) => {
-    if (!canAct) { toast(denied, "warn"); return; }
-    const rg = AUT_LEVELS.find((x) => x.level === lvl);
-    if (!rg || rg.level === level) return;
-    setPending({
-      title: `Set autonomy to ${labelOf(rg)}?`, desc: mode === "general" ? meaningOf(rg) : autonomyImpact(rg.level, paused), primary: `Set ${labelOf(rg)}`,
-      danger: rg.level === "full",
-      run: () => void setLevel(rg.level, labelOf(rg)),
-    });
-  };
-
-  return (
-    <>
-      <div className="ctl-group" id="autGroup">
-        <span className="aut-lab">Autonomy</span>
-        <div
-          ref={groupRef}
-          className={"aut" + (canAct ? "" : " locked") + (paused ? " dimmed" : "")} id="autTop" role="radiogroup"
-          aria-label="Container autonomy level" onKeyDown={onKeyDown}
-        >
-          {!known.known ? (
-            // a legacy / server-set level: shown SELECTED so the control never
-            // reads as broken, but not clickable — picking a preset replaces it
-            <span className="seg lvl custom on" role="radio" aria-checked="true" aria-disabled="true"
-              title={"Level set on server: " + (level || "unset") + " — pick a preset to replace it"}>
-              <span className="d" aria-hidden="true" />Custom
-            </span>
-          ) : null}
-          {AUT_LEVELS.map((rg, i) => {
-            const active = rg.level === level;
-            const cls = "seg lvl " + rg.tone + (active ? " on" : "");
-            const tip = canAct
-              ? (active ? "Current autonomy: " + labelOf(rg) + (paused ? " — applies when running" : "") : `Set autonomy to ${labelOf(rg)} — ${meaningOf(rg)}`)
-              : denied;
-            return (
-              <button
-                key={rg.level} type="button" className={cls} role="radio" aria-checked={active} title={tip}
-                tabIndex={i === focusIdx ? 0 : -1} aria-disabled={canAct ? undefined : true}
-                onFocus={() => setFocusIdx(i)} onClick={() => click(rg.level)}
-              >
-                {/* no leading dot: the selected fill already marks the level (Linear segmented control) */}
-                {labelOf(rg)}
-              </button>
-            );
-          })}
-        </div>
-        <p className="v2-exec-lvl-d" aria-live="polite">
-          {known.known
-            ? meaningOf(AUT_LEVELS.find((x) => x.level === level)!)
-            : <span title="Not one of the three presets — picking a level above replaces it.">Level set on server: {level || "unset"}</span>}
-        </p>
-      </div>
-      {pending && (
-        <Modal
-          title={pending.title}
-          desc={pending.desc}
-          danger={pending.danger}
-          primary={pending.primary}
-          onPrimary={() => { const p = pending; setPending(null); p.run(); }}
-          onClose={() => setPending(null)}
-        />
-      )}
-    </>
-  );
-}
-
-function AutonomyControls() {
+function WakeControls() {
   return (
     <div className="ctl-wrap" id="ctlWrap">
       <NotifierSwitch />
@@ -846,7 +683,7 @@ function ExecutionControls() {
           <span className="v2-sr">{note}</span>
         </div>
         {offline ? <p className="v2-exec-offline" role="note">Offline — changes are disabled until Embodent reconnects.</p> : null}
-        <AutonomyControls />
+        <WakeControls />
       </Popover>
     </>
   );

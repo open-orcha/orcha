@@ -71,25 +71,12 @@ describe("Execution controls — keyboard", () => {
     expect(await screen.findByText("Pause all agent wakes?")).toBeInTheDocument();
   });
 
-  it("autonomy levels: roving tabindex, arrows/Home/End move focus only, activation opens the confirm", async () => {
-    mount();
-    await screen.findAllByText("Orcha");
-    await openExecByKeyboard();
-    const radios = Array.from(document.querySelectorAll('#autTop [role="radio"]')) as HTMLButtonElement[];
-    expect(radios.map((r) => r.tagName)).toEqual(["BUTTON", "BUTTON", "BUTTON"]);
-    expect(radios.map((r) => r.tabIndex)).toEqual([0, -1, -1]); // only the active level is a Tab stop
-    radios[0].focus();
-    fireEvent.keyDown(radios[0], { key: "ArrowRight" });
-    expect(document.activeElement).toBe(radios[1]);
-    expect(screen.queryByText(/Set autonomy to/)).toBeNull(); // moving focus never changes the level
-    fireEvent.keyDown(radios[1], { key: "End" });
-    expect(document.activeElement).toBe(radios[2]);
-    fireEvent.keyDown(radios[2], { key: "Home" });
-    expect(document.activeElement).toBe(radios[0]);
-    fireEvent.keyDown(radios[0], { key: "ArrowLeft" });
-    expect(document.activeElement).toBe(radios[2]);
-    fireEvent.click(radios[2]);
-    expect(await screen.findByText("Set autonomy to Full?")).toBeInTheDocument();
+  it("Escape closes execution controls and restores keyboard focus without exposing old presets", async () => {
+    mount(); await screen.findAllByText("Orcha"); await openExecByKeyboard();
+    expect(document.querySelectorAll('#autTop [role="radio"]')).toHaveLength(0);
+    fireEvent.keyDown(screen.getByRole("dialog", { name: "Execution controls" }), { key: "Escape" });
+    await waitFor(() => expect(document.activeElement).toBe(document.getElementById("execBtn")));
+    expect(screen.queryByRole("dialog", { name: "Execution controls" })).toBeNull();
   });
 
   it("a viewer-role identity sees the controls disabled with the reason (no impersonation)", async () => {

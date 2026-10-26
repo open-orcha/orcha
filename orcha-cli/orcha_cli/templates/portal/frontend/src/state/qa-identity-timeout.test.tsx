@@ -7,7 +7,7 @@
  *    actions that flip a tick later — the source of the test races), bounded
  *    by IDENTITY_GRACE_MS;
  *  - optimistic decisions are shared app-wide (every count agrees at once);
- *  - plan attention honours the plan author's effective autonomy.
+ *  - plan attention honours the task's OFF/ON autonomy.
  */
 import { act, cleanup, render, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -167,7 +167,7 @@ describe("optimistic decisions are shared by every attention surface", () => {
   });
 });
 
-describe("plan attention honours effective autonomy", () => {
+describe("plan attention ignores legacy project and agent autonomy", () => {
   const planMsg = { message_id: "m1", author_id: "a1", author_alias: "Atlas", is_human: false, body: "PLAN", created_at: "2026-09-01T10:00:00Z" };
   const s = (level: string, agent: Record<string, unknown>) => mapSnapshot({
     container: { id: "c1", autonomy_level: level },
@@ -176,17 +176,18 @@ describe("plan attention honours effective autonomy", () => {
     requests: [],
   });
   const plans = (x: ReturnType<typeof s>) => selectAttention(x, "h1").items.filter((i) => i.kind === "plan").length;
-  it("container plan, agent effective pr → a progress note, not a plan waiting", () => {
-    expect(plans(s("plan", { effective_autonomy: "pr" }))).toBe(0);
-    expect(plans(s("plan", { autonomy_override: "full" }))).toBe(0);
+  it("OFF remains approval-gated with a legacy PR or Full agent", () => {
+    expect(plans(s("plan", { effective_autonomy: "pr" }))).toBe(1);
+    expect(plans(s("plan", { autonomy_override: "full" }))).toBe(1);
   });
   it("container pr, agent effective plan → the plan waits on a human", () => {
     expect(plans(s("pr", { effective_autonomy: "plan" }))).toBe(1);
   });
-  it("enforced container level wins over an override", () => {
+  it("ON alone removes plan attention despite legacy enforcement", () => {
     const x = s("plan", { autonomy_override: "full" });
     x.container!.autonomy_enforced = true;
-    expect(plans(x)).toBe(1);
+    x.tasks[0].autonomy = "on";
+    expect(plans(x)).toBe(0);
     expect(plans(s("plan", {}))).toBe(1); // inherit
   });
 });

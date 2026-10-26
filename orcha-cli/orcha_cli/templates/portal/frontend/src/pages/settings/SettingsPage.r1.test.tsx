@@ -90,11 +90,11 @@ describe("Execution › Notifier is truthful and matches the header chip", () =>
   it("the independence explanation is a '?' tooltip, not a paragraph", async () => {
     installFetch({ wakes_enabled: true, last_wake_scan_at: null });
     renderAt("#tab=execution");
-    const help = await screen.findByRole("button", { name: "About Notifier and autonomy" });
-    expect(screen.queryByText(/pausing wakes never changes autonomy/)).toBeNull();
+    const help = await screen.findByRole("button", { name: "About Notifier" });
+    expect(screen.queryByText(/Task autonomy is changed on the task itself/)).toBeNull();
     fireEvent.focus(help);
     fireEvent.pointerEnter(help);
-    await waitFor(() => expect(screen.getByRole("tooltip")).toHaveTextContent(/pausing wakes never changes autonomy/));
+    await waitFor(() => expect(screen.getByRole("tooltip")).toHaveTextContent(/Task autonomy is changed on the task itself/));
   });
 });
 

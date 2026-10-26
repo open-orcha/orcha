@@ -253,7 +253,7 @@ describe("Task detail — polish round 1 (D10/D12)", () => {
     renderPage("/tasks?task=t2bbbbbb&full=1");
     const rail = await screen.findByRole("complementary", { name: "Task properties" });
     expect(within(rail).queryByText("Created by")).toBeNull();
-    expect(rail.textContent).not.toContain("human");
+    expect(within(rail).queryByText("Created by human")).toBeNull();
     const tl = await screen.findByRole("list", { name: "Task activity" });
     expect(tl.textContent).toContain("Task created");
   });
@@ -266,8 +266,8 @@ describe("Task detail — polish round 1 (D10/D12)", () => {
     expect(document.querySelector(".wk-runs")!.textContent).not.toMatch(/\b1 run\b/);
   });
 
-  it("plan gate: a leading 'Plan' heading isn't repeated, and task autonomy lives in the help mark", async () => {
-    (SNAP.tasks as Record<string, unknown>[])[1].autonomy = "on";
+  it("OFF plan: a leading 'Plan' heading is not repeated", async () => {
+    (SNAP.tasks as Record<string, unknown>[])[1].autonomy = "off";
     (SNAP.tasks as Record<string, unknown>[])[1].plan_message = { body: "## Plan\n1. Add table\n2. Backfill", author_alias: "forge", at: "2026-08-02T01:30:00Z" };
     renderPage("/tasks?task=t2bbbbbb");
     await waitFor(() => expect(document.querySelector('#gate-t2bbbbbb[data-kind="plan"]')).toBeTruthy());
@@ -275,8 +275,7 @@ describe("Task detail — polish round 1 (D10/D12)", () => {
     expect(gate.querySelector("h1,h2,h3,h4")).toBeNull();
     expect(gate.textContent).toContain("Add table");
     expect(gate.querySelector(".td-g-chip")).toBeNull();
-    const help = gate.querySelector(".td-g-help") as HTMLElement;
-    expect(help.getAttribute("title")).toMatch(/Task autonomy is ON/);
+    expect(gate.querySelector(".td-g-help")).toBeNull();
   });
 });
 

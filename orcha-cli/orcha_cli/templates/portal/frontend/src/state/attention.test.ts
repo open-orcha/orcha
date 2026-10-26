@@ -91,12 +91,16 @@ describe("selectAttention", () => {
     expect(keys(a)).toContain("verify:tv");
   });
 
-  it("task autonomy ON removes that task's plan and completion approvals", () => {
+  it("task autonomy ON skips plan approval but preserves every pending human verification", () => {
     const s = snap("full");
     s.tasks.forEach((task) => { if (["tp", "tv", "tv2"].includes(task.id)) task.autonomy = "on"; });
     const a = selectAttention(s, "h1");
-    expect(keys(a).every((k) => k.startsWith("request:"))).toBe(true);
-    expect(a.count).toBe(3);
+    expect(keys(a)).not.toContain("plan:tp");
+    expect(keys(a)).toContain("verify:tv");
+    expect(keys(a)).toContain("verify:tv2");
+    expect(a.count).toBe(4);
+    s.tasks.find((task) => task.id === "tv")!.status = "completed";
+    expect(keys(selectAttention(s, "h1"))).not.toContain("verify:tv");
   });
 
   it("escalated requests count even when targeted at an agent (GAP-04)", () => {

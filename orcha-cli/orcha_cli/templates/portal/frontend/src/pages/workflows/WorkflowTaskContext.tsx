@@ -5,6 +5,7 @@ import { Button } from "../../components/primitives/Button";
 import { StatusIcon } from "../../components/primitives";
 import { useSnapshot } from "../../state/SnapshotProvider";
 import { WorkflowEvidencePanel } from "./WorkflowEvidence";
+import { WorkflowTaskAcceptanceRecord } from "./WorkflowTaskAcceptanceRecord";
 import { hasWorkflowRoutes, WorkflowApiError, workflowPaths, workflowRequest, workflowWriteReason } from "./workflowApi";
 import type { WorkflowDetail, WorkflowTask } from "./workflowContract.generated";
 import "./workflows.css";
@@ -128,7 +129,8 @@ export function WorkflowTaskInspector({ taskId }: { taskId: string }) {
       {member.task.withdrawn_at && <p>Withdrawn by {snap?.agents.find((agent) => agent.id === member.task.withdrawn_by)?.alias ?? "Name unavailable"}: {member.task.withdrawn_reason ?? "Reason unavailable"}</p>}
       <p>Task autonomy {member.task.autonomy === "on" ? "ON" : "OFF"}. Only the human project owner can change it. Changes affect future actions.</p>
       <p>{member.task.autonomy === "on" ? "The agent may approve its plan and finished work." : "The plan and finished work need approval."} Holds, prerequisites, stop instructions and the human Finish action still apply.</p>
-      <p>Task autonomy changes and plan or result approval are unavailable until the task approval connection is ready.</p>
+      <WorkflowTaskAcceptanceRecord task={member.task} />
+      <p>Review finished results in the workflow task controls. Plan approval is a separate decision.</p>
       {workflowWriteReason(member.detail.capability, verified) && <p>{workflowWriteReason(member.detail.capability, verified)}</p>}
       {member.task.blockers.length > 0 && <ul aria-label="Workflow blockers">{member.task.blockers.map((b, i) => <li key={i}>{b.message}</li>)}</ul>}
       {member.task.display_state.warning && <p className="wf-warning">{member.task.display_state.warning}</p>}

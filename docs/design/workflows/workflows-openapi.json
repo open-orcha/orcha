@@ -280,6 +280,146 @@
         }
       }
     },
+    "/api/tasks/{tid}/accept": {
+      "post": {
+        "summary": "Workflow Task Accept",
+        "operationId": "workflow_task_accept_api_tasks__tid__accept_post",
+        "parameters": [
+          {
+            "name": "tid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AcceptTask"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowDetail"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "x-workflow-operation": "accept"
+      }
+    },
+    "/api/tasks/{tid}/approvals": {
+      "get": {
+        "summary": "Task Approvals",
+        "operationId": "task_approvals_api_tasks__tid__approvals_get",
+        "parameters": [
+          {
+            "name": "tid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskApprovalHistory"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "x-workflow-operation": "task_approvals"
+      }
+    },
+    "/api/tasks/{tid}/autonomy": {
+      "put": {
+        "summary": "Update Task Autonomy",
+        "operationId": "update_task_autonomy_api_tasks__tid__autonomy_put",
+        "parameters": [
+          {
+            "name": "tid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TaskAutonomyUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskAutonomyResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "x-workflow-operation": "task_autonomy"
+      }
+    },
     "/api/tasks/{tid}/dependencies": {
       "put": {
         "summary": "Edit Workflow Dependencies",
@@ -587,6 +727,56 @@
           }
         },
         "x-workflow-operation": "reissue_stop"
+      }
+    },
+    "/api/tasks/{tid}/reject": {
+      "post": {
+        "summary": "Workflow Task Reject",
+        "operationId": "workflow_task_reject_api_tasks__tid__reject_post",
+        "parameters": [
+          {
+            "name": "tid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TaskMutation"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowDetail"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "x-workflow-operation": "reject"
       }
     },
     "/api/tasks/{tid}/release-lost-worker": {
@@ -2167,6 +2357,164 @@
           "evidence"
         ],
         "title": "AcceptBasis"
+      },
+      "AcceptTask": {
+        "properties": {
+          "expected_revision": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Expected Revision"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Idempotency Key"
+          },
+          "reason": {
+            "type": "string",
+            "maxLength": 4000,
+            "title": "Reason",
+            "default": ""
+          },
+          "expected_work_revision": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Expected Work Revision"
+          },
+          "evidence": {
+            "$ref": "#/components/schemas/EvidenceReference"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "expected_revision",
+          "idempotency_key",
+          "expected_work_revision",
+          "evidence"
+        ],
+        "title": "AcceptTask"
+      },
+      "AcceptedEvidenceItem": {
+        "properties": {
+          "item_id": {
+            "type": "string",
+            "title": "Item Id"
+          },
+          "deliverable_id": {
+            "type": "string",
+            "title": "Deliverable Id"
+          },
+          "deliverable_version": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Deliverable Version"
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Sha256"
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "result_summary",
+                  "file_changes",
+                  "log_excerpt",
+                  "owner_result",
+                  "outside_result"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kind"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "worker",
+                  "owner",
+                  "outside",
+                  "cancelled_attempt",
+                  "released_attempt"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
+          },
+          "snapshot_phase": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "submission",
+                  "terminal"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Snapshot Phase"
+          },
+          "complete": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Complete"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "storage_state": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "readable",
+                  "missing",
+                  "corrupt",
+                  "missing_after_restore"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Storage State"
+          }
+        },
+        "type": "object",
+        "required": [
+          "item_id",
+          "deliverable_id",
+          "deliverable_version",
+          "sha256"
+        ],
+        "title": "AcceptedEvidenceItem"
       },
       "Activity": {
         "properties": {
@@ -3877,6 +4225,266 @@
         ],
         "title": "ReviewRound"
       },
+      "TaskAcceptance": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "work_revision": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Work Revision"
+          },
+          "actor_id": {
+            "type": "string",
+            "title": "Actor Id"
+          },
+          "actor_kind": {
+            "type": "string",
+            "enum": [
+              "human",
+              "ai"
+            ],
+            "title": "Actor Kind"
+          },
+          "actor_alias": {
+            "type": "string",
+            "title": "Actor Alias"
+          },
+          "autonomy_at_acceptance": {
+            "type": "string",
+            "enum": [
+              "off",
+              "on"
+            ],
+            "title": "Autonomy At Acceptance"
+          },
+          "autonomy_revision": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Autonomy Revision"
+          },
+          "acceptance_source": {
+            "type": "string",
+            "title": "Acceptance Source"
+          },
+          "evidence_set_id": {
+            "type": "string",
+            "title": "Evidence Set Id"
+          },
+          "evidence_items": {
+            "items": {
+              "$ref": "#/components/schemas/AcceptedEvidenceItem"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Evidence Items"
+          },
+          "accepted_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Accepted At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "work_revision",
+          "actor_id",
+          "actor_kind",
+          "actor_alias",
+          "autonomy_at_acceptance",
+          "autonomy_revision",
+          "acceptance_source",
+          "evidence_set_id",
+          "evidence_items",
+          "accepted_at"
+        ],
+        "title": "TaskAcceptance",
+        "description": "Immutable result acceptance for this exact task/work revision."
+      },
+      "TaskApprovalHistory": {
+        "properties": {
+          "task_id": {
+            "type": "string",
+            "title": "Task Id"
+          },
+          "approvals": {
+            "items": {
+              "$ref": "#/components/schemas/TaskApprovalRecord"
+            },
+            "type": "array",
+            "title": "Approvals"
+          }
+        },
+        "type": "object",
+        "required": [
+          "task_id",
+          "approvals"
+        ],
+        "title": "TaskApprovalHistory"
+      },
+      "TaskApprovalRecord": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "phase": {
+            "type": "string",
+            "enum": [
+              "plan",
+              "completion"
+            ],
+            "title": "Phase"
+          },
+          "work_revision": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Work Revision"
+          },
+          "requirements_sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Requirements Sha256"
+          },
+          "submission_sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Submission Sha256"
+          },
+          "actor_id": {
+            "type": "string",
+            "title": "Actor Id"
+          },
+          "actor_kind": {
+            "type": "string",
+            "enum": [
+              "human",
+              "ai"
+            ],
+            "title": "Actor Kind"
+          },
+          "actor_alias": {
+            "type": "string",
+            "title": "Actor Alias"
+          },
+          "autonomy_at_approval": {
+            "type": "string",
+            "enum": [
+              "off",
+              "on"
+            ],
+            "title": "Autonomy At Approval"
+          },
+          "autonomy_revision": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Autonomy Revision"
+          },
+          "permission_source": {
+            "type": "string",
+            "title": "Permission Source"
+          },
+          "approved_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Approved At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "phase",
+          "work_revision",
+          "requirements_sha256",
+          "submission_sha256",
+          "actor_id",
+          "actor_kind",
+          "actor_alias",
+          "autonomy_at_approval",
+          "autonomy_revision",
+          "permission_source",
+          "approved_at"
+        ],
+        "title": "TaskApprovalRecord"
+      },
+      "TaskAutonomyResult": {
+        "properties": {
+          "task_id": {
+            "type": "string",
+            "title": "Task Id"
+          },
+          "autonomy": {
+            "type": "string",
+            "enum": [
+              "off",
+              "on"
+            ],
+            "title": "Autonomy"
+          },
+          "autonomy_revision": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Autonomy Revision"
+          },
+          "changed": {
+            "type": "boolean",
+            "title": "Changed"
+          },
+          "changed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Changed At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "task_id",
+          "autonomy",
+          "autonomy_revision",
+          "changed"
+        ],
+        "title": "TaskAutonomyResult"
+      },
+      "TaskAutonomyUpdate": {
+        "properties": {
+          "autonomy": {
+            "type": "string",
+            "enum": [
+              "off",
+              "on"
+            ],
+            "title": "Autonomy"
+          },
+          "actor_agent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actor Agent Id",
+            "description": "Owner UUID fallback when verified proxy identity is unavailable"
+          }
+        },
+        "type": "object",
+        "required": [
+          "autonomy"
+        ],
+        "title": "TaskAutonomyUpdate",
+        "description": "Only the project owner may change a task's future approval authority."
+      },
       "TaskBatch": {
         "properties": {
           "expected_revision": {
@@ -4881,6 +5489,16 @@
               }
             ],
             "title": "Evidence State"
+          },
+          "acceptance": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TaskAcceptance"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "type": "object",

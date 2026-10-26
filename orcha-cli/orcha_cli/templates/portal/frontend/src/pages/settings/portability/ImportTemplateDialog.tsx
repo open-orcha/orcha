@@ -319,7 +319,7 @@ function PlanView({ preview, opts, loading, models, seatsId, prompts, setSection
             const lab = actionLabel(a.action, a.final_alias, a.alias);
             const choice = opts.collisions[a.alias];
             const meta = [a.role, a.model ? modelLabel(a.model, models) : null,
-              a.autonomy_override ? "autonomy: " + a.autonomy_override : null].filter(Boolean).join(" · ");
+              a.autonomy_override ? "historical autonomy: " + a.autonomy_override : null].filter(Boolean).join(" · ");
             return (
               <li key={a.alias} className="pt-row" data-action={a.action}>
                 <div className="pt-row-main">

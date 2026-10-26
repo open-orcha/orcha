@@ -1,18 +1,5 @@
-/**
- * #64 per-agent autonomy override UI (mig 043 + the mig-039 affordance gates)
- * — the tripwire teeth (cloud tests/test_iss64_autonomy_override.py):
- *   - explicit-null Inherit chip: "Inherit" PATCHes autonomy_override: null
- *     (clear-to-inherit), a level chip PATCHes the exact enum value;
- *   - the effective_autonomy badge: the desc always names the EFFECTIVE level;
- *   - the enforced lock glyph: an enforcing container parks the chips and says
- *     so (🔒), never misreading the live state;
- *   - gating: owner / manage_autonomy grant may edit; viewers and ungranted
- *     members see the state read-only (chips disabled);
- *   - graceful absence: an open backend that omits the exposure fields renders
- *     NO override control.
- */
+/** Historical project/agent autonomy never exposes an editing surface. */
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
-import { fireEvent } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { ToastProvider } from "../../components/ui";
@@ -92,10 +79,9 @@ function mount() {
 }
 
 const seg = (c: HTMLElement) => c.querySelector("#autOvrSeg") as HTMLElement | null;
-const chips = (c: HTMLElement) => Array.from(seg(c)?.querySelectorAll("button") ?? []) as HTMLButtonElement[];
 const patchCalls = () => calls.filter((c) => c.url === "/api/agents/a1" && c.init?.method === "PATCH");
 
-describe("#64 per-agent autonomy override segment (mig 043 + mig 039 gates)", () => {
+describe("historical per-agent autonomy is read-only", () => {
   beforeEach(() => {
     localStorage.clear();
     sessionStorage.clear();
@@ -107,113 +93,21 @@ describe("#64 per-agent autonomy override segment (mig 043 + mig 039 gates)", ()
     _setActingIdentity(null);
   });
 
-  it("renders the four chips + the EFFECTIVE badge; Inherit lit on a null override (open trust-off: acting human may edit)", async () => {
-    stubFetch(CLOUD_SNAPSHOT());
+  it.each([undefined, "owner", "member", "viewer"])("never exposes legacy authority to a %s reader", async (role) => {
+    if (role) extensions.identity = async () => ({ agent_id: "h1", alias: "kedar", member_role: role, grants: ["manage_autonomy"] }) as Identity;
+    stubFetch(CLOUD_SNAPSHOT({ enforced: true, a1_override: "full", a1_effective: "full" }));
     const { container } = mount();
-    await screen.findByText("Roster · 2");
-    await waitFor(() => expect(seg(container)).toBeTruthy());
-    expect(chips(container).map((b) => b.textContent)).toEqual(["Inherit", "Plan-only", "Build to PR", "Full"]);
-    const on = seg(container)!.querySelector("button.on");
-    expect(on?.textContent).toBe("Inherit"); // explicit-null inherit state
-    // the desc names the server-computed EFFECTIVE level
-    expect(container.textContent).toContain("Effective: Plan-only — inherits the container level");
-    chips(container).forEach((b) => expect(b.disabled).toBe(false)); // trust off → permissive affordance
+    await screen.findByText(/Autonomy is set on each task/);
+    expect(seg(container)).toBeNull();
+    expect(container.textContent).not.toContain("Effective: Full");
+    expect(container.querySelector("#awakeSeg")).not.toBeNull();
+    expect(patchCalls()).toEqual([]);
   });
-
-  it("graceful absence: an open backend without the exposure fields renders NO override control", async () => {
-    stubFetch(OPEN_SNAPSHOT);
-    const { container } = mount();
-    await screen.findByText("Roster · 2");
-    await waitFor(() => expect(container.querySelector("#awakeSeg")).toBeTruthy()); // controls card is up …
-    expect(seg(container)).toBeNull(); // … but no override segment
-    expect(container.textContent).not.toContain("autonomy override");
-  });
-
-  it("a level chip PATCHes the exact vanilla body to /api/agents/{id}", async () => {
-    stubFetch(CLOUD_SNAPSHOT());
-    const { container } = mount();
-    await screen.findByText("Roster · 2");
-    await waitFor(() => expect(seg(container)).toBeTruthy());
-    fireEvent.click(chips(container).find((b) => b.textContent === "Full")!);
-    await waitFor(() => expect(patchCalls()).toHaveLength(1));
-    expect(patchCalls()[0].init!.body).toBe(JSON.stringify({ actor_agent_id: "h1", autonomy_override: "full" }));
-    // optimistic: the badge names the overridden effective level immediately
-    expect(container.textContent).toContain("Effective: Full — per-agent override");
-  });
-
-  it("the Inherit chip PATCHes an EXPLICIT null (clear-to-inherit, never omitted)", async () => {
-    stubFetch(CLOUD_SNAPSHOT({ a1_override: "full", a1_effective: "full" }));
-    const { container } = mount();
-    await screen.findByText("Roster · 2");
-    await waitFor(() => expect(seg(container)).toBeTruthy());
-    expect(seg(container)!.querySelector("button.on")?.textContent).toBe("Full");
-    expect(container.textContent).toContain("Effective: Full — per-agent override");
-    fireEvent.click(chips(container).find((b) => b.textContent === "Inherit")!);
-    await waitFor(() => expect(patchCalls()).toHaveLength(1));
-    // the body carries the null EXPLICITLY — the backend's model_fields_set clear
-    expect(patchCalls()[0].init!.body).toBe(JSON.stringify({ actor_agent_id: "h1", autonomy_override: null }));
-    expect(String(patchCalls()[0].init!.body)).toContain('"autonomy_override":null');
-  });
-
-  it("re-clicking the active chip is a no-op (no PATCH)", async () => {
-    stubFetch(CLOUD_SNAPSHOT());
-    const { container } = mount();
-    await screen.findByText("Roster · 2");
-    await waitFor(() => expect(seg(container)).toBeTruthy());
-    fireEvent.click(chips(container).find((b) => b.textContent === "Inherit")!);
-    await new Promise((r) => setTimeout(r, 20));
-    expect(patchCalls()).toHaveLength(0);
-  });
-
-  it("enforced container: chips park disabled and the desc carries the lock glyph + honest copy", async () => {
-    stubFetch(CLOUD_SNAPSHOT({ enforced: true, a1_override: "full", a1_effective: "plan" }));
-    const { container } = mount();
-    await screen.findByText("Roster · 2");
-    await waitFor(() => expect(seg(container)).toBeTruthy());
-    chips(container).forEach((b) => expect(b.disabled).toBe(true));
-    // the parked override stays visible; the effective level is the container's
-    expect(seg(container)!.querySelector("button.on")?.textContent).toBe("Full");
-    expect(container.textContent).toContain("Effective: Plan-only — 🔒 container enforces its level for all agents (override ignored)");
-  });
-
-  it("mig 039 gating: a viewer sees the state read-only (chips disabled)", async () => {
-    extensions.identity = async () => ({ agent_id: "h1", alias: "kedar", member_role: "viewer" }) as Identity;
-    stubFetch(CLOUD_SNAPSHOT());
-    const { container } = mount();
-    await screen.findByText("Roster · 2");
-    await waitFor(() => expect(seg(container)).toBeTruthy());
-    await waitFor(() => expect(chips(container).every((b) => b.disabled)).toBe(true));
-    // still SEES the current override + effective level
-    expect(container.textContent).toContain("Effective: Plan-only");
-  });
-
-  it("mig 039 gating: a member without manage_autonomy is read-only; WITH the grant may edit; owners always may", async () => {
-    // ungranted member
-    extensions.identity = async () => ({ agent_id: "h1", member_role: "member", grants: ["manage_agents"] }) as Identity;
-    stubFetch(CLOUD_SNAPSHOT());
-    let view = mount();
-    await screen.findByText("Roster · 2");
-    await waitFor(() => expect(seg(view.container)).toBeTruthy());
-    await waitFor(() => expect(chips(view.container).every((b) => b.disabled)).toBe(true));
-    view.unmount();
-    _setActingIdentity(null);
-
-    // manage_autonomy holder
-    extensions.identity = async () => ({ agent_id: "h1", member_role: "member", grants: ["manage_autonomy"] }) as Identity;
-    stubFetch(CLOUD_SNAPSHOT());
-    view = mount();
-    await screen.findByText("Roster · 2");
-    await waitFor(() => expect(seg(view.container)).toBeTruthy());
-    await waitFor(() => expect(chips(view.container).every((b) => !b.disabled)).toBe(true));
-    view.unmount();
-    _setActingIdentity(null);
-
-    // owner (implicitly holds every grant)
-    extensions.identity = async () => ({ agent_id: "h1", member_role: "owner" }) as Identity;
-    stubFetch(CLOUD_SNAPSHOT());
-    view = mount();
-    await screen.findByText("Roster · 2");
-    await waitFor(() => expect(seg(view.container)).toBeTruthy());
-    await waitFor(() => expect(chips(view.container).every((b) => !b.disabled)).toBe(true));
+  it("an older server still retains ordinary wake and model controls", async () => {
+    stubFetch(OPEN_SNAPSHOT); const { container } = mount();
+    await waitFor(() => expect(container.querySelector("#awakeSeg")).not.toBeNull());
+    expect(seg(container)).toBeNull();
+    expect(container.querySelector("#modelSeg")).not.toBeNull();
+    expect(patchCalls()).toEqual([]);
   });
 });

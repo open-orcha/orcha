@@ -91,12 +91,12 @@ describe("D5 frame — one header area", () => {
     expect(main.getAttribute("tabindex")).toBe("-1"); // skip-link / programmatic focus target
   });
 
-  it("the execution chip shows ONE state word; the level lives in its label/tooltip", async () => {
+  it("the execution chip shows the observed wake state", async () => {
     mount(<Shell page="tasks" title="Tasks"><div /></Shell>);
     await waitFor(() => expect(document.getElementById("execBtn")).toBeTruthy());
     const btn = document.getElementById("execBtn")!;
     expect(btn.textContent).not.toContain("Plan-only");
-    expect(btn.getAttribute("aria-label")).toMatch(/^Execution — .* · Autonomy: Plan-only$/);
+    expect(btn.getAttribute("aria-label")).toMatch(/^Execution — /);
     expect(btn.getAttribute("title")).toBe(btn.getAttribute("aria-label"));
   });
 

@@ -5,14 +5,14 @@
  *                       never the first in-progress plan task in list order
  *   EXTRA (permissions) every locked per-agent autonomy override chip carries its own reason
  */
-import { cleanup, render, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { ToastProvider } from "../../components/ui";
 import { extensions, type Identity } from "../../extensions";
 import { SnapshotProvider, _setActingIdentity } from "../../state/SnapshotProvider";
 import type { Agent, Snapshot, Task } from "../../types";
-import { AgentsPage, OVR_ENFORCED_REASON, pickGatePlan } from "./AgentsPage";
+import { AgentsPage, pickGatePlan } from "./AgentsPage";
 import { Conversation } from "./Conversation";
 
 const fresh = () => new Date().toISOString();
@@ -152,38 +152,14 @@ describe("EXTRA: the gate callout speaks for the latest decision / a live gate",
   });
 });
 
-describe("EXTRA: locked autonomy override chips carry their own reason", () => {
-  it("member without manage_autonomy: every override chip is disabled and titled with the grant reason", async () => {
-    asIdentity({ member_role: "member", grants: [] });
-    stubFetch(SNAP([]));
-    const { container } = mount("/agents?agent=forge&tab=config");
-    await waitFor(() => expect(container.querySelectorAll("#autOvrSeg button").length).toBeGreaterThan(0));
-    await waitFor(() => expect(container.querySelector("#autOvrSeg button")!.getAttribute("title")).toContain("manage_autonomy"));
-    Array.from(container.querySelectorAll<HTMLButtonElement>("#autOvrSeg button")).forEach((b) => {
-      expect(b.disabled).toBe(true);
-      expect(b.getAttribute("title")).toContain("manage_autonomy");
-    });
-  });
-
-  it("viewer: the chips name the viewer reason", async () => {
-    asIdentity({ member_role: "viewer" });
-    stubFetch(SNAP([]));
-    const { container } = mount("/agents?agent=forge&tab=config");
-    await waitFor(() => expect(container.querySelector("#autOvrSeg button")?.getAttribute("title")).toContain("viewer"));
-  });
-
-  it("enforced project: the chips say the override is ignored (even for the owner)", async () => {
-    asIdentity({ member_role: "owner" });
+describe("Task-only authority replaces agent overrides", () => {
+  it.each(["owner", "member", "viewer"])("keeps legacy settings out of the %s configuration controls", async (role) => {
+    asIdentity({ member_role: role as "owner" | "member" | "viewer" });
     stubFetch(SNAP([], { autonomy_enforced: true }));
     const { container } = mount("/agents?agent=forge&tab=config");
-    await waitFor(() => expect(container.querySelector("#autOvrSeg button")?.getAttribute("title")).toBe(OVR_ENFORCED_REASON));
-  });
-
-  it("owner on an unenforced project: chips are enabled with no lock title", async () => {
-    asIdentity({ member_role: "owner" });
-    stubFetch(SNAP([]));
-    const { container } = mount("/agents?agent=forge&tab=config");
-    await waitFor(() => expect(Array.from(container.querySelectorAll<HTMLButtonElement>("#autOvrSeg button")).some((b) => !b.disabled)).toBe(true));
-    expect(container.querySelector("#autOvrSeg button")!.getAttribute("title")).toBeNull();
+    await screen.findByText(/Autonomy is set on each task/);
+    expect(container.querySelector("#autOvrSeg")).toBeNull();
+    expect(container.querySelector("#awakeSeg")).not.toBeNull();
+    expect(container.querySelector("#modelSeg")).not.toBeNull();
   });
 });

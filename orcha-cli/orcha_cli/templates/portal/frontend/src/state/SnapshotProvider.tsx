@@ -788,23 +788,8 @@ export function pendingPlan(t: Task): boolean {
   return t.status === "in_progress" && !t.plan_decision && !!planMessageOf(t);
 }
 
-/** An agent's EFFECTIVE autonomy (portal_backend/autonomy.py, the one rule):
- *  the server-computed value when present, else enforced → container level,
- *  else the agent's override, else the container level. */
-export function agentAutonomy(snap: Snapshot | null, a: Agent | null | undefined): string {
-  const lvl = autLevel(snap);
-  if (!a) return lvl;
-  if (a.effective_autonomy) return a.effective_autonomy;
-  if (snap?.container?.autonomy_enforced) return lvl;
-  return a.autonomy_override || lvl;
-}
-
-/** Is this task's plan actually gated on a human? pendingPlan (in_progress,
- *  undecided, an agent plan message) AND the plan author's — else the
- *  assignee's — effective autonomy is "plan". An agent running at pr/full
- *  (per-agent override) posts progress notes, not plans awaiting approval, so
- *  those tasks no longer over-flag as "plan waiting" (screen review). */
-export function planAwaitsHuman(snap: Snapshot | null, t: Task): boolean {
+/** Only task OFF/ON determines whether a posted plan awaits approval. */
+export function planAwaitsHuman(_snap: Snapshot | null, t: Task): boolean {
   return pendingPlan(t) && t.autonomy !== "on";
 }
 
