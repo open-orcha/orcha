@@ -40,6 +40,13 @@ def run_row(row: dict) -> dict:
         "output": row.get("output"),
         "failure_reason": failure_reason(row),
         "diff": row.get("diff"),
+        "details_pruned_at": (
+            row["details_pruned_at"].isoformat() if row.get("details_pruned_at") else None
+        ),
+        "details_state": (
+            "pruned" if row.get("details_pruned_at") else
+            "not_loaded" if "output" not in row or "diff" not in row else "full"
+        ),
         "kill_reason": row.get("kill_reason"),
         "started_at": (row["started_at"].isoformat() if row["started_at"] else None),
         "ended_at": row["ended_at"].isoformat() if row["ended_at"] else None,
@@ -54,6 +61,7 @@ def infer_agent_active_task(cur, aid: str) -> Optional[str]:
            JOIN agent_tasks at ON at.task_id = t.id
            WHERE at.agent_id=%s AND at.assignment_status IN ('assigned','accepted','working')
              AND t.status='in_progress' AND t.is_root = false
+             AND t.workflow_id IS NULL
            ORDER BY t.started_at DESC NULLS LAST, t.created_at DESC
            LIMIT 2""",
         (aid,),
@@ -106,7 +114,8 @@ def prune_old_run_detail(cur, agent_id) -> int:
     )
     tail_expr = sql.right("output", OUTPUT_TAIL_BYTES)
     cur.execute(
-        f"""UPDATE worker_runs SET diff=NULL, output={tail_expr}
+        f"""UPDATE worker_runs SET diff=NULL, output={tail_expr},
+                  details_pruned_at=COALESCE(details_pruned_at,now())
              WHERE {sql.in_list('run_id')}""",
         (sql.list_param(run_ids),),
     )

@@ -347,6 +347,10 @@ def _commit_version(tid, task, logical, kind, source, run, author, note, staging
     final = None
     try:
         with db_cursor() as (conn, cur):
+            # Share the task lock with workflow evidence allocation, including
+            # uploads to different paths: the per-task cap must be atomic.
+            cur.execute("SELECT id FROM tasks WHERE id=%s" + sql.for_update(), (tid,))
+            cur.fetchone()
             cur.execute(
                 "SELECT count(*) AS n FROM task_deliverables WHERE task_id=%s AND path<>%s",
                 (tid, logical),

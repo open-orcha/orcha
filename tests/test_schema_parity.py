@@ -70,7 +70,8 @@ def pg():
     with psycopg.connect(ADMIN_URL, autocommit=True) as admin:
         admin.execute(f'DROP DATABASE IF EXISTS "{PARITY_DB}" WITH (FORCE)')
         admin.execute(f'CREATE DATABASE "{PARITY_DB}"')
-    conn = psycopg.connect(ADMIN_URL.rsplit("/", 1)[0] + f"/{PARITY_DB}")
+    # Override only the database, preserving socket hosts and URL parameters.
+    conn = psycopg.connect(ADMIN_URL, dbname=PARITY_DB)
     for f in sorted(PG_DIR.glob("*.sql")):
         conn.execute(f.read_text())
     conn.commit()

@@ -27,6 +27,7 @@ uses), their embodiment tokens are revoked, and an audit event is logged.
 """
 
 from portal_backend import sql
+from portal_backend.workflow_evidence_service import terminalize_workflow_run_with_evidence
 from portal_backend.agent_status import log_event
 
 # Same threshold and reasoning as the heartbeat reaper (ISS-60B): longer than the
@@ -99,17 +100,17 @@ def reconcile_stranded_runs(cur, cid: str, orphan_secs: float, lane: str) -> lis
         (cid, lane, sql.ago(orphan_secs), sql.ago(orphan_secs + SANDBOX_STRANDED_EXTRA_SECS)),
     )
     stranded = cur.fetchall()
-    # SQLite has no data-modifying CTE: orphan them in a second statement of the same
-    # transaction, keeping only the rows this UPDATE actually flipped (status still running).
     orphaned = set()
-    if stranded:
-        cur.execute(
-            f"""UPDATE worker_runs SET status = 'orphaned', ended_at = now()
-               WHERE {sql.in_list('CAST(run_id AS TEXT)')} AND status = 'running'
-               RETURNING run_id""",
-            (sql.list_param([str(row["run_id"]) for row in stranded]),),
+    for row in sorted(stranded, key=lambda item: str(item["run_id"])):
+        # Recheck after another terminal path may have won the race. The shared
+        # service takes the workflow locks before touching the run itself.
+        cur.execute("SELECT status FROM worker_runs WHERE run_id=%s", (row["run_id"],))
+        if cur.fetchone()["status"] != "running":
+            continue
+        terminalize_workflow_run_with_evidence(
+            cur, row["run_id"], "orphaned", cause="stranded_run",
         )
-        orphaned = {str(row["run_id"]) for row in cur.fetchall()}
+        orphaned.add(str(row["run_id"]))
     rows = [row for row in stranded if str(row["run_id"]) in orphaned]
     run_ids = [str(row["run_id"]) for row in rows]
     if run_ids:

@@ -51,6 +51,8 @@ async def test_task_runs_summary_view_drops_output_and_diff(client, make_agent, 
     run = r.json()["runs"][0]
     assert run["run_id"] == run_id and run["status"] == "exited"
     assert run["output"] is None and run["diff"] is None
+    assert run["details_state"] == "not_loaded"
+    assert run["details_pruned_at"] is None
 
     bad = await client.get(f"/api/tasks/{task['id']}/runs?view=everything")
     assert bad.status_code == 422
@@ -73,6 +75,9 @@ async def test_finish_prunes_detail_beyond_newest_runs(client, make_agent, make_
         assert lines == 0 and row["diff"] is None
         assert row["output"].endswith("TAIL-MARKER") and len(row["output"]) == 4096
         assert row["input_tokens"] == 10 and row["status"] == "exited"
+    summary = (await client.get(f"/api/tasks/{task['id']}/runs?view=summary")).json()["runs"]
+    older = {r["run_id"]: r for r in summary}
+    assert all(older[rid]["details_state"] == "pruned" for rid in runs[:2])
     # the newest three keep everything
     for run_id in runs[2:]:
         row, lines = _detail(db, run_id)
