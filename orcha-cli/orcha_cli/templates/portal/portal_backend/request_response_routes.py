@@ -20,6 +20,7 @@ from portal_backend.review_routing import (
     pending_prereview_for_request as _pending_prereview_for_request,
 )
 from portal_backend.schemas.requests import RequestRespond
+from portal_backend.run_failure_backoff import failure_pause_status
 
 
 @app.get("/api/requests/{rid}")
@@ -162,5 +163,8 @@ def respond_request(rid: str, body: RequestRespond, request: Request):
                 else None,
             },
         )
+        # An answer never resumes a failure pause; say so instead of implying a wake.
+        paused = failure_pause_status(cur, rid)
         conn.commit()
-    return {"request_id": rid, "status": "answered", "unblocks_parent": unblocks_parent}
+    result = {"request_id": rid, "status": "answered", "unblocks_parent": unblocks_parent}
+    return {**result, "automatic_work": paused} if paused else result

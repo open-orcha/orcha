@@ -5,6 +5,9 @@ automatic work runs open the circuit until a human uses the existing release end
 No task state, event acknowledgements, or live processes are changed by this module.
 """
 
+import json
+from datetime import timezone
+
 from portal_backend import sql
 from portal_backend.agent_status import log_event
 from portal_backend.events import publish_event
@@ -55,7 +58,8 @@ def notify_failure(cur, cid, aid, state, error=None):
     payload = (
         f"{alias}'s automatic work is paused after {state['strikes']} consecutive failed runs. "
         f"Last error: {error or 'The worker failed without recording an error.'} "
-        "Fix the cause, then open Activity and choose Resume automatic work. Pending work is saved."
+        "Fix the cause, then choose Resume automatic work on this request or in Activity. "
+        "Answering or nudging alone does not resume it. Pending work is saved."
     )
     # Claim the notice atomically: two scans can observe the same unnotified pause.
     cur.execute("UPDATE wake_backoff SET notified_at=now() WHERE agent_id=%s AND wake_key=%s "
@@ -118,3 +122,90 @@ def apply_failure_backoff(cur, cid, candidates, *, notify=True):
                              failure_paused=state["strikes"] >= FAILURE_LIMIT,
                              retry_after=state["suppressed_until"])
     return candidates
+
+
+def _utc(value):
+    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value
+
+
+def _detail(value):
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except ValueError:
+            return {}
+    return value if isinstance(value, dict) else {}
+
+
+def failure_pause_notice(cur, rid):
+    """Resolve a pause notice to its agent and pause instance from server records only.
+
+    Only notify_failure writes the system audit row matched here, so notices sent before
+    this link existed resolve the same way and request text is never parsed. The pause
+    instance is the run_failure row that began before the notice was sent; a release
+    deletes that row, so a later pause cannot be resumed through an earlier notice.
+    state: paused (this notice's pause is active), resumed, or superseded (a newer pause).
+    """
+    cur.execute("SELECT container_id, requester_id, created_at FROM requests WHERE id=%s", (rid,))
+    notice = cur.fetchone()
+    if not notice:
+        return None
+    cur.execute(
+        "SELECT detail FROM events WHERE entity_type='request' AND entity_id=%s "
+        "AND event_type='created' AND actor_type='system'", (rid,),
+    )
+    aid = next((d.get("agent_id") for d in (_detail(row["detail"]) for row in cur.fetchall())
+                if d.get("reason") == "run_failure_breaker"), None)
+    if not aid or str(aid) != str(notice["requester_id"]):
+        return None
+    cur.execute("SELECT alias, container_id FROM agents WHERE id=%s", (aid,))
+    agent = cur.fetchone()
+    if not agent or str(agent["container_id"]) != str(notice["container_id"]):
+        return None
+    pause = failure_state(cur, aid)
+    if pause is None or pause["strikes"] < FAILURE_LIMIT:
+        state = "resumed"
+    elif _utc(pause["first_strike_at"]) <= _utc(notice["created_at"]):
+        state = "paused"
+    else:
+        state = "superseded"
+    return {"agent_id": str(aid), "alias": agent["alias"], "container_id": str(notice["container_id"]),
+            "state": state, "pause": pause}
+
+
+def failure_pause_status(cur, rid):
+    """What an answer or nudge must tell the human about a still-active pause."""
+    notice = failure_pause_notice(cur, rid)
+    if not notice or notice["state"] != "paused":
+        return None
+    return {
+        "paused": True,
+        "agent_id": notice["agent_id"],
+        "message": (f"Saved, but {notice['alias']}'s automatic work is still paused and it will not "
+                    "start. Choose Resume automatic work when the cause is fixed."),
+        "resume_path": f"/api/requests/{rid}/resume-automatic-work",
+    }
+
+
+def resume_from_notice(cur, rid, actor_id):
+    """Clear only the pause this notice reported. Requests, events, acknowledgements,
+    budgets, stop controls, other pacing rows and task state are left as they are."""
+    notice = failure_pause_notice(cur, rid)
+    if notice is None:
+        return None
+    # Serialize with record_run_outcome (SQLite already holds BEGIN IMMEDIATE), then re-read.
+    cur.execute("SELECT id FROM agents WHERE id=%s" + sql.for_update(), (notice["agent_id"],))
+    notice = failure_pause_notice(cur, rid)
+    if notice["state"] != "paused":
+        return {**notice, "resumed": False}
+    # The agent lock is held and the instance was re-verified above.
+    cur.execute(
+        "DELETE FROM wake_backoff WHERE agent_id=%s AND wake_key=%s AND strikes >= %s RETURNING strikes",
+        (notice["agent_id"], FAILURE_KEY, FAILURE_LIMIT),
+    )
+    deleted = cur.fetchone()
+    if deleted:
+        log_event(cur, notice["container_id"], "human", actor_id, "agent", notice["agent_id"],
+                  "wake_backoff_released",
+                  {"wake_key": FAILURE_KEY, "strikes_at_release": deleted["strikes"], "request_id": rid})
+    return {**notice, "state": "resumed" if deleted else notice["state"], "resumed": deleted is not None}

@@ -14,6 +14,7 @@ from portal_backend.guards import (
 )
 from portal_backend.identity_routes import trusted_actor as _trusted_actor
 from portal_backend.request_lookup import require_request
+from portal_backend.run_failure_backoff import failure_pause_status
 from portal_backend.schemas.requests import NudgeBody
 
 
@@ -188,11 +189,14 @@ def nudge_request(rid: str, body: NudgeBody, request: Request):
             "nudged",
             {"by_human": True, "role": role},
         )
+        # The prompt is saved, but a failure-paused agent will not start until resumed.
+        paused = failure_pause_status(cur, rid)
         conn.commit()
-    return {
+    result = {
         "request_id": rid,
         "status": status,
         "nudged": True,
         "nudged_role": role,
         "nudged_agent_id": recipient_id,
     }
+    return {**result, "automatic_work": paused} if paused else result

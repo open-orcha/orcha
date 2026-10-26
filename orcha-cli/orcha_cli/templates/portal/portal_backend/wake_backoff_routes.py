@@ -16,7 +16,8 @@ from portal_backend.database import db_cursor
 from portal_backend.guards import require_agent, require_container, require_kind, valid_uuid
 from portal_backend.identity_routes import enforce_grant, require_member_read, trusted_actor
 from portal_backend.schemas.agent_state import WakeBackoffRelease
-from portal_backend.run_failure_backoff import FAILURE_KEY, FAILURE_LIMIT
+from portal_backend.request_lookup import require_request
+from portal_backend.run_failure_backoff import FAILURE_KEY, FAILURE_LIMIT, resume_from_notice
 
 
 @app.get("/api/containers/{cid}/wake-backoff")
@@ -106,3 +107,29 @@ def release_wake_backoff(
         "wake_key": wake_key,
         "released": deleted is not None,
     }
+
+
+@app.post("/api/requests/{rid}/resume-automatic-work", status_code=200)
+def resume_automatic_work(rid: str, request: Request, body: Optional[WakeBackoffRelease] = None):
+    """Resume work paused by repeated failed runs, from the pause notice itself.
+
+    Same human authority as the release valve above. Clears only the pause this notice
+    reported; a retry after it is cleared is a no-op, and an earlier notice cannot clear a
+    newer pause. Answering or nudging the notice never does this."""
+    if not valid_uuid(rid):
+        raise HTTPException(400, "request_id is not a valid UUID")
+    with db_cursor() as (conn, cur):
+        cid = str(require_request(cur, rid)["container_id"])
+        enforce_grant(cur, request, cid, "manage_autonomy")
+        actor_agent_id = trusted_actor(cur, request, cid, body.actor_agent_id if body else None)
+        require_kind(cur, actor_agent_id, ("human",))
+        if str(require_agent(cur, actor_agent_id)["container_id"]) != cid:
+            raise HTTPException(403, "actor belongs to a different project")
+        outcome = resume_from_notice(cur, rid, actor_agent_id)
+        if outcome is None:
+            raise HTTPException(409, "this request is not an automatic-work pause notice")
+        if outcome["state"] == "superseded":
+            raise HTTPException(409, "a newer pause replaced this one; resume from the newer notice")
+        conn.commit()
+    return {"request_id": rid, "agent_id": outcome["agent_id"], "state": outcome["state"],
+            "resumed": outcome["resumed"]}
