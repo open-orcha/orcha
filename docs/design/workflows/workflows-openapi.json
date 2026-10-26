@@ -326,7 +326,8 @@
               }
             }
           }
-        }
+        },
+        "x-workflow-operation": "dependencies"
       }
     },
     "/api/tasks/{tid}/external-result": {
@@ -434,7 +435,8 @@
               }
             }
           }
-        }
+        },
+        "x-workflow-operation": "withdraw_evidence"
       }
     },
     "/api/tasks/{tid}/hold": {
@@ -1495,7 +1497,8 @@
               }
             }
           }
-        }
+        },
+        "x-workflow-operation": "accept_objective"
       }
     },
     "/api/workflows/{wid}/pause": {
@@ -1743,7 +1746,8 @@
               }
             }
           }
-        }
+        },
+        "x-workflow-operation": "resolve_loop"
       }
     },
     "/api/workflows/{wid}/review-rounds": {
