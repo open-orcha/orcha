@@ -994,6 +994,17 @@ class WorkflowService:
         )
         if self.cur.rowcount:
             targets = [w["owner_human_id"]]
+            verifier = (
+                self.one("SELECT reviewer_agent_id FROM tasks WHERE id=%s", (subject,))
+                if subject != "workflow"
+                else None
+            )
+            if verifier and verifier["reviewer_agent_id"]:
+                # §14.7: task notices go to the task's verifier where set. Attention
+                # notices name owner-only decisions, so the owner keeps those too.
+                targets = [str(verifier["reviewer_agent_id"])] + (
+                    targets if kind == "workflow_attention" else []
+                )
             if kind == "task_ready":
                 targets = [
                     a["agent_id"]

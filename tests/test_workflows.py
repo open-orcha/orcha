@@ -724,6 +724,40 @@ def test_lost_release_warning_is_permanent_and_list_mark_clears():
     assert shown["warning"] and not shown["list_warning"]
 
 
+def test_task_notices_go_to_the_verifier_where_set(setup_workflow, monkeypatch):
+    cid, actor, worker, other, hooks, execute = setup_workflow
+    sent = []
+    monkeypatch.setattr(
+        ws, "publish_event", lambda cur, c, aid, kind, data: sent.append((str(aid), kind))
+    )
+    w = prepare_and_start(setup_workflow, create(setup_workflow))
+    checked, plain = w["tasks"][0]["id"], w["tasks"][1]["id"]
+    with db_cursor() as (_, cur):
+        cur.execute(
+            "UPDATE tasks SET reviewer_agent_id=%s WHERE id=%s", (other, checked)
+        )
+    sent.clear()
+    submit_result(setup_workflow, w, checked)
+    awaiting = [aid for aid, kind in sent if kind == "workflow_task_awaiting_acceptance"]
+    assert awaiting == [str(other)]
+    with db_cursor() as (_, cur):
+        svc = ws.WorkflowService(cur, hooks)
+        wf = svc.workflow(w["id"])
+        sent.clear()
+        svc.notice(wf, "workflow_attention", checked, 99)
+        # Attention names an owner-only decision: the owner keeps it too.
+        assert sorted(sent) == sorted(
+            [(str(other), "workflow_attention"), (str(actor.id), "workflow_attention")]
+        )
+        sent.clear()
+        svc.notice(wf, "workflow_task_awaiting_acceptance", plain, 99)
+        svc.notice(wf, "workflow_ready_to_finish", "workflow", 99)
+        assert sent == [
+            (str(actor.id), "workflow_task_awaiting_acceptance"),
+            (str(actor.id), "workflow_ready_to_finish"),
+        ]
+
+
 def test_withdraw_cannot_remove_last_or_accepted_task(setup_workflow):
     w = create(setup_workflow, count=1)
     _, tasks, _ = actions_for(setup_workflow, w["id"], setup_workflow[1])
