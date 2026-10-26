@@ -79,9 +79,12 @@ APP_TABLES = [
 
 
 def _bootstrap_database() -> None:
-    """Drop+recreate the test DB, load 001_init.sql, then apply incremental
-    migrations (002+) — so the test schema matches a live DB after `orcha up`
-    runs the R1 migration runner, not just the initdb baseline."""
+    """Drop+recreate the test DB and load the initdb-owned baseline.
+
+    The production runner applies and records every incremental migration after the
+    database module is imported below.  Keeping bootstrap limited to 001 makes the
+    test database follow the same ownership boundary as ``orcha up``.
+    """
     import psycopg
 
     with psycopg.connect(ADMIN_URL, autocommit=True) as conn:
@@ -89,12 +92,6 @@ def _bootstrap_database() -> None:
         conn.execute(f'CREATE DATABASE "{TEST_DB}"')
     with psycopg.connect(TEST_URL) as conn:
         conn.execute(SCHEMA_SQL.read_text())
-        # Apply every migration past the 001 baseline, in lexical order, exactly as
-        # the portal's run_migrations() does on a live stack.
-        for sql_file in sorted(MIGRATIONS_DIR.glob("0*.sql")):
-            if sql_file.name == SCHEMA_SQL.name:
-                continue
-            conn.execute(sql_file.read_text())
         conn.commit()
 
 
@@ -115,8 +112,9 @@ sys.path.insert(0, str(PORTAL_DIR))
 sys.path.insert(0, str(REPO / "orcha-cli"))
 from portal_backend import database, sql  # noqa: E402  (must follow the env + path setup above)
 
-if BACKEND == "sqlite":
-    database.run_migrations()  # the real runner, on the shipped SQLite baseline
+# Use the real runner on both backends so the schema and its migration ledger cannot
+# drift apart. PostgreSQL records 001 as the existing initdb baseline, then applies 002+.
+database.run_migrations()
 import main  # noqa: E402
 
 
@@ -334,11 +332,19 @@ def schema_migrations_hidden():
     finally:
         execute("DROP TABLE IF EXISTS schema_migrations")
         if existed:
-            execute(
-                "CREATE TABLE schema_migrations ("
-                "version TEXT PRIMARY KEY, "
-                "applied_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP)"
-            )
+            if BACKEND == "postgres":
+                execute(
+                    "CREATE TABLE schema_migrations ("
+                    "version TEXT PRIMARY KEY, "
+                    "applied_at TIMESTAMPTZ NOT NULL DEFAULT now())"
+                )
+            else:
+                execute(
+                    "CREATE TABLE schema_migrations ("
+                    "version TEXT PRIMARY KEY NOT NULL, "
+                    "applied_at TIMESTAMPTZ NOT NULL DEFAULT "
+                    f"{sql.now_text_default()})"
+                )
             for row in rows:
                 execute(
                     "INSERT INTO schema_migrations(version, applied_at) VALUES (%s, %s)",

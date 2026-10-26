@@ -10,8 +10,20 @@ def _rows(statement):
         return cur.fetchall()
 
 
+def _schema_signature():
+    if database.BACKEND == "postgres":
+        return _rows(
+            "SELECT column_name, data_type, is_nullable, column_default "
+            "FROM information_schema.columns "
+            "WHERE table_schema='public' AND table_name='schema_migrations' "
+            "ORDER BY ordinal_position"
+        )
+    return _rows("PRAGMA table_info(schema_migrations)")
+
+
 def test_hiding_migration_ledger_restores_exact_rows():
     before = _rows("SELECT version, applied_at FROM schema_migrations ORDER BY version")
+    schema_before = _schema_signature()
     assert before
 
     with schema_migrations_hidden():
@@ -23,3 +35,4 @@ def test_hiding_migration_ledger_restores_exact_rows():
     assert _rows(
         "SELECT version, applied_at FROM schema_migrations ORDER BY version"
     ) == before
+    assert _schema_signature() == schema_before
