@@ -253,10 +253,12 @@ class WorkflowService:
         if self.live_turn(tid):
             conflict("reservation_live", "Wait for the existing turn to be released.")
 
-    def live_turn(self, tid):
+    def live_turn(self, tid, lock=False):
+        # lock=True only after the workflow and task locks (workflow -> task -> reservation).
         return self.one(
             "SELECT * FROM workflow_executions WHERE task_id=%s AND state IN "
-            "('reserved','running','awaiting_review','stopping','recovery_needed')",
+            "('reserved','running','awaiting_review','stopping','recovery_needed')"
+            + (sql.for_update() if lock else ""),
             (tid,),
         )
 
@@ -728,6 +730,14 @@ class WorkflowService:
                             or live["work_revision"] != task["work_revision"]
                             or not live["current_evidence_set_id"],
                             "evidence_version_stale",
+                        ),
+                        (
+                            bool(live) and live["evidence_state"] == "missing",
+                            "evidence_missing",
+                        ),
+                        (
+                            bool(live) and live["evidence_state"] != "saved",
+                            "evidence_not_saved",
                         ),
                     ),
                     task=task,
@@ -1908,7 +1918,7 @@ class WorkflowService:
         t = self.task(w["id"], tid, b["expected_work_revision"])
         if t["status"] != "needs_verification":
             conflict("not_awaiting_review", "This task is not awaiting review.")
-        e = self.live_turn(tid)
+        e = self.live_turn(tid, lock=True)
         if (
             not e
             or e["work_revision"] != t["work_revision"]
@@ -1917,6 +1927,10 @@ class WorkflowService:
             conflict(
                 "evidence_version_stale", "Refresh the current result and evidence."
             )
+        if e["evidence_state"] == "missing":
+            conflict("evidence_missing", "Evidence is missing - add it before accepting.")
+        if e["evidence_state"] != "saved":
+            conflict("evidence_not_saved", "The evidence for this result is not saved yet.")
         self._record_acceptance(t, actor, b["evidence"])
         self.cur.execute(
             "UPDATE tasks SET status='completed',completed_at=%s,awaiting_owner_decision=NULL,owner_decision_at=NULL WHERE id=%s",
@@ -1952,7 +1966,7 @@ class WorkflowService:
         )
 
     def _stop(self, w, t, actor, origin, reason):
-        e = self.live_turn(t["id"])
+        e = self.live_turn(t["id"], lock=True)
         if not e:
             return
         if e["source_kind"] == "evidence_review" or e["worker_stopped_at"]:
@@ -2064,7 +2078,8 @@ class WorkflowService:
         if w["status"] == "completed":
             conflict("workflow_completed", "Completed workflows are read-only.")
         t = self.task(w["id"], tid, b["expected_work_revision"])
-        e = self.live_turn(tid)
+        # Decide against the current deadline under the reservation lock (§17.2).
+        e = self.live_turn(tid, lock=True)
         if not e:
             conflict("already_released", "This turn has already been released.")
         deadline = release_deadline(e)
@@ -2072,7 +2087,7 @@ class WorkflowService:
             conflict(
                 "release_not_yet_available",
                 "The worker has not been silent long enough.",
-                release_available_at=str(deadline) if deadline else None,
+                release_available_at=sql.ts(deadline) if deadline else None,
             )
         # Integration MUST terminalize/capture evidence and fence before releasing capacity.
         self.hooks.request_stop(self.cur, e, actor, "lost_release", b["reason"])
@@ -2098,7 +2113,7 @@ class WorkflowService:
         if w["status"] == "completed":
             conflict("workflow_completed", "Completed workflows are read-only.")
         t = self.task(w["id"], tid, b["expected_work_revision"])
-        e = self.live_turn(tid)
+        e = self.live_turn(tid, lock=True)
         if not e or e["state"] != "stopping":
             conflict("stop_not_pending", "There is no unconfirmed stop to send again.")
         self.hooks.request_stop(self.cur, e, actor, "recovery_reissue", b["reason"])
