@@ -38,6 +38,7 @@ beforeEach(() => {
   window.scrollTo = vi.fn();
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
+      if (url === "/openapi.json") return jsonRes({ paths: {} });
     if (url === "/api/containers") return jsonRes([{ id: "c1", status: "active" }]);
     if (url.endsWith("/project-profile")) {
       return jsonRes({ container_id: "c1", mode: MODE, dod_presets: [], template_key: null, template_name: null, last_applied_at: null });

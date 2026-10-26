@@ -1,3 +1,4 @@
+import { WorkflowTaskStatus, useTaskWorkflow } from "../workflows/WorkflowTaskContext";
 /**
  * Tasks list + board (Linear "My issues" / "Agent tasks", directives D5/D8/D12).
  *
@@ -27,7 +28,7 @@ import { agentByAlias, planAwaitsHuman, useSnapshot } from "../../state/Snapshot
 import { Icon } from "../../components/ui";
 import { Button, Menu, MenuButton, Popover, Row, isEditingTarget, moveRowFocus, type MenuItemSpec } from "../../components/primitives";
 import { Avatar, AvatarStack, type AvatarActor } from "../../components/primitives";
-import { StatusGlyph, StatusIcon } from "../../components/primitives";
+import { StatusGlyph } from "../../components/primitives";
 import { PriorityGlyph, PriorityIcon, priorityLevel } from "../../components/primitives";
 import { Chip } from "../../components/primitives";
 import { LivePill } from "../../components/primitives";
@@ -209,20 +210,21 @@ export function TaskRow({ t, snap, selected, onSelect, compact, groupedBy, revie
   menu?: RowMenuItems | null;
 }) {
   const act = latestActivity(t);
-  const chips = taskChips(snap, t, { reviewOn, level }).slice(0, phone ? 1 : 2);
+  const { member } = useTaskWorkflow(t.id);
+  const chips = member ? [<Chip key="workflow" size="sm">{member.detail.title} · Autonomy {member.task.autonomy === "on" ? "ON" : "OFF"}</Chip>] : taskChips(snap, t, { reviewOn, level }).slice(0, phone ? 1 : 2);
   const hideWho = groupedBy === "assignee" && assigneesOf(t).length <= 1;
   return (
     <Row
       id={t.id}
-      className={"trow tl-row" + (compact ? " is-compact" : "")}
+      className={"trow tl-row" + (compact ? " is-compact" : "") + (member ? " is-workflow-row" : "")}
       selected={selected}
       onActivate={() => onSelect(t.id)}
       title={act.text ? t.title + "\n" + act.text + (act.at ? " · " + relTime(act.at) : "") : t.title}
     >
       <PriorityIcon priority={t.priority} className="tl-prio" />
       <span className="tl-id">{shortId(t.id)}</span>
-      <StatusIcon status={t.status} className="tl-st" />
-      <span className="tl-title">{t.title}</span>
+      {!member && <WorkflowTaskStatus taskId={t.id} fallback={t.status} className="tl-st" />}
+      <span className="tl-title">{t.title}{member && <WorkflowTaskStatus taskId={t.id} fallback={t.status} className="wf-task-label" showLabel />}</span>
       {chips.length ? <span className="tl-chips">{chips}</span> : null}
       <span className="tl-who">
         <Who snap={snap} t={t} hide={hideWho} />
@@ -341,6 +343,7 @@ export function TaskBoard({ tasks, selected, onSelect, snap, reviewOn, level, st
   /** New task (shown as the Ready column's "+"; new tasks start there) */
   onAdd?: () => void;
 }) {
+  const { index: workflows } = useTaskWorkflow(null);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const narrowBoard = useMedia("(max-width: 700px)");
   const [pref, setPref] = useState<Record<string, boolean>>(readBoardHidden);
@@ -401,7 +404,8 @@ export function TaskBoard({ tasks, selected, onSelect, snap, reviewOn, level, st
                 const lv = priorityLevel(x.priority);
                 const actors = actorsOf(snap, x);
                 const working = taskIsWorking(snap, x);
-                const chips = taskChips(snap, x, { reviewOn, level });
+                const member = workflows?.members.get(x.id);
+                const chips = member ? <Chip size="sm">{member.detail.title} · Autonomy {member.task.autonomy === "on" ? "ON" : "OFF"}</Chip> : taskChips(snap, x, { reviewOn, level });
                 return (
                   <BoardCard
                     key={x.id}
@@ -417,7 +421,7 @@ export function TaskBoard({ tasks, selected, onSelect, snap, reviewOn, level, st
                         <span className="tl-noone is-sm" title="Unassigned"><span className="v2-sr">Unassigned</span></span>
                       )
                     }
-                    glyph={<StatusGlyph status={x.status} />}
+                    glyph={<WorkflowTaskStatus taskId={x.id} fallback={x.status} />}
                     title={x.title}
                     label={x.title}
                     chips={
@@ -426,6 +430,7 @@ export function TaskBoard({ tasks, selected, onSelect, snap, reviewOn, level, st
                           <span className="v2-sr">{lv} priority</span>
                         </Chip>
                         {chips}
+                        {member && <WorkflowTaskStatus taskId={x.id} fallback={x.status} showLabel />}
                       </>
                     }
                     selected={x.id === selected}

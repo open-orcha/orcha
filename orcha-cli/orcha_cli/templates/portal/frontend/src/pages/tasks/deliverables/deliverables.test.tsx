@@ -105,6 +105,7 @@ beforeEach(() => {
     "fetch",
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
+      if (url === "/openapi.json") return jsonRes({ paths: {} });
       const method = (init && init.method) || "GET";
       calls.push({ url, method, body: init?.body });
       if (url === "/api/containers") return jsonRes([{ id: "c1", status: "active" }]);

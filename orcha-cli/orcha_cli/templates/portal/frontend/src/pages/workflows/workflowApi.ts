@@ -165,3 +165,9 @@ export function workflowLabel(workflow: WorkflowDetail): string {
   if (workflow.status === "active" && workflow.completion.can_finish) return "Ready to finish";
   return { active: "Active", paused: "Paused", completed: "Completed", cancelled: "Cancelled" }[workflow.status];
 }
+
+export function hasWorkflowRoutes(spec: unknown): boolean {
+  if (!spec || typeof spec !== "object" || !("paths" in spec) || !spec.paths || typeof spec.paths !== "object") throw new Error("OpenAPI paths unavailable");
+  return Object.entries(spec.paths).some(([path, operations]) => /^\/api\/containers\/\{[^}]+\}\/workflows$/.test(path)
+    && operations !== null && typeof operations === "object" && "get" in operations);
+}

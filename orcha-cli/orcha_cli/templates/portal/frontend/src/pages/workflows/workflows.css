@@ -42,3 +42,15 @@
 .wf-page section, .wf-page details { overflow-wrap: anywhere; }
 .wf-page details > summary { padding: 12px 0; cursor: pointer; }
 .wf-page pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+
+.wf-task-context { margin-block: 16px; overflow-wrap: anywhere; }
+.wf-task-context:empty { display: none; }
+.wf-task-context h2 { font-size: 1rem; }
+.wf-task-context .v2-btn { min-height: 44px; height: auto; white-space: normal; }
+.td-meta:has(.wf-task-state) { flex-wrap: wrap; white-space: normal; }
+.wf-task-state { min-width: 0; white-space: normal; overflow-wrap: anywhere; }
+.tl-row.v2-row.is-workflow-row { height: auto; min-height: 44px; padding-block: 8px; }
+.tl-row.is-workflow-row .tl-title { white-space: normal; overflow-wrap: anywhere; }
+.wf-task-label { display: block; font-weight: 400; font-size: .85em; color: var(--v2-text-2); white-space: normal; }
+.tl-row.is-workflow-row .tl-chips { max-width: 40%; white-space: normal; }
+.tl-row.is-workflow-row .tl-chips .v2-chip { white-space: normal; height: auto; overflow-wrap: anywhere; }

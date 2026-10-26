@@ -53,6 +53,7 @@ beforeEach(() => {
   window.scrollTo = vi.fn();
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
+      if (url === "/openapi.json") return jsonRes({ paths: {} });
     if (url === "/api/containers") return jsonRes([{ id: "c1", status: "active" }]);
     if (url === "/api/containers/c1/budgets") return jsonRes(BUDGETS);
     if (url.startsWith("/api/containers/c1")) return jsonRes(SNAP);

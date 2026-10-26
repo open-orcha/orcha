@@ -67,6 +67,7 @@ beforeEach(() => {
     "fetch",
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
+      if (url === "/openapi.json") return jsonRes({ paths: {} });
       const method = (init && init.method) || "GET";
       let body: unknown = undefined;
       if (init && typeof init.body === "string") {

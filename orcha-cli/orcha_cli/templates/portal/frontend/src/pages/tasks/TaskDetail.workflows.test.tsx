@@ -1,0 +1,124 @@
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { ToastProvider } from "../../components/ui";
+import { SnapshotProvider } from "../../state/SnapshotProvider";
+import { exampleTask, exampleWorkflow, jsonResponse, workflowSpec, writeCapability } from "../workflows/workflowTestFixtures";
+import type { WorkflowDetail, WorkflowTaskEvidence } from "../workflows/workflowContract.generated";
+import { TasksPage } from "./TasksPage";
+import { NeedsPage, _resetNeedsHistory } from "../needs/NeedsPage";
+
+let workflow: WorkflowDetail;
+let taskStatus: string;
+let legacyAutonomy: string;
+let readsFail = false;
+let writes: string[];
+const evidence: WorkflowTaskEvidence = {
+  task_id: "build", workflow_id: "release", current_evidence_set_id: "saved", next_before_revision: null,
+  sets: [{ evidence_set_id: "saved", task_id: "build", workflow_id: "release", workflow_execution_id: "execution", run_id: "run", work_revision: 3, result_revision: 2,
+    source_sequence: 1, generation: 1, state: "saved", purpose: "acceptance", missing_reason: null, terminal_cause: null, created_at: "2026-10-25T10:00:00Z", frozen_at: "2026-10-25T10:01:00Z", source_revision: null,
+    items: [{ item_id: "item", deliverable_id: "result", deliverable_version: 2, sha256: "a".repeat(64), kind: "result_summary", source: "worker", snapshot_phase: "terminal", complete: true, note: null, storage_state: "readable" }] }],
+};
+beforeEach(() => {
+  _resetNeedsHistory();
+  taskStatus = "not_ready"; legacyAutonomy = "full"; readsFail = false; writes = [];
+  workflow = exampleWorkflow({ evidence_capability: { available: true, reason: null }, tasks: [exampleTask({ current_evidence_set_id: "saved", evidence_state: "saved" })] });
+  window.scrollTo = vi.fn();
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (init?.method && init.method !== "GET") { writes.push(url); return jsonResponse({}); }
+    if (url === "/openapi.json") return jsonResponse(workflowSpec);
+    if (url.endsWith("/workflows/capability")) return jsonResponse(writeCapability);
+    if (url.startsWith("/api/containers/project/workflows")) return jsonResponse(readsFail ? {} : { capability: writeCapability, workflows: [workflow] }, readsFail ? 503 : 200);
+    if (url === "/api/workflows/release/tasks/build/evidence") return jsonResponse(evidence);
+    if (url === "/api/containers") return jsonResponse([{ id: "project", name: "Orcha", status: "active" }]);
+    if (url.startsWith("/api/containers/project")) return jsonResponse({
+      container: { id: "project", name: "Orcha", status: "active", autonomy_level: legacyAutonomy },
+      agents: [{ id: "kedar", alias: "Kedar", kind: "human", status: "idle" }, { id: "andrew", alias: "Andrew", kind: "ai", status: "working", autonomy_override: "full" }],
+      tasks: [{ id: "build", title: "Build Android", status: taskStatus, priority: 100, assignees: ["Andrew"], created_by_agent_id: "kedar", created_at: "2026-10-25T10:00:00Z", definition_of_done: "Pairing checks pass", result: "Build checks passed", message_summary: { count: 0, last: null } }], requests: [],
+    });
+    if (url.endsWith("/messages")) return jsonResponse({ messages: [] });
+    if (url.endsWith("/runs")) return jsonResponse([{ run_id: "run", status: "running", agent: "Andrew", started_at: "2026-10-25T10:00:00Z" }]);
+    return jsonResponse({});
+  }));
+});
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); localStorage.clear(); sessionStorage.clear(); });
+function page(entry = "/tasks?cid=project&task=build&full=1") {
+  return render(<ToastProvider><SnapshotProvider><MemoryRouter initialEntries={[entry]}>{entry.startsWith("/needs") ? <NeedsPage /> : <TasksPage />}</MemoryRouter></SnapshotProvider></ToastProvider>);
+}
+it("shows server status and task OFF while replacing standalone hold, assign and cancellation controls", async () => {
+  page(); const context = await screen.findByRole("region", { name: "Task workflow" });
+  await within(context).findByRole("link", { name: "Mobile release" });
+  expect(within(context).getByText(/Task autonomy OFF/)).toBeVisible();
+  expect(within(context).getByRole("list", { name: "Workflow blockers" })).toHaveTextContent("Waiting for Start");
+  expect(within(context).getByText(/Prepared · waiting for Start/)).toBeVisible();
+  expect(screen.queryByRole("button", { name: /Reassign & wake/ })).toBeNull();
+  expect(screen.queryByRole("button", { name: /Cancel task/ })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Task actions" }));
+  const menu = await screen.findByRole("menu", { name: "Task actions" });
+  expect(within(menu).queryByText("Release hold")).toBeNull();
+  expect(within(menu).queryByText("Unassign…")).toBeNull();
+  expect(within(menu).queryByText("Cancel task…")).toBeNull();
+  expect(within(menu).getByText("Open workflow task controls")).toBeVisible();
+  expect(writes).toEqual([]);
+});
+it("opens saved evidence before diagnostics and keeps legacy result acceptance unavailable", async () => {
+  taskStatus = "needs_verification";
+  page(); const link = await screen.findByRole("link", { name: "Result summary — version 2" });
+  expect(link).toHaveAttribute("href", "/api/tasks/build/deliverables/result/versions/2/raw");
+  expect(link.compareDocumentPosition(screen.getByRole("tablist", { name: "Task sections" })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(screen.queryByRole("region", { name: "Verification" })).toBeNull();
+  expect(screen.queryByRole("button", { name: /^Accept/ })).toBeNull();
+  expect(screen.getByText(/plan or result approval are unavailable/)).toBeVisible();
+  expect(writes).toEqual([]);
+});
+it("uses the same evidence-first workflow guard on Needs you without exposing legacy acceptance", async () => {
+  taskStatus = "needs_verification"; legacyAutonomy = "plan";
+  page("/needs?cid=project&item=verify:build");
+  const context = await screen.findByRole("region", { name: "Task workflow" });
+  expect(await within(context).findByRole("link", { name: "Result summary — version 2" })).toHaveAttribute("href", "/api/tasks/build/deliverables/result/versions/2/raw");
+  expect(within(context).getByRole("link", { name: "Open workflow task controls" })).toHaveAttribute("href", "/workflows/release?cid=project#workflow-task-build");
+  expect(screen.queryByRole("button", { name: "Accept" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Reject…" })).toBeNull();
+  expect(writes).toEqual([]);
+});
+it("does not offer the ordinary run-stop route for a cancelled workflow or lose its stop warning", async () => {
+  taskStatus = "in_progress";
+  workflow = { ...workflow, status: "cancelled", tasks: [exampleTask({ status: "cancelled", display_state: { label: "Stopping · cancelled", warning: "Released without stop confirmation: the worker may still be running outside Orcha.", release_available: false, release_available_at: "2026-10-25T12:30:00Z" } })] };
+  page(); await screen.findByRole("link", { name: "Open workflow task controls" });
+  expect(screen.getByText("Released without stop confirmation: the worker may still be running outside Orcha.")).toBeVisible();
+  fireEvent.click(screen.getByRole("tab", { name: /Runs/ }));
+  await screen.findByRole("region", { name: "Runs and diffs" });
+  expect(screen.queryByRole("button", { name: "Stop run" })).toBeNull();
+  expect(writes).toEqual([]);
+});
+it("carries the workflow label and OFF presentation into the global task list", async () => {
+  page("/tasks?cid=project");
+  expect(await screen.findByText("Mobile release · Autonomy OFF")).toBeVisible();
+  expect(screen.getByText("Prepared · waiting for Start")).toBeVisible();
+});
+it("retains a typed comment while membership refresh fails and keeps old information labelled", async () => {
+  page(); await screen.findByRole("link", { name: "Open workflow task controls" });
+  const composer = screen.getByRole("textbox", { name: /comment|message/i });
+  fireEvent.change(composer, { target: { value: "Please check the saved result" } });
+  readsFail = true; fireEvent.click(screen.getByRole("button", { name: "Refresh task workflow" }));
+  await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("membership could not be checked"));
+  expect(composer).toHaveValue("Please check the saved result");
+  expect(screen.getByText(/Showing last loaded workflow information/)).toBeVisible();
+  expect(screen.queryByRole("button", { name: /Cancel task/ })).toBeNull();
+  expect(writes).toEqual([]);
+});
+it("preserves a standalone rejection draft through membership refresh without submitting it", async () => {
+  workflow = { ...workflow, tasks: [] }; taskStatus = "needs_verification";
+  page();
+  await screen.findByRole("region", { name: "Verification" });
+  fireEvent.click(document.querySelector('#gate-build [data-act="reject"]')!);
+  fireEvent.change(document.querySelector("#rt-build")!, { target: { value: "Need the pairing checks" } });
+  readsFail = true; fireEvent.focus(window);
+  await screen.findByRole("alert");
+  expect(screen.queryByRole("region", { name: "Verification" })).toBeNull();
+  readsFail = false; fireEvent.click(screen.getByRole("button", { name: "Refresh task workflow" }));
+  await screen.findByRole("region", { name: "Verification" });
+  expect(document.querySelector("#rt-build")).toHaveValue("Need the pairing checks");
+  expect(writes).toEqual([]);
+});

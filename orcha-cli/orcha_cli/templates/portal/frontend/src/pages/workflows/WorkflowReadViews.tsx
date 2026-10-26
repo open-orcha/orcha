@@ -64,7 +64,7 @@ export function WorkflowSummary({ workflow, focusHeading = false }: { workflow: 
 export function WorkflowTaskList({ cid, tasks, total, renderActions }: { cid: string; tasks: WorkflowTaskView[]; total: number | null; renderActions?: (id: string) => ReactNode }) {
   return <div>
     <p>{total === null ? `${tasks.length} tasks shown; total unavailable` : `${tasks.length} of ${total} tasks shown`}</p>
-    <ul className="wf-task-list">{tasks.map((task) => <li key={task.id}>
+    <ul className="wf-task-list">{tasks.map((task) => <li key={task.id} id={`workflow-task-${task.id}`} tabIndex={-1}>
       <WorkflowTaskLink cid={cid} taskId={task.id}>{task.title}</WorkflowTaskLink>
       <p>{task.displayLabel} · {task.assignee || "Unassigned"}</p>
       <p>Task autonomy {task.autonomy === null ? "unavailable" : task.autonomy ? "ON" : "OFF"}</p>

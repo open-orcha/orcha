@@ -89,3 +89,9 @@ it("restores list filters and keyboard focus after a workflow detail round trip"
   expect(screen.getByLabelText("Owner")).toHaveValue("kedar");
   expect(row).toHaveFocus();
 });
+it("focuses the requested task after the workflow read finishes", async () => {
+  reads(() => exampleWorkflow());
+  renderPage("/workflows/release?cid=project#workflow-task-build");
+  await screen.findByRole("link", { name: "Build Android" });
+  expect(document.getElementById("workflow-task-build")).toHaveFocus();
+});
