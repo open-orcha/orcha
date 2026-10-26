@@ -1097,6 +1097,38 @@ def test_accept_and_stop_actions_follow_live_turn_and_approval_hook(setup_workfl
     assert tasks[tid]["stop"]["reason"] == "stop_already_requested"
     assert tasks[tid]["reissue_stop"]["enabled"]
     assert tasks[tid]["release_lost_worker"]["reason"] == "release_not_yet_available"
+    with pytest.raises(HTTPException) as err:
+        execute("release_lost_worker", {"reason": "silent"}, w["id"], tid)
+    assert err.value.detail["code"] == "release_not_yet_available"
+    when = err.value.detail["release_available_at"]
+    assert "T" in when and when.endswith("+00:00")
+
+
+@pytest.mark.parametrize(
+    "state,code", [("missing", "evidence_missing"), ("pending", "evidence_not_saved")]
+)
+def test_accept_requires_saved_evidence(setup_workflow, state, code):
+    _, _, _, _, _, execute = setup_workflow
+    w = prepare_and_start(setup_workflow, create(setup_workflow, count=1))
+    tid = w["tasks"][0]["id"]
+    e, ref = submit_result(setup_workflow, w, tid)
+    with db_cursor() as (_, cur):
+        cur.execute(
+            "UPDATE workflow_executions SET evidence_state=%s WHERE id=%s",
+            (state, e["id"]),
+        )
+    _, tasks, _ = actions_for(setup_workflow, w["id"], setup_workflow[1])
+    assert tasks[tid]["accept"]["reason"] == code
+    with pytest.raises(HTTPException) as err:
+        execute("accept", {"evidence": ref}, w["id"], tid)
+    assert err.value.detail["code"] == code
+    with db_cursor() as (_, cur):
+        cur.execute(
+            "UPDATE workflow_executions SET evidence_state='saved' WHERE id=%s",
+            (e["id"],),
+        )
+    w = execute("accept", {"evidence": ref}, w["id"], tid)
+    assert next(t for t in w["tasks"] if t["id"] == tid)["status"] == "completed"
 
 
 def test_actions_respect_pause_agents_objectives_and_disabled_capability(
