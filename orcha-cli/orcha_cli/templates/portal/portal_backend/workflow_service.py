@@ -424,6 +424,8 @@ class WorkflowService:
                 "workflow_owner_required",
             ),
             "verified_human": (human, "human_reviewer_required"),
+            # The verified person who submitted an outside result may withdraw it.
+            "workflow_owner_or_submitter": (is_owner, "workflow_owner_required"),
             "workflow_owner_or_participant": (
                 is_owner or participant,
                 (
@@ -451,8 +453,11 @@ class WorkflowService:
                 return "workflow_terminal"
             return None
 
-        def action(name, permission, kind, blocked=None, task=None, **extra):
+        def action(
+            name, permission, kind, blocked=None, task=None, submitter=None, **extra
+        ):
             ok, denial = allowed[permission]
+            ok = ok or bool(human and submitter and submitter == str(me))
             why = (
                 "integration_required"
                 if not WORKFLOWS_INTEGRATED
@@ -672,7 +677,7 @@ class WorkflowService:
                 ),
                 action(
                     "withdraw_evidence",
-                    "workflow_owner",
+                    "workflow_owner_or_submitter",
                     "open",
                     first(
                         (not outside, "evidence_not_pending"),
@@ -681,6 +686,7 @@ class WorkflowService:
                             "reservation_live",
                         ),
                     ),
+                    submitter=str(outside["submitted_by"]) if outside else None,
                 ),
                 action(
                     "add_evidence",
@@ -2304,13 +2310,16 @@ class WorkflowService:
         self.notice(w, "workflow_evidence_waiting", tid, t["work_revision"])
 
     def op_withdraw_evidence(self, w, actor, b, tid):
-        p = self.owner(w, actor)
+        p = self.actor(actor, w["container_id"])
         self.active(w, allow_paused=True)
         t = self.task(w["id"], tid, b["expected_work_revision"])
         e = self.one(
             "SELECT * FROM task_outside_evidence WHERE id=%s AND task_id=%s AND state IN ('pending','admitted')",
             (b["evidence_id"], tid),
         )
+        # The workflow owner or the verified person who submitted it (plan 16.1).
+        if str(p["id"]) not in {str(w["owner_human_id"]), str(e and e["submitted_by"])}:
+            self.owner(w, actor)
         if not e:
             conflict(
                 "evidence_not_pending", "This outside result is no longer pending."

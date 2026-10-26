@@ -42,6 +42,7 @@ class AvailableAction(BaseModel):
     enabled: bool
     reason: str | None = None
     # Who may act: workflow_owner, workflow_or_project_owner, verified_human,
+    # workflow_owner_or_submitter (the person who submitted that outside result),
     # workflow_owner_or_participant (an assigned agent, after Start) or
     # task_approval (the task's own approval rule).
     permission: str | None = None

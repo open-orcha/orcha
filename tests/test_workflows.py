@@ -420,6 +420,52 @@ def test_outside_evidence_withdrawal_preserves_owner_gate(setup_workflow, gate, 
         )
 
 
+def test_outside_result_submitter_or_owner_may_withdraw_it(setup_workflow):
+    _, first_owner, worker, other, hooks, execute = setup_workflow
+    w = prepare_and_start(setup_workflow, create(setup_workflow, count=1))
+    tid = w["tasks"][0]["id"]
+    new_owner = ws.WorkflowActor(other, True)
+
+    def submit(acting):
+        execute(
+            "external_result",
+            {"evidence": {"narrative": "Done elsewhere"}},
+            w["id"],
+            tid,
+            acting=acting,
+        )
+        with db_cursor(readonly=True) as (_, cur):
+            return ws.WorkflowService(cur, hooks).one(
+                "SELECT id FROM task_outside_evidence WHERE task_id=%s AND state='pending'",
+                (tid,),
+            )["id"]
+
+    evidence = submit(first_owner)
+    execute("transfer_owner", {"new_owner_id": other}, w["id"])
+    # The former owner submitted it, so they may still withdraw it.
+    _, tasks, _ = actions_for(setup_workflow, w["id"], first_owner)
+    action = tasks[tid]["withdraw_evidence"]
+    assert action["enabled"] and action["permission"] == "workflow_owner_or_submitter"
+    execute("withdraw_evidence", {"evidence_id": evidence}, w["id"], tid)
+
+    evidence = submit(new_owner)
+    # Neither owner nor submitter (a project owner, or an agent) is refused.
+    _, tasks, _ = actions_for(setup_workflow, w["id"], first_owner)
+    assert tasks[tid]["withdraw_evidence"]["reason"] == "workflow_owner_required"
+    for acting in (first_owner, ws.WorkflowActor(worker, True, True)):
+        with pytest.raises(HTTPException) as err:
+            execute(
+                "withdraw_evidence", {"evidence_id": evidence}, w["id"], tid, acting=acting
+            )
+        assert err.value.detail["code"] == "workflow_owner_required"
+    _, tasks, _ = actions_for(setup_workflow, w["id"], new_owner)
+    assert tasks[tid]["withdraw_evidence"]["enabled"]
+    w = execute(
+        "withdraw_evidence", {"evidence_id": evidence}, w["id"], tid, acting=new_owner
+    )
+    assert w["tasks"][0]["awaiting_owner_decision"] == "evidence_withdrawn"
+
+
 def test_outside_result_needs_a_person_even_when_autonomy_allows_agents(
     setup_workflow, monkeypatch
 ):
