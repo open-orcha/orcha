@@ -53,6 +53,7 @@ beforeEach(() => {
     "fetch",
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
+      if (url === "/openapi.json") return jsonRes({ paths: {} });
       const method = (init && init.method) || "GET";
       const call = { url, method };
       calls.push(call);
@@ -176,6 +177,7 @@ describe("GH #74 — task thread retry affordance", () => {
       "fetch",
       vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input);
+      if (url === "/openapi.json") return jsonRes({ paths: {} });
         const method = (init && init.method) || "GET";
         calls.push({ url, method });
         if (url === "/api/containers") return jsonRes([{ id: "c1", status: "active" }]);

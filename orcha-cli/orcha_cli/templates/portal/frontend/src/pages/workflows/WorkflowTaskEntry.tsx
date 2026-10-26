@@ -4,12 +4,15 @@ import { Button } from "../../components/primitives/Button";
 import { Dialog } from "../../components/primitives/Dialog";
 import { useSnapshot } from "../../state/SnapshotProvider";
 import { actionReason, workflowPaths, workflowRequest } from "./workflowApi";
+import { useTaskWorkflow } from "./WorkflowTaskContext";
 import type { WorkflowDetail } from "./workflowContract.generated";
 
 /** Explicit, read-only discovery from the existing task inspector. Navigation
  * only seeds a retained draft; importing still requires the full group preview. */
 export function WorkflowTaskEntry({ taskId }: { taskId: string }) {
   const { cid, identity, identityTrusted, identityPending } = useSnapshot();
+  const { index, member } = useTaskWorkflow(taskId);
+  if (member || (index && !["ready", "unsupported"].includes(index.state))) return null;
   return <TaskEntry key={JSON.stringify([cid, taskId, identity?.agent_id, identityTrusted])} cid={cid} taskId={taskId} verified={identityTrusted && !identityPending && !!identity?.agent_id} />;
 }
 function TaskEntry({ cid, taskId, verified }: { cid: string | null; taskId: string; verified: boolean }) {

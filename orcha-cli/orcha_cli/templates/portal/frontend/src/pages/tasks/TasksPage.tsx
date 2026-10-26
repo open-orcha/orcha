@@ -28,6 +28,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
+import { WorkflowTaskProvider } from "../workflows/WorkflowTaskContext";
 import { Shell } from "../../shell/Shell";
 import { threadOf } from "../../api/client";
 import { shortId } from "../../lib/format";
@@ -138,6 +139,10 @@ function loadListScroll(key: string): number | null {
 export const JUST_CREATED_BUMPS = 3;
 
 export function TasksPage() {
+  return <WorkflowTaskProvider><TasksPageContent /></WorkflowTaskProvider>;
+}
+
+function TasksPageContent() {
   const { snap, bump, refresh, errorKind } = useSnapshot();
   const location = useLocation();
   const navigate = useNavigate();

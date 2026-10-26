@@ -34,6 +34,7 @@ beforeEach(() => {
   window.scrollTo = vi.fn();
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
+      if (url === "/openapi.json") return jsonRes({ paths: {} });
     if (url === "/api/containers") return jsonRes([{ id: "c1", name: "Orcha", status: "active" }]);
     if (url.startsWith("/api/containers/c1")) return snapStatus === 200 ? jsonRes(SNAP) : jsonRes({ detail: "down" }, snapStatus);
     if (/\/runs$/.test(url)) return jsonRes([]);

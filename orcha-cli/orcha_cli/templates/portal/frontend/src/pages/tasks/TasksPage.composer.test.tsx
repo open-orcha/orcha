@@ -48,6 +48,7 @@ function mount(snapshot = BASE_SNAPSHOT, holdPost = false) {
 
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
+      if (url === "/openapi.json") return jsonRes({ paths: {} });
     const method = init?.method || "GET";
     let body: unknown;
     if (typeof init?.body === "string") body = JSON.parse(init.body);

@@ -60,6 +60,7 @@ beforeEach(() => {
     "fetch",
     vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
+      if (url === "/openapi.json") return jsonRes({ paths: {} });
       if (url === "/api/containers") return jsonRes([{ id: "c1", status: "active" }]);
       if (url.startsWith("/api/containers/c1")) return jsonRes(SNAP);
       if (/\/messages$/.test(url)) return jsonRes({ messages: [] });
@@ -378,6 +379,7 @@ describe("after create", () => {
       "fetch",
       vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input);
+      if (url === "/openapi.json") return jsonRes({ paths: {} });
         const method = init?.method || "GET";
         if (url === "/api/containers") return jsonRes([{ id: "c1", status: "active" }]);
         if (url.startsWith("/api/containers/c1") && method === "GET") return jsonRes(SNAP);

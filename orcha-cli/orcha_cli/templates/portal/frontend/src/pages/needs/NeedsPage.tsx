@@ -63,6 +63,7 @@ import { projectStatusMeta } from "../../cloud/projects/projectStatus";
 import { sendJSON } from "../../api/client";
 import type { Agent, OrchaRequest, Snapshot, Task } from "../../types";
 import { GateSurface, NO_HUMAN, useTaskRuns } from "../tasks/TasksPage";
+import { WorkflowTaskInspector, WorkflowTaskProvider, WorkflowTaskStatus, useTaskWorkflow } from "../workflows/WorkflowTaskContext";
 import { RequestDetail, requestKindLabel } from "../requests/RequestsPage";
 import { requestTitle as payloadRequestTitle } from "../requests/requestPayload";
 import { plainPreview } from "./plainPreview";
@@ -385,6 +386,7 @@ function Description({ text, snap }: { text: string; snap: Snapshot | null }) {
 function TaskDecision({ item, onDecided }: { item: AttentionItem; onDecided: (outcome: string) => void }) {
   const { snap } = useSnapshot();
   const t = item.task!;
+  const { blockLegacy } = useTaskWorkflow(t.id);
   const runs = useTaskRuns(item.kind === "verify" ? t.id : null);
   // GateSurface reports WHICH decision succeeded just before onActed
   const outcomeRef = useRef<string | null>(null);
@@ -397,7 +399,7 @@ function TaskDecision({ item, onDecided }: { item: AttentionItem; onDecided: (ou
   return (
     <>
       <div className="nd-meta">
-        <StatusIcon status={t.status} showLabel size={14} />
+        <WorkflowTaskStatus taskId={t.id} fallback={t.status} showLabel size={14} />
         {t.assignee ? (
           <a className="nd-who" href={"/agents?agent=" + encodeURIComponent(t.assignee)}>
             <Avatar alias={t.assignee} kind={assignee?.kind || "ai"} status={assignee?.status} size={20} palette={slotOf(snap, t.assignee)} decorative />
@@ -407,12 +409,13 @@ function TaskDecision({ item, onDecided }: { item: AttentionItem; onDecided: (ou
         {/* the age lives in the row, the gate card and the timeline — not here too (D12) */}
         {reviewer ? <span className="nd-dim nd-review">review: {reviewer}</span> : null}
       </div>
-      {item.assignedToOther ? (
+      {item.assignedToOther && !blockLegacy ? (
         <p className="nd-caveat">
           Assigned to {otherOwner(item)} for review. It isn't counted in your queue; you can still decide if you need to.
         </p>
       ) : null}
       {t.description ? <Description text={t.description} snap={snap} /> : null}
+      <WorkflowTaskInspector taskId={t.id} />
       <div className="nd-decision">
         <GateSurface
           key={item.key}
@@ -628,6 +631,10 @@ export function pagerHint(total: number, waiting: number): string {
 
 /* ---- the page ------------------------------------------------------------ */
 export function NeedsPage() {
+  return <WorkflowTaskProvider><NeedsPageContent /></WorkflowTaskProvider>;
+}
+
+function NeedsPageContent() {
   const { snap, cid, connection, stale, lastOkAt, retryIdentity } = useSnapshot();
   const projectMode = useProjectMode(cid).mode;
   const authority = useActingAuthority();

@@ -14,17 +14,13 @@ import { WorkflowMove } from "./WorkflowMove";
 import { WorkflowResolveReview, WorkflowReviewEditor } from "./WorkflowReviewEditor";
 import { WorkflowActivity, WorkflowReviewHistory } from "./WorkflowHistory";
 import { WorkflowDependencies, WorkflowSummary, WorkflowTaskList, WorkflowProgress, type WorkflowTaskView } from "./WorkflowReadViews";
-import { WorkflowApiError, workflowLabel, workflowPaths, workflowRequest, workflowWriteReason } from "./workflowApi";
+import { hasWorkflowRoutes, WorkflowApiError, workflowLabel, workflowPaths, workflowRequest, workflowWriteReason } from "./workflowApi";
 import type { Capability, WorkflowDetail, WorkflowList } from "./workflowContract.generated";
 import { workflowListReturnTarget, workflowNavigationState } from "./workflowNavigation";
 import "./workflows.css";
 
 type Availability = "checking" | "unsupported" | "ready" | "unavailable" | "forbidden";
-export function hasWorkflowRoutes(spec: unknown): boolean {
-  if (!spec || typeof spec !== "object" || !("paths" in spec) || !spec.paths || typeof spec.paths !== "object") throw new Error("OpenAPI paths unavailable");
-  return Object.entries(spec.paths).some(([path, operations]) => /^\/api\/containers\/\{[^}]+\}\/workflows$/.test(path)
-    && operations !== null && typeof operations === "object" && "get" in operations);
-}
+export { hasWorkflowRoutes } from "./workflowApi";
 export function WorkflowsPage() {
   const context = useSnapshot();
   const { pathname } = useLocation();
@@ -57,6 +53,14 @@ function WorkflowScreen() {
   const search = params.get("search") ?? "";
   const owner = params.get("owner") ?? "";
   const tab = params.get("tab") ?? "tasks";
+  useEffect(() => {
+    // A direct task link arrives before the asynchronous workflow read. Move
+    // keyboard focus only once the named task actually exists on this page.
+    if (!detail || tab !== "tasks") return;
+    const task = detail.tasks.find((t) => location.hash === `#workflow-task-${encodeURIComponent(t.id)}`);
+    const row = task && document.getElementById(`workflow-task-${task.id}`);
+    if (row) { row.scrollIntoView?.({ block: "nearest" }); row.focus(); }
+  }, [detail?.id, location.hash]);
   const initialTaskId = snap?.tasks?.find((task) => task.id === params.get("addTask"))?.id;
   const serverStatus = ["preparing", "active", "ready"].includes(filter) ? "active" : ["paused", "completed", "cancelled"].includes(filter) ? filter : "";
   const query = (key: string, value: string) => setParams((previous) => { const p = new URLSearchParams(previous); value ? p.set(key, value) : p.delete(key); return p; });

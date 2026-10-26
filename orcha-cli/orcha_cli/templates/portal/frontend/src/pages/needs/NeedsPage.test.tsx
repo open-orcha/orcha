@@ -51,6 +51,7 @@ beforeEach(() => {
     "fetch",
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
+      if (url === "/openapi.json") return jsonRes({ paths: {} });
       const method = (init && init.method) || "GET";
       const body = init && typeof init.body === "string" ? JSON.parse(init.body) : undefined;
       calls.push({ url, method, body });
@@ -309,6 +310,7 @@ describe("NeedsPage", () => {
     await waitFor(() => expect(document.querySelector("#reason-t2")?.className).toContain("show"));
     fireEvent.keyDown(document.body, { key: "Escape" });
     await waitFor(() => expect(document.querySelector("#reason-t2")?.className).not.toContain("show"));
+    expect(document.querySelector('#gate-t2 [data-act="reject"]')).toHaveFocus();
     expect(item()).toBe("verify:t2"); // the detail stays open
     fireEvent.keyDown(document.body, { key: "Escape" });
     await waitFor(() => expect(item()).toBeNull());
