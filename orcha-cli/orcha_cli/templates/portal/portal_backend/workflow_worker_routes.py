@@ -13,7 +13,7 @@ from portal_backend.identity_routes import require_member_read
 from portal_backend.schemas.workflow_workers import WorkflowActivate, WorkflowContinue, WorkflowReserve, WorkflowStopObserved
 from portal_backend.workflow_graph import conflict
 from portal_backend.workflow_service import WorkflowActor, WorkflowHooks, WorkflowService, require_capability
-from portal_backend.workflow_worker_auth import lock_run, record_runner_contact, require_current_generation
+from portal_backend.workflow_worker_auth import lock_run, record_runner_contact, require_current_generation, token_execution
 from portal_backend.workflow_worker_launch import abort_launch, activate, continue_turn, launch_receipt, preallocate_run, require_runner
 from portal_backend.workflow_worker_stops import confirm_stopped, release_lost, stop_execution
 
@@ -123,6 +123,11 @@ def worker_launch_policy(tid: str, request: Request):
 
 
 def _contact(token):
+    # Most run tokens are not workflow-bound. Look them up read-only first so ordinary
+    # agent calls never take the SQLite write lock for this check.
+    with db_cursor(readonly=True) as (_, cur):
+        if not token_execution(cur, token):
+            return None
     with db_cursor() as (_, cur):
         return record_runner_contact(cur, token)
 
