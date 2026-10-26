@@ -266,6 +266,8 @@ class ReviewHistory(BaseModel):
     # The task and work revision the recorded outcome judged; null until recorded.
     reviewed_task_id: str | None = None
     reviewed_work_revision: int | None = None
+    # The review task's own work revision when the outcome was recorded.
+    review_work_revision: int | None = None
     resolved_by_owner: str | None = None
     resolved_reason: str | None = None
 

@@ -155,6 +155,9 @@ CREATE TABLE workflow_review_rounds (
     reviewed_task_id UUID,
     reviewed_work_revision INTEGER,
     outcome TEXT,
+    -- The review task's own work revision when its outcome was recorded; a retried
+    -- review (newer revision) may replace an inconclusive outcome.
+    review_work_revision INTEGER,
     resolved_by_owner UUID REFERENCES agents(id),
     resolved_reason TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f','now') || '000+00:00'),
@@ -162,7 +165,7 @@ CREATE TABLE workflow_review_rounds (
     CONSTRAINT workflow_round_correction_task_fkey FOREIGN KEY (correction_task_id, workflow_id) REFERENCES tasks(id, workflow_id),
     CONSTRAINT workflow_round_outcome_check CHECK (outcome IN ('changes_requested','accepted','inconclusive')),
     CONSTRAINT workflow_round_reviewed_task_fkey FOREIGN KEY (reviewed_task_id, workflow_id) REFERENCES tasks(id, workflow_id),
-    CONSTRAINT workflow_round_reviewed_check CHECK ((reviewed_task_id IS NULL) = (reviewed_work_revision IS NULL) AND (outcome IS NULL OR reviewed_task_id IS NOT NULL) AND (reviewed_work_revision IS NULL OR reviewed_work_revision >= 1)),
+    CONSTRAINT workflow_round_reviewed_check CHECK ((reviewed_task_id IS NULL) = (reviewed_work_revision IS NULL) AND (outcome IS NULL OR reviewed_task_id IS NOT NULL) AND (reviewed_work_revision IS NULL OR reviewed_work_revision >= 1) AND (outcome IS NULL) = (review_work_revision IS NULL)),
     UNIQUE (workflow_id, loop_key, round_number),
     UNIQUE (review_task_id),
     UNIQUE (correction_task_id)

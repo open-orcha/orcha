@@ -3545,6 +3545,17 @@
             ],
             "title": "Reviewed Work Revision"
           },
+          "review_work_revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Review Work Revision"
+          },
           "resolved_by_owner": {
             "anyOf": [
               {

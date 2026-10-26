@@ -2481,7 +2481,14 @@ class WorkflowService:
             and b.get("correction")
             and previous["reviewed_artifact"] == b["reviewed_artifact"]
         )
-        if previous and previous["outcome"] and not expanding_recorded:
+        # An inconclusive review resolves nothing; once the human flow retries the
+        # review task (newer work revision) its fresh outcome replaces it.
+        rerecord = bool(
+            previous
+            and previous["outcome"] == "inconclusive"
+            and review["work_revision"] > previous["review_work_revision"]
+        )
+        if previous and previous["outcome"] and not (expanding_recorded or rerecord):
             conflict(
                 "review_outcome_recorded", "The review outcome is already recorded."
             )
@@ -2514,20 +2521,21 @@ class WorkflowService:
                 pair = [correction, followup]
         ids = self._add(w, actor, pair)
         rid = previous["id"] if previous else _id()
-        if previous and not previous["outcome"]:
+        if previous and (not previous["outcome"] or rerecord):
             self.cur.execute(
-                "UPDATE workflow_review_rounds SET outcome=%s,reviewed_artifact=%s,reviewed_task_id=%s,reviewed_work_revision=%s WHERE id=%s",
+                "UPDATE workflow_review_rounds SET outcome=%s,reviewed_artifact=%s,reviewed_task_id=%s,reviewed_work_revision=%s,review_work_revision=%s WHERE id=%s",
                 (
                     b["outcome"],
                     _json(b["reviewed_artifact"]),
                     reviewed["id"],
                     reviewed["work_revision"],
+                    review["work_revision"],
                     rid,
                 ),
             )
         elif not previous:
             self.cur.execute(
-                "INSERT INTO workflow_review_rounds(id,workflow_id,loop_key,round_number,review_task_id,reviewed_artifact,reviewed_task_id,reviewed_work_revision,outcome) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                "INSERT INTO workflow_review_rounds(id,workflow_id,loop_key,round_number,review_task_id,reviewed_artifact,reviewed_task_id,reviewed_work_revision,review_work_revision,outcome) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
                 (
                     rid,
                     w["id"],
@@ -2537,6 +2545,7 @@ class WorkflowService:
                     _json(b["reviewed_artifact"]),
                     reviewed["id"],
                     reviewed["work_revision"],
+                    review["work_revision"],
                     b["outcome"],
                 ),
             )
@@ -2562,6 +2571,8 @@ class WorkflowService:
                 "loop_key": b["loop_key"],
                 "round": number,
                 "outcome": b["outcome"],
+                "replaced_outcome": "inconclusive" if rerecord else None,
+                "review_work_revision": review["work_revision"],
                 "new_tasks": ids,
                 "limit_reached": limit_hit,
             },

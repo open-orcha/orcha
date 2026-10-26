@@ -907,6 +907,81 @@ def test_review_rounds_are_fresh_acyclic_pairs_and_receipt_replay_is_exact(
     )
 
 
+def test_inconclusive_review_is_replaced_only_after_the_review_is_retried(
+    setup_workflow,
+):
+    _, _, _, _, hooks, execute = setup_workflow
+    w = prepare_and_start(
+        setup_workflow, create(setup_workflow, dependencies={1: ["t0"]})
+    )
+    by_title = {t["title"]: t for t in w["tasks"]}
+    build, review = by_title["Task 0"], by_title["Task 1"]
+    for tid in (build["id"], review["id"]):
+        e, ref = submit_result(setup_workflow, w, tid)
+        execute("accept", {"evidence": ref}, w["id"], tid)
+        with db_cursor() as (_, cur):
+            ws.WorkflowService(cur, hooks).release_confirmed(
+                e["id"], e["generation"], "exited"
+            )
+        if tid == build["id"]:
+            built = ref
+
+    def record(outcome, key):
+        body = {
+            "loop_key": "release",
+            "review_task_id": review["id"],
+            "reviewed_task_id": build["id"],
+            "reviewed_artifact": built,
+            "outcome": outcome,
+            "idempotency_key": key,
+        }
+        with db_cursor(readonly=True) as (_, cur):
+            body["expected_revision"] = ws.WorkflowService(cur, hooks).workflow(
+                w["id"]
+            )["revision"]
+        return execute("review_round", body, w["id"])
+
+    out = record("inconclusive", "broken")
+    (first,) = out["review_rounds"]
+    assert (first["outcome"], first["review_work_revision"]) == (
+        "inconclusive",
+        review["work_revision"],
+    )
+    # The same review run cannot be re-judged; it must be retried first.
+    with pytest.raises(HTTPException) as err:
+        record("accepted", "same-run")
+    assert err.value.detail["code"] == "review_outcome_recorded"
+    execute("retry", {}, w["id"], review["id"])
+    out = record("accepted", "after-retry")
+    (again,) = out["review_rounds"]
+    assert again["id"] == first["id"] and again["outcome"] == "accepted"
+    assert again["review_work_revision"] == review["work_revision"] + 1
+    # A conclusive outcome is never replaced, even after another retry.
+    e, ref = submit_result(setup_workflow, w, review["id"])
+    execute("accept", {"evidence": ref}, w["id"], review["id"])
+    with db_cursor() as (_, cur):
+        ws.WorkflowService(cur, hooks).release_confirmed(
+            e["id"], e["generation"], "exited"
+        )
+    execute("retry", {}, w["id"], review["id"])
+    with pytest.raises(HTTPException) as err:
+        record("changes_requested", "late")
+    assert err.value.detail["code"] == "review_outcome_recorded"
+    with db_cursor(readonly=True) as (_, cur):
+        cur.execute(
+            "SELECT detail FROM workflow_history WHERE workflow_id=%s AND event='workflow_review_outcome' ORDER BY created_at,id",
+            (w["id"],),
+        )
+        history = [
+            p if isinstance(p, dict) else json.loads(p)
+            for p in (r["detail"] for r in cur.fetchall())
+        ]
+    assert [(h["outcome"], h["replaced_outcome"]) for h in history] == [
+        ("inconclusive", None),
+        ("accepted", "inconclusive"),
+    ]
+
+
 def test_objective_edit_invalidates_its_acceptance_and_goal(setup_workflow):
     _, _, _, _, _, execute = setup_workflow
     w = execute(
