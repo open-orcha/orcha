@@ -367,6 +367,42 @@ def test_outside_evidence_withdrawal_preserves_owner_gate(setup_workflow, gate, 
         )
 
 
+def test_outside_result_needs_a_person_even_when_autonomy_allows_agents(
+    setup_workflow, monkeypatch
+):
+    w = prepare_and_start(setup_workflow, create(setup_workflow, count=1))
+    tid = w["tasks"][0]["id"]
+    cid, actor, worker, _, hooks, execute = setup_workflow
+    monkeypatch.setattr(
+        hooks,
+        "authorize_completion",
+        lambda cur, task, person, ref: {"autonomy": "on", "autonomy_revision": 2},
+    )
+    monkeypatch.setattr(
+        hooks,
+        "completion_permission",
+        lambda cur, task, person: {"allowed": True, "reason": None},
+    )
+    w = execute(
+        "external_result",
+        {"evidence": {"narrative": "Produced outside Orcha"}},
+        w["id"],
+        tid,
+    )
+    with db_cursor() as (_, cur):
+        svc = ws.WorkflowService(cur, hooks)
+        e = svc.reserve_turn(tid, actor)
+        ref = hooks.evidence[str(e["current_evidence_set_id"])][2]
+    agent = ws.WorkflowActor(worker, True, True)
+    _, by_agent, _ = actions_for(setup_workflow, w["id"], agent)
+    assert by_agent[tid]["accept"]["reason"] == "human_approval_required"
+    with pytest.raises(HTTPException) as err:
+        execute("accept", {"evidence": ref}, w["id"], tid, acting=agent)
+    assert err.value.detail["code"] == "human_approval_required"
+    w = execute("accept", {"evidence": ref}, w["id"], tid)
+    assert next(t for t in w["tasks"] if t["id"] == tid)["status"] == "completed"
+
+
 def test_rejection_does_not_reactivate_assignee(setup_workflow):
     w = prepare_and_start(setup_workflow, create(setup_workflow))
     tid = w["tasks"][0]["id"]
@@ -394,6 +430,28 @@ def test_cancel_preserves_accepted_result_and_holds_unconfirmed_worker(setup_wor
     with db_cursor(readonly=True) as (_, cur):
         svc = ws.WorkflowService(cur, setup_workflow[4])
         assert svc.live_turn(tid)["id"] == e["id"]
+
+
+def test_late_result_after_cancel_is_refused_as_stale_generation(setup_workflow):
+    _, _, worker, _, hooks, execute = setup_workflow
+    w = prepare_and_start(setup_workflow, create(setup_workflow, count=1))
+    tid = w["tasks"][0]["id"]
+    with db_cursor() as (_, cur):
+        svc = ws.WorkflowService(cur, hooks)
+        e = svc.reserve_turn(tid, ws.WorkflowActor(worker, True, True), run_id=uid())
+        ref = hooks.save(svc.task(w["id"], tid))
+        cur.execute(
+            "UPDATE workflow_executions SET state='running',current_evidence_set_id=%s,evidence_state='saved' WHERE id=%s",
+            (ref["evidence_set_id"], e["id"]),
+        )
+    w = execute("cancel", {}, w["id"])
+    assert w["status"] == "cancelled"
+    with pytest.raises(HTTPException) as err:
+        with db_cursor() as (_, cur):
+            ws.WorkflowService(cur, hooks).submit_for_review(
+                tid, e["id"], e["generation"], ref
+            )
+    assert err.value.detail["code"] == "stale_generation"
 
 
 def test_withdraw_cannot_remove_last_or_accepted_task(setup_workflow):

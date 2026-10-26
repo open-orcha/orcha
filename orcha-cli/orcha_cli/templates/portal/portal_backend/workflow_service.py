@@ -739,6 +739,12 @@ class WorkflowService:
                             bool(live) and live["evidence_state"] != "saved",
                             "evidence_not_saved",
                         ),
+                        (
+                            bool(live)
+                            and live["source_kind"] == "evidence_review"
+                            and not human,
+                            "human_approval_required",
+                        ),
                     ),
                     task=task,
                 ),
@@ -1792,9 +1798,9 @@ class WorkflowService:
         if not t or not t["workflow_id"]:
             conflict("workflow_task_required", "A workflow task is required.")
         w = self.lock(t["workflow_id"])
-        self.active(w, allow_paused=True)
         task = self.task(w["id"], tid)
-        e = self.live_turn(tid)
+        e = self.live_turn(tid, lock=True)
+        # Fence first: a revoked worker gets stale_generation even after cancel (§16.2).
         if (
             not e
             or e["id"] != execution_id
@@ -1804,6 +1810,7 @@ class WorkflowService:
             or e["state"] not in {"running", "awaiting_review"}
         ):
             conflict("stale_generation", "This worker no longer owns the task turn.")
+        self.active(w, allow_paused=True)
         # Capture adapter has already bound the exact pending/saved set to this execution.
         if (
             not reference.get("evidence_set_id")
@@ -1931,6 +1938,13 @@ class WorkflowService:
             conflict("evidence_missing", "Evidence is missing - add it before accepting.")
         if e["evidence_state"] != "saved":
             conflict("evidence_not_saved", "The evidence for this result is not saved yet.")
+        if e["source_kind"] == "evidence_review" and p["kind"] != "human":
+            # §16.1: an outside result is accepted by a person, whatever the task autonomy.
+            conflict(
+                "human_approval_required",
+                "A person must accept an outside result.",
+                status=403,
+            )
         self._record_acceptance(t, actor, b["evidence"])
         self.cur.execute(
             "UPDATE tasks SET status='completed',completed_at=%s,awaiting_owner_decision=NULL,owner_decision_at=NULL WHERE id=%s",
