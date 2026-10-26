@@ -2516,12 +2516,18 @@ class WorkflowService:
         rid = previous["id"] if previous else _id()
         if previous and not previous["outcome"]:
             self.cur.execute(
-                "UPDATE workflow_review_rounds SET outcome=%s,reviewed_artifact=%s WHERE id=%s",
-                (b["outcome"], _json(b["reviewed_artifact"]), rid),
+                "UPDATE workflow_review_rounds SET outcome=%s,reviewed_artifact=%s,reviewed_task_id=%s,reviewed_work_revision=%s WHERE id=%s",
+                (
+                    b["outcome"],
+                    _json(b["reviewed_artifact"]),
+                    reviewed["id"],
+                    reviewed["work_revision"],
+                    rid,
+                ),
             )
         elif not previous:
             self.cur.execute(
-                "INSERT INTO workflow_review_rounds(id,workflow_id,loop_key,round_number,review_task_id,reviewed_artifact,outcome) VALUES (%s,%s,%s,%s,%s,%s,%s)",
+                "INSERT INTO workflow_review_rounds(id,workflow_id,loop_key,round_number,review_task_id,reviewed_artifact,reviewed_task_id,reviewed_work_revision,outcome) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)",
                 (
                     rid,
                     w["id"],
@@ -2529,6 +2535,8 @@ class WorkflowService:
                     number,
                     review["id"],
                     _json(b["reviewed_artifact"]),
+                    reviewed["id"],
+                    reviewed["work_revision"],
                     b["outcome"],
                 ),
             )

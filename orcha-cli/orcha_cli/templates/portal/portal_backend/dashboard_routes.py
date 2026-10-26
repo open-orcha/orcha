@@ -164,3 +164,23 @@ def routines_page():
     """Routines — recurring scheduled work (mig 054): each due slot creates a normal task
     through the task-creation path. SPA shell; data from /api/containers/{cid}/routines."""
     return serve_page("dist/index.html")  # React SPA shell
+
+
+@app.get("/workflows", response_class=HTMLResponse)
+def workflows_page():
+    """Workflows list (docs/design/workflows). SPA shell; data from
+    /api/containers/{cid}/workflows, which refuses while Workflows is disabled."""
+    return serve_page("dist/index.html")  # React SPA shell
+
+
+@app.get("/workflows/new", response_class=HTMLResponse)
+def workflow_new_page():
+    """New-workflow screen. SPA shell; saves through POST /api/containers/{cid}/workflows."""
+    return serve_page("dist/index.html")  # React SPA shell
+
+
+@app.get("/workflows/{workflow_id}", response_class=HTMLResponse)
+def workflow_detail_page(workflow_id: str):
+    """One workflow (BrowserRouter /workflows/:workflowId). SPA shell only: the id is
+    never read here; the page loads /api/workflows/{wid}, which checks membership."""
+    return serve_page("dist/index.html")  # React SPA shell
