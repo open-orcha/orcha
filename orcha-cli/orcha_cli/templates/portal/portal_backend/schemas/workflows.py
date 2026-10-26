@@ -41,6 +41,12 @@ class AvailableAction(BaseModel):
     action: str
     enabled: bool
     reason: str | None = None
+    # Who may act: workflow_owner, workflow_or_project_owner, verified_human,
+    # workflow_owner_or_participant, workflow_owner_or_agent or task_approval.
+    permission: str | None = None
+    # release only: the holds THIS reader may clear (start: workflow owner;
+    # human: workflow owner or the person who set that safety hold).
+    holds: list[Literal["start", "human"]] | None = None
 
 
 class EvidenceItem(Input):
@@ -245,6 +251,7 @@ class Objective(BaseModel):
     revision: int
     accepted_revision: int | None
     evidence: EvidenceBasis | None = None
+    available_actions: list[AvailableAction] = Field(default_factory=list)
 
 
 class ReviewHistory(BaseModel):

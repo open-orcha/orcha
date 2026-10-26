@@ -2274,6 +2274,35 @@
               }
             ],
             "title": "Reason"
+          },
+          "permission": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Permission"
+          },
+          "holds": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "start",
+                    "human"
+                  ]
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Holds"
           }
         },
         "type": "object",
@@ -2965,6 +2994,13 @@
                 "type": "null"
               }
             ]
+          },
+          "available_actions": {
+            "items": {
+              "$ref": "#/components/schemas/AvailableAction"
+            },
+            "type": "array",
+            "title": "Available Actions"
           }
         },
         "type": "object",

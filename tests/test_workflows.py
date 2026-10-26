@@ -63,6 +63,13 @@ class ContractHooks(ws.WorkflowHooks):
             raise HTTPException(403, {"code": "human_approval_required"})
         return {"autonomy": "off", "autonomy_revision": 1}
 
+    def completion_permission(self, cur, task, actor):
+        human = actor["kind"] == "human"
+        return {
+            "allowed": human,
+            "reason": None if human else "human_approval_required",
+        }
+
     def request_stop(self, cur, execution, actor, origin, reason):
         self.stops.append((execution["id"], origin))
 
@@ -391,6 +398,8 @@ def test_cancel_preserves_accepted_result_and_holds_unconfirmed_worker(setup_wor
 
 def test_withdraw_cannot_remove_last_or_accepted_task(setup_workflow):
     w = create(setup_workflow, count=1)
+    _, tasks, _ = actions_for(setup_workflow, w["id"], setup_workflow[1])
+    assert tasks[w["tasks"][0]["id"]]["withdraw"]["reason"] == "last_required_task"
     with pytest.raises(HTTPException) as err:
         setup_workflow[-1]("withdraw", {}, w["id"], w["tasks"][0]["id"])
     assert err.value.detail["code"] == "last_required_task"
@@ -920,3 +929,203 @@ def test_completed_import_needs_explicit_human_acceptance_of_exact_result(
             None,
             "saved",
         )
+
+
+def actions_for(fixture, wid, acting, hooks=None):
+    """(workflow actions, {task_id: task actions}, {objective_id: actions}) by name."""
+    with db_cursor(readonly=True) as (_, cur):
+        w = ws.WorkflowService(cur, hooks or fixture[4]).detail(wid, acting)
+    by_name = lambda items: {a["action"]: a for a in items}
+    return (
+        by_name(w["available_actions"]),
+        {t["id"]: by_name(t["available_actions"]) for t in w["tasks"]},
+        {o["id"]: by_name(o["available_actions"]) for o in w["objectives"]},
+    )
+
+
+def test_actions_split_workflow_owner_from_project_owner_safety_hold(setup_workflow):
+    _, project_owner, worker, other, _, execute = setup_workflow
+    w = create(setup_workflow, count=2, dependencies={1: ["t0"]})
+    a, b = (w["created_task_ids"][k] for k in ("t0", "t1"))
+    w = execute("transfer_owner", {"new_owner_id": other}, w["id"])
+    workflow_owner = ws.WorkflowActor(other, True)
+    for t in (a, b):
+        w = execute("prepare", {}, w["id"], t, acting=workflow_owner)
+
+    wf, tasks, _ = actions_for(setup_workflow, w["id"], project_owner)
+    # A project owner keeps only safety-hold and ownership recovery authority.
+    assert wf["transfer_owner"]["enabled"]
+    assert wf["transfer_owner"]["permission"] == "workflow_or_project_owner"
+    for name in ("start", "patch", "finish", "cancel", "accept_goal", "move"):
+        assert wf[name]["reason"] == "workflow_owner_required", name
+    assert tasks[a]["hold"]["enabled"]
+    assert tasks[a]["hold"]["permission"] == "workflow_or_project_owner"
+    for name in ("stop", "reissue_stop", "release_lost_worker", "withdraw", "retry"):
+        assert tasks[a][name]["permission"] == "workflow_owner", name
+        assert tasks[a][name]["reason"] == "workflow_owner_required", name
+    # The start hold belongs to the workflow owner, never to a project owner.
+    assert tasks[a]["release"] == {
+        "action": "release",
+        "enabled": False,
+        "reason": "hold_owner_required",
+        "permission": "workflow_or_project_owner",
+        "holds": [],
+    }
+
+    w = execute("hold", {}, w["id"], a, acting=project_owner)
+    _, tasks, _ = actions_for(setup_workflow, w["id"], project_owner)
+    assert tasks[a]["release"]["enabled"] and tasks[a]["release"]["holds"] == ["human"]
+    assert tasks[a]["hold"]["enabled"]  # re-saving one's own hold reason
+    _, by_workflow_owner, _ = actions_for(setup_workflow, w["id"], workflow_owner)
+    assert by_workflow_owner[a]["release"]["holds"] == ["start", "human"]
+
+    revision = next(t["work_revision"] for t in w["tasks"] if t["id"] == a)
+    release = {"task_ids": [a], "task_revisions": {a: revision}}
+    with pytest.raises(HTTPException) as err:
+        execute(
+            "release", dict(release, holds=["start"]), w["id"], acting=project_owner
+        )
+    assert err.value.detail["code"] == "workflow_owner_required"
+    w = execute(
+        "release", dict(release, holds=["human"]), w["id"], acting=project_owner
+    )
+    _, tasks, _ = actions_for(setup_workflow, w["id"], project_owner)
+    assert tasks[a]["release"]["reason"] == "hold_owner_required"
+
+    # Another person's hold blocks a second hold, matching op_hold.
+    w = execute("hold", {}, w["id"], b, acting=workflow_owner)
+    _, tasks, _ = actions_for(setup_workflow, w["id"], project_owner)
+    assert tasks[b]["hold"]["reason"] == "hold_exists"
+    assert tasks[b]["release"]["reason"] == "hold_owner_required"
+
+
+def test_actions_match_server_refusals_for_scope_and_evidence(setup_workflow):
+    execute = setup_workflow[-1]
+    w = create(setup_workflow, count=3, dependencies={1: ["t0"]})
+    a, b, c = (w["created_task_ids"][k] for k in ("t0", "t1", "t2"))
+    wf, tasks, _ = actions_for(setup_workflow, w["id"], setup_workflow[1])
+    assert tasks[a]["withdraw"]["reason"] == "task_has_dependents"
+    with pytest.raises(HTTPException) as err:
+        execute("withdraw", {}, w["id"], a)
+    assert err.value.detail["code"] == "task_has_dependents"
+    assert tasks[c]["withdraw"]["enabled"] and tasks[c]["dependencies"]["enabled"]
+    assert tasks[c]["move"]["enabled"]
+    assert tasks[a]["withdraw_evidence"]["reason"] == "evidence_not_pending"
+    assert tasks[a]["add_evidence"]["reason"] == "missing_evidence_required"
+    assert tasks[a]["resolve_loop"]["reason"] == "review_loop_unavailable"
+    assert tasks[a]["accept"]["reason"] == "not_awaiting_review"
+    assert tasks[a]["stop"]["reason"] == "no_running_worker"
+    for name in ("patch", "accept_goal", "review_round", "add_tasks", "import"):
+        assert wf[name]["enabled"], name
+    w = execute("withdraw", {}, w["id"], c)
+    _, tasks, _ = actions_for(setup_workflow, w["id"], setup_workflow[1])
+    assert tasks[c]["withdraw"]["reason"] == "withdrawal_not_allowed"
+    assert tasks[c]["move"]["reason"] == "task_history_present"
+
+    for t in (a, b):
+        w = execute("prepare", {}, w["id"], t)
+    revisions = {t["id"]: t["work_revision"] for t in w["tasks"] if t["id"] != c}
+    w = execute("start", {"task_ids": [a, b], "task_revisions": revisions}, w["id"])
+    _, tasks, _ = actions_for(setup_workflow, w["id"], setup_workflow[1])
+    assert tasks[a]["submit_outside_result"]["enabled"]
+    w = execute(
+        "external_result",
+        {"evidence": {"narrative": "Done elsewhere"}, "produced_by": "Outside team"},
+        w["id"],
+        a,
+    )
+    _, tasks, _ = actions_for(setup_workflow, w["id"], setup_workflow[1])
+    assert tasks[a]["submit_outside_result"]["reason"] == "owner_evidence_pending"
+    assert tasks[a]["withdraw_evidence"]["enabled"]
+    assert tasks[a]["retry"]["reason"] == "owner_decision_required"
+    assert ws.WorkflowHooks().completion_permission(None, {}, {}) == {
+        "allowed": False,
+        "reason": "approval_integration_required",
+    }
+
+
+def test_accept_and_stop_actions_follow_live_turn_and_approval_hook(setup_workflow):
+    _, _, _, other, _, execute = setup_workflow
+    w = prepare_and_start(setup_workflow, create(setup_workflow, count=1))
+    tid = w["tasks"][0]["id"]
+    e, ref = submit_result(setup_workflow, w, tid)
+    _, tasks, _ = actions_for(setup_workflow, w["id"], setup_workflow[1])
+    assert tasks[tid]["accept"]["enabled"] and tasks[tid]["reject"]["enabled"]
+    assert tasks[tid]["accept"]["permission"] == "task_approval"
+    assert tasks[tid]["stop"]["enabled"]
+    assert tasks[tid]["hold"]["reason"] == "reservation_live"
+    # Another verified human may reject; accept is decided by the approval hook.
+    _, by_member, _ = actions_for(
+        setup_workflow, w["id"], ws.WorkflowActor(other, True)
+    )
+    assert by_member[tid]["reject"]["enabled"]
+    assert by_member[tid]["stop"]["reason"] == "workflow_owner_required"
+    _, unintegrated, _ = actions_for(
+        setup_workflow, w["id"], setup_workflow[1], hooks=ws.WorkflowHooks()
+    )
+    assert unintegrated[tid]["accept"]["reason"] == "approval_integration_required"
+    w = execute("stop", {}, w["id"], tid)
+    _, tasks, _ = actions_for(setup_workflow, w["id"], setup_workflow[1])
+    assert tasks[tid]["stop"]["reason"] == "stop_already_requested"
+    assert tasks[tid]["reissue_stop"]["enabled"]
+    assert tasks[tid]["release_lost_worker"]["reason"] == "release_not_yet_available"
+
+
+def test_actions_respect_pause_agents_objectives_and_disabled_capability(
+    setup_workflow, monkeypatch
+):
+    cid, _, worker, _, _, execute = setup_workflow
+    w = execute(
+        "create",
+        {
+            "title": "Objectives",
+            "goal": "Goal",
+            "tasks": [
+                {
+                    "client_key": "t0",
+                    "title": "Task",
+                    "definition_of_done": "Result",
+                    "assignee_id": worker,
+                }
+            ],
+            "objectives": [{"title": "Tested", "criteria": "Tests pass"}],
+        },
+    )
+    oid = w["objectives"][0]["id"]
+    tid = w["tasks"][0]["id"]
+    agent = ws.WorkflowActor(worker, True, True)
+    wf, _, _ = actions_for(setup_workflow, w["id"], agent)
+    assert wf["add_tasks"]["reason"] == "workflow_not_started"
+    assert wf["review_round"]["reason"] == "workflow_not_started"
+    assert wf["patch"]["reason"] == "workflow_owner_required"
+    _, _, objectives = actions_for(setup_workflow, w["id"], setup_workflow[1])
+    assert objectives[oid]["accept_objective"]["enabled"]
+    assert objectives[oid]["edit_objective"]["enabled"]
+
+    w = prepare_and_start(setup_workflow, w)
+    wf, _, _ = actions_for(setup_workflow, w["id"], agent)
+    assert wf["add_tasks"]["enabled"] and wf["review_round"]["enabled"]
+    w = execute("pause", {}, w["id"])
+    wf, tasks, objectives = actions_for(setup_workflow, w["id"], setup_workflow[1])
+    assert wf["resume"]["enabled"] and wf["patch"]["enabled"]
+    for name in ("start", "finish", "add_tasks", "import", "move", "review_round"):
+        assert wf[name]["reason"] == "workflow_not_active", name
+    assert tasks[tid]["release"]["reason"] == "workflow_not_active"
+    assert tasks[tid]["dependencies"]["reason"] == "workflow_not_active"
+    assert objectives[oid]["accept_objective"]["enabled"]
+    with db_cursor() as (_, cur):
+        cur.execute("UPDATE containers SET status='paused' WHERE id=%s", (cid,))
+    wf, tasks, _ = actions_for(setup_workflow, w["id"], setup_workflow[1])
+    assert (
+        wf["resume"]["reason"] == tasks[tid]["hold"]["reason"] == "project_not_active"
+    )
+    assert wf["transfer_owner"]["enabled"]
+    with db_cursor() as (_, cur):
+        cur.execute("UPDATE containers SET status='active' WHERE id=%s", (cid,))
+
+    monkeypatch.setattr(ws, "WORKFLOWS_INTEGRATED", False)
+    wf, tasks, objectives = actions_for(setup_workflow, w["id"], setup_workflow[1])
+    every = [*wf.values(), *tasks[tid].values(), *objectives[oid].values()]
+    assert every and all(
+        not a["enabled"] and a["reason"] == "integration_required" for a in every
+    )
