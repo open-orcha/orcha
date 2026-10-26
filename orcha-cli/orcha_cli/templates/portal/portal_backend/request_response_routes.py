@@ -164,7 +164,7 @@ def respond_request(rid: str, body: RequestRespond, request: Request):
             },
         )
         # An answer never resumes a failure pause; say so instead of implying a wake.
-        paused = failure_pause_status(cur, rid)
+        paused = failure_pause_status(cur, str(r["requester_id"]) if r["requester_id"] else None)
         conn.commit()
     result = {"request_id": rid, "status": "answered", "unblocks_parent": unblocks_parent}
     return {**result, "automatic_work": paused} if paused else result

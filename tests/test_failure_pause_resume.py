@@ -154,3 +154,40 @@ async def test_pause_listing_points_at_the_notice_that_can_resume_it(
     assert [(r["agent_id"], r["paused"], r["notice_request_id"]) for r in listing] == [(aid, True, rid)]
     assert (await resume(client, rid, human)).json()["resumed"] is True
     assert (await client.get(f"/api/containers/{cid}/wake-backoff")).json()["backoffs"] == []
+
+
+async def test_other_answers_and_nudges_say_paused_then_reach_the_agent_after_resume(
+    client, container, make_agent, make_task, make_request, db,
+):
+    cid, human, aid, tid = await setup(client, container, make_agent, make_task)
+    parent = await make_request(human, "Ship the reviewed fix", target_alias="Builder")
+    child = await make_request(aid, "Which branch?", target_alias="Owner", parent_request_id=parent["id"])
+    question = await make_request(aid, "May I rebase?", target_alias="Owner")
+    await fail_three_times(client, db, aid, tid)
+    notice = str(db.execute("SELECT entity_id FROM events WHERE entity_type='request' "
+                            "AND event_type='created' AND actor_type='system'")[0]["entity_id"])
+    resume_path = f"/api/requests/{notice}/resume-automatic-work"
+
+    # The paused agent's own question and a parent chain: saved, unblocked, but not started.
+    answered = await client.post(f"/api/requests/{child['id']}/respond", json={
+        "responder_agent_id": human, "response": "Use main"})
+    assert answered.status_code == 200, answered.text
+    assert answered.json()["unblocks_parent"]["parent_request_id"] == parent["id"]
+    assert answered.json()["automatic_work"]["resume_path"] == resume_path
+    nudge = await client.post(f"/api/requests/{parent['id']}/nudge", json={"actor_agent_id": human})
+    assert nudge.status_code == 200 and nudge.json()["nudged"] is True
+    assert nudge.json()["automatic_work"]["notice_request_id"] == notice
+    assert not (await candidate(client, cid, aid))["should_wake"]
+
+    assert (await resume(client, notice, human)).json()["resumed"] is True
+    later = await client.post(f"/api/requests/{question['id']}/respond", json={
+        "responder_agent_id": human, "response": "Yes"})
+    assert later.status_code == 200 and "automatic_work" not in later.json()
+    ready = await candidate(client, cid, aid)
+    assert ready["should_wake"]
+    rows = {e["id"]: e for e in db.event_rows(aid)}
+    answered_ids = {json.loads(rows[i]["payload"]).get("request_id") if isinstance(rows[i]["payload"], str)
+                    else rows[i]["payload"].get("request_id")
+                    for i in ready["handled_event_ids"] if i in rows and rows[i]["event_name"] == "request_answered"}
+    assert {child["id"], question["id"]} <= answered_ids
+    assert "prompt" in [rows[i]["event_name"] for i in ready["handled_event_ids"] if i in rows]

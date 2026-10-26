@@ -173,17 +173,23 @@ def failure_pause_notice(cur, rid):
             "state": state, "pause": pause}
 
 
-def failure_pause_status(cur, rid):
-    """What an answer or nudge must tell the human about a still-active pause."""
-    notice = failure_pause_notice(cur, rid)
-    if not notice or notice["state"] != "paused":
+def failure_pause_status(cur, aid):
+    """What an answer or nudge must tell the human when the agent it would wake is
+    failure-paused: the reply is saved, nothing starts, and where to resume."""
+    pause = failure_state(cur, aid) if aid else None
+    if pause is None or pause["strikes"] < FAILURE_LIMIT:
         return None
+    cur.execute("SELECT alias, container_id FROM agents WHERE id=%s", (aid,))
+    agent = cur.fetchone()
+    nid = active_notice_ids(cur, str(agent["container_id"])).get(str(aid))
+    where = "on its pause notice" if nid else "in Activity"
     return {
         "paused": True,
-        "agent_id": notice["agent_id"],
-        "message": (f"Saved, but {notice['alias']}'s automatic work is still paused and it will not "
-                    "start. Choose Resume automatic work when the cause is fixed."),
-        "resume_path": f"/api/requests/{rid}/resume-automatic-work",
+        "agent_id": str(aid),
+        "notice_request_id": nid,
+        "message": (f"Saved, but {agent['alias']}'s automatic work is still paused and it will not "
+                    f"start. Choose Resume automatic work {where} when the cause is fixed."),
+        "resume_path": f"/api/requests/{nid}/resume-automatic-work" if nid else None,
     }
 
 

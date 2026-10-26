@@ -190,7 +190,7 @@ def nudge_request(rid: str, body: NudgeBody, request: Request):
             {"by_human": True, "role": role},
         )
         # The prompt is saved, but a failure-paused agent will not start until resumed.
-        paused = failure_pause_status(cur, rid)
+        paused = failure_pause_status(cur, recipient_id)
         conn.commit()
     result = {
         "request_id": rid,
