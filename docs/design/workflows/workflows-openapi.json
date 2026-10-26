@@ -62,6 +62,82 @@
         }
       }
     },
+    "/api/containers/{cid}/workflow-task-search": {
+      "get": {
+        "summary": "Search Workflow Tasks",
+        "description": "Return a bounded picker page and only the draft's selected task records.",
+        "operationId": "search_workflow_tasks_api_containers__cid__workflow_task_search_get",
+        "parameters": [
+          {
+            "name": "cid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Cid"
+            }
+          },
+          {
+            "name": "query",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 200,
+              "default": "",
+              "title": "Query"
+            }
+          },
+          {
+            "name": "selected",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 200,
+              "title": "Selected"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 5,
+              "minimum": 1,
+              "default": 5,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowTaskSearch"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/containers/{cid}/workflows": {
       "get": {
         "summary": "List Workflows",
@@ -5562,6 +5638,71 @@
           "available_actions"
         ],
         "title": "WorkflowTask"
+      },
+      "WorkflowTaskChoice": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "is_root": {
+            "type": "boolean",
+            "title": "Is Root"
+          },
+          "workflow_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workflow Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "title",
+          "status",
+          "is_root"
+        ],
+        "title": "WorkflowTaskChoice"
+      },
+      "WorkflowTaskSearch": {
+        "properties": {
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/WorkflowTaskChoice"
+            },
+            "type": "array",
+            "maxItems": 5,
+            "title": "Results"
+          },
+          "selected": {
+            "items": {
+              "$ref": "#/components/schemas/WorkflowTaskChoice"
+            },
+            "type": "array",
+            "maxItems": 200,
+            "title": "Selected"
+          }
+        },
+        "type": "object",
+        "required": [
+          "results",
+          "selected"
+        ],
+        "title": "WorkflowTaskSearch"
       }
     }
   }

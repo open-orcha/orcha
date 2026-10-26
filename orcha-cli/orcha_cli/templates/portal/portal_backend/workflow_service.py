@@ -818,16 +818,7 @@ class WorkflowService:
             (w["container_id"],),
         )
         w["graph_revision"] = guard["revision"] if guard else 1
-        project = self.one(
-            "SELECT max_tasks FROM containers WHERE id=%s", (w["container_id"],)
-        )
-        project_count = self.one(
-            "SELECT count(*) AS n FROM tasks WHERE container_id=%s",
-            (w["container_id"],),
-        )["n"]
-        full = (
-            len(s["tasks"]) >= w["task_limit"] or project_count >= project["max_tasks"]
-        )
+        full = len(s["tasks"]) >= w["task_limit"]
         startable = any(
             t["preparation_state"] == "prepared"
             and t["status"] not in {"completed", "cancelled"}
@@ -1587,17 +1578,7 @@ class WorkflowService:
                     status=403,
                 )
         existing = self.rows("SELECT * FROM tasks WHERE workflow_id=%s", (w["id"],))
-        project = self.one(
-            "SELECT max_tasks FROM containers WHERE id=%s", (w["container_id"],)
-        )
-        count = self.one(
-            "SELECT count(*) AS n FROM tasks WHERE container_id=%s",
-            (w["container_id"],),
-        )["n"]
-        if (
-            len(existing) + len(specs) > w["task_limit"]
-            or count + len(specs) > project["max_tasks"]
-        ):
+        if len(existing) + len(specs) > w["task_limit"]:
             conflict("task_limit", "The task limit would be exceeded.")
         keys = [s["client_key"] for s in specs]
         if len(set(keys)) != len(keys) or any(

@@ -415,6 +415,19 @@ class WorkflowList(BaseModel):
     next_cursor: str | None = None
 
 
+class WorkflowTaskChoice(BaseModel):
+    id: str
+    title: str
+    status: str
+    is_root: bool
+    workflow_id: str | None = None
+
+
+class WorkflowTaskSearch(BaseModel):
+    results: list[WorkflowTaskChoice] = Field(max_length=5)
+    selected: list[WorkflowTaskChoice] = Field(max_length=200)
+
+
 class ImportTaskImpact(BaseModel):
     id: str
     title: str

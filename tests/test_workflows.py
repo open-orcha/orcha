@@ -1504,6 +1504,111 @@ def test_workflow_draft_preview_is_read_only_and_binds_new_task_content(setup_wo
     assert created["created_task_ids"]["one"] == created["tasks"][0]["id"]
 
 
+def test_retained_project_history_does_not_consume_the_workflow_task_limit(
+    setup_workflow,
+):
+    cid, _, worker, _, _, execute = setup_workflow
+    with db_cursor() as (_, cur):
+        cur.execute("UPDATE containers SET max_tasks=200 WHERE id=%s", (cid,))
+        for index in range(205):
+            cur.execute(
+                "INSERT INTO tasks(id,container_id,title,definition_of_done,status) "
+                "VALUES (%s,%s,%s,'Retained result',%s)",
+                (
+                    uid(),
+                    cid,
+                    f"Retained task {index}",
+                    "completed" if index % 2 == 0 else "cancelled",
+                ),
+            )
+
+    workflow = create(setup_workflow, count=1)
+    actions = {row["action"]: row for row in workflow["available_actions"]}
+    assert actions["add_tasks"]["enabled"]
+    assert actions["import"]["enabled"]
+
+    workflow = execute("patch", {"task_limit": 1}, workflow["id"])
+    assert workflow["task_limit"] == 1
+    with pytest.raises(HTTPException) as err:
+        execute(
+            "add_tasks",
+            {
+                "tasks": [
+                    {
+                        "client_key": "over-workflow-limit",
+                        "title": "One task too many",
+                        "definition_of_done": "A concrete result",
+                        "assignee_id": worker,
+                    }
+                ]
+            },
+            workflow["id"],
+        )
+    assert err.value.detail["code"] == "task_limit"
+
+
+@pytest.mark.asyncio
+async def test_workflow_task_search_is_bounded_selected_and_project_authorized(
+    client, setup_workflow, monkeypatch
+):
+    cid = setup_workflow[0]
+    selected_id = uid()
+    other_cid, other_task = uid(), uid()
+    with db_cursor() as (_, cur):
+        for index in range(8):
+            task_id = selected_id if index == 3 else uid()
+            cur.execute(
+                "INSERT INTO tasks(id,container_id,title,definition_of_done,status) "
+                "VALUES (%s,%s,%s,'Searchable','ready')",
+                (task_id, cid, f"Search match {index}"),
+            )
+        cur.execute(
+            "INSERT INTO containers(id,name) VALUES (%s,'Other project')", (other_cid,)
+        )
+        cur.execute(
+            "INSERT INTO tasks(id,container_id,title,definition_of_done,status) "
+            "VALUES (%s,%s,'Search match elsewhere','Searchable','ready')",
+            (other_task, other_cid),
+        )
+
+    url = f"/api/containers/{cid}/workflow-task-search"
+    response = await client.get(
+        url,
+        params=[
+            ("query", "Search match"),
+            ("selected", selected_id),
+            ("selected", other_task),
+        ],
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert len(payload["results"]) == 5
+    assert [row["id"] for row in payload["selected"]] == [selected_id]
+    assert selected_id not in {row["id"] for row in payload["results"]}
+    assert all(row["title"].startswith("Search match") for row in payload["results"])
+
+    empty = await client.get(
+        url, params=[("query", "no such task"), ("selected", selected_id)]
+    )
+    assert empty.status_code == 200
+    assert empty.json()["results"] == []
+    assert [row["id"] for row in empty.json()["selected"]] == [selected_id]
+
+    literal_wildcard = await client.get(url, params={"query": "%"})
+    assert literal_wildcard.status_code == 200
+    assert literal_wildcard.json()["results"] == []
+    over_limit = await client.get(url, params={"query": "Search", "limit": 6})
+    assert over_limit.status_code == 422
+
+    monkeypatch.setenv("ORCHA_TRUST_PROXY_USER", "1")
+    refused = await client.get(
+        url, headers={"X-Auth-Request-User": "not-a-project-member"}
+    )
+    assert refused.status_code == 403
+    allowed = await client.get(url, headers={"X-Auth-Request-User": "owner"})
+    assert allowed.status_code == 200
+
+
 def test_review_rounds_are_fresh_acyclic_pairs_and_receipt_replay_is_exact(
     setup_workflow,
 ):

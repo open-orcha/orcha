@@ -33,8 +33,9 @@ it("offers only draft navigation after checking membership, with no mutation", a
 it("seeds an existing task without overwriting a retained creation draft or saving it", async () => {
   const scope = { origin: "https://orcha.example", project: "project", identity: crypto.randomUUID() };
   keepDraft(scope, { ...emptyDraft(), name: "Retained plan", goal: "Retained goal", tasks: [{ ...newDraftTask(), title: "Already planned" }] });
-  const fetch = vi.fn(); vi.stubGlobal("fetch", fetch);
-  render(<WorkflowDraftEditor scope={scope} saveUnavailableReason={null} initialTaskId="build" existingTasks={[{ id: "build", title: "Build Android", status: "ready", is_root: false }]} />);
+  const fetch = vi.fn(async (_url: string) => jsonResponse({ results: [], selected: [{ id: "build", title: "Build Android", status: "ready", is_root: false, workflow_id: null }] })); vi.stubGlobal("fetch", fetch);
+  render(<WorkflowDraftEditor scope={scope} saveUnavailableReason={null} initialTaskId="build" />);
   await waitFor(() => expect(screen.getByRole("checkbox", { name: /Build Android.*Will stay held/ })).toBeChecked());
-  expect(screen.getByLabelText("Workflow name")).toHaveValue("Retained plan"); expect(screen.getByLabelText("Task summary")).toHaveValue("Already planned"); expect(fetch).not.toHaveBeenCalled();
+  expect(screen.getByLabelText("Workflow name")).toHaveValue("Retained plan"); expect(screen.getByLabelText("Task summary")).toHaveValue("Already planned");
+  expect(String(fetch.mock.calls[0][0])).toContain("workflow-task-search");
 });

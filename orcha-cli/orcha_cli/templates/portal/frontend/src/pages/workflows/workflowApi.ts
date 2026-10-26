@@ -86,6 +86,7 @@ export async function workflowRequest<K extends keyof WorkflowModels>(name: K, u
 
 export const workflowPaths = {
   collection: (cid: string) => `/api/containers/${encodeURIComponent(cid)}/workflows`,
+  taskSearch: (cid: string) => `/api/containers/${encodeURIComponent(cid)}/workflow-task-search`,
   detail: (wid: string) => `/api/workflows/${encodeURIComponent(wid)}`,
   receipt: (cid: string, key: string, operation: string) => `/api/containers/${encodeURIComponent(cid)}/workflow-operations/${encodeURIComponent(key)}?${new URLSearchParams({ operation })}`,
 };

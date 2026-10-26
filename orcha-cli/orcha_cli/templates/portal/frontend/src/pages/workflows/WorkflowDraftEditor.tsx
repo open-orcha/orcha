@@ -9,13 +9,14 @@ import type { WorkflowDetail } from "./workflowContract.generated";
 import { WorkflowImportChoices, type ImportChoice } from "./WorkflowImport";
 import "./workflows.css";
 
-interface Props { scope: DraftScope; saveUnavailableReason: string | null; agents?: { id: string; alias: string }[]; existingTasks?: ImportChoice[]; initialTaskId?: string; ownerName?: string; onSaved?: (detail: WorkflowDetail) => void }
+interface Props { scope: DraftScope; saveUnavailableReason: string | null; agents?: { id: string; alias: string }[]; initialTaskId?: string; ownerName?: string; onSaved?: (detail: WorkflowDetail) => void }
 export function WorkflowDraftEditor(props: Props) {
   return <ScopedDraftEditor key={JSON.stringify(props.scope)} {...props} />;
 }
 
-function ScopedDraftEditor({ scope, saveUnavailableReason, agents = [], existingTasks = [], initialTaskId, ownerName, onSaved }: Props) {
+function ScopedDraftEditor({ scope, saveUnavailableReason, agents = [], initialTaskId, ownerName, onSaved }: Props) {
   const [draft, setDraft] = useState(() => readDraft(scope));
+  const [existingTasks, setExistingTasks] = useState<ImportChoice[]>([]);
   const [discarding, setDiscarding] = useState(false);
   const change = (next: WorkflowDraft) => { keepDraft(scope, next); setDraft(next); };
   const update = (task: DraftTask, patch: Partial<DraftTask>) => change({ ...draft, tasks: draft.tasks.map((t) => t.key === task.key ? { ...t, ...patch } : t) });
@@ -85,7 +86,7 @@ function ScopedDraftEditor({ scope, saveUnavailableReason, agents = [], existing
       })}
       <Button icon="plus" disabled={draft.tasks.length >= 200} onClick={() => change({ ...draft, tasks: [...draft.tasks, newDraftTask()] })}>Add task summary</Button>
     </section>
-    <WorkflowImportChoices tasks={existingTasks} selected={draft.existingTaskIds ?? []} onChange={(ids) => change({ ...draft, existingTaskIds: ids })} />
+    <WorkflowImportChoices scope={scope} selected={draft.existingTaskIds ?? []} onChange={(ids) => change({ ...draft, existingTaskIds: ids })} onSelectedChoices={setExistingTasks} />
     </fieldset>
     <WorkflowDraftSave draft={draft} scope={scope} unavailableReason={saveUnavailableReason} onImportChange={(ids) => change({ ...draft, existingTaskIds: ids })} onSaved={(result) => { discardDraft(scope); onSaved?.(result); }} />
     <Button disabled={frozen} onClick={() => setDiscarding(true)}>Discard draft</Button>

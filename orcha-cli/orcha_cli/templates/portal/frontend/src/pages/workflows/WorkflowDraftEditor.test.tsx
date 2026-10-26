@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WorkflowDraftEditor } from "./WorkflowDraftEditor";
 import { discardDraft, type DraftScope } from "./workflowDraft";
@@ -71,5 +71,32 @@ describe("local workflow preparation", () => {
     fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Discard draft" }));
     expect(screen.queryByLabelText("Task summary")).toBeNull();
     expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("uses five-result server search in creation drafts and retains selected tasks", async () => {
+    const available = Array.from({ length: 6 }, (_, index) => ({ id: `build-${index}`, title: `Build target ${index}`, status: "ready", is_root: false, workflow_id: null }));
+    const docs = { id: "docs", title: "Write release guide", status: "ready", is_root: false, workflow_id: null };
+    const urls: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+      urls.push(url);
+      const params = new URL(url, "https://orcha.example").searchParams;
+      const selected = params.getAll("selected");
+      const matches = params.get("query") === "docs" ? [docs] : available;
+      return { ok: true, status: 200, json: async () => ({
+        results: matches.filter((candidate) => !selected.includes(candidate.id)).slice(0, 5),
+        selected: selected.map((id) => [...available, docs].find((candidate) => candidate.id === id)).filter(Boolean),
+      }) } as Response;
+    }));
+    render(<WorkflowDraftEditor scope={scope()} saveUnavailableReason={reason} />);
+    expect(screen.getByText("Enter a task name to search.")).toBeVisible();
+    fireEvent.change(screen.getByLabelText("Find an existing task"), { target: { value: "build" } });
+    const results = await screen.findByRole("group", { name: "Task search results" });
+    expect(results.querySelectorAll('input[type="checkbox"]')).toHaveLength(5);
+    fireEvent.click(screen.getByRole("checkbox", { name: /Build target 0/ }));
+    fireEvent.change(screen.getByLabelText("Find an existing task"), { target: { value: "docs" } });
+    expect(await screen.findByRole("checkbox", { name: /Write release guide/ })).toBeVisible();
+    expect(within(screen.getByRole("group", { name: "Selected existing tasks" })).getByRole("checkbox", { name: /Build target 0/ })).toBeChecked();
+    await waitFor(() => expect(urls.length).toBeGreaterThanOrEqual(2));
+    expect(urls.every((url) => url.includes("workflow-task-search") && new URL(url, "https://orcha.example").searchParams.get("limit") === "5")).toBe(true);
   });
 });

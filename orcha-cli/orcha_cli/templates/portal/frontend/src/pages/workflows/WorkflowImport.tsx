@@ -2,9 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { Button } from "../../components/primitives/Button";
 import { Dialog } from "../../components/primitives/Dialog";
-import type { Task } from "../../types";
 import { actionReason, workflowPaths, workflowRequest } from "./workflowApi";
-import type { Preview, WorkflowDetail } from "./workflowContract.generated";
+import type { Preview, WorkflowDetail, WorkflowTaskChoice } from "./workflowContract.generated";
 import type { DraftScope } from "./workflowDraft";
 import { useWorkflowForm } from "./workflowFormState";
 import { sendWorkflowOperation, useWorkflowOperation } from "./workflowOperations";
@@ -12,24 +11,74 @@ import { WorkflowOperationNotice } from "./WorkflowOperationNotice";
 import { workflowTaskHref } from "./WorkflowReadViews";
 import { WorkflowImportReview, importAcceptances, missingImportReview, type ImportReviews } from "./WorkflowImportReview";
 
-export type ImportChoice = Pick<Task, "id" | "title" | "status" | "is_root">;
-export function WorkflowImportChoices({ tasks, selected, onChange, members = [] }: {
-  tasks: ImportChoice[]; selected: string[]; onChange: (ids: string[]) => void; members?: string[];
+export type ImportChoice = WorkflowTaskChoice;
+const SEARCH_LIMIT = 5;
+const SEARCH_DELAY_MS = 200;
+
+export function WorkflowImportChoices({ scope, selected, onChange, members = [], onSelectedChoices }: {
+  scope: DraftScope; selected: string[]; onChange: (ids: string[]) => void; members?: string[];
+  onSelectedChoices?: (tasks: ImportChoice[]) => void;
 }) {
   const [search, setSearch] = useState("");
-  const rows = tasks.filter((t) => t.title.toLowerCase().includes(search.toLowerCase()));
+  const [results, setResults] = useState<ImportChoice[]>([]);
+  const [selectedChoices, setSelectedChoices] = useState<ImportChoice[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [retry, setRetry] = useState(0);
+  const selectedKey = selected.join("\0");
+  useEffect(() => {
+    if (!search.trim() && selected.length === 0) {
+      setResults([]); setSelectedChoices([]); setLoading(false); setError("");
+      onSelectedChoices?.([]);
+      return;
+    }
+    let active = true;
+    const controller = new AbortController();
+    setLoading(true); setError("");
+    const timer = setTimeout(() => {
+      const query = new URLSearchParams({ query: search.trim(), limit: String(SEARCH_LIMIT) });
+      selected.forEach((id) => query.append("selected", id));
+      void workflowRequest("WorkflowTaskSearch", `${workflowPaths.taskSearch(scope.project)}?${query}`, {
+        signal: controller.signal, actorId: scope.identity,
+      }).then((response) => {
+        if (!active) return;
+        setResults(response.results);
+        setSelectedChoices(response.selected);
+        onSelectedChoices?.(response.selected);
+      }).catch((reason: unknown) => {
+        if (active) setError(reason instanceof Error ? reason.message : "Task search is unavailable.");
+      }).finally(() => { if (active) setLoading(false); });
+    }, SEARCH_DELAY_MS);
+    return () => { active = false; clearTimeout(timer); controller.abort(); };
+  }, [scope.project, scope.identity, search, selectedKey, retry, onSelectedChoices]);
+
+  const known = new Map([...selectedChoices, ...results].map((task) => [task.id, task]));
+  const chosen = selected.map((id, index) => known.get(id) ?? {
+    id, title: `Selected task ${index + 1}`, status: "unknown", is_root: false, workflow_id: null,
+  });
+  const reason = (task: ImportChoice) => members.includes(task.id) ? "Already in this workflow"
+    : task.workflow_id ? "Already in another workflow"
+    : task.is_root ? "Project objectives cannot join a workflow"
+    : ["in_progress", "needs_verification"].includes(task.status) ? "Wait for the current work and review to end"
+    : task.status === "cancelled" ? "Retry this task before adding it" : null;
+  const note = (task: ImportChoice) => task.status === "unknown" ? "Details unavailable; this selection is kept"
+    : reason(task) ?? (task.status === "completed" ? "Review its saved result before adding" : "Will stay held until explicitly released");
+  const changeChoice = (task: ImportChoice, checked: boolean) => {
+    const ids = checked ? [...selected, task.id] : selected.filter((id) => id !== task.id);
+    const rows = ids.map((id) => id === task.id ? task : known.get(id)).filter((row): row is ImportChoice => !!row);
+    setSelectedChoices(rows); onSelectedChoices?.(rows); onChange(ids);
+  };
+  const choice = (task: ImportChoice, checked: boolean) => <label className="wf-choice" key={task.id}><input type="checkbox" checked={checked}
+    disabled={!checked && !!reason(task)} onChange={(event) => changeChoice(task, event.target.checked)} />
+    <span>{task.title}<small>{note(task)}</small></span></label>;
   return <fieldset><legend>Existing tasks</legend>
-    <label>Find an existing task<input type="search" value={search} onChange={(e) => setSearch(e.target.value)} /></label>
-    <p>Search covers loaded project tasks. Orcha checks membership, workers and the whole connected dependency group before saving.</p>
-    {rows.length === 0 && <p>No loaded tasks match.</p>}
-    {rows.map((t) => {
-      const reason = members.includes(t.id) ? "Already in this workflow" : t.is_root ? "Project objectives cannot join a workflow"
-        : ["in_progress", "needs_verification"].includes(t.status) ? "Wait for the current work and review to end"
-        : t.status === "cancelled" ? "Retry this task before adding it" : null;
-      return <label className="wf-choice" key={t.id}><input type="checkbox" checked={selected.includes(t.id)} disabled={!!reason && !selected.includes(t.id)}
-        onChange={(e) => onChange(e.target.checked ? [...selected, t.id] : selected.filter((id) => id !== t.id))} />
-        <span>{t.title}<small>{reason ?? (t.status === "completed" ? "Review its saved result before adding" : "Will stay held until explicitly released")}</small></span></label>;
-    })}
+    <label>Find an existing task<input type="search" maxLength={200} value={search} aria-describedby="wf-task-search-help" onChange={(e) => { setResults([]); setSearch(e.target.value); }} /></label>
+    <p id="wf-task-search-help">Search runs on the server and shows up to five matches. Orcha checks membership, workers and the whole connected dependency group before saving.</p>
+    {chosen.length > 0 && <div role="group" aria-label="Selected existing tasks"><h4>Selected tasks</h4>{chosen.map((task) => choice(task, true))}</div>}
+    {loading && <p role="status">Searching project tasks…</p>}
+    {error && <><p role="alert">{error} Your selected tasks are kept.</p><Button onClick={() => setRetry((value) => value + 1)}>Try task search again</Button></>}
+    {!loading && !error && results.length === 0 && <p>{search.trim() ? "No tasks match this search." : "Enter a task name to search."}</p>}
+    {!error && results.length > 0 && <div role="group" aria-label="Task search results">{results.filter((task) => !selected.includes(task.id)).map((task) => choice(task, false))}</div>}
   </fieldset>;
 }
 
@@ -58,8 +107,8 @@ export function WorkflowImportImpact({ preview, selected, onChange, cid, release
   </section>;
 }
 
-export function WorkflowImport({ detail, scope, verified, stale, tasks, initialTaskId, onSaved }: {
-  detail: WorkflowDetail; scope: DraftScope; verified: boolean; stale: boolean; tasks: ImportChoice[]; initialTaskId?: string; onSaved: (result: WorkflowDetail) => void;
+export function WorkflowImport({ detail, scope, verified, stale, initialTaskId, onSaved }: {
+  detail: WorkflowDetail; scope: DraftScope; verified: boolean; stale: boolean; initialTaskId?: string; onSaved: (result: WorkflowDetail) => void;
 }) {
   const [open, setOpen] = useState(!!initialTaskId);
   const [selected, setSelected] = useWorkflowForm<string[]>(scope, `import:${detail.id}`, initialTaskId ? [initialTaskId] : []);
@@ -106,7 +155,7 @@ export function WorkflowImport({ detail, scope, verified, stale, tasks, initialT
     {open && <Dialog title="Add existing tasks" size="lg" className="wf-page" onClose={() => { if (!frozen) setOpen(false); }}
       footer={<><Button disabled={frozen} onClick={() => setOpen(false)}>Keep draft and close</Button><Button disabled={blocked} variant="primary" onClick={() => void save()}>Confirm addition</Button></>}>
       <fieldset className="wf-form-body" disabled={frozen}>
-        <WorkflowImportChoices tasks={tasks} selected={selected} onChange={setSelected} members={detail.tasks.map((t) => t.id)} />
+        <WorkflowImportChoices scope={scope} selected={selected} onChange={setSelected} members={detail.tasks.map((t) => t.id)} />
         <Button disabled={!selected.length || frozen || stale} onClick={() => void review()}>Review selected tasks</Button>
         {current && <WorkflowImportImpact preview={current.impact} selected={selected} onChange={setSelected} cid={scope.project}
           releaseIds={releaseIds} onReleaseChange={setReleaseIds} canRelease={canRelease} />}

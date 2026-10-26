@@ -7,10 +7,11 @@ membership. Authenticated work tokens remain the only agent identity lane.
 
 from typing import Literal
 
-from fastapi import Request, Query
+from fastapi import HTTPException, Request, Query
 
 from portal_backend.application import app
 from portal_backend.database import db_cursor
+from portal_backend.guards import valid_uuid
 from portal_backend.identity_routes import (
     proxy_login,
     require_member_read,
@@ -187,6 +188,61 @@ def list_workflows(
             "capability": workflow_capability(cid, request),
             "next_cursor": rows[limit - 1]["id"] if len(rows) > limit else None,
         }
+
+
+@app.get(
+    "/api/containers/{cid}/workflow-task-search",
+    response_model=model.WorkflowTaskSearch,
+)
+def search_workflow_tasks(
+    cid: str,
+    request: Request,
+    query: str = Query(default="", max_length=200),
+    selected: list[str] = Query(default_factory=list, max_length=200),
+    limit: int = Query(default=5, ge=1, le=5),
+):
+    """Return a bounded picker page and only the draft's selected task records."""
+    if not valid_uuid(cid):
+        raise HTTPException(400, "container_id is not a valid UUID")
+    selected_ids = list(dict.fromkeys(selected))
+    if any(not valid_uuid(task_id) for task_id in selected_ids):
+        raise HTTPException(400, "selected task id is not a valid UUID")
+    fields = "id,title,status,is_root,workflow_id"
+    with db_cursor(readonly=True) as (_, cur):
+        require_member_read(cur, request, cid)
+        selected_rows = []
+        if selected_ids:
+            placeholders = ",".join("%s" for _ in selected_ids)
+            cur.execute(
+                f"SELECT {fields} FROM tasks WHERE container_id=%s "
+                f"AND id IN ({placeholders})",
+                (cid, *selected_ids),
+            )
+            by_id = {str(row["id"]): row for row in cur.fetchall()}
+            selected_rows = [
+                by_id[task_id] for task_id in selected_ids if task_id in by_id
+            ]
+
+        where = "container_id=%s"
+        params: list[object] = [cid]
+        term = query.strip().lower()
+        if term:
+            escaped = (
+                term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            )
+            where += " AND lower(title) LIKE %s ESCAPE '\\'"
+            params.append(f"%{escaped}%")
+        if selected_ids:
+            placeholders = ",".join("%s" for _ in selected_ids)
+            where += f" AND id NOT IN ({placeholders})"
+            params.extend(selected_ids)
+        cur.execute(
+            f"SELECT {fields} FROM tasks WHERE {where} "
+            "ORDER BY lower(title),created_at,id LIMIT %s",
+            (*params, limit),
+        )
+        results = cur.fetchall()
+    return {"results": results, "selected": selected_rows}
 
 
 @app.post("/api/containers/{cid}/workflows/preview", response_model=model.Preview)

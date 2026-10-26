@@ -64,7 +64,7 @@ function WorkflowScreen() {
     const row = task && document.getElementById(`workflow-task-${task.id}`);
     if (row) { row.scrollIntoView?.({ block: "nearest" }); row.focus(); }
   }, [detail?.id, location.hash]);
-  const initialTaskId = snap?.tasks?.find((task) => task.id === params.get("addTask"))?.id;
+  const initialTaskId = params.get("addTask") ?? undefined;
   const serverStatus = ["preparing", "active", "ready"].includes(filter) ? "active" : ["paused", "completed", "cancelled"].includes(filter) ? filter : "";
   const query = (key: string, value: string) => setParams((previous) => { const p = new URLSearchParams(previous); value ? p.set(key, value) : p.delete(key); return p; });
   const actorName = (id: string) => snap?.agents.find((a) => a.id === id)?.alias ?? "Name unavailable";
@@ -150,8 +150,7 @@ function WorkflowScreen() {
     {loading && availability !== "checking" && <p role="status">Loading workflows…</p>}
     {isNew && cid && verified && <WorkflowDraftEditor scope={scope} saveUnavailableReason={stale || availability !== "ready" ? "Check the current connection before saving. Your draft is kept." : writeReason}
       agents={snap?.agents.filter((a) => a.kind === "ai" && a.status !== "terminated").map((a) => ({ id: a.id, alias: a.alias }))}
-      existingTasks={snap?.tasks ?? []} initialTaskId={initialTaskId}
-      ownerName={actorName(scope.identity)} onSaved={(result) => navigate(href(result.id), { state: navigationState })} />}
+      initialTaskId={initialTaskId} ownerName={actorName(scope.identity)} onSaved={(result) => navigate(href(result.id), { state: navigationState })} />}
     {isNew && !verified && <p>Choose a current human member of this project before preparing a workflow draft.</p>}
     {!isNew && !workflowId && list && <>
       <div className="wf-filters"><label>Status<select value={filter} onChange={(e) => query("status", e.target.value)}>
@@ -176,7 +175,7 @@ function WorkflowScreen() {
         acceptedTasks: detail.progress.accepted, totalTasks: detail.progress.total, acceptedObjectives: detail.progress.objectives_accepted, totalObjectives: detail.progress.objectives_total,
         goalLabel: detail.goal_accepted_revision === detail.goal_revision ? "Current goal accepted" : "Goal needs acceptance" }} />
       <WorkflowActions detail={detail} scope={scope} verified={verified} stale={stale} onSaved={() => { setStale(true); setRetry((n) => n + 1); }} />
-      <WorkflowImport detail={detail} scope={scope} verified={verified} stale={stale} tasks={snap?.tasks ?? []} initialTaskId={initialTaskId} onSaved={() => { setStale(true); setRetry((n) => n + 1); }} />
+      <WorkflowImport detail={detail} scope={scope} verified={verified} stale={stale} initialTaskId={initialTaskId} onSaved={() => { setStale(true); setRetry((n) => n + 1); }} />
       <WorkflowAddTasks detail={detail} scope={scope} verified={verified} stale={stale} agents={snap?.agents.filter((a) => a.kind === "ai" && a.status !== "terminated").map((a) => ({ id: a.id, alias: a.alias })) ?? []} onSaved={() => { setStale(true); setRetry((n) => n + 1); }} />
       <WorkflowSettings detail={detail} scope={scope} verified={verified} stale={stale} humans={snap?.agents.filter((a) => a.kind === "human" && a.status !== "terminated").map((a) => ({ id: a.id, alias: a.alias })) ?? []} onSaved={() => { setStale(true); setRetry((n) => n + 1); }} />
       <WorkflowMove detail={detail} scope={scope} verified={verified} stale={stale} onSaved={() => { setStale(true); setRetry((n) => n + 1); }} />

@@ -1,5 +1,5 @@
 // Generated from FastAPI OpenAPI slices. DO NOT EDIT.
-// Workflow source SHA-256: 1efb4ebae382d0e3ca009b7be96fcaafbfd224028d4b0b11ed346a6be288587d
+// Workflow source SHA-256: 62aece78664480d405eba842e86c3e20b1d79b35434fd814a48f29fdf819c86c
 // Evidence GET source SHA-256: f2a794298f992bd3ff3955fa5d6aefc30a97e373794a3c1e9d03c8f46796853e
 // Regenerate with tools/generate-workflow-contract.mjs and both source files.
 
@@ -545,6 +545,19 @@ export type WorkflowTask = {
   "acceptance"?: TaskAcceptance | null;
 };
 
+export type WorkflowTaskChoice = {
+  "id": string;
+  "title": string;
+  "status": string;
+  "is_root": boolean;
+  "workflow_id"?: string | null;
+};
+
+export type WorkflowTaskSearch = {
+  "results": Array<WorkflowTaskChoice>;
+  "selected": Array<WorkflowTaskChoice>;
+};
+
 export type WorkflowTaskEvidence = {
   "task_id": string;
   "workflow_id": string;
@@ -645,6 +658,8 @@ export type WorkflowModels = {
   WorkflowList: WorkflowList;
   WorkflowPatch: WorkflowPatch;
   WorkflowTask: WorkflowTask;
+  WorkflowTaskChoice: WorkflowTaskChoice;
+  WorkflowTaskSearch: WorkflowTaskSearch;
   WorkflowTaskEvidence: WorkflowTaskEvidence;
   SavedEvidenceSet: SavedEvidenceSet;
   SavedEvidenceItem: SavedEvidenceItem;
@@ -3438,6 +3453,62 @@ export const workflowSchemas = {
       "available_actions"
     ]
   },
+  "WorkflowTaskChoice": {
+    "properties": {
+      "id": {
+        "type": "string"
+      },
+      "title": {
+        "type": "string"
+      },
+      "status": {
+        "type": "string"
+      },
+      "is_root": {
+        "type": "boolean"
+      },
+      "workflow_id": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "type": "object",
+    "required": [
+      "id",
+      "title",
+      "status",
+      "is_root"
+    ]
+  },
+  "WorkflowTaskSearch": {
+    "properties": {
+      "results": {
+        "items": {
+          "$ref": "#/components/schemas/WorkflowTaskChoice"
+        },
+        "type": "array",
+        "maxItems": 5
+      },
+      "selected": {
+        "items": {
+          "$ref": "#/components/schemas/WorkflowTaskChoice"
+        },
+        "type": "array",
+        "maxItems": 200
+      }
+    },
+    "type": "object",
+    "required": [
+      "results",
+      "selected"
+    ]
+  },
   "WorkflowTaskEvidence": {
     "properties": {
       "task_id": {
@@ -3727,6 +3798,10 @@ export const workflowSchemas = {
 export const workflowRoutes = [
   {
     "path": "/api/containers/{cid}/workflow-operations/{idempotency_key}",
+    "method": "get"
+  },
+  {
+    "path": "/api/containers/{cid}/workflow-task-search",
     "method": "get"
   },
   {

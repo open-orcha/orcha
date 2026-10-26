@@ -8,6 +8,20 @@ import type { Preview } from "./workflowContract.generated";
 const scope = () => ({ origin: "https://orcha.example", project: "project", identity: crypto.randomUUID() });
 const detail = () => exampleWorkflow({ capability: writeCapability, tasks: [], available_actions: [{ action: "import", enabled: true }, { action: "add_tasks", enabled: true }] });
 const choices = [{ id: "qa", title: "QA checklist", status: "ready", is_root: false }, { id: "data", title: "Prepare test data", status: "ready", is_root: false }];
+const searchResponse = (url: string) => {
+  const query = new URL(url, "https://orcha.example").searchParams;
+  const selected = query.getAll("selected");
+  const term = (query.get("query") ?? "").toLowerCase();
+  return jsonResponse({
+    results: choices.filter((task) => !selected.includes(task.id) && task.title.toLowerCase().includes(term)).slice(0, 5),
+    selected: selected.map((id) => choices.find((task) => task.id === id)).filter(Boolean),
+  });
+};
+async function openImport() {
+  fireEvent.click(screen.getByRole("button", { name: "Add existing tasks" }));
+  fireEvent.change(screen.getByLabelText("Find an existing task"), { target: { value: "a" } });
+  await screen.findByRole("checkbox", { name: /QA checklist/ });
+}
 const impact = (ids: string[]): Preview => ({ graph_revision: 2, preview_digest: ids.join(","), selected_task_ids: ids, required_task_ids: ["qa", "data"], save_starts_work: false,
   blockers: ids.includes("data") ? [] : [{ code: "closure", message: "QA checklist also requires Prepare test data." }], task_impacts: choices.map((t) => ({ ...t, workflow_id: null, eligible: true, requires_acceptance: false, result_digest: null,
     definition_of_done: "Checks pass", preparation_state: "prepared", start_hold: true, human_hold_reason: null, assignee_ids: [], depends_on: t.id === "qa" ? ["data"] : [] })) });
@@ -17,12 +31,13 @@ it("imports with start choices OFF by default and sends only explicitly releasab
   const p = impact(["qa", "data"]); p.task_impacts![0].releasable = true; p.task_impacts![1].releasable = false;
   const writes: Record<string, unknown>[] = [];
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+    if (url.includes("workflow-task-search")) return searchResponse(url);
     if (url.endsWith("import-preview")) return jsonResponse(p);
     if (url.endsWith("/import")) writes.push(JSON.parse(String(init?.body)));
     return jsonResponse(current);
   }));
-  render(<MemoryRouter><WorkflowImport detail={current} scope={scope()} verified stale={false} tasks={choices} onSaved={vi.fn()} /></MemoryRouter>);
-  fireEvent.click(screen.getByRole("button", { name: "Add existing tasks" }));
+  render(<MemoryRouter><WorkflowImport detail={current} scope={scope()} verified stale={false} onSaved={vi.fn()} /></MemoryRouter>);
+  await openImport();
   for (const title of [/QA checklist/, /Prepare test data/]) fireEvent.click(screen.getByRole("checkbox", { name: title }));
   fireEvent.click(screen.getByRole("button", { name: "Review selected tasks" }));
   const start = await screen.findByRole("checkbox", { name: "Start this task when it is ready: QA checklist" });
@@ -41,12 +56,13 @@ it("keeps an unavailable import start choice after refusal and requires explicit
   const p = impact(["qa", "data"]); p.task_impacts![0].releasable = true;
   let writes = 0;
   vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+    if (url.includes("workflow-task-search")) return searchResponse(url);
     if (url.endsWith("import-preview")) return jsonResponse(p);
     if (url.endsWith("/import")) { writes++; return jsonResponse({ detail: { code: "release_not_allowed", message: "QA checklist can no longer start from import" } }, 409); }
     return jsonResponse(current);
   }));
-  render(<MemoryRouter><WorkflowImport detail={current} scope={scope()} verified stale={false} tasks={choices} onSaved={vi.fn()} /></MemoryRouter>);
-  fireEvent.click(screen.getByRole("button", { name: "Add existing tasks" }));
+  render(<MemoryRouter><WorkflowImport detail={current} scope={scope()} verified stale={false} onSaved={vi.fn()} /></MemoryRouter>);
+  await openImport();
   for (const title of [/QA checklist/, /Prepare test data/]) fireEvent.click(screen.getByRole("checkbox", { name: title }));
   fireEvent.click(screen.getByRole("button", { name: "Review selected tasks" }));
   fireEvent.click(await screen.findByRole("checkbox", { name: "Start this task when it is ready: QA checklist" }));
@@ -64,13 +80,14 @@ it("keeps an unavailable import start choice after refusal and requires explicit
 it("requires explicit closure selection and a second preview before importing atomically", async () => {
   const saved = vi.fn(); const writes: Record<string, unknown>[] = [];
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+    if (url.includes("workflow-task-search")) return searchResponse(url);
     const body = init?.body ? JSON.parse(String(init.body)) : null;
     if (url.endsWith("import-preview")) return jsonResponse(impact(body.task_ids));
     if (url.endsWith("/import")) writes.push(body);
     return jsonResponse(detail());
   }));
-  render(<MemoryRouter><WorkflowImport detail={detail()} scope={scope()} verified stale={false} tasks={choices} onSaved={saved} /></MemoryRouter>);
-  fireEvent.click(screen.getByRole("button", { name: "Add existing tasks" }));
+  render(<MemoryRouter><WorkflowImport detail={detail()} scope={scope()} verified stale={false} onSaved={saved} /></MemoryRouter>);
+  await openImport();
   fireEvent.click(screen.getByRole("checkbox", { name: /QA checklist/ }));
   fireEvent.click(screen.getByRole("button", { name: "Review selected tasks" }));
   await screen.findByText(/QA checklist also requires/);
@@ -85,10 +102,11 @@ it("requires explicit closure selection and a second preview before importing at
 });
 it("retains import choices on a conflict and across navigation, without a reusable confirmation", async () => {
   const identity = scope();
-  vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => url.endsWith("import-preview") ? jsonResponse(impact(JSON.parse(String(init?.body)).task_ids))
+  vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => url.includes("workflow-task-search") ? searchResponse(url)
+    : url.endsWith("import-preview") ? jsonResponse(impact(JSON.parse(String(init?.body)).task_ids))
     : url.endsWith("/import") ? jsonResponse({ detail: { code: "changed", message: "Prepare test data started. Nothing was added." } }, 409) : jsonResponse(detail())));
-  const view = render(<MemoryRouter><WorkflowImport detail={detail()} scope={identity} verified stale={false} tasks={choices} onSaved={vi.fn()} /></MemoryRouter>);
-  fireEvent.click(screen.getByRole("button", { name: "Add existing tasks" }));
+  const view = render(<MemoryRouter><WorkflowImport detail={detail()} scope={identity} verified stale={false} onSaved={vi.fn()} /></MemoryRouter>);
+  await openImport();
   for (const title of [/QA checklist/, /Prepare test data/]) fireEvent.click(screen.getByRole("checkbox", { name: title }));
   fireEvent.click(screen.getByRole("button", { name: "Review selected tasks" }));
   await waitFor(() => expect(screen.getByRole("button", { name: "Confirm addition" })).toBeEnabled());
@@ -96,17 +114,18 @@ it("retains import choices on a conflict and across navigation, without a reusab
   await screen.findByText(/Prepare test data started/);
   expect(screen.getByRole("checkbox", { name: /QA checklist/ })).toBeChecked();
   expect(screen.getByRole("button", { name: "Confirm addition" })).toBeDisabled();
-  view.unmount(); render(<MemoryRouter><WorkflowImport detail={detail()} scope={identity} verified stale={false} tasks={choices} onSaved={vi.fn()} /></MemoryRouter>);
-  fireEvent.click(screen.getByRole("button", { name: "Add existing tasks" }));
+  view.unmount(); render(<MemoryRouter><WorkflowImport detail={detail()} scope={identity} verified stale={false} onSaved={vi.fn()} /></MemoryRouter>);
+  await openImport();
   expect(screen.getByRole("checkbox", { name: /Prepare test data/ })).toBeChecked(); expect(screen.getByRole("button", { name: "Confirm addition" })).toBeDisabled();
 });
 it("does not fabricate acceptance from a completed task or an apparently clear preview", async () => {
   vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+    if (url.includes("workflow-task-search")) return searchResponse(url);
     const p = impact(["qa"]); p.required_task_ids = ["qa"]; p.blockers = []; p.task_impacts![0].requires_acceptance = true;
     return jsonResponse(url.endsWith("import-preview") ? p : detail());
   }));
-  render(<MemoryRouter><WorkflowImport detail={detail()} scope={scope()} verified stale={false} tasks={choices} onSaved={vi.fn()} /></MemoryRouter>);
-  fireEvent.click(screen.getByRole("button", { name: "Add existing tasks" })); fireEvent.click(screen.getByRole("checkbox", { name: /QA checklist/ }));
+  render(<MemoryRouter><WorkflowImport detail={detail()} scope={scope()} verified stale={false} onSaved={vi.fn()} /></MemoryRouter>);
+  await openImport(); fireEvent.click(screen.getByRole("checkbox", { name: /QA checklist/ }));
   fireEvent.click(screen.getByRole("button", { name: "Review selected tasks" })); await screen.findByText(/needs explicit review of its exact saved result/);
   expect(screen.getByRole("button", { name: "Confirm addition" })).toBeDisabled();
 });
@@ -128,12 +147,13 @@ it("accepts only the exact finished result shown in the preview with an explicit
   const writes: Record<string, unknown>[] = []; const saved = vi.fn();
   const p = impact(["qa", "data"]); p.task_impacts![0] = { ...p.task_impacts![0], requires_acceptance: true, status: "completed", result_digest: "a".repeat(64), result_text: "Saved pairing checks passed.", definition_of_done: "Pairing passes on both platforms" };
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+    if (url.includes("workflow-task-search")) return searchResponse(url);
     if (url.endsWith("import-preview")) return jsonResponse(p);
     if (url.endsWith("/import")) writes.push(JSON.parse(String(init?.body)));
     return jsonResponse(detail());
   }));
-  render(<MemoryRouter><WorkflowImport detail={detail()} scope={scope()} verified stale={false} tasks={choices} onSaved={saved} /></MemoryRouter>);
-  fireEvent.click(screen.getByRole("button", { name: "Add existing tasks" }));
+  render(<MemoryRouter><WorkflowImport detail={detail()} scope={scope()} verified stale={false} onSaved={saved} /></MemoryRouter>);
+  await openImport();
   for (const title of [/QA checklist/, /Prepare test data/]) fireEvent.click(screen.getByRole("checkbox", { name: title }));
   fireEvent.click(screen.getByRole("button", { name: "Review selected tasks" })); await screen.findByText("Saved pairing checks passed.");
   expect(screen.getByText(/Done when: Pairing passes/)).toBeVisible(); expect(screen.getByRole("button", { name: "Confirm addition" })).toBeDisabled();
@@ -142,4 +162,37 @@ it("accepts only the exact finished result shown in the preview with an explicit
   fireEvent.click(screen.getByRole("checkbox", { name: "I accept this saved result for QA checklist." }));
   fireEvent.click(screen.getByRole("button", { name: "Confirm addition" })); await waitFor(() => expect(saved).toHaveBeenCalledOnce());
   expect(writes[0]).toMatchObject({ preview_digest: "qa,data", acceptances: { qa: { reviewed_result_digest: "a".repeat(64), evidence: { narrative: "These saved checks satisfy the pairing criteria." } } } });
+});
+
+it("keeps an existing-workflow selection while task search fails and recovers", async () => {
+  const available = Array.from({ length: 6 }, (_, index) => ({ id: `task-${index}`, title: `Match ${index}`, status: "ready", is_root: false, workflow_id: null }));
+  const urls: string[] = [];
+  let failing = false;
+  vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+    if (!url.includes("workflow-task-search")) return jsonResponse(detail());
+    urls.push(url);
+    if (failing) return jsonResponse({ detail: { message: "Task search failed." } }, 503);
+    const params = new URL(url, "https://orcha.example").searchParams;
+    const selected = params.getAll("selected");
+    return jsonResponse({
+      results: available.filter((task) => !selected.includes(task.id)).slice(0, 5),
+      selected: selected.map((id) => available.find((task) => task.id === id)).filter(Boolean),
+    });
+  }));
+  render(<MemoryRouter><WorkflowImport detail={detail()} scope={scope()} verified stale={false} onSaved={vi.fn()} /></MemoryRouter>);
+  fireEvent.click(screen.getByRole("button", { name: "Add existing tasks" }));
+  expect(screen.getByText("Enter a task name to search.")).toBeVisible();
+  fireEvent.change(screen.getByLabelText("Find an existing task"), { target: { value: "match" } });
+  const results = await screen.findByRole("group", { name: "Task search results" });
+  expect(results.querySelectorAll('input[type="checkbox"]')).toHaveLength(5);
+  fireEvent.click(screen.getByRole("checkbox", { name: /Match 0/ }));
+  failing = true;
+  fireEvent.change(screen.getByLabelText("Find an existing task"), { target: { value: "broken" } });
+  expect(await screen.findByRole("alert")).toHaveTextContent("Task search failed");
+  expect(screen.getByRole("group", { name: "Selected existing tasks" }).querySelector('input[type="checkbox"]')).toBeChecked();
+  expect(new URL(urls.at(-1)!, "https://orcha.example").searchParams.getAll("selected")).toEqual(["task-0"]);
+  failing = false;
+  fireEvent.click(screen.getByRole("button", { name: "Try task search again" }));
+  await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+  expect(urls.every((url) => new URL(url, "https://orcha.example").searchParams.get("limit") === "5")).toBe(true);
 });
