@@ -220,7 +220,9 @@ def search_workflow_tasks(
             )
             by_id = {str(row["id"]): row for row in cur.fetchall()}
             selected_rows = [
-                by_id[task_id] for task_id in selected_ids if task_id in by_id
+                service._row(by_id[task_id])
+                for task_id in selected_ids
+                if task_id in by_id
             ]
 
         where = "container_id=%s"
@@ -241,7 +243,7 @@ def search_workflow_tasks(
             "ORDER BY lower(title),created_at,id LIMIT %s",
             (*params, limit),
         )
-        results = cur.fetchall()
+        results = [service._row(row) for row in cur.fetchall()]
     return {"results": results, "selected": selected_rows}
 
 

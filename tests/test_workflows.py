@@ -1609,6 +1609,36 @@ async def test_workflow_task_search_is_bounded_selected_and_project_authorized(
     assert allowed.status_code == 200
 
 
+@pytest.mark.asyncio
+async def test_workflow_task_search_returns_string_ids_for_workflow_owned_tasks(
+    client, setup_workflow
+):
+    # PostgreSQL hands back UUID objects; both lists must reach the string schema.
+    cid = setup_workflow[0]
+    w = create(setup_workflow, count=2)
+    chosen, other = w["tasks"][0], w["tasks"][1]
+    response = await client.get(
+        f"/api/containers/{cid}/workflow-task-search",
+        params=[("query", "Task"), ("selected", chosen["id"])],
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["selected"] == [
+        {
+            "id": chosen["id"],
+            "title": chosen["title"],
+            "status": payload["selected"][0]["status"],
+            "is_root": False,
+            "workflow_id": w["id"],
+        }
+    ]
+    assert [row["id"] for row in payload["results"]] == [other["id"]]
+    assert payload["results"][0]["workflow_id"] == w["id"]
+    for row in payload["selected"] + payload["results"]:
+        assert isinstance(row["id"], str)
+        assert isinstance(row["workflow_id"], str)
+
+
 def test_review_rounds_are_fresh_acyclic_pairs_and_receipt_replay_is_exact(
     setup_workflow,
 ):
