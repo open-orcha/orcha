@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import { getJSON, type ApiError } from "../../api/client";
 import { Button } from "../../components/primitives/Button";
 import { StatusIcon } from "../../components/primitives";
-import { useSnapshot } from "../../state/SnapshotProvider";
+import { useActingAuthority, useSnapshot } from "../../state/SnapshotProvider";
 import { WorkflowEvidencePanel } from "./WorkflowEvidence";
 import { WorkflowTaskAcceptanceRecord } from "./WorkflowTaskAcceptanceRecord";
 import { hasWorkflowRoutes, WorkflowApiError, workflowPaths, workflowRequest, workflowWriteReason } from "./workflowApi";
@@ -19,12 +19,14 @@ const Context = createContext<Index | null>(null);
  * task snapshot does not project membership yet, so never infer it from a URL
  * hint, stored task status, assignee, or an incomplete first page. */
 export function WorkflowTaskProvider({ children }: { children: ReactNode }) {
-  const { cid, identity, identityTrusted, identityPending } = useSnapshot();
-  const scope = JSON.stringify([window.location.origin, cid, identity?.agent_id, identityTrusted, identityPending]);
-  return <MembershipIndex scope={scope} cid={cid}>{children}</MembershipIndex>;
+  const { cid, identityTrusted, identityPending } = useSnapshot();
+  const authority = useActingAuthority();
+  const actorId = !identityPending ? authority.human?.id ?? null : null;
+  const scope = JSON.stringify([window.location.origin, cid, actorId, identityTrusted, identityPending]);
+  return <MembershipIndex scope={scope} cid={cid} actorId={actorId}>{children}</MembershipIndex>;
 }
 
-function MembershipIndex({ scope, cid, children }: { scope: string; cid: string | null; children: ReactNode }) {
+function MembershipIndex({ scope, cid, actorId, children }: { scope: string; cid: string | null; actorId: string | null; children: ReactNode }) {
   const [stored, setValue] = useState<Omit<Index, "refresh"> & { scope: string }>({ scope, state: "loading", members: new Map(), error: "" });
   const value = stored.scope === scope ? stored : { scope, state: "loading" as const, members: new Map<string, Membership>(), error: "" };
   const [retry, setRetry] = useState(0);
@@ -45,7 +47,7 @@ function MembershipIndex({ scope, cid, children }: { scope: string; cid: string 
         if (active) setValue({ scope, state: "unsupported", members: new Map(), error: "" });
         return;
       }
-      const capability = await workflowRequest("Capability", workflowPaths.collection(cid!) + "/capability", { signal: controller.signal });
+      const capability = await workflowRequest("Capability", workflowPaths.collection(cid!) + "/capability", { signal: controller.signal, actorId });
       if (!capability.workflow_read) throw new WorkflowApiError("Workflow access is unavailable. Check your sign-in and project membership.", 403);
       const members = new Map<string, Membership>();
       const workflowIds = new Set<string>();
@@ -54,7 +56,7 @@ function MembershipIndex({ scope, cid, children }: { scope: string; cid: string 
       do {
         const query = new URLSearchParams({ limit: "50" });
         if (cursor) query.set("cursor", cursor);
-        const page = await workflowRequest("WorkflowList", workflowPaths.collection(cid!) + `?${query}`, { signal: controller.signal });
+        const page = await workflowRequest("WorkflowList", workflowPaths.collection(cid!) + `?${query}`, { signal: controller.signal, actorId });
         if (!page.capability.workflow_read || page.workflows.some((w) => w.container_id !== cid || !w.capability.workflow_read)) {
           throw new WorkflowApiError("Workflow access changed. Refresh before continuing.", 403);
         }
@@ -80,7 +82,7 @@ function MembershipIndex({ scope, cid, children }: { scope: string; cid: string 
           : "Workflow membership could not be checked. Refresh before changing this task." }));
     }).finally(() => clearTimeout(timer));
     return () => { active = false; controller.abort(); clearTimeout(timer); };
-  }, [cid, scope, retry]);
+  }, [cid, scope, retry, actorId]);
   return <Context.Provider value={{ ...value, refresh }}>{children}</Context.Provider>;
 }
 
@@ -116,9 +118,10 @@ export function WorkflowTaskStatus({ taskId, fallback, showLabel = false, classN
  * record; it is never inferred from the assignee or current owner. */
 export function WorkflowTaskInspector({ taskId }: { taskId: string }) {
   const { index, member, stale } = useTaskWorkflow(taskId);
-  const { snap, identity, identityTrusted, identityPending } = useSnapshot();
+  const { snap, identityPending } = useSnapshot();
+  const authority = useActingAuthority();
   if (!index || index.state === "unsupported") return null;
-  const verified = identityTrusted && !identityPending && !!identity?.agent_id;
+  const verified = !identityPending && !!authority.human;
   return <section aria-label="Task workflow" className="wf-task-context">
     {index.state === "loading" && <p role="status">Checking workflow membership… Task changes wait until this check finishes.</p>}
     {index.error && <p role="alert">{index.error}</p>}

@@ -43,7 +43,7 @@ export function WorkflowTaskDecision({ detail, task, scope, verified, stale, onS
     if (busy || stale || unresolved || invalid) return;
     setBusy(true); setPreview(null); setError("");
     try {
-      const latest = await workflowRequest("WorkflowDetail", workflowPaths.detail(detail.id));
+      const latest = await workflowRequest("WorkflowDetail", workflowPaths.detail(detail.id), { actorId: scope.identity });
       const blocked = permission(latest);
       if (blocked) throw new Error(blocked);
       const target = latest.tasks.find((t) => t.id === task.id)!;
@@ -51,7 +51,7 @@ export function WorkflowTaskDecision({ detail, task, scope, verified, stale, onS
         throw new Error("The task changed. Refresh it and review the current result; your feedback is kept.");
       }
       if (action === "accept") {
-        const saved = await workflowRequest("WorkflowTaskEvidence", workflowPaths.detail(detail.id) + `/tasks/${encodeURIComponent(task.id)}/evidence`);
+        const saved = await workflowRequest("WorkflowTaskEvidence", workflowPaths.detail(detail.id) + `/tasks/${encodeURIComponent(task.id)}/evidence`, { actorId: scope.identity });
         const selected = saved.sets.find((set) => set.evidence_set_id === evidence?.evidence_set_id);
         const refreshedSupplier = selected ? evidenceSupplier(selected) : { required: false, supplier: null };
         if (!latest.evidence_capability?.available || saved.task_id !== task.id || saved.workflow_id !== detail.id || !selected
@@ -111,7 +111,7 @@ export function WorkflowTaskDecision({ detail, task, scope, verified, stale, onS
     <WorkflowOperationNotice scope={scope} slot={slot} onSaved={onSaved} canRetry={async () => {
       const verb = operation?.operation;
       if (!operation || (verb !== "accept" && verb !== "reject") || operation.url !== `/api/tasks/${encodeURIComponent(task.id)}/${verb}` || stale) return false;
-      return !permission(await workflowRequest("WorkflowDetail", workflowPaths.detail(detail.id)), verb);
+      return !permission(await workflowRequest("WorkflowDetail", workflowPaths.detail(detail.id), { actorId: scope.identity }), verb);
     }} />
   </section>;
 }

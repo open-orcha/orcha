@@ -5,7 +5,10 @@ import { WorkflowTaskEntry } from "./WorkflowTaskEntry";
 import { WorkflowDraftEditor } from "./WorkflowDraftEditor";
 import { exampleWorkflow, jsonResponse, writeCapability } from "./workflowTestFixtures";
 import { emptyDraft, keepDraft, newDraftTask } from "./workflowDraft";
-vi.mock("../../state/SnapshotProvider", () => ({ useSnapshot: () => ({ cid: "project", identity: { agent_id: "kedar" }, identityTrusted: true, identityPending: false }) }));
+vi.mock("../../state/SnapshotProvider", () => ({
+  useSnapshot: () => ({ cid: "project", identity: { agent_id: "kedar" }, identityTrusted: true, identityPending: false }),
+  useActingAuthority: () => ({ human: { id: "kedar", kind: "human", member_role: "owner" }, reason: null, readOnly: false, pending: false }),
+}));
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 it("finds existing workflow membership on later pages and never offers a second import", async () => {

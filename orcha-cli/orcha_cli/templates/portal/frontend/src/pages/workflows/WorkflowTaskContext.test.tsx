@@ -5,7 +5,10 @@ import { WorkflowTaskInspector, WorkflowTaskProvider, WorkflowTaskStatus, useTas
 import { exampleTask, exampleWorkflow, jsonResponse, workflowSpec, writeCapability } from "./workflowTestFixtures";
 
 let identity = "kedar";
-vi.mock("../../state/SnapshotProvider", () => ({ useSnapshot: () => ({ cid: "project", identity: { agent_id: identity }, identityTrusted: true, identityPending: false }) }));
+vi.mock("../../state/SnapshotProvider", () => ({
+  useSnapshot: () => ({ cid: "project", identity: { agent_id: identity }, identityTrusted: true, identityPending: false }),
+  useActingAuthority: () => ({ human: { id: identity, kind: "human", member_role: "owner" }, reason: null, readOnly: false, pending: false }),
+}));
 beforeEach(() => { identity = "kedar"; });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 function Probe() {

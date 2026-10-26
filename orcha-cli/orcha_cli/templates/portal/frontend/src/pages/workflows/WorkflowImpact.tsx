@@ -11,11 +11,11 @@ export function impactMatches(impact: Impact | null, taskIds: string[], holds: s
     && sameChoices(impact.holds ?? [], holds);
 }
 
-export async function readWorkflowImpact(detail: WorkflowDetail, kind: Impact["kind"], taskIds: string[] = [], holds: string[] = ["start"]): Promise<WorkflowImpact> {
+export async function readWorkflowImpact(detail: WorkflowDetail, kind: Impact["kind"], taskIds: string[] = [], holds: string[] = ["start"], actorId?: string): Promise<WorkflowImpact> {
   const query = new URLSearchParams();
   taskIds.forEach((id) => query.append("task_ids", id));
   if (kind === "release") holds.forEach((hold) => query.append("holds", hold));
-  const current = await workflowRequest("WorkflowImpact", `${workflowPaths.detail(detail.id)}/${kind}-check${query.size ? `?${query}` : ""}`);
+  const current = await workflowRequest("WorkflowImpact", `${workflowPaths.detail(detail.id)}/${kind}-check${query.size ? `?${query}` : ""}`, { actorId });
   const impact = current.impact;
   if (current.id !== detail.id || current.container_id !== detail.container_id || impact.kind !== kind
     || impact.revision !== current.revision || impact.graph_revision !== current.graph_revision || impact.scope_revision !== current.scope_revision

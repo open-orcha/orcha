@@ -37,7 +37,7 @@ export async function sendWorkflowOperation(scope: DraftScope, slot: string,
     : { ...request, method: request.method ?? "POST", body: structuredClone(request.body), key: crypto.randomUUID(), state: "sending" };
   publish(storage, op);
   try {
-    const result = await workflowRequest("WorkflowDetail", op.url, { method: op.method, body: { ...op.body, idempotency_key: op.key } });
+    const result = await workflowRequest("WorkflowDetail", op.url, { method: op.method, body: { ...op.body, idempotency_key: op.key }, actorId: scope.identity });
     if (result.container_id !== scope.project || (op.expectedWorkflowId && result.id !== op.expectedWorkflowId)) throw new WorkflowApiError("The response could not be matched to this workflow. Check the save receipt.", 0, "scope_mismatch", true);
     op.state = "saved"; op.result = result;
   } catch (error) {
@@ -52,7 +52,7 @@ export async function sendWorkflowOperation(scope: DraftScope, slot: string,
 export async function checkWorkflowOperation(scope: DraftScope, slot: string): Promise<WorkflowOperation | undefined> {
   const op = pendingOperation(scope, slot);
   if (!op || op.state !== "uncertain") return op;
-  const receipt = await workflowRequest("Receipt", workflowPaths.receipt(scope.project, op.key, op.operation));
+  const receipt = await workflowRequest("Receipt", workflowPaths.receipt(scope.project, op.key, op.operation), { actorId: scope.identity });
   if (receipt.idempotency_key !== op.key || receipt.operation !== op.operation ||
     (receipt.status === "saved" && (!receipt.result || receipt.result.container_id !== scope.project || (op.expectedWorkflowId && receipt.result.id !== op.expectedWorkflowId)))) {
     throw new WorkflowApiError("The saved result could not be matched to this request. Keep this draft and check again.");

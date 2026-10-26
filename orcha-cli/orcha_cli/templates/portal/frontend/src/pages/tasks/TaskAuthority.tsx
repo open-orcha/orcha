@@ -11,9 +11,9 @@ import { useTaskWorkflow } from "../workflows/WorkflowTaskContext";
  * restricted to the workflow owner. Result acceptance uses different routes. */
 export function useWorkflowPlanApproval(taskId: string): boolean {
   const { member, stale } = useTaskWorkflow(taskId);
-  const { identityTrusted, identityPending } = useSnapshot();
+  const { identityPending } = useSnapshot();
   const authority = useActingAuthority();
-  return !!member && !stale && !!identityTrusted && !identityPending && !!authority.human
+  return !!member && !stale && !identityPending && !!authority.human
     && member.task.autonomy === "off" && typeof member.task.autonomy_revision === "number"
     && member.detail.capability.workflow_read === true
     && !["integration_required", "local_workflow_writes_unavailable"].includes(member.detail.capability.reason ?? "");
@@ -25,7 +25,7 @@ export function TaskAuthority({ task }: { task: Task }) {
 }
 
 function TaskAuthorityState({ task }: { task: Task }) {
-  const { cid, refresh, identityTrusted, identityPending } = useSnapshot();
+  const { cid, refresh, identityPending } = useSnapshot();
   const { index, member, stale } = useTaskWorkflow(task.id);
   const authority = useActingAuthority();
   const [support, setSupport] = useState<{ autonomy: boolean; approvals: boolean } | null>(null);
@@ -57,7 +57,8 @@ function TaskAuthorityState({ task }: { task: Task }) {
   useEffect(() => { setConfirm(null); }, [task.autonomy, task.autonomy_revision, task.status, authority.human?.id]);
   const blocked = authority.reason || (!authority.human || authority.human.member_role !== "owner" ? "Only the human project owner can change task autonomy." : null)
     || (index && index.state !== "unsupported" && stale ? "Check workflow membership before changing task authority." : null)
-    || (member && (!identityTrusted || identityPending || member.detail.capability.reason === "local_workflow_writes_unavailable") ? "Verified sign-in is required to change a workflow task." : null)
+    || (member && (identityPending || !authority.human) ? "Choose a current human member on this local portal, or use verified sign-in, to change a workflow task." : null)
+    || (member?.detail.capability.reason === "local_workflow_writes_unavailable" ? "Workflow task changes are read-only on this connection." : null)
     || (member?.detail.capability.reason === "integration_required" ? "Workflow task changes are unavailable on this server." : null)
     || (task.is_root ? "The project goal always needs a person’s approval." : null)
     || (["completed", "cancelled"].includes(task.status) ? "Finished tasks keep their recorded autonomy history." : null)

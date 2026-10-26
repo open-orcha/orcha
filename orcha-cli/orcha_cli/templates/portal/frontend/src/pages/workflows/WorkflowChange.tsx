@@ -26,7 +26,7 @@ export function WorkflowChange({ detail, scope, verified, stale, operation, url,
   const current = preview?.basis === basis ? preview.detail : null;
   const guard = (latest: WorkflowDetail) => latest.id !== detail.id || latest.container_id !== scope.project
     ? "This workflow changed. Open it again from its project."
-    : !verified ? "Verified sign-in is required to make this change."
+    : !verified ? "Choose a current human member on this local portal, or use verified sign-in, to make this change."
     : latest.capability.reason === "integration_required" || latest.capability.reason === "local_workflow_writes_unavailable"
       ? workflowWriteReason(latest.capability, verified)
     : check ? check(latest) : workflowWriteReason(latest.capability, verified);
@@ -34,7 +34,7 @@ export function WorkflowChange({ detail, scope, verified, stale, operation, url,
     if (stale || unresolved || invalid || busy) return;
     setPreview(null); setError(""); setBusy(true);
     try {
-      const latest = await workflowRequest("WorkflowDetail", workflowPaths.detail(detail.id));
+      const latest = await workflowRequest("WorkflowDetail", workflowPaths.detail(detail.id), { actorId: scope.identity });
       const reason = guard(latest);
       if (reason) throw new Error(reason);
       setPreview({ basis, detail: latest });
@@ -56,6 +56,6 @@ export function WorkflowChange({ detail, scope, verified, stale, operation, url,
     <Button disabled={busy || unresolved || stale || !!invalid || !!guard(detail)} onClick={() => void review()}>Review {label.toLowerCase()}</Button>
     {current && <><p>Review this change against the current saved workflow. Nothing has been saved yet.</p>{children?.(current)}
       <Button variant="primary" disabled={!!invalid || stale || unresolved || busy || !!guard(current)} onClick={() => void confirm()}>Confirm {label.toLowerCase()}</Button></>}
-    <WorkflowOperationNotice scope={scope} slot={slot} onSaved={onSaved} canRetry={async () => op?.operation === operation && op.url === url && !guard(await workflowRequest("WorkflowDetail", workflowPaths.detail(detail.id)))} />
+    <WorkflowOperationNotice scope={scope} slot={slot} onSaved={onSaved} canRetry={async () => op?.operation === operation && op.url === url && !guard(await workflowRequest("WorkflowDetail", workflowPaths.detail(detail.id), { actorId: scope.identity }))} />
   </section>;
 }

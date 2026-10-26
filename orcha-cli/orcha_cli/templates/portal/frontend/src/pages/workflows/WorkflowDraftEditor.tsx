@@ -35,7 +35,7 @@ function ScopedDraftEditor({ scope, saveUnavailableReason, agents = [], existing
     <fieldset className="wf-form-body" disabled={frozen}>
     <section aria-labelledby="wf-goal-heading">
       <h2 id="wf-goal-heading">Goal</h2>
-      {ownerName && <p>Owner: {ownerName} — verified sign-in</p>}
+      {ownerName && <p>Owner: {ownerName}</p>}
       <label>Workflow name<input maxLength={200} value={draft.name} onChange={(e) => change({ ...draft, name: e.target.value })} /></label>
       <label>Goal<textarea maxLength={4000} rows={3} value={draft.goal} onChange={(e) => change({ ...draft, goal: e.target.value })} /></label>
       <label>How work runs<select value={draft.mode} onChange={(e) => change({ ...draft, mode: e.target.value as WorkflowDraft["mode"] })}>

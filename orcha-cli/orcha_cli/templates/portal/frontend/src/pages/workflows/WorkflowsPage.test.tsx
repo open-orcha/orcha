@@ -4,26 +4,41 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { exampleWorkflow, exampleTask, jsonResponse, readCapability, workflowSpec, writeCapability } from "./workflowTestFixtures";
 const context = vi.hoisted(() => ({ cid: "project", identity: null as null | { agent_id: string }, identityTrusted: false, identityPending: false,
   snap: { agents: [{ id: "kedar", alias: "Kedar" }, { id: "andrew", alias: "Andrew" }] } }));
+const authority = vi.hoisted(() => ({ human: null as null | { id: string; kind: string; member_role: string }, reason: null, readOnly: false, pending: false }));
 vi.mock("../../shell/Shell", () => ({ Shell: ({ children }: { children: React.ReactNode }) => <main>{children}</main> }));
-vi.mock("../../state/SnapshotProvider", () => ({ useSnapshot: () => context }));
+vi.mock("../../state/SnapshotProvider", () => ({ useSnapshot: () => context, useActingAuthority: () => authority }));
 import { WorkflowsPage } from "./WorkflowsPage";
-beforeEach(() => { context.cid = "project"; context.identity = null; context.identityTrusted = false; });
+beforeEach(() => { context.cid = "project"; context.identity = null; context.identityTrusted = false; context.identityPending = false; authority.human = null; });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 function renderPage(path = "/workflows?cid=project") { return render(<MemoryRouter initialEntries={[path]}><WorkflowsPage /></MemoryRouter>); }
 function reads(handler: (url: string) => unknown) {
-  const fetch = vi.fn(async (input: RequestInfo | URL) => {
+  const fetch = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
     const url = String(input);
     if (url === "/openapi.json") return jsonResponse(workflowSpec);
     if (url.endsWith("/capability")) return jsonResponse(readCapability);
     return jsonResponse(handler(url));
   }); vi.stubGlobal("fetch", fetch); return fetch;
 }
-it("does not call missing workflow routes or treat actor selection as sign-in", async () => {
+it("does not call missing workflow routes without a current human", async () => {
   const fetch = vi.fn(async () => jsonResponse({ paths: {} })); vi.stubGlobal("fetch", fetch);
   renderPage("/workflows/new?cid=project");
   expect(await screen.findByText(/doesn’t support Workflows yet/)).toBeVisible();
-  expect(screen.getByText(/Verified sign-in is required/)).toBeVisible();
+  expect(screen.getByText(/Choose a current human member/)).toBeVisible();
   expect(screen.queryByRole("button", { name: "Save workflow" })).toBeNull(); expect(fetch).toHaveBeenCalledTimes(1);
+});
+it("lets the selected local human prepare a workflow and identifies them to the local API", async () => {
+  authority.human = { id: "kedar", kind: "human", member_role: "owner" };
+  const fetch = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
+    const url = String(input);
+    if (url === "/openapi.json") return jsonResponse(workflowSpec);
+    return jsonResponse(writeCapability);
+  });
+  vi.stubGlobal("fetch", fetch);
+  renderPage("/workflows/new?cid=project");
+  expect(await screen.findByLabelText("Workflow name")).toBeVisible();
+  const capabilityCall = fetch.mock.calls.find(([url]) => String(url).endsWith("/capability"));
+  expect(capabilityCall?.[1]).toMatchObject({ headers: { "X-Orcha-Local-Actor": "kedar" } });
+  expect(screen.queryByText(/verified sign-in is required/i)).toBeNull();
 });
 it("rejects malformed discovery and only retries on request", async () => {
   const fetch = vi.fn().mockResolvedValueOnce(jsonResponse({})).mockResolvedValue(jsonResponse({ paths: {} })); vi.stubGlobal("fetch", fetch);

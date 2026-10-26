@@ -3,7 +3,7 @@ import { Link, useLocation, useNavigate, useSearchParams } from "react-router-do
 import { getJSON } from "../../api/client";
 import { Button } from "../../components/primitives/Button";
 import { Shell } from "../../shell/Shell";
-import { useSnapshot } from "../../state/SnapshotProvider";
+import { useActingAuthority, useSnapshot } from "../../state/SnapshotProvider";
 import { WorkflowDraftEditor } from "./WorkflowDraftEditor";
 import { WorkflowActions } from "./WorkflowActions";
 import { WorkflowTaskActions } from "./WorkflowTaskActions";
@@ -23,13 +23,15 @@ type Availability = "checking" | "unsupported" | "ready" | "unavailable" | "forb
 export { hasWorkflowRoutes } from "./workflowApi";
 export function WorkflowsPage() {
   const context = useSnapshot();
+  const authority = useActingAuthority();
   const { pathname } = useLocation();
   // Never carry an old actor's reads or confirmations across identity/project changes.
-  const key = JSON.stringify([context.cid, context.identity?.agent_id, context.identityTrusted, context.identityPending, pathname]);
+  const key = JSON.stringify([context.cid, authority.human?.id, context.identityTrusted, context.identityPending, pathname]);
   return <Shell page="workflows" title="Workflows"><WorkflowScreen key={key} /></Shell>;
 }
 function WorkflowScreen() {
-  const { cid, snap, identity, identityTrusted, identityPending } = useSnapshot();
+  const { cid, snap, identityPending } = useSnapshot();
+  const authority = useActingAuthority();
   const location = useLocation();
   const { pathname } = location;
   const navigationState = workflowNavigationState(location.state);
@@ -38,8 +40,9 @@ function WorkflowScreen() {
   const navigate = useNavigate();
   const isNew = pathname === "/workflows/new";
   const workflowId = !isNew && pathname.startsWith("/workflows/") ? decodeURIComponent(pathname.slice("/workflows/".length)) : null;
-  const verified = !identityPending && identityTrusted && !!identity?.agent_id;
-  const scope = { origin: window.location.origin, project: cid ?? "", identity: verified ? identity!.agent_id! : "unverified" };
+  const actorId = !identityPending ? authority.human?.id ?? null : null;
+  const verified = !!actorId;
+  const scope = { origin: window.location.origin, project: cid ?? "", identity: actorId ?? "unverified" };
   const [availability, setAvailability] = useState<Availability>("checking");
   const [capability, setCapability] = useState<Capability | null>(null);
   const [list, setList] = useState<WorkflowList | null>(null);
@@ -83,19 +86,19 @@ function WorkflowScreen() {
     async function load() {
       const spec = await getJSON<unknown>("/openapi.json", controller.signal);
       if (!hasWorkflowRoutes(spec)) { if (active) { setAvailability("unsupported"); setList(null); setDetail(null); } return; }
-      const cap = await workflowRequest("Capability", workflowPaths.collection(cid!) + "/capability", { signal: controller.signal });
+      const cap = await workflowRequest("Capability", workflowPaths.collection(cid!) + "/capability", { signal: controller.signal, actorId });
       if (cap.workflow_read !== true) throw new WorkflowApiError("You do not have access to read workflows on this connection.", 403);
       if (!active) return;
       setCapability(cap);
       if (workflowId) {
-        const current = await workflowRequest("WorkflowDetail", workflowPaths.detail(workflowId), { signal: controller.signal });
+        const current = await workflowRequest("WorkflowDetail", workflowPaths.detail(workflowId), { signal: controller.signal, actorId });
         if (current.container_id !== cid || current.id !== workflowId) throw new Error("This workflow belongs to a different project. Open it from its project’s Workflows list.");
         if (active) setDetail(current);
       } else if (!isNew) {
         const q = new URLSearchParams({ limit: "50" });
         if (serverStatus) q.set("status", serverStatus);
         if (next) q.set("cursor", next);
-        const page = await workflowRequest("WorkflowList", workflowPaths.collection(cid!) + `?${q}`, { signal: controller.signal });
+        const page = await workflowRequest("WorkflowList", workflowPaths.collection(cid!) + `?${q}`, { signal: controller.signal, actorId });
         if (page.capability.workflow_read !== true || page.workflows.some((w) => w.container_id !== cid)) throw new WorkflowApiError("This response cannot be shown for the current project.", 403);
         if (next && page.next_cursor === next) throw new Error("Orcha returned the same page again. Refresh the list before loading more.");
         if (active) {
@@ -114,7 +117,7 @@ function WorkflowScreen() {
       if (forbidden) { setDetail(null); setList(null); setCapability(null); }
     }).finally(() => { clearTimeout(timer); if (active) setLoading(false); });
     return () => { active = false; clearTimeout(timer); controller.abort(); };
-  }, [cid, workflowId, isNew, serverStatus, next, retry]);
+  }, [cid, workflowId, isNew, serverStatus, next, retry, actorId]);
   const writeReason = workflowWriteReason(detail?.capability ?? capability, verified);
   const taskViews: WorkflowTaskView[] = detail?.tasks.map((t) => ({
     id: t.id, title: t.title, assignee: t.assignee_ids.map(actorName).join(", ") || null,
@@ -149,7 +152,7 @@ function WorkflowScreen() {
       agents={snap?.agents.filter((a) => a.kind === "ai" && a.status !== "terminated").map((a) => ({ id: a.id, alias: a.alias }))}
       existingTasks={snap?.tasks ?? []} initialTaskId={initialTaskId}
       ownerName={actorName(scope.identity)} onSaved={(result) => navigate(href(result.id), { state: navigationState })} />}
-    {isNew && !verified && <p>Verified sign-in is required before preparing a workflow draft. Selecting a human name does not verify sign-in.</p>}
+    {isNew && !verified && <p>Choose a current human member on this local portal, or use verified sign-in, before preparing a workflow draft.</p>}
     {!isNew && !workflowId && list && <>
       <div className="wf-filters"><label>Status<select value={filter} onChange={(e) => query("status", e.target.value)}>
         <option value="open">Open workflows</option><option value="preparing">Preparing</option><option value="active">Active</option><option value="paused">Paused</option><option value="ready">Ready to finish</option><option value="completed">Completed</option><option value="cancelled">Cancelled</option><option value="all">All</option>

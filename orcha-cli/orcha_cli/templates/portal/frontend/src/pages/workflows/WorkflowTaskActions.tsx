@@ -70,8 +70,8 @@ export function WorkflowTaskActions({ detail, task, scope, verified, stale, agen
   async function review(next: Action) {
     setAction(next); setPreview(null); setImpact(null); setBusy(true); setError(""); setRiskAccepted(false);
     try {
-      const current = next === "release" ? await readWorkflowImpact(detail, "release", [task.id], holds.length ? holds : ["start"])
-        : await workflowRequest("WorkflowDetail", workflowPaths.detail(detail.id));
+      const current = next === "release" ? await readWorkflowImpact(detail, "release", [task.id], holds.length ? holds : ["start"], scope.identity)
+        : await workflowRequest("WorkflowDetail", workflowPaths.detail(detail.id), { actorId: scope.identity });
       if (current.id !== detail.id || current.container_id !== scope.project) throw new Error("The workflow changed. Open the task again from its project.");
       const currentTask = current.tasks.find((t) => t.id === task.id);
       if (!currentTask) throw new Error("This task is no longer in this workflow.");
@@ -165,7 +165,7 @@ export function WorkflowTaskActions({ detail, task, scope, verified, stale, agen
         const originalAction = (Object.keys(taskActions) as Action[]).find((key) => taskActions[key].operation === operation?.operation
           && operation.url === actionUrl(key, detail.id, task));
         if (!originalAction) return false;
-        const latest = await workflowRequest("WorkflowDetail", workflowPaths.detail(detail.id));
+        const latest = await workflowRequest("WorkflowDetail", workflowPaths.detail(detail.id), { actorId: scope.identity });
         const selected = latest.tasks.find((t) => t.id === task.id);
         return latest.container_id === scope.project && latest.id === detail.id && !!selected && !taskReason(latest, selected, originalAction, verified);
       }} />

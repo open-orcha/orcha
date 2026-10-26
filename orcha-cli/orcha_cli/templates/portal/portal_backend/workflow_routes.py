@@ -1,10 +1,13 @@
-"""Workflows API. Registered while the write/admission capability stays disabled.
+"""Workflows API with separate hosted, local-human, and worker trust lanes.
 
-The ordinary actor-ID fallback is intentionally absent. A verified proxy member or
-an authenticated work token supplies identity, never an actor field in a request.
+Hosted browsers use the proxy-verified login. A loopback-only local portal may name
+the human selected in its UI, and the server validates that person against the live
+project membership. Authenticated work tokens remain the only agent identity lane.
 """
 
+import os
 from typing import Literal
+from urllib.parse import urlsplit
 
 from fastapi import Request, Query
 
@@ -22,6 +25,36 @@ from portal_backend.worker_auth import require_work_lane
 from portal_backend.workflow_integration import IntegratedWorkflowHooks
 
 HOOKS = IntegratedWorkflowHooks()
+LOCAL_ACTOR_HEADER = "X-Orcha-Local-Actor"
+
+
+def _loopback_host(host):
+    value = (host or "").strip().strip("[]").lower()
+    return (
+        value == "localhost"
+        or value.endswith(".localhost")
+        or value == "::1"
+        or value.startswith("127.")
+    )
+
+
+def _local_actor_claim(request):
+    """Return a local UI claim only on a loopback, non-proxy connection.
+
+    ``ORCHA_BIND=lan`` is an explicit remote-access mode. Docker-era local portals
+    leave the variable unset, so the request and browser Origin must also name a
+    loopback host. The proxy-trust switch always wins and ignores this header.
+    """
+    if _proxy_trusted() or (os.environ.get("ORCHA_BIND") or "").strip() == "lan":
+        return None
+    if not _loopback_host(request.url.hostname):
+        return None
+    browser_source = (
+        request.headers.get("Origin") or request.headers.get("Referer") or ""
+    ).strip()
+    if not browser_source or not _loopback_host(urlsplit(browser_source).hostname):
+        return None
+    return (request.headers.get(LOCAL_ACTOR_HEADER) or "").strip() or None
 
 
 def resolve_actor(cur, request, cid, *, allow_agent=False):
@@ -51,13 +84,35 @@ def resolve_actor(cur, request, cid, *, allow_agent=False):
         )
     login = proxy_login(request)
     if not login:
+        local_actor_id = _local_actor_claim(request)
+        if local_actor_id:
+            cur.execute(
+                """SELECT id,kind,member_role FROM agents
+                   WHERE id=%s AND container_id=%s AND terminated_at IS NULL""",
+                (local_actor_id, cid),
+            )
+            row = cur.fetchone()
+            if not row or row["member_role"] == "viewer":
+                conflict(
+                    "verified_member_required",
+                    "A current non-viewer project membership is required.",
+                    status=403,
+                )
+            if row["kind"] != "human":
+                conflict(
+                    "human_required",
+                    "Choose a human project member for this action.",
+                    status=403,
+                )
+            return service.WorkflowActor(str(row["id"]), True)
         conflict(
             (
                 "verified_sign_in_required"
                 if _proxy_trusted()
                 else "local_workflow_writes_unavailable"
             ),
-            "Connect through verified sign-in to change workflows.",
+            "Open the local portal and choose a current human member, "
+            "or connect through verified sign-in.",
             status=403,
         )
     cur.execute(
@@ -79,7 +134,7 @@ def read_context(cur, request, wid):
     w = svc.workflow(wid)
     require_member_read(cur, request, w["container_id"])
     actor = None
-    if proxy_login(request):
+    if proxy_login(request) or _local_actor_claim(request):
         try:
             actor = resolve_actor(cur, request, w["container_id"])
         except Exception as exc:
@@ -130,7 +185,7 @@ def list_workflows(
         params.append(limit + 1)
         rows = svc.rows(query, tuple(params))
         actor = None
-        if proxy_login(request):
+        if proxy_login(request) or _local_actor_claim(request):
             from fastapi import HTTPException
 
             try:

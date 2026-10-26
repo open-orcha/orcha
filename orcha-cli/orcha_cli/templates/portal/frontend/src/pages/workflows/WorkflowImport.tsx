@@ -85,9 +85,9 @@ export function WorkflowImport({ detail, scope, verified, stale, tasks, initialT
     if (frozen || stale || actionReason(detail, "import", verified) || !selected.length) return;
     setBusy(true); setError(""); setPreview(null);
     try {
-      const latest = await workflowRequest("WorkflowDetail", workflowPaths.detail(detail.id));
+      const latest = await workflowRequest("WorkflowDetail", workflowPaths.detail(detail.id), { actorId: scope.identity });
       if (latest.id !== detail.id || latest.container_id !== scope.project || actionReason(latest, "import", verified)) throw new Error("Access or workflow state changed. Refresh before adding tasks.");
-      const impact = await workflowRequest("Preview", workflowPaths.detail(detail.id) + "/import-preview", { method: "POST", body: { task_ids: selected, acceptances: {} } });
+      const impact = await workflowRequest("Preview", workflowPaths.detail(detail.id) + "/import-preview", { method: "POST", body: { task_ids: selected, acceptances: {} }, actorId: scope.identity });
       setPreview({ workflow: latest, impact, basis: JSON.stringify(selected) });
     } catch (e) { setError(e instanceof Error ? e.message : "The import could not be checked. Your choices are kept."); }
     finally { setBusy(false); }
@@ -115,7 +115,7 @@ export function WorkflowImport({ detail, scope, verified, stale, tasks, initialT
       </fieldset>
       {busy && <p role="status">Checking tasks and their dependencies…</p>}{error && <p role="alert">{error}</p>}
       <WorkflowOperationNotice scope={scope} slot={slot} onSaved={(result) => { setSelected([]); setReleaseIds([]); setOpen(false); onSaved(result); }} canRetry={async () => {
-        const latest = await workflowRequest("WorkflowDetail", workflowPaths.detail(detail.id));
+        const latest = await workflowRequest("WorkflowDetail", workflowPaths.detail(detail.id), { actorId: scope.identity });
         return latest.container_id === scope.project && latest.id === detail.id && !actionReason(latest, "import", verified);
       }} />
     </Dialog>}

@@ -45,7 +45,7 @@ export function parseWorkflowModel<K extends keyof WorkflowModels>(name: K, valu
 }
 
 export async function workflowRequest<K extends keyof WorkflowModels>(name: K, url: string,
-  options: { method?: "GET" | "POST" | "PATCH" | "PUT"; body?: unknown; signal?: AbortSignal } = {}): Promise<WorkflowModels[K]> {
+  options: { method?: "GET" | "POST" | "PATCH" | "PUT"; body?: unknown; signal?: AbortSignal; actorId?: string | null } = {}): Promise<WorkflowModels[K]> {
   const method = options.method ?? "GET";
   if (method !== "GET") {
     const route = workflowRoutes.find((r) => r.method === method.toLowerCase() && new RegExp(`^${r.path.replace(/\{[^}]+\}/g, "[^/]+")}$`).test(url.split("?")[0]));
@@ -59,8 +59,12 @@ export async function workflowRequest<K extends keyof WorkflowModels>(name: K, u
   const timeout = setTimeout(abort, 15_000);
   const mutation = method !== "GET" && !url.endsWith("/preview") && !url.endsWith("/import-preview");
   try {
+    const headers: Record<string, string> = {};
+    if (options.body !== undefined) headers["Content-Type"] = "application/json";
+    if (options.actorId) headers["X-Orcha-Local-Actor"] = options.actorId;
     const response = await fetch(url, { method, signal: controller.signal,
-      ...(options.body === undefined ? {} : { headers: { "Content-Type": "application/json" }, body: JSON.stringify(options.body) }) });
+      ...(Object.keys(headers).length ? { headers } : {}),
+      ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }) });
     if (!response.ok) {
       let message = "Orcha could not complete this request.";
       let code = "";
@@ -86,23 +90,23 @@ export const workflowPaths = {
   receipt: (cid: string, key: string, operation: string) => `/api/containers/${encodeURIComponent(cid)}/workflow-operations/${encodeURIComponent(key)}?${new URLSearchParams({ operation })}`,
 };
 
-export function workflowWriteReason(capability: Capability | null, verified: boolean): string | null {
+export function workflowWriteReason(capability: Capability | null, hasHuman: boolean): string | null {
   if (!capability) return "Checking access to workflow changes…";
   if (capability.workflow_human_write !== true) {
     if (capability.reason === "integration_required") return "Workflow changes are not available on this server yet. You can continue reading.";
-    if (capability.reason === "local_workflow_writes_unavailable") return "Workflows are read-only on this connection. Connect through verified sign-in to make changes.";
+    if (capability.reason === "local_workflow_writes_unavailable") return "Workflows are read-only on this connection. Open the portal on the Orcha computer, or use verified sign-in, to make changes.";
     if (capability.reason === "workflow_owner_required") return "Only this workflow’s owner can make these changes.";
     return "You do not have permission to change workflows on this connection.";
   }
-  return verified ? null : "Verified sign-in is required to change workflows. Selecting a human name does not verify sign-in.";
+  return hasHuman ? null : "Choose a current human member on this local portal, or use verified sign-in, to change workflows.";
 }
 
 const actionMessages: Record<string, string> = {
   integration_required: "This action is not available on this server yet.",
   approval_integration_required: "Task approval is not available on this server yet.",
-  verified_member_required: "Verified sign-in and project membership are required.",
+  verified_member_required: "A current non-viewer project membership is required.",
   workflow_owner_required: "Only this workflow’s owner can make this change.",
-  human_reviewer_required: "A verified human reviewer is required.",
+  human_reviewer_required: "A current human reviewer is required.",
   workflow_participation_required: "Only this workflow’s owner or a participating agent can do this.",
   completion_not_authorized: "You do not have permission to accept this task result.",
   workflow_not_active: "The workflow must be active before this action is available.",
@@ -144,20 +148,20 @@ const actionMessages: Record<string, string> = {
 
 /** Per-action decisions are authoritative. The coarse write flag is owner-only;
  * a project owner can still receive permission for a safety hold or recovery. */
-export function availableActionReason(capability: Capability, actions: AvailableAction[] | undefined, action: string, verified: boolean): string | null {
-  if (!verified) return "Verified sign-in is required to make this change.";
-  if (capability.reason === "integration_required" || capability.reason === "local_workflow_writes_unavailable") return workflowWriteReason(capability, verified);
+export function availableActionReason(capability: Capability, actions: AvailableAction[] | undefined, action: string, hasHuman: boolean): string | null {
+  if (!hasHuman) return "Choose a current human member on this local portal, or use verified sign-in, to make this change.";
+  if (capability.reason === "integration_required" || capability.reason === "local_workflow_writes_unavailable") return workflowWriteReason(capability, hasHuman);
   const available = actions?.find((a) => a.action === action);
   if (available?.enabled === true) return null;
   return actionMessages[available?.reason ?? ""] ?? "This action is not available in the current state. Refresh to check for changes.";
 }
 
-export function actionReason(detail: WorkflowDetail, action: string, verified: boolean): string | null {
-  return availableActionReason(detail.capability, detail.available_actions, action, verified);
+export function actionReason(detail: WorkflowDetail, action: string, hasHuman: boolean): string | null {
+  return availableActionReason(detail.capability, detail.available_actions, action, hasHuman);
 }
 
-export function objectiveActionReason(detail: WorkflowDetail, id: string, action: string, verified: boolean): string | null {
-  return availableActionReason(detail.capability, detail.objectives.find((o) => o.id === id)?.available_actions, action, verified);
+export function objectiveActionReason(detail: WorkflowDetail, id: string, action: string, hasHuman: boolean): string | null {
+  return availableActionReason(detail.capability, detail.objectives.find((o) => o.id === id)?.available_actions, action, hasHuman);
 }
 
 export function workflowLabel(workflow: WorkflowDetail): string {

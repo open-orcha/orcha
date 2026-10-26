@@ -1154,26 +1154,101 @@ async def test_disabled_capability_blocks_write_even_with_spoofed_human(
 
 
 @pytest.mark.asyncio
-async def test_local_human_id_is_never_identity_and_proxy_member_works(
+async def test_local_member_can_create_and_proxy_identity_ignores_local_claim(
     client, setup_workflow, monkeypatch
 ):
     cid = setup_workflow[0]
-    body = {"title": "Create", "goal": "A result", "idempotency_key": "create"}
+    owner = setup_workflow[1].id
+    other = setup_workflow[3]
     monkeypatch.delenv("ORCHA_TRUST_PROXY_USER", raising=False)
+    monkeypatch.delenv("ORCHA_BIND", raising=False)
     response = await client.post(
         f"/api/containers/{cid}/workflows",
-        json=body,
-        headers={"X-Auth-Request-User": "owner"},
+        json={"title": "Local", "goal": "A local result", "idempotency_key": "local"},
+        headers={
+            "Host": "localhost",
+            "Origin": "http://localhost",
+            "X-Orcha-Local-Actor": owner,
+        },
     )
-    assert response.status_code == 403
+    assert response.status_code == 201, response.text
+    assert response.json()["owner_human_id"] == owner
+
     monkeypatch.setenv("ORCHA_TRUST_PROXY_USER", "1")
     response = await client.post(
         f"/api/containers/{cid}/workflows",
-        json=body,
-        headers={"X-Auth-Request-User": "owner"},
+        json={"title": "Hosted", "goal": "A hosted result", "idempotency_key": "hosted"},
+        headers={
+            "Host": "localhost",
+            "Origin": "http://localhost",
+            "X-Orcha-Local-Actor": other,
+            "X-Auth-Request-User": "owner",
+        },
     )
     assert response.status_code == 201, response.text
-    assert response.json()["owner_human_id"] == setup_workflow[1].id
+    assert response.json()["owner_human_id"] == owner
+
+
+@pytest.mark.asyncio
+async def test_local_workflow_claim_rejects_remote_ai_viewer_and_other_project(
+    client, setup_workflow, monkeypatch
+):
+    cid, owner, worker, _, _, _ = setup_workflow
+    viewer, other_cid, outsider = uid(), uid(), uid()
+    with db_cursor() as (_, cur):
+        cur.execute("INSERT INTO containers(id,name) VALUES (%s,'Other project')", (other_cid,))
+        cur.execute(
+            "INSERT INTO agents(id,container_id,alias,role,kind,member_role) VALUES (%s,%s,'Viewer','test','human','viewer')",
+            (viewer, cid),
+        )
+        cur.execute(
+            "INSERT INTO agents(id,container_id,alias,role,kind,member_role) VALUES (%s,%s,'Outsider','test','human','owner')",
+            (outsider, other_cid),
+        )
+    monkeypatch.delenv("ORCHA_TRUST_PROXY_USER", raising=False)
+    monkeypatch.delenv("ORCHA_BIND", raising=False)
+    local = {"Host": "localhost", "Origin": "http://localhost"}
+
+    for actor_id, reason in [
+        (worker, "human_required"),
+        (viewer, "verified_member_required"),
+        (outsider, "verified_member_required"),
+    ]:
+        response = await client.get(
+            f"/api/containers/{cid}/workflows/capability",
+            headers={**local, "X-Orcha-Local-Actor": actor_id},
+        )
+        assert response.status_code == 200
+        assert response.json() == {
+            "workflow_read": True,
+            "workflow_human_write": False,
+            "reason": reason,
+        }
+
+    response = await client.get(
+        f"/api/containers/{cid}/workflows/capability",
+        headers={
+            "Host": "localhost",
+            "Origin": "https://orcha.example",
+            "X-Orcha-Local-Actor": owner.id,
+        },
+    )
+    assert response.json()["reason"] == "local_workflow_writes_unavailable"
+
+    monkeypatch.setenv("ORCHA_BIND", "lan")
+    response = await client.get(
+        f"/api/containers/{cid}/workflows/capability",
+        headers={**local, "X-Orcha-Local-Actor": owner.id},
+    )
+    assert response.json()["reason"] == "local_workflow_writes_unavailable"
+
+    monkeypatch.setenv("ORCHA_TRUST_PROXY_USER", "1")
+    monkeypatch.delenv("ORCHA_BIND", raising=False)
+    response = await client.get(
+        f"/api/containers/{cid}/workflows/capability",
+        headers={**local, "X-Orcha-Local-Actor": owner.id},
+    )
+    assert response.json()["reason"] == "verified_sign_in_required"
 
 
 def admission_fixture():

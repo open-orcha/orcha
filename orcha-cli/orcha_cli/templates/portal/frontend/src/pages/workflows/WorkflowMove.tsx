@@ -46,7 +46,7 @@ export function WorkflowMove({ detail, scope, verified, stale, onSaved }: {
     setBusy(true); setError("");
     try {
       const query = new URLSearchParams({ status: "active", limit: "50" }); if (next) query.set("cursor", next);
-      const page = await workflowRequest("WorkflowList", workflowPaths.collection(scope.project) + `?${query}`);
+      const page = await workflowRequest("WorkflowList", workflowPaths.collection(scope.project) + `?${query}`, { actorId: scope.identity });
       if (page.workflows.some((w) => w.container_id !== scope.project) || (next && page.next_cursor === next)) throw new Error("The workflow list changed. Close this form and try again.");
       setDestinations((old) => [...new Map([...(next ? old : []), ...page.workflows].filter((w) => w.id !== detail.id).map((w) => [w.id, w])).values()]);
       setCursor(page.next_cursor ?? null);
@@ -57,11 +57,11 @@ export function WorkflowMove({ detail, scope, verified, stale, onSaved }: {
     if (frozen || stale || !draft.tasks.length || !draft.reason.trim()) return;
     setBusy(true); setPreview(null); setError("");
     try {
-      const source = await workflowRequest("WorkflowDetail", workflowPaths.detail(detail.id));
+      const source = await workflowRequest("WorkflowDetail", workflowPaths.detail(detail.id), { actorId: scope.identity });
       if (source.id !== detail.id || source.container_id !== scope.project) throw new Error("The source workflow changed. Open it again.");
       const denied = actionReason(source, "move", verified) || draft.tasks.map((id) => taskReason(source, id)).find(Boolean);
       if (denied) throw new Error(denied);
-      const destination = draft.destination ? await workflowRequest("WorkflowDetail", workflowPaths.detail(draft.destination)) : null;
+      const destination = draft.destination ? await workflowRequest("WorkflowDetail", workflowPaths.detail(draft.destination), { actorId: scope.identity }) : null;
       if (destination && (destination.id !== draft.destination || destination.container_id !== scope.project || destination.status !== "active" || actionReason(destination, "import", verified))) throw new Error("The destination is no longer available for these tasks. Choose another active workflow.");
       setPreview({ basis, source, destination });
     } catch (e) { setError(e instanceof Error ? e.message : "Could not review this move. Your choices are kept."); }
@@ -103,7 +103,7 @@ export function WorkflowMove({ detail, scope, verified, stale, onSaved }: {
       </section>}
       <WorkflowOperationNotice scope={scope} slot={slot} onSaved={saved} canRetry={async () => {
         if (op?.operation !== "move" || op.url !== workflowPaths.detail(detail.id) + "/move") return false;
-        const latest = await workflowRequest("WorkflowDetail", workflowPaths.detail(detail.id));
+        const latest = await workflowRequest("WorkflowDetail", workflowPaths.detail(detail.id), { actorId: scope.identity });
         return latest.id === detail.id && latest.container_id === scope.project && !actionReason(latest, "move", verified);
       }} />
     </Dialog>}

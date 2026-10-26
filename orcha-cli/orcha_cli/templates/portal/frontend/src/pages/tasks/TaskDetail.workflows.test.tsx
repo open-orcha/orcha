@@ -65,14 +65,26 @@ it("lets a verified human member approve an OFF task plan without workflow-owner
   expect(screen.queryByRole("region", { name: "Verification" })).toBeNull();
   expect(screen.getByRole("button", { name: "Change to ON" })).toBeDisabled();
 });
-it.each(["on", "local", "unsupported"])("does not offer a workflow plan decision for %s authority", async (kind) => {
-  if (kind !== "local") extensions.identity = async () => ({ agent_id: "kedar", member_role: "member" }) as Identity;
-  extensions.identityTrusted = () => kind !== "local";
+it.each(["on", "unsupported"])("does not offer a workflow plan decision for %s authority", async (kind) => {
+  extensions.identity = async () => ({ agent_id: "kedar", member_role: "member" }) as Identity;
+  extensions.identityTrusted = () => true;
   taskStatus = "in_progress"; planBody = "Andrew plans the build."; taskAutonomy = kind === "on" ? "on" : "off";
   workflow.tasks[0] = { ...workflow.tasks[0], autonomy: taskAutonomy, autonomy_revision: 1, status: "in_progress" };
   workflow.capability = kind === "unsupported" ? { workflow_read: true, workflow_human_write: false, reason: "integration_required" } : writeCapability;
   page(); await screen.findByRole("link", { name: "Mobile release" });
   expect(screen.queryByRole("region", { name: "Plan approval" })).toBeNull(); expect(writes).toEqual([]);
+});
+it("offers an OFF workflow plan decision to the selected local human", async () => {
+  extensions.identityTrusted = () => false;
+  taskStatus = "in_progress"; planBody = "Andrew plans the build."; taskAutonomy = "off";
+  workflow.tasks[0] = { ...workflow.tasks[0], autonomy: "off", autonomy_revision: 1, status: "in_progress" };
+  workflow.capability = writeCapability;
+  page(); await screen.findByRole("link", { name: "Mobile release" });
+  expect(screen.getByRole("region", { name: "Plan approval" })).toBeVisible();
+  const workflowRead = vi.mocked(fetch).mock.calls.find(([url, init]) =>
+    String(url).endsWith("/workflows/capability") && (init?.headers as Record<string, string> | undefined)?.["X-Orcha-Local-Actor"] === "kedar");
+  expect(workflowRead).toBeDefined();
+  expect(writes).toEqual([]);
 });
 it("shows server status and task OFF while replacing standalone hold, assign and cancellation controls", async () => {
   page(); const context = await screen.findByRole("region", { name: "Task workflow" });

@@ -33,7 +33,7 @@ export function WorkflowActions({ detail, scope, verified, stale, onSaved }: {
   const slot = `workflow:${detail.id}`;
   const operation = useWorkflowOperation(scope, slot);
   const unresolved = operation?.state === "sending" || operation?.state === "uncertain";
-  const fresh = async () => workflowRequest("WorkflowDetail", workflowPaths.detail(detail.id));
+  const fresh = async () => workflowRequest("WorkflowDetail", workflowPaths.detail(detail.id), { actorId: scope.identity });
   const startEligible = (task: WorkflowDetail["tasks"][number]) => task.preparation_state === "prepared" && task.start_hold && !task.withdrawn_at && !["completed", "cancelled"].includes(task.status);
 
   async function review(next: Action) {
@@ -41,10 +41,10 @@ export function WorkflowActions({ detail, scope, verified, stale, onSaved }: {
     setBusy(true);
     try {
       const current = next === "start" || next === "cancel"
-        ? await readWorkflowImpact(detail, next === "start" ? "start" : "cancellation", next === "start" ? selected : [])
+        ? await readWorkflowImpact(detail, next === "start" ? "start" : "cancellation", next === "start" ? selected : [], ["start"], scope.identity)
         : await fresh();
       if (current.container_id !== scope.project || current.id !== detail.id) throw new Error("The workflow changed. Return to the list and open it again.");
-      if (next === "finish") current.completion = await workflowRequest("CompletionCheck", workflowPaths.detail(detail.id) + "/completion-check");
+      if (next === "finish") current.completion = await workflowRequest("CompletionCheck", workflowPaths.detail(detail.id) + "/completion-check", { actorId: scope.identity });
       setPreview(current);
       if ("impact" in current) setImpact(current.impact as Impact);
     } catch (e) { setError(e instanceof Error ? e.message : "Could not check this action."); }

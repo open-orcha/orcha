@@ -38,14 +38,14 @@ export function WorkflowDraftSave({ draft, scope, unavailableReason, onSaved, on
   const problems = draftProblems(draft);
   const access = async () => {
     if (unavailableReason) return false;
-    const capability = await workflowRequest("Capability", workflowPaths.collection(scope.project) + "/capability");
+    const capability = await workflowRequest("Capability", workflowPaths.collection(scope.project) + "/capability", { actorId: scope.identity });
     return capability.workflow_human_write === true;
   };
   async function review() {
     setReviewing(true); setError(""); setPreview(null);
     if (unavailableReason || problems.length || unresolved) return;
     setBusy(true);
-    try { setPreview({ basis, draftBasis, value: await workflowRequest("Preview", workflowPaths.collection(scope.project) + "/preview", { method: "POST", body }) }); }
+    try { setPreview({ basis, draftBasis, value: await workflowRequest("Preview", workflowPaths.collection(scope.project) + "/preview", { method: "POST", body, actorId: scope.identity }) }); }
     catch (e) { setError(e instanceof Error ? e.message : "The preview could not be checked. Your draft is kept."); }
     finally { setBusy(false); }
   }
