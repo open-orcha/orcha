@@ -22,7 +22,7 @@ RUN_SUMMARY_COLUMNS = ", ".join(
         "run_id", "agent_id", "task_id", "wake_kind", "wake_event", "lane", "status",
         "exit_code", "log_path", "pid", "runtime", "conversation_id", "conversation_ack_ts",
         "last_message_path", "worktree", "branch", "base_cwd", "sandbox_container_id",
-        "kill_reason", "started_at", "ended_at",
+        "kill_reason", "started_at", "ended_at", "details_pruned_at",
     )
 )
 

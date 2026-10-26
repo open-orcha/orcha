@@ -21,9 +21,9 @@ from portal_backend.schemas.worker_runs import (
 from portal_backend.worker_run_support import (
     infer_agent_active_task,
     is_non_task_work,
-    prune_old_run_detail,
-    revoke_tokens_for_runs,
 )
+
+from portal_backend.workflow_evidence_service import terminalize_workflow_run_with_evidence
 
 
 def _require_run_machine_lane(cur, request: Request, agent_id) -> None:
@@ -72,7 +72,7 @@ def finish_worker_run(run_id: str, body: WorkerRunFinish, request: Request):
         )
     with db_cursor() as (conn, cur):
         cur.execute(
-            "SELECT * FROM worker_runs WHERE run_id=%s" + sql.for_update(),
+            "SELECT * FROM worker_runs WHERE run_id=%s",
             (run_id,),
         )
         existing = cur.fetchone()
@@ -92,39 +92,28 @@ def finish_worker_run(run_id: str, body: WorkerRunFinish, request: Request):
         total_cost_usd = body.total_cost_usd
         if total_cost_usd is None:
             total_cost_usd = _codex_cost_estimate(cur, existing, body)
-        cur.execute(
-            """UPDATE worker_runs SET status=%s, exit_code=%s, output=%s,
-                      task_id=COALESCE(task_id, %s),
-                      diff=COALESCE(%s, diff), kill_reason=COALESCE(%s, kill_reason),
-                      input_tokens=COALESCE(%s, input_tokens),
-                      output_tokens=COALESCE(%s, output_tokens),
-                      cache_read_input_tokens=COALESCE(%s, cache_read_input_tokens),
-                      cache_creation_input_tokens=COALESCE(%s, cache_creation_input_tokens),
-                      total_cost_usd=COALESCE(%s, total_cost_usd),
-                      ended_at=now()
-               WHERE run_id=%s RETURNING agent_id, status, ended_at""",
-            (
-                body.status,
-                body.exit_code,
-                body.output,
-                late_task_id,
-                body.diff,
-                body.kill_reason,
-                body.input_tokens,
-                body.output_tokens,
-                body.cache_read_input_tokens,
-                body.cache_creation_input_tokens,
-                total_cost_usd,
-                run_id,
-            ),
+        if late_task_id:
+            cur.execute("UPDATE worker_runs SET task_id=%s WHERE run_id=%s AND task_id IS NULL",
+                        (late_task_id, run_id))
+        updates = {"exit_code": body.exit_code, "output": body.output}
+        for key, value in {
+            "diff": body.diff, "kill_reason": body.kill_reason,
+            "input_tokens": body.input_tokens, "output_tokens": body.output_tokens,
+            "cache_read_input_tokens": body.cache_read_input_tokens,
+            "cache_creation_input_tokens": body.cache_creation_input_tokens,
+            "total_cost_usd": total_cost_usd,
+        }.items():
+            if value is not None:
+                updates[key] = value
+        row = terminalize_workflow_run_with_evidence(
+            cur, run_id, body.status, cause="finish", updates=updates,
         )
-        row = cur.fetchone()
         existing["task_id"] = existing["task_id"] or late_task_id
-        if existing["status"] in ("running", "orphaned"):
+        cur.execute("SELECT workflow_id FROM tasks WHERE id=%s", (existing["task_id"],))
+        task = cur.fetchone()
+        if existing["status"] in ("running", "orphaned") and not (task and task["workflow_id"]):
             record_run_outcome(cur, existing, body)
             requeue_interrupted_run(cur, existing, body)
-        revoke_tokens_for_runs(cur, [run_id])
-        prune_old_run_detail(cur, row["agent_id"])
         # Live chat: a container-wide (never agent-targeted — it must not wake anyone)
         # event so open portals re-read runs/turns now instead of on their next poll.
         cur.execute("SELECT container_id FROM agents WHERE id=%s", (row["agent_id"],))

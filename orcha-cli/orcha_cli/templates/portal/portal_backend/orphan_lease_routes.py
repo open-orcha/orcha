@@ -9,6 +9,7 @@ from portal_backend.database import db_cursor
 from portal_backend.guards import require_container, valid_uuid
 from portal_backend.identity_routes import require_machine_lane_member
 from portal_backend.stranded_runs import reconcile_stranded_runs
+from portal_backend.workflow_evidence_service import terminalize_workflow_run_with_evidence
 
 ORPHAN_LEASE_SECS = 1260.0
 
@@ -64,15 +65,15 @@ def _reap_lane(
     reaped_ids = [str(row["agent_id"]) for row in reaped]
     if reaped_ids:
         cur.execute(
-            f"""UPDATE worker_runs SET status='orphaned', ended_at=now()
-               WHERE {sql.in_list('CAST(agent_id AS TEXT)')} AND status='running' AND lane=%s
-               RETURNING run_id, agent_id""",
-            (sql.list_param(reaped_ids), run_lane),
+            f"SELECT run_id,agent_id FROM worker_runs "
+            f"WHERE {sql.in_list('CAST(agent_id AS TEXT)')} AND status='running' "
+            "AND lane=%s ORDER BY run_id", (sql.list_param(reaped_ids), run_lane),
         )
         for run in cur.fetchall():
-            runs_by_agent.setdefault(str(run["agent_id"]), []).append(
-                str(run["run_id"])
+            terminalize_workflow_run_with_evidence(
+                cur, run["run_id"], "orphaned", cause="orphan_lease",
             )
+            runs_by_agent.setdefault(str(run["agent_id"]), []).append(str(run["run_id"]))
     reconciled = [run_id for run_ids in runs_by_agent.values() for run_id in run_ids]
     if reconciled:
         cur.execute(

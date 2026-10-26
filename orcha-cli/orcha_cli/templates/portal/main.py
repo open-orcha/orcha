@@ -140,6 +140,7 @@ def _resident_inbox_task_work_id(cur, aid: str, delivered_ts, max_ts):
 
 # Route modules register cohesive API surfaces when imported.
 from portal_backend import workflow_routes  # noqa: E402,F401
+from portal_backend import workflow_evidence_routes  # noqa: E402,F401
 from portal_backend.active_conversation_routes import (  # noqa: E402
     configure_compatibility as _configure_active_conversations,
 )

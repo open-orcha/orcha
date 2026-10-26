@@ -39,6 +39,11 @@ SCHEMA_SQL = MIGRATIONS_DIR / "001_init.sql"
 BACKEND = os.environ.get("ORCHA_TEST_BACKEND", "sqlite")
 if BACKEND not in ("sqlite", "postgres"):
     raise RuntimeError(f"ORCHA_TEST_BACKEND must be sqlite or postgres, got {BACKEND!r}")
+# A worker can inherit the live installation's migration directory. Always test
+# this checkout's schema, just as we always use an isolated database below.
+os.environ["MIGRATIONS_DIR"] = str(
+    MIGRATIONS_DIR / "sqlite" if BACKEND == "sqlite" else MIGRATIONS_DIR
+)
 
 # --- Postgres leg: a SEPARATE database so a test run never touches a live stack's data ---
 # (also read by tests/test_schema_parity.py, which always compares against Postgres)
@@ -63,6 +68,12 @@ APP_TABLES = [
     "agents", "containers",
     # mig 063 — FK'd to agents/containers, so listed last (the CASCADE lock order)
     "notification_prefs", "notification_pref_defaults",
+    "container_task_graph_guard", "workflows", "workflow_objectives",
+    "workflow_executions", "workflow_task_acceptances", "task_outside_evidence",
+    "workflow_review_rounds", "workflow_operation_receipts", "workflow_history",
+    "workflow_notification_receipts", "workflow_evidence_sets", "workflow_evidence",
+    "workflow_terminal_receipts",
+    "workflow_runner_credentials", "workflow_launch_permits", "workflow_stop_intents",
 ]
 
 
