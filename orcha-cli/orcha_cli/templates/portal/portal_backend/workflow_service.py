@@ -534,7 +534,7 @@ class WorkflowService:
                 )
                 run_live = not run or not run["ended_at"]
             releasable = []
-            if task["start_hold"] and is_owner:
+            if task["start_hold"] and is_owner and w["launch_enabled"]:
                 releasable.append("start")
             if task["human_hold_by"] and (is_owner or me == task["human_hold_by"]):
                 releasable.append("human")
@@ -579,6 +579,13 @@ class WorkflowService:
                         (
                             not (task["start_hold"] or task["human_hold_by"]),
                             "no_hold",
+                        ),
+                        (
+                            is_owner
+                            and not releasable
+                            and not task["human_hold_by"]
+                            and not w["launch_enabled"],
+                            "workflow_not_started",
                         ),
                         (not releasable, "hold_owner_required"),
                     ),
@@ -1554,6 +1561,12 @@ class WorkflowService:
             self.no_turn(tid)
             if "start" in holds:
                 self.owner(w, actor)
+                if not start and not w["launch_enabled"] and t["start_hold"]:
+                    # §14.1: Start performs the first release of start holds.
+                    conflict(
+                        "workflow_not_started",
+                        "Use Start to release the first tasks.",
+                    )
                 self.cur.execute(
                     "UPDATE tasks SET start_hold=false WHERE id=%s", (tid,)
                 )
