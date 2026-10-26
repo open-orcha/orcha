@@ -1161,13 +1161,22 @@ async def test_local_member_can_create_and_proxy_identity_ignores_local_claim(
     owner = setup_workflow[1].id
     other = setup_workflow[3]
     monkeypatch.delenv("ORCHA_TRUST_PROXY_USER", raising=False)
-    monkeypatch.setenv("ORCHA_BIND", "loopback")
+    monkeypatch.delenv("ORCHA_BIND", raising=False)
     response = await client.post(
         f"/api/containers/{cid}/workflows",
         json={"title": "Local", "goal": "A local result", "idempotency_key": "local"},
+        headers={"X-Orcha-Local-Actor": owner},
+    )
+    assert response.status_code == 201, response.text
+    assert response.json()["owner_human_id"] == owner
+
+    monkeypatch.setenv("ORCHA_BIND", "lan")
+    response = await client.post(
+        f"/api/containers/{cid}/workflows",
+        json={"title": "LAN", "goal": "A LAN result", "idempotency_key": "lan"},
         headers={
-            "Host": "localhost",
-            "Origin": "http://localhost",
+            "Host": "192.168.1.20",
+            "Origin": "http://192.168.1.20",
             "X-Orcha-Local-Actor": owner,
         },
     )
@@ -1190,7 +1199,7 @@ async def test_local_member_can_create_and_proxy_identity_ignores_local_claim(
 
 
 @pytest.mark.asyncio
-async def test_local_workflow_claim_rejects_remote_ai_viewer_and_other_project(
+async def test_local_workflow_claim_allows_local_and_lan_but_rejects_invalid_members(
     client, setup_workflow, monkeypatch
 ):
     cid, owner, worker, _, _, _ = setup_workflow
@@ -1206,8 +1215,8 @@ async def test_local_workflow_claim_rejects_remote_ai_viewer_and_other_project(
             (outsider, other_cid),
         )
     monkeypatch.delenv("ORCHA_TRUST_PROXY_USER", raising=False)
-    monkeypatch.setenv("ORCHA_BIND", "loopback")
-    local = {"Host": "localhost", "Origin": "http://localhost"}
+    monkeypatch.delenv("ORCHA_BIND", raising=False)
+    local = {}
 
     for actor_id, reason in [
         (worker, "human_required"),
@@ -1225,39 +1234,30 @@ async def test_local_workflow_claim_rejects_remote_ai_viewer_and_other_project(
             "reason": reason,
         }
 
-    response = await client.get(
-        f"/api/containers/{cid}/workflows/capability",
-        headers={
-            "Host": "127.attacker.example",
-            "Origin": "http://127.attacker.example",
-            "X-Orcha-Local-Actor": owner.id,
-        },
-    )
-    assert response.json()["reason"] == "local_workflow_writes_unavailable"
-
-    response = await client.get(
-        f"/api/containers/{cid}/workflows/capability",
-        headers={
-            "Host": "localhost",
-            "Origin": "https://orcha.example",
-            "X-Orcha-Local-Actor": owner.id,
-        },
-    )
-    assert response.json()["reason"] == "local_workflow_writes_unavailable"
-
-    monkeypatch.delenv("ORCHA_BIND", raising=False)
-    response = await client.get(
-        f"/api/containers/{cid}/workflows/capability",
-        headers={**local, "X-Orcha-Local-Actor": owner.id},
-    )
-    assert response.json()["reason"] == "local_workflow_writes_unavailable"
-
-    monkeypatch.setenv("ORCHA_BIND", "lan")
-    response = await client.get(
-        f"/api/containers/{cid}/workflows/capability",
-        headers={**local, "X-Orcha-Local-Actor": owner.id},
-    )
-    assert response.json()["reason"] == "local_workflow_writes_unavailable"
+    for bind, headers in [
+        (None, {"X-Orcha-Local-Actor": owner.id}),
+        ("loopback", {"Host": "localhost", "X-Orcha-Local-Actor": owner.id}),
+        (
+            "lan",
+            {
+                "Host": "192.168.1.20",
+                "Origin": "http://192.168.1.20",
+                "X-Orcha-Local-Actor": owner.id,
+            },
+        ),
+    ]:
+        if bind is None:
+            monkeypatch.delenv("ORCHA_BIND", raising=False)
+        else:
+            monkeypatch.setenv("ORCHA_BIND", bind)
+        response = await client.get(
+            f"/api/containers/{cid}/workflows/capability", headers=headers
+        )
+        assert response.json() == {
+            "workflow_read": True,
+            "workflow_human_write": True,
+            "reason": None,
+        }
 
     monkeypatch.setenv("ORCHA_TRUST_PROXY_USER", "1")
     monkeypatch.delenv("ORCHA_BIND", raising=False)
@@ -1269,7 +1269,7 @@ async def test_local_workflow_claim_rejects_remote_ai_viewer_and_other_project(
 
 
 @pytest.mark.asyncio
-async def test_workflow_plan_decision_requires_loopback_live_non_viewer(
+async def test_workflow_plan_decision_requires_local_live_non_viewer(
     client, setup_workflow, monkeypatch
 ):
     cid, owner, worker, _, _, _ = setup_workflow
@@ -1287,8 +1287,8 @@ async def test_workflow_plan_decision_requires_loopback_live_non_viewer(
             (retired, cid),
         )
     monkeypatch.delenv("ORCHA_TRUST_PROXY_USER", raising=False)
-    monkeypatch.setenv("ORCHA_BIND", "loopback")
-    local = {"Host": "localhost", "Origin": "http://localhost"}
+    monkeypatch.setenv("ORCHA_BIND", "lan")
+    local = {"Host": "192.168.1.20", "Origin": "http://192.168.1.20"}
 
     def decision(actor_id):
         return {
@@ -1309,10 +1309,10 @@ async def test_workflow_plan_decision_requires_loopback_live_non_viewer(
     response = await client.post(
         "/api/decisions",
         json=decision(owner.id),
-        headers={"Host": "127.attacker.example", "Origin": "http://127.attacker.example"},
+        headers={**local, "X-Orcha-Local-Actor": viewer},
     )
     assert response.status_code == 403
-    assert response.json()["detail"]["code"] == "local_workflow_writes_unavailable"
+    assert response.json()["detail"]["code"] == "actor_mismatch"
 
     response = await client.post(
         "/api/decisions", json=decision(owner.id), headers=local

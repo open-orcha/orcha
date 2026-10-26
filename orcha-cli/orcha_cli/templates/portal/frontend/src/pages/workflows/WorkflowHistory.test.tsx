@@ -54,7 +54,7 @@ it("does not unlock owner resolution with a selected name or an unavailable inte
   expect(fetch).not.toHaveBeenCalled();
 });
 
-it("guards verified sign-in even when an action supplies its own permission check", () => {
+it("guards a missing human even when an action supplies its own permission check", () => {
   vi.stubGlobal("fetch", vi.fn());
   render(<WorkflowChange detail={exampleWorkflow({ capability: writeCapability })} scope={scope()} verified={false} stale={false}
     operation="patch" url="/api/workflows/release" label="Settings change" body={{ title: "Updated" }} check={() => null} onSaved={vi.fn()} />);

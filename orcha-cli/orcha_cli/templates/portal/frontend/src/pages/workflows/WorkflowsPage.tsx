@@ -152,7 +152,7 @@ function WorkflowScreen() {
       agents={snap?.agents.filter((a) => a.kind === "ai" && a.status !== "terminated").map((a) => ({ id: a.id, alias: a.alias }))}
       existingTasks={snap?.tasks ?? []} initialTaskId={initialTaskId}
       ownerName={actorName(scope.identity)} onSaved={(result) => navigate(href(result.id), { state: navigationState })} />}
-    {isNew && !verified && <p>Choose a current human member on this local portal, or use verified sign-in, before preparing a workflow draft.</p>}
+    {isNew && !verified && <p>Choose a current human member of this project before preparing a workflow draft.</p>}
     {!isNew && !workflowId && list && <>
       <div className="wf-filters"><label>Status<select value={filter} onChange={(e) => query("status", e.target.value)}>
         <option value="open">Open workflows</option><option value="preparing">Preparing</option><option value="active">Active</option><option value="paused">Paused</option><option value="ready">Ready to finish</option><option value="completed">Completed</option><option value="cancelled">Cancelled</option><option value="all">All</option>

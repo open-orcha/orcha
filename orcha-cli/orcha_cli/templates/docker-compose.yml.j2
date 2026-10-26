@@ -66,8 +66,8 @@ services:
       # proxy). Unset/empty for self-hosters → the header is ignored entirely. Passed
       # through from the host env like ORCHA_LLM_API_KEY above.
       ORCHA_TRUST_PROXY_USER: ${ORCHA_TRUST_PROXY_USER:-}
-      # The stock Docker portal is published on host loopback below. Workflow
-      # writes fail closed unless the runtime explicitly confirms this bind.
+      # The stock Docker portal is published on host loopback below. Other local
+      # services use this marker to distinguish loopback from LAN exposure.
       ORCHA_BIND: loopback
       # Local run (deploy/local): a GitHub personal access token used only when
       # neither App token source above resolves — lets a laptop stack reach the

@@ -94,16 +94,20 @@ export function workflowWriteReason(capability: Capability | null, hasHuman: boo
   if (!capability) return "Checking access to workflow changes…";
   if (capability.workflow_human_write !== true) {
     if (capability.reason === "integration_required") return "Workflow changes are not available on this server yet. You can continue reading.";
-    if (capability.reason === "local_workflow_writes_unavailable") return "Workflows are read-only on this connection. Open the portal on the Orcha computer, or use verified sign-in, to make changes.";
+    if (capability.reason === "local_workflow_writes_unavailable") return "Workflow changes are unavailable on this older server. Update Orcha and try again.";
+    if (capability.reason === "verified_sign_in_required") return "Sign in as a current human member of this project to change workflows on this hosted server.";
+    if (capability.reason === "human_required") return "Choose a current human member of this project to change workflows.";
     if (capability.reason === "workflow_owner_required") return "Only this workflow’s owner can make these changes.";
     return "You do not have permission to change workflows on this connection.";
   }
-  return hasHuman ? null : "Choose a current human member on this local portal, or use verified sign-in, to change workflows.";
+  return hasHuman ? null : "Choose a current human member of this project to change workflows.";
 }
 
 const actionMessages: Record<string, string> = {
   integration_required: "This action is not available on this server yet.",
   approval_integration_required: "Task approval is not available on this server yet.",
+  human_required: "Choose a current human member of this project for this action.",
+  verified_sign_in_required: "Sign in as a current human member of this project for this hosted action.",
   verified_member_required: "A current non-viewer project membership is required.",
   workflow_owner_required: "Only this workflow’s owner can make this change.",
   human_reviewer_required: "A current human reviewer is required.",
@@ -149,7 +153,7 @@ const actionMessages: Record<string, string> = {
 /** Per-action decisions are authoritative. The coarse write flag is owner-only;
  * a project owner can still receive permission for a safety hold or recovery. */
 export function availableActionReason(capability: Capability, actions: AvailableAction[] | undefined, action: string, hasHuman: boolean): string | null {
-  if (!hasHuman) return "Choose a current human member on this local portal, or use verified sign-in, to make this change.";
+  if (!hasHuman) return "Choose a current human member of this project to make this change.";
   if (capability.reason === "integration_required" || capability.reason === "local_workflow_writes_unavailable") return workflowWriteReason(capability, hasHuman);
   const available = actions?.find((a) => a.action === action);
   if (available?.enabled === true) return null;

@@ -43,7 +43,7 @@ function TaskEntry({ cid, taskId, actorId }: { cid: string | null; taskId: strin
       {busy && <p role="status">Checking task membership…</p>}{error && <p role="alert">{error} <Button onClick={() => void load(cursor)}>Retry workflows</Button></p>}
       {member ? <p>This task already belongs to <Link to={href(member.id, false)}>{member.title}</Link>. It cannot be added to a second workflow.</p> : <>
         <p>A task can belong to one workflow. Adding it requires reviewing the whole related task group; opening a draft does not change or start this task.</p>
-        {!actorId && <p>Choose a current human member on this local portal, or use verified sign-in, to add this task to a workflow.</p>}
+        {!actorId && <p>Choose a current human member of this project to add this task to a workflow.</p>}
         {loaded && !cursor && !busy && !error && actorId && <p><Link to={href("new")}>Create workflow with this task</Link></p>}
         {loaded && !cursor && !busy && !error && <ul>{workflows.filter((w) => w.status === "active").map((w) => <li key={w.id}>
           {actionReason(w, "import", !!actorId) ? <span>{w.title} — {actionReason(w, "import", !!actorId)}</span> : <Link to={href(w.id)}>Add to {w.title}</Link>}

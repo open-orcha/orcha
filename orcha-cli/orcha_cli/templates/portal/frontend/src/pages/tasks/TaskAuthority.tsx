@@ -59,8 +59,8 @@ function TaskAuthorityState({ task }: { task: Task }) {
   useEffect(() => { setConfirm(null); }, [task.autonomy, task.autonomy_revision, task.status, authority.human?.id]);
   const blocked = authority.reason || (!authority.human || authority.human.member_role !== "owner" ? "Only the human project owner can change task autonomy." : null)
     || (index && index.state !== "unsupported" && stale ? "Check workflow membership before changing task authority." : null)
-    || (member && (identityPending || !authority.human) ? "Choose a current human member on this local portal, or use verified sign-in, to change a workflow task." : null)
-    || (member?.detail.capability.reason === "local_workflow_writes_unavailable" ? "Workflow task changes are read-only on this connection." : null)
+    || (member && (identityPending || !authority.human) ? "Choose a current human member of this project to change a workflow task." : null)
+    || (member?.detail.capability.reason === "local_workflow_writes_unavailable" ? "Workflow task changes require an updated Orcha server." : null)
     || (member?.detail.capability.reason === "integration_required" ? "Workflow task changes are unavailable on this server." : null)
     || (task.is_root ? "The project goal always needs a person’s approval." : null)
     || (["completed", "cancelled"].includes(task.status) ? "Finished tasks keep their recorded autonomy history." : null)

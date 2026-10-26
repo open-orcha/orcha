@@ -1,14 +1,11 @@
 """Workflows API with separate hosted, local-human, and worker trust lanes.
 
-Hosted browsers use the proxy-verified login. A loopback-only local portal may name
-the human selected in its UI, and the server validates that person against the live
-project membership. Authenticated work tokens remain the only agent identity lane.
+Hosted browsers use the proxy-verified login. A local portal may name the human
+selected in its UI, and the server validates that person against the live project
+membership. Authenticated work tokens remain the only agent identity lane.
 """
 
-import ipaddress
-import os
 from typing import Literal
-from urllib.parse import urlsplit
 
 from fastapi import Request, Query
 
@@ -29,31 +26,14 @@ HOOKS = IntegratedWorkflowHooks()
 LOCAL_ACTOR_HEADER = "X-Orcha-Local-Actor"
 
 
-def _loopback_host(host):
-    value = (host or "").strip().strip("[]").lower()
-    if value == "localhost" or value.endswith(".localhost"):
-        return True
-    try:
-        return ipaddress.ip_address(value).is_loopback
-    except ValueError:
-        return False
-
-
 def _local_actor_claim(request, claimed_actor_id=None):
-    """Return a local UI claim only on a loopback, non-proxy connection.
+    """Return the selected human only when proxy identity is not authoritative.
 
-    The server must explicitly report a loopback bind. An unset value is an old or
-    unmanaged deployment and therefore fails closed. The request and browser Origin
-    must also name a loopback host. Proxy trust always wins and ignores local claims.
+    Local Orcha has no sign-in boundary, including when its owner exposes it on the
+    LAN. The selected identity is only a claim: every write revalidates its live
+    project membership below. Proxy trust always wins and ignores local claims.
     """
-    if _proxy_trusted() or (os.environ.get("ORCHA_BIND") or "").strip() != "loopback":
-        return None
-    if not _loopback_host(request.url.hostname):
-        return None
-    browser_source = (
-        request.headers.get("Origin") or request.headers.get("Referer") or ""
-    ).strip()
-    if not browser_source or not _loopback_host(urlsplit(browser_source).hostname):
+    if _proxy_trusted():
         return None
     header_actor = (request.headers.get(LOCAL_ACTOR_HEADER) or "").strip() or None
     claimed_actor = str(claimed_actor_id).strip() if claimed_actor_id else None
@@ -92,13 +72,9 @@ def resolve_human_actor(cur, request, cid, *, claimed_actor_id=None):
                 )
             return service.WorkflowActor(str(row["id"]), True)
         conflict(
-            (
-                "verified_sign_in_required"
-                if _proxy_trusted()
-                else "local_workflow_writes_unavailable"
-            ),
-            "Open the loopback-bound local portal and choose a current human member, "
-            "or connect through verified sign-in.",
+            "verified_sign_in_required" if _proxy_trusted() else "human_required",
+            "Choose a current human member of this project. Hosted proxy deployments use "
+            "the verified signed-in member.",
             status=403,
         )
     cur.execute(

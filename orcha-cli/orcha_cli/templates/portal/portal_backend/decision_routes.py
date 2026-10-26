@@ -34,8 +34,8 @@ def create_decision(body: DecisionCreate, request: Request):
             task = require_task(cur, body.subject_id)
             if task["workflow_id"]:
                 # Workflow plan approval is a workflow write: use the same hosted
-                # or explicitly loopback-bound local trust lane as every workflow
-                # route, then validate live non-viewer membership server-side.
+                # or local selected-human lane as every workflow route, then
+                # validate live non-viewer membership server-side.
                 from portal_backend.workflow_routes import resolve_human_actor
 
                 body.actor_agent_id = resolve_human_actor(

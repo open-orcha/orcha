@@ -26,7 +26,7 @@ export function WorkflowChange({ detail, scope, verified, stale, operation, url,
   const current = preview?.basis === basis ? preview.detail : null;
   const guard = (latest: WorkflowDetail) => latest.id !== detail.id || latest.container_id !== scope.project
     ? "This workflow changed. Open it again from its project."
-    : !verified ? "Choose a current human member on this local portal, or use verified sign-in, to make this change."
+    : !verified ? "Choose a current human member of this project to make this change."
     : latest.capability.reason === "integration_required" || latest.capability.reason === "local_workflow_writes_unavailable"
       ? workflowWriteReason(latest.capability, verified)
     : check ? check(latest) : workflowWriteReason(latest.capability, verified);
