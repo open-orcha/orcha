@@ -3523,6 +3523,28 @@
           "reviewed_artifact": {
             "$ref": "#/components/schemas/EvidenceReference"
           },
+          "reviewed_task_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewed Task Id"
+          },
+          "reviewed_work_revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewed Work Revision"
+          },
           "resolved_by_owner": {
             "anyOf": [
               {

@@ -883,6 +883,21 @@ def test_review_rounds_are_fresh_acyclic_pairs_and_receipt_replay_is_exact(
     out = execute("review_round", body, w["id"])
     assert execute("review_round", body, w["id"]) == out
     assert len(out["tasks"]) == 4 and len(out["review_rounds"]) == 2
+    recorded, waiting = sorted(out["review_rounds"], key=lambda r: r["round_number"])
+    # The recorded outcome names the exact task and work revision it judged (server-side).
+    built = next(t for t in out["tasks"] if t["id"] == build["id"])
+    assert recorded["reviewed_task_id"] == build["id"]
+    assert recorded["reviewed_work_revision"] == built["work_revision"]
+    assert recorded["reviewed_artifact"] == ref
+    # A round still waiting for its review has not judged anything yet.
+    assert waiting["outcome"] is None
+    assert (waiting["reviewed_task_id"], waiting["reviewed_work_revision"]) == (None, None)
+    with pytest.raises(Exception):
+        with db_cursor() as (_, cur):
+            cur.execute(
+                "UPDATE workflow_review_rounds SET outcome='accepted' WHERE id=%s",
+                (waiting["id"],),
+            )
     tasks = {t["title"]: t for t in out["tasks"]}
     assert tasks["Fix feedback"]["depends_on"] == [review["id"]]
     assert tasks["Review again"]["depends_on"] == [tasks["Fix feedback"]["id"]]
