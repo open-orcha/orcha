@@ -285,12 +285,8 @@ def get_container(
         )
         agents = cur.fetchall()
 
-        # mig 043: surface each agent's EFFECTIVE autonomy level alongside its raw override, using
-        # the ONE shared rule (container level if the container enforces it for everyone, else the
-        # agent's override, else the container level). Additive per-agent field — the container's
-        # own autonomy_level/autonomy_enforced remain on `c` unchanged, so no existing field shifts
-        # meaning. The roster reads `autonomy_override` for the badge and `effective_autonomy` for
-        # the "acts as" label; the container carries the lock (autonomy_enforced) glyph.
+        # Keep the former per-agent value under an explicitly historical name for
+        # mixed-version configuration-history readers. It grants no authority.
         for _a in agents:
             _a["legacy_autonomy_override"] = _a.pop("autonomy_override", None)
             # Additive (agent-status parity): the explicit PAUSE fact, so no surface

@@ -32,6 +32,21 @@ it("clears the server's list warning while preserving permanent inspector histor
   expect(screen.getByText("Withdrawn by Name unavailable: The alternative solution is accepted")).toBeVisible();
   expect(screen.queryByText("former-owner")).toBeNull();
 });
+it("shows the exact recorded acceptance actor, authority and evidence version", async () => {
+  const task = exampleTask({ acceptance: {
+    id: "acceptance", work_revision: 3, actor_id: "andrew", actor_kind: "ai", actor_alias: "Build Agent",
+    autonomy_at_acceptance: "on", autonomy_revision: 2, acceptance_source: "task_autonomy", evidence_set_id: "evidence",
+    accepted_at: "2026-10-26T03:00:00Z", evidence_items: [{ item_id: "item", deliverable_id: "result", deliverable_version: 4, sha256: "a".repeat(64) }],
+  } });
+  mockReads((url) => url.includes("/evidence") ? jsonResponse({ task_id: "build", workflow_id: "release", current_evidence_set_id: null, sets: [] })
+    : jsonResponse({ capability: writeCapability, workflows: [exampleWorkflow({ tasks: [task] })] }));
+  render(<App />);
+  expect(await screen.findByText(/Accepted by Build Agent \(agent\) for work revision 3/)).toHaveTextContent("task autonomy ON at revision 2");
+  expect(screen.getByText(/Agent acceptance authorized by task autonomy/)).toBeVisible();
+  expect(screen.getByRole("link", { name: "Accepted evidence version 4" })).toHaveAttribute("href", "/api/tasks/build/deliverables/result/versions/4/raw");
+  expect(screen.getByText(`· SHA-256 ${"a".repeat(64)}`)).toBeVisible();
+  expect(screen.queryByText(/Accepted by andrew/)).toBeNull();
+});
 it("checks later workflow pages before releasing legacy actions and preserves drafts", async () => {
   let resolve!: (response: Response) => void;
   const fetch = mockReads((url) => url.includes("cursor=") ? new Promise<Response>((done) => { resolve = done; })

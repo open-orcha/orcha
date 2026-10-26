@@ -15,7 +15,7 @@ def ack_config_from_scan(scan: dict) -> dict | None:
     return None
 
 
-def log_graded_wake(verdict: dict, autonomy_level, acted: bool) -> None:
+def log_graded_wake(verdict: dict, task_autonomy, acted: bool) -> None:
     """Emit the structured record consumed by the continuity evaluation harness."""
     try:
         record = json.dumps(
@@ -25,7 +25,7 @@ def log_graded_wake(verdict: dict, autonomy_level, acted: bool) -> None:
                 "action": verdict.get("action"),
                 "acted": bool(acted),
                 "would_boot": True,
-                "autonomy_level": autonomy_level,
+                "task_autonomy": task_autonomy,
             }
         )
         print(f"[notifier] graded_wake {record}", flush=True)
@@ -113,7 +113,9 @@ def apply_wake_act(
             config=ack_config,
             api_key=ack_api_key,
         )
-    except Exception:  # noqa: BLE001 - model/provider failures must escalate rather than crash
+    except (
+        Exception
+    ):  # noqa: BLE001 - model/provider failures must escalate rather than crash
         return False
     line = (decision.get("text") or "").strip() if isinstance(decision, dict) else ""
     if not (isinstance(decision, dict) and decision.get("ack") and line):

@@ -12,12 +12,10 @@ import kotlin.test.assertTrue
 class SettingsGitHubPairingLinearTest {
 
     @Test
-    fun executionSummaryShowsPausedOrAutonomyLabel() {
-        assertEquals("Paused", executionSummary(false, "full"))
-        assertEquals("Plan-only", executionSummary(true, null))
-        assertEquals("Plan-only", executionSummary(null, "plan"))
-        assertEquals("Build to PR", executionSummary(true, "pr"))
-        assertEquals("Full", executionSummary(true, "full"))
+    fun executionSummaryShowsOnlyProjectWakeState() {
+        assertEquals("Paused", executionSummary(false))
+        assertEquals("Running", executionSummary(true))
+        assertEquals("Running", executionSummary(null))
     }
 
     @Test

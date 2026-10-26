@@ -291,11 +291,9 @@ describe('fetchStackAttention', () => {
 describe('computeAttention — canonical V2 kinds (arch §3.1)', () => {
   const planned = { id: 'p1', title: 'Plan me', status: 'in_progress', plan_decision: null, plan_message: { body: 'plan' } }
 
-  it('flags a pending plan only at autonomy "plan" (the default when unknown)', () => {
+  it('flags a pending plan only when that task is OFF (the default when unknown)', () => {
     expect(computeAttention(stack, AGENTS, [], [planned]).map((i) => i.kind)).toEqual(['task_plan'])
-    expect(computeAttention(stack, AGENTS, [], [planned], { autonomy: 'plan' }).map((i) => i.kind)).toEqual(['task_plan'])
-    expect(computeAttention(stack, AGENTS, [], [planned], { autonomy: 'auto' })).toEqual([])
-    expect(computeAttention(stack, AGENTS, [], [planned], { autonomy: 'full' })).toEqual([])
+    expect(computeAttention(stack, AGENTS, [], [{ ...planned, autonomy: 'on' }])).toEqual([])
   })
 
   it('does not flag a plan that already has a decision, or an in-progress task with no plan post', () => {
@@ -307,10 +305,10 @@ describe('computeAttention — canonical V2 kinds (arch §3.1)', () => {
     ).toEqual([])
   })
 
-  it('suppresses verification at autonomy "full" only', () => {
+  it('keeps every task awaiting human verification, including autonomy ON', () => {
     const t = [{ id: 't1', title: 'Verify', status: 'needs_verification' }]
-    expect(computeAttention(stack, AGENTS, [], t, { autonomy: 'full' })).toEqual([])
-    expect(computeAttention(stack, AGENTS, [], t, { autonomy: 'auto' }).map((i) => i.kind)).toEqual(['task_verify'])
+    expect(computeAttention(stack, AGENTS, [], [{ ...t[0], autonomy: 'on' }]).map((i) => i.kind)).toEqual(['task_verify'])
+    expect(computeAttention(stack, AGENTS, [], t).map((i) => i.kind)).toEqual(['task_verify'])
   })
 
   it('includes escalated requests (GAP-04) regardless of target', () => {

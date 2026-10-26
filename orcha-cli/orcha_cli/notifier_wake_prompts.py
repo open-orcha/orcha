@@ -30,9 +30,15 @@ def build_wake_prompt(cand: dict) -> str:
     # #266: a clock-driven heartbeat wake with NOTHING otherwise pending — say so plainly so the
     # worker knows it's a scheduled poll: drain anything that's there, and if genuinely empty, just
     # exit (the generic "pending work" below would be misleading for an empty scheduled poll).
-    if (cand.get("auto_wake_due") and not cand.get("pending_events")
-            and not cand.get("auto_start_task_ids") and not cand.get("self_wake_due")):
-        bits.append("scheduled heartbeat wake (nothing flagged — check for anything pending, else exit)")
+    if (
+        cand.get("auto_wake_due")
+        and not cand.get("pending_events")
+        and not cand.get("auto_start_task_ids")
+        and not cand.get("self_wake_due")
+    ):
+        bits.append(
+            "scheduled heartbeat wake (nothing flagged — check for anything pending, else exit)"
+        )
     what = " + ".join(bits) or "pending work"
 
     manifest = ""
@@ -40,7 +46,12 @@ def build_wake_prompt(cand: dict) -> str:
     if notifications:
         rows = []
         for n in notifications[:12]:
-            label = str(n.get("rank_label") or n.get("type") or n.get("event_name") or "notification")
+            label = str(
+                n.get("rank_label")
+                or n.get("type")
+                or n.get("event_name")
+                or "notification"
+            )
             label = label.replace("_", "-")
             # #359: a task-REQUEST drains as "accept → spawn the task → work it", not "answer & clear".
             # Surface it distinctly so the worker (and the human reading the manifest) sees it is work,
@@ -53,17 +64,29 @@ def build_wake_prompt(cand: dict) -> str:
                 if deeplink.get("kind") and deeplink.get("id"):
                     surface = f"{deeplink['kind']}:{deeplink['id']}"
                 else:
-                    surface = str(n.get("type") or n.get("event_name") or "notification").replace("_", "-")
+                    surface = str(
+                        n.get("type") or n.get("event_name") or "notification"
+                    ).replace("_", "-")
             actor = f" from {n['actor_alias']}" if n.get("actor_alias") else ""
-            obj_pri = f" p={n['object_priority']}" if n.get("object_priority") is not None else ""
+            obj_pri = (
+                f" p={n['object_priority']}"
+                if n.get("object_priority") is not None
+                else ""
+            )
             preview = str(n.get("preview") or "").replace("\n", " ").strip()
             if len(preview) > 120:
                 preview = preview[:117] + "..."
             tail = f": {preview}" if preview else ""
-            rows.append(f"rank {n.get('rank', '?')} {label} -> {surface}{actor}{obj_pri}{tail}")
+            rows.append(
+                f"rank {n.get('rank', '?')} {label} -> {surface}{actor}{obj_pri}{tail}"
+            )
         if cand.get("notifications_truncated") or len(notifications) > 12:
-            rows.append("more pending notifications omitted from this prompt; keep draining until empty")
-        manifest = " RANKED WAKE MANIFEST - drain in this order: " + " | ".join(rows) + "."
+            rows.append(
+                "more pending notifications omitted from this prompt; keep draining until empty"
+            )
+        manifest = (
+            " RANKED WAKE MANIFEST - drain in this order: " + " | ".join(rows) + "."
+        )
 
     # A3: a directed prompt-event carries a human/teammate message. Surface it verbatim so the
     # worker acts on it specifically (not just "drain the inbox"). Quote each pending message.
@@ -71,17 +94,21 @@ def build_wake_prompt(cand: dict) -> str:
     msgs = [m for m in (cand.get("prompt_messages") or []) if m]
     if msgs:
         quoted = " ".join(f'(prompt {i + 1}) "{m}"' for i, m in enumerate(msgs))
-        directed = (f" DIRECTED MESSAGE{'S' if len(msgs) > 1 else ''} FOR YOU — act on "
-                    f"{'these' if len(msgs) > 1 else 'this'} specifically: {quoted}.")
+        directed = (
+            f" DIRECTED MESSAGE{'S' if len(msgs) > 1 else ''} FOR YOU — act on "
+            f"{'these' if len(msgs) > 1 else 'this'} specifically: {quoted}."
+        )
         # GH #33: a task-thread message wake carries only the message preview. When the wake resolves
         # a task, its FULL body (title + description + definition_of_done) now rides in your system
         # prompt's "Your task" section — read it before acting, and don't work off the message/title
         # alone. The thread read (GET /api/tasks/<id>/messages) also returns a `task` header with the
         # same body if you re-read it there.
         if cand.get("wake_task_id"):
-            directed += (" Before acting, READ the FULL task body (description AND definition_of_done) "
-                         "in your 'Your task' section — honor every acceptance criterion (run the loop "
-                         "if asked); do not act on the message preview or title alone (GH #33).")
+            directed += (
+                " Before acting, READ the FULL task body (description AND definition_of_done) "
+                "in your 'Your task' section — honor every acceptance criterion (run the loop "
+                "if asked); do not act on the message preview or title alone (GH #33)."
+            )
     # #359: a TASK-request in the inbox IS an assignment — accepting it spawns the task. Without this
     # the worker reads "drain your inbox" + "assignment is the only task trigger" and DEFLECTS the
     # work (answers/defers the request to empty the inbox) instead of spawning it. When one is
@@ -89,8 +116,9 @@ def build_wake_prompt(cand: dict) -> str:
     # GH #91/#90 (Round 10): also honor the uncapped, event-independent server signal so a beyond-cap
     # or event-consumed (nudge-redelivered) task request still selects the accept-task step — keeping
     # the prompt and the token lane in agreement (both say "accept it and make progress").
-    has_task_request = (any((n.get("is_task_request") for n in notifications))
-                        or bool(cand.get("has_pending_task_request")))
+    has_task_request = any((n.get("is_task_request") for n in notifications)) or bool(
+        cand.get("has_pending_task_request")
+    )
     if has_task_request:
         task_step = (
             f"(2) one or more inbox items is a TASK-REQUEST (a teammate asking you to DO work) — "
@@ -120,6 +148,25 @@ def build_wake_prompt(cand: dict) -> str:
             "(2) do not claim a task just because you were woken for inbox/event work — "
             "assignment is the only task trigger; "
         )
+    authority = ""
+    if cand.get("context_task_id"):
+        autonomy = cand.get("task_autonomy") or "off"
+        revision = cand.get("task_autonomy_revision") or 1
+        if autonomy == "on":
+            authority = (
+                f" TASK AUTONOMY ON (revision {revision}) applies only to this task: you may "
+                "approve your own plan, start work automatically when every gate allows, and "
+                "accept your completed work against the task requirements and definition of done. "
+                "It never bypasses dependencies, holds, scheduling, stop-work instructions, or "
+                "human-only workflow Finish. You may still send requests to people or agents."
+            )
+        else:
+            authority = (
+                f" TASK AUTONOMY OFF (revision {revision}) applies to this task: request human "
+                "approval for your plan before implementation and for finished work. You may send "
+                "requests to people or agents at any time. Dependencies, holds, scheduling, "
+                "stop-work instructions, and workflow completion rules still apply."
+            )
     # GH #34 (scoped): the fixed operating instructions (steps 1-3, `task_step`) are the SAME text
     # every time a given agent hits a given branch — only the trailing "[orcha wake] ..." summary
     # (alias/count/manifest/directed-message) is unique per wake. Rendering the instructions FIRST
@@ -134,9 +181,9 @@ def build_wake_prompt(cand: dict) -> str:
         f"your inbox is EMPTY (don't stop after the first item; that strands the rest "
         f"until the next wake); {task_step}(3) once the inbox is empty and you've "
         f"reached a natural stop — or you need the human — STOP and exit; another wake "
-        f"resumes you when there's more. Never self-certify: stop at needs_verification "
-        f"and let the human verify. "
-        f"[orcha wake] {alias}: {what}.{manifest}{directed}"
+        f"resumes you when there's more. With no task context, never self-certify: stop at "
+        f"needs_verification; with a task, follow only its ON/OFF autonomy authority. "
+        f"{authority} [orcha wake] {alias}: {what}.{manifest}{directed}"
     )
 
 
@@ -147,8 +194,9 @@ def build_wake_prompt(cand: dict) -> str:
 # and the wake prompt are one and the same again.
 
 
-def build_resident_sidecar_drain_prompt(alias: Optional[str], inbox: int,
-                                        messages: Optional[list] = None) -> str:
+def build_resident_sidecar_drain_prompt(
+    alias: Optional[str], inbox: int, messages: Optional[list] = None
+) -> str:
     """#247 B3 (§5.2 warm-zone): the LEAN one-shot prompt for a warm-resident DRAIN SIDECAR. Pure.
 
     Distinct from build_wake_prompt (the ephemeral wake) in TWO deliberate ways:
@@ -181,9 +229,11 @@ def build_resident_sidecar_drain_prompt(alias: Optional[str], inbox: int,
     msgs = [m for m in (messages or []) if m]
     if msgs:
         quoted = " ".join(f'(message {i + 1}) "{m}"' for i, m in enumerate(msgs))
-        directed = (f" DIRECTED MESSAGE{'S' if len(msgs) > 1 else ''} FOR YOU — these carry content "
-                    f"with no other inbox surface, so handle {'them' if len(msgs) > 1 else 'it'} "
-                    f"specifically: {quoted}.")
+        directed = (
+            f" DIRECTED MESSAGE{'S' if len(msgs) > 1 else ''} FOR YOU — these carry content "
+            f"with no other inbox surface, so handle {'them' if len(msgs) > 1 else 'it'} "
+            f"specifically: {quoted}."
+        )
     return (
         f"[orcha wake · drain sidecar] {who}: {n} piled up while your live conversation session is "
         f"held WARM.{directed} You are a ONE-SHOT DRAIN worker: clear the FULL non-conversation backlog, then "

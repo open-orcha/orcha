@@ -323,7 +323,9 @@ def test_import_starts_only_ticked_waiting_tasks_in_a_started_workflow(setup_wor
             )
     ids = [tick, untick, held]
     preparing = create(setup_workflow, mode="parallel", count=1)
-    w = prepare_and_start(setup_workflow, create(setup_workflow, mode="parallel", count=1))
+    w = prepare_and_start(
+        setup_workflow, create(setup_workflow, mode="parallel", count=1)
+    )
 
     def preview(wid):
         with db_cursor(readonly=True) as (_, cur):
@@ -393,7 +395,10 @@ def test_import_names_blocked_tasks_and_audits_original_states(setup_workflow):
         str(blocked): "Blocked before it joined this workflow",
     }
     detail = json.loads(detail) if isinstance(detail, str) else detail
-    assert detail["original_states"] == {str(held): "not_ready", str(blocked): "blocked"}
+    assert detail["original_states"] == {
+        str(held): "not_ready",
+        str(blocked): "blocked",
+    }
 
     tid = next(t["id"] for t in w["tasks"] if t["id"] not in (held, blocked))
     w = execute("prepare", {}, w["id"], tid)
@@ -479,7 +484,10 @@ def test_outside_result_for_an_older_task_version_is_not_admitted(setup_workflow
 
     def submit():
         execute(
-            "external_result", {"evidence": {"narrative": "Done elsewhere"}}, w["id"], tid
+            "external_result",
+            {"evidence": {"narrative": "Done elsewhere"}},
+            w["id"],
+            tid,
         )
         with db_cursor(readonly=True) as (_, cur):
             return ws.WorkflowService(cur, hooks).one(
@@ -520,7 +528,10 @@ def test_losing_claimant_is_told_not_eligible_and_others_are_refused(setup_workf
     )
     plain, outside = (t["id"] for t in w["tasks"])
     execute(
-        "external_result", {"evidence": {"narrative": "Done elsewhere"}}, w["id"], outside
+        "external_result",
+        {"evidence": {"narrative": "Done elsewhere"}},
+        w["id"],
+        outside,
     )
 
     def claim(tid, acting, run_id=None):
@@ -578,7 +589,11 @@ def test_outside_result_submitter_or_owner_may_withdraw_it(setup_workflow):
     for acting in (first_owner, ws.WorkflowActor(worker, True, True)):
         with pytest.raises(HTTPException) as err:
             execute(
-                "withdraw_evidence", {"evidence_id": evidence}, w["id"], tid, acting=acting
+                "withdraw_evidence",
+                {"evidence_id": evidence},
+                w["id"],
+                tid,
+                acting=acting,
             )
         assert err.value.detail["code"] == "workflow_owner_required"
     _, tasks, _ = actions_for(setup_workflow, w["id"], new_owner)
@@ -644,14 +659,24 @@ def test_rejection_does_not_reactivate_assignee(setup_workflow):
 def test_cancel_preserves_accepted_result_and_holds_unconfirmed_worker(setup_workflow):
     w = prepare_and_start(setup_workflow, create(setup_workflow))
     tid = w["tasks"][0]["id"]
+    sleeping = w["tasks"][1]["id"]
     e, ref = submit_result(setup_workflow, w, tid)
     w = setup_workflow[-1]("accept", {"evidence": ref}, w["id"], tid)
+    with db_cursor() as (_, cur):
+        cur.execute(
+            "INSERT INTO agent_self_wake(agent_id,task_id,resume_at,context) VALUES (%s,%s,%s,'continue later')",
+            (setup_workflow[2], sleeping, ws.sql.utcnow()),
+        )
     w = setup_workflow[-1]("cancel", {}, w["id"])
     assert w["status"] == "cancelled" and w["progress"]["accepted"] == 1
     assert w["tasks"][0]["display_state"]["label"] == "Stopping - accepted"
     with db_cursor(readonly=True) as (_, cur):
         svc = ws.WorkflowService(cur, setup_workflow[4])
         assert svc.live_turn(tid)["id"] == e["id"]
+        cur.execute(
+            "SELECT count(*) AS n FROM agent_self_wake WHERE task_id=%s", (sleeping,)
+        )
+        assert cur.fetchone()["n"] == 0
 
 
 def test_late_result_after_cancel_is_refused_as_stale_generation(setup_workflow):
@@ -762,9 +787,7 @@ def test_labels_follow_the_plan_label_map_with_names(setup_workflow):
     assert got["Task 0"] == "Prepared · awaiting release"
     assert got["Task 1"] == "Waiting for Task 0"
     assert got["Task 2"] == "Prepared · awaiting release · on hold by Owner"
-    w = execute(
-        "withdraw", {"reason": "Not needed"}, w["id"], by_title["Task 2"]["id"]
-    )
+    w = execute("withdraw", {"reason": "Not needed"}, w["id"], by_title["Task 2"]["id"])
     row = next(t for t in w["tasks"] if t["title"] == "Task 2")
     assert row["display_state"]["label"] == "Withdrawn by Owner: Not needed"
     assert row["withdrawn_by"] == str(setup_workflow[1].id)
@@ -774,7 +797,11 @@ def test_labels_follow_the_plan_label_map_with_names(setup_workflow):
 def test_lost_release_warning_is_permanent_and_list_mark_clears():
     lost = {"state": "released_lost", "first_stop_at": None}
     newer = {"state": "running", "first_stop_at": None}
-    task = {"id": "t", "status": "not_ready", "awaiting_owner_decision": "stopped_by_owner"}
+    task = {
+        "id": "t",
+        "status": "not_ready",
+        "awaiting_owner_decision": "stopped_by_owner",
+    }
     shown = task_display(task, lost)
     assert shown["label"] == "Stopped by owner · owner decides"
     assert shown["warning"] and shown["list_warning"]
@@ -791,7 +818,9 @@ def test_task_notices_go_to_the_verifier_where_set(setup_workflow, monkeypatch):
     cid, actor, worker, other, hooks, execute = setup_workflow
     sent = []
     monkeypatch.setattr(
-        ws, "publish_event", lambda cur, c, aid, kind, data: sent.append((str(aid), kind))
+        ws,
+        "publish_event",
+        lambda cur, c, aid, kind, data: sent.append((str(aid), kind)),
     )
     w = prepare_and_start(setup_workflow, create(setup_workflow))
     checked, plain = w["tasks"][0]["id"], w["tasks"][1]["id"]
@@ -801,7 +830,9 @@ def test_task_notices_go_to_the_verifier_where_set(setup_workflow, monkeypatch):
         )
     sent.clear()
     submit_result(setup_workflow, w, checked)
-    awaiting = [aid for aid, kind in sent if kind == "workflow_task_awaiting_acceptance"]
+    awaiting = [
+        aid for aid, kind in sent if kind == "workflow_task_awaiting_acceptance"
+    ]
     assert awaiting == [str(other)]
     with db_cursor() as (_, cur):
         svc = ws.WorkflowService(cur, hooks)
@@ -829,11 +860,11 @@ def test_owner_attention_covers_recovery_lost_worker_and_choose_assignee(
     monkeypatch.setattr(
         ws,
         "publish_event",
-        lambda cur, c, aid, kind, data: sent.append(
-            (str(aid), data.get("task_id"), data.get("reason"))
-        )
-        if kind == "workflow_attention"
-        else None,
+        lambda cur, c, aid, kind, data: (
+            sent.append((str(aid), data.get("task_id"), data.get("reason")))
+            if kind == "workflow_attention"
+            else None
+        ),
     )
     w = prepare_and_start(
         setup_workflow, create(setup_workflow, mode="parallel", count=2)
@@ -870,13 +901,20 @@ def test_owner_attention_covers_recovery_lost_worker_and_choose_assignee(
     assert sent == [(owner, running, "lost_worker")]
     with db_cursor() as (_, cur):
         cur.execute(
-            "UPDATE workflow_executions SET state='recovery_needed' WHERE id=%s",
+            "INSERT INTO worker_runs(run_id,agent_id,status,started_at,ended_at) VALUES (%s,%s,'failed',%s,%s)",
+            (e["run_id"], worker, long_ago, long_ago),
+        )
+        cur.execute(
+            "UPDATE workflow_executions SET state='running',first_stop_at=NULL WHERE id=%s",
             (e["id"],),
         )
     sent.clear()
     reconcile()
     reconcile()
     assert sent == [(owner, running, "recovery_needed")]
+    with db_cursor(readonly=True) as (_, cur):
+        cur.execute("SELECT state FROM workflow_executions WHERE id=%s", (e["id"],))
+        assert cur.fetchone()["state"] == "recovery_needed"
 
 
 def test_task_is_woken_again_each_time_it_can_start_again(setup_workflow, monkeypatch):
@@ -936,9 +974,7 @@ def test_check_routes_preview_what_each_task_would_become(setup_workflow):
 
     # Start defaults to every prepared task; drafts stay held and say why.
     impact, rows = check("start")
-    assert impact["task_revisions"] == {
-        t["id"]: t["work_revision"] for t in w["tasks"]
-    }
+    assert impact["task_revisions"] == {t["id"]: t["work_revision"] for t in w["tasks"]}
     assert {tid for tid, r in rows.items() if r["selected"]} == {a, after}
     assert rows[a]["resulting_status"] == "ready" and rows[a]["can_start"]
     assert rows[after]["resulting_status"] == "waiting_for_prerequisites"
@@ -1220,10 +1256,15 @@ def test_concurrent_imports_cannot_overwrite_membership(setup_workflow):
         assert str(cur.fetchone()["workflow_id"]) == winner
 
 
-def test_move_requires_closed_component_and_both_owners(setup_workflow):
-    execute = setup_workflow[-1]
+def test_move_requires_closed_component_and_allows_human_source_owner(setup_workflow):
+    _, _, _, other, _, execute = setup_workflow
     source = create(setup_workflow, dependencies={1: ["t0"]})
     dest = create(setup_workflow, count=0)
+    with db_cursor() as (_, cur):
+        cur.execute(
+            "UPDATE workflows SET owner_human_id=%s WHERE id=%s",
+            (other, dest["id"]),
+        )
     ids = [t["id"] for t in source["tasks"]]
     body = {
         "task_ids": ids[:1],
@@ -1233,6 +1274,14 @@ def test_move_requires_closed_component_and_both_owners(setup_workflow):
     with pytest.raises(HTTPException) as err:
         execute("move", body, source["id"])
     assert err.value.detail["code"] == "dependency_closure"
+    with pytest.raises(HTTPException) as err:
+        execute(
+            "move",
+            {**body, "task_ids": ids},
+            source["id"],
+            acting=ws.WorkflowActor(other, True),
+        )
+    assert err.value.detail["code"] == "workflow_owner_required"
     source = execute("move", {**body, "task_ids": ids}, source["id"])
     assert not source["tasks"]
     with db_cursor(readonly=True) as (_, cur):
@@ -1314,7 +1363,10 @@ def test_review_rounds_are_fresh_acyclic_pairs_and_receipt_replay_is_exact(
     assert recorded["reviewed_artifact"] == ref
     # A round still waiting for its review has not judged anything yet.
     assert waiting["outcome"] is None
-    assert (waiting["reviewed_task_id"], waiting["reviewed_work_revision"]) == (None, None)
+    assert (waiting["reviewed_task_id"], waiting["reviewed_work_revision"]) == (
+        None,
+        None,
+    )
     with pytest.raises(Exception):
         with db_cursor() as (_, cur):
             cur.execute(
@@ -1673,6 +1725,14 @@ def test_completed_import_needs_explicit_human_acceptance_of_exact_result(
     )
     assert hooks.import_captures == [(done, actor.id, impact["result_digest"])]
     assert w["progress"]["accepted"] == 1
+    acceptance = w["tasks"][0]["acceptance"]
+    assert acceptance["actor_alias"] == "Owner"
+    assert acceptance["actor_kind"] == "human"
+    assert acceptance["work_revision"] == w["tasks"][0]["work_revision"]
+    assert acceptance["autonomy_at_acceptance"] == "off"
+    assert acceptance["acceptance_source"] == "import"
+    assert acceptance["evidence_set_id"]
+    assert acceptance["evidence_items"][0]["sha256"] == "a" * 64
     with db_cursor(readonly=True) as (_, cur):
         cur.execute(
             "SELECT actor_id,actor_kind,acceptance_source FROM workflow_task_acceptances WHERE task_id=%s",

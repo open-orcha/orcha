@@ -6,9 +6,8 @@ selectAttention (frontend/src/state/attention.ts) over the snapshot. Linear revi
 the two disagreed (8 on the project itself, 5 everywhere else) because the server left
 out waiting plans and counted other reviewers' verifications. These tests pin:
 
-  * the explicit per-kind numbers for a seeded project (plans gated on the author's
-    EFFECTIVE autonomy, verifications gated on the container level, human-facing /
-    escalated requests), and
+  * the explicit per-kind numbers for a seeded project (plans gated on task autonomy,
+    every task awaiting human verification, human-facing / escalated requests), and
   * PARITY: server needs_you == a line-for-line Python port of selectAttention run over
     the very snapshot (GET /api/containers/{cid}) the portal consumes, for several
     acting humans and autonomy settings.
@@ -91,7 +90,7 @@ def select_attention_count(snap, acting_id, read_only=False):
         kind = None
         if _plan_awaits_human(snap, t):
             kind = "plan"
-        elif t["status"] == "needs_verification" and t.get("autonomy") != "on":
+        elif t["status"] == "needs_verification":
             kind = "verify"
         if not kind:
             continue
@@ -242,14 +241,15 @@ async def test_needs_you_follows_task_autonomy_only(
     assert row["needs_you_breakdown"]["plan"] == 2
     assert row["needs_you"] == select_attention_count(await _snapshot(client, cid), ids["root"])
 
-    # ON removes only those tasks' approval decisions; legacy project values are inert.
+    # ON removes only plan decisions. A task still in needs_verification is, by
+    # definition, awaiting a person (for example, an admitted outside result).
     db.execute(
         "UPDATE tasks SET autonomy='on' WHERE id IN (%s,%s,%s,%s,%s)",
         (ids["p1"], ids["p2"], ids["v1"], ids["v2"], ids["v3"]),
     )
     db.execute("UPDATE containers SET autonomy_level='full',autonomy_enforced=true WHERE id=%s", (cid,))
     row = _row((await client.get("/api/containers")).json(), cid)
-    assert row["needs_you_breakdown"] == {"plan": 0, "verify": 0, "request": 3}
+    assert row["needs_you_breakdown"] == {"plan": 0, "verify": 3, "request": 3}
     assert row["needs_you"] == select_attention_count(await _snapshot(client, cid), ids["root"])
 
     # Switching one task back OFF restores only that task's plan decision.

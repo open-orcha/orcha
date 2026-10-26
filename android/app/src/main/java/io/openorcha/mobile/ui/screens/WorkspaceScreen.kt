@@ -62,7 +62,6 @@ fun WorkspaceScreen(
     onDecidePlanFor: (String, Boolean, String?) -> Unit,
     onVerifyFor: (String, Boolean, String?) -> Unit,
     onSetWakes: (Boolean) -> Unit,
-    onSetAutonomy: (String) -> Unit,
     onOpenGithubHub: () -> Unit = {},
     onSearchQueryChange: (String) -> Unit = {},
     /** Project switcher target; null hides the per-project list (only "All projects"). */
@@ -78,7 +77,6 @@ fun WorkspaceScreen(
     val containerPaused = snapshot != null && snapshot.container.status != "active"
     val wakesEnabled = snapshot?.container?.wakesEnabled ?: true
     val notifierPaused = snapshot != null && !wakesEnabled
-    val autonomyLevel = snapshot?.container?.autonomyLevel ?: "plan"
 
     var planSheetTask by remember { mutableStateOf<TaskDto?>(null) }
     var verifySheetTask by remember { mutableStateOf<TaskDto?>(null) }
@@ -216,13 +214,11 @@ fun WorkspaceScreen(
     if (controlsSheetOpen) {
         ContainerControlsSheet(
             wakesEnabled = wakesEnabled,
-            autonomyLevel = autonomyLevel,
             containerActive = !containerPaused,
             canAct = humanId != null,
             busy = state.actionInFlight,
             onDismiss = { controlsSheetOpen = false },
             onSetWakes = onSetWakes,
-            onSetAutonomy = onSetAutonomy,
         )
     }
 }

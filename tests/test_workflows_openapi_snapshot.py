@@ -1,9 +1,9 @@
 """The committed Workflows contract snapshot must match the generated /openapi.json.
 
 The portal binds to docs/design/workflows/workflows-openapi.json. It is the
-Workflows slice of FastAPI's generated spec: every route registered by
-portal_backend.workflow_routes plus the schemas those routes reach. Regenerate
-after a route or schema change with:
+Workflows slice of FastAPI's generated spec: every route registered by the
+workflow and task-autonomy route modules plus the schemas those routes reach.
+Regenerate after a route or schema change with:
 
     ORCHA_WRITE_WORKFLOWS_OPENAPI=1 pytest tests/test_workflows_openapi_snapshot.py
 """
@@ -25,7 +25,10 @@ def workflows_contract():
     methods = {}
     for route in main.app.routes:
         endpoint = getattr(route, "endpoint", None)
-        if getattr(endpoint, "__module__", "") == "portal_backend.workflow_routes":
+        if getattr(endpoint, "__module__", "") in {
+            "portal_backend.workflow_routes",
+            "portal_backend.task_autonomy_routes",
+        }:
             methods.setdefault(route.path_format, set()).update(
                 m.lower() for m in route.methods
             )
@@ -77,6 +80,8 @@ def test_snapshot_covers_task_level_recovery_routes():
     for path in ("stop", "retry", "reissue-stop", "release-lost-worker"):
         assert "post" in paths["/api/tasks/{tid}/" + path]
     assert "put" in paths["/api/tasks/{tid}/dependencies"]
+    assert "put" in paths["/api/tasks/{tid}/autonomy"]
+    assert "get" in paths["/api/tasks/{tid}/approvals"]
 
 
 def test_every_offered_action_names_its_route():

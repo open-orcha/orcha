@@ -77,16 +77,9 @@ import io.openorcha.mobile.ui.theme.Orcha
 import io.openorcha.mobile.ui.theme.SkinMode
 import io.openorcha.mobile.ui.theme.ThemeMode
 
-/** The user-facing autonomy label (Plan-only / Build to PR / Full). */
-internal fun autonomyDisplayLabel(level: String?): String = when (level) {
-    "pr" -> "Build to PR"
-    "full" -> "Full"
-    else -> "Plan-only"
-}
-
-/** The Execution row's trailing value: "Paused" when wakes are off, else the autonomy label. */
-internal fun executionSummary(wakesEnabled: Boolean?, autonomyLevel: String?): String =
-    if (wakesEnabled == false) "Paused" else autonomyDisplayLabel(autonomyLevel)
+/** The Execution row shows only the project-wide wake switch. */
+internal fun executionSummary(wakesEnabled: Boolean?): String =
+    if (wakesEnabled == false) "Paused" else "Running"
 
 /** Theme segmented options — "System" for Auto, like iOS and the portal. */
 internal val THEME_OPTIONS: List<Pair<ThemeMode, String>> = ThemeMode.entries.map {
@@ -130,9 +123,8 @@ fun SettingsScreen(
     // Device-token auth (cloud unification):
     onSetAccessToken: (String, String?) -> Unit = { _, _ -> },
     onSignInAgain: (String) -> Unit = {},
-    // Execution (Notifier & autonomy) — the same human actions the workspace sheet uses.
+    // Project-wide agent wake control — the same action the workspace sheet uses.
     onSetWakes: ((Boolean) -> Unit)? = null,
-    onSetAutonomy: ((String) -> Unit)? = null,
     // Routines history rows open the created task (optional).
     onOpenTask: ((String) -> Unit)? = null,
     // After Connect repo saves, so the caller can refresh the snapshot (optional).
@@ -246,12 +238,12 @@ fun SettingsScreen(
                             RowsCard {
                                 val wakes = snapshot.container.wakesEnabled
                                 LRow(
-                                    title = "Notifier & autonomy",
-                                    subtitle = "Pause agent wakes, choose how far agents go",
+                                    title = "Agent wakes",
+                                    subtitle = "Pause or resume new agent work",
                                     onClick = { showExecution = true },
                                     leading = { RowIcon(OrchaIcons.PlayArrow, tint = if (wakes == false) p.warn else p.ok) },
                                     trailing = {
-                                        TrailingValue(executionSummary(wakes, snapshot.container.autonomyLevel), chevron = true)
+                                        TrailingValue(executionSummary(wakes), chevron = true)
                                     },
                                 )
                                 LDivider()
@@ -439,13 +431,11 @@ fun SettingsScreen(
     if (showExecution && snapshot != null) {
         ContainerControlsSheet(
             wakesEnabled = snapshot.container.wakesEnabled ?: true,
-            autonomyLevel = snapshot.container.autonomyLevel ?: "plan",
             containerActive = snapshot.container.status == "active",
             canAct = selected?.humanAgentId != null && onSetWakes != null,
             busy = state.actionInFlight,
             onDismiss = { showExecution = false },
             onSetWakes = { onSetWakes?.invoke(it) },
-            onSetAutonomy = { onSetAutonomy?.invoke(it) },
         )
     }
     if (showIconSheet && selected != null) {

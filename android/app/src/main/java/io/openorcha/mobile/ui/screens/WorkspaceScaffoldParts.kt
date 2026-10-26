@@ -218,7 +218,7 @@ internal fun WorkspaceTopBar(
     }
 }
 
-/** Compact Running / Paused capsule — opens the Autonomy & Notifier sheet. */
+/** Compact Running / Paused capsule — opens project execution controls. */
 @Composable
 private fun ExecutionChip(running: Boolean, onClick: () -> Unit) {
     val p = Orcha.palette
@@ -228,7 +228,7 @@ private fun ExecutionChip(running: Boolean, onClick: () -> Unit) {
             .heightIn(min = 48.dp)
             .clickable(role = Role.Button, onClickLabel = "Open autonomy and notifier") { onClick() }
             .semantics(mergeDescendants = true) {
-                contentDescription = "Autonomy & Notifier"
+                contentDescription = "Execution controls"
                 stateDescription = if (running) "Running" else "Paused"
             }
             .padding(horizontal = LSpace.xs),

@@ -799,12 +799,8 @@ export function agentAutonomy(snap: Snapshot | null, a: Agent | null | undefined
   return a.autonomy_override || lvl;
 }
 
-/** Is this task's plan actually gated on a human? pendingPlan (in_progress,
- *  undecided, an agent plan message) AND the plan author's — else the
- *  assignee's — effective autonomy is "plan". An agent running at pr/full
- *  (per-agent override) posts progress notes, not plans awaiting approval, so
- *  those tasks no longer over-flag as "plan waiting" (screen review). */
-export function planAwaitsHuman(snap: Snapshot | null, t: Task): boolean {
+/** A pending plan needs a person unless this exact task has autonomy ON. */
+export function planAwaitsHuman(_snap: Snapshot | null, t: Task): boolean {
   return pendingPlan(t) && t.autonomy !== "on";
 }
 
@@ -818,7 +814,7 @@ export function attnItems(snap: Snapshot | null): AttnItems {
   const tasks = snap?.tasks ?? [];
   const reqs = snap?.requests ?? [];
   const plans = tasks.filter((t) => planAwaitsHuman(snap, t));
-  const verifs = tasks.filter((t) => t.status === "needs_verification" && t.autonomy !== "on");
+  const verifs = tasks.filter((t) => t.status === "needs_verification");
   const escs = reqs.filter((r) => r.status === "open" && isToHuman(snap, r));
   return { plans, verifs, escs, count: plans.length + verifs.length + escs.length };
 }

@@ -76,14 +76,9 @@ def wake_scan(
             )
             if cur.rowcount:
                 conn.commit()
-        cur.execute(
-            "SELECT wakes_enabled, autonomy_level, autonomy_enforced "
-            "FROM containers WHERE id=%s",
-            (cid,),
-        )
+        cur.execute("SELECT wakes_enabled FROM containers WHERE id=%s", (cid,))
         settings = cur.fetchone()
         wakes_enabled = bool(settings["wakes_enabled"])
-        autonomy_enforced = bool(settings["autonomy_enforced"])
         triage_model = _resolve_use_case_model(cur, cid, "triage")
         ack_model = _resolve_use_case_model(cur, cid, "ack")
         triage_key_enc = provider_key_enc(
@@ -112,8 +107,6 @@ def wake_scan(
                 valid_uuid=valid_uuid,
                 resolve_model=_compatibility["resolve_model"],
                 resolve_model_runtime=_compatibility["resolve_model_runtime"],
-                container_autonomy_level=settings["autonomy_level"],
-                container_autonomy_enforced=autonomy_enforced,
             )
             for agent in list_wake_agents(cur, cid, cooldown)
         ]
@@ -137,8 +130,6 @@ def wake_scan(
         "container_status": container["status"],
         "active": container["status"] == "active",
         "wakes_enabled": wakes_enabled,
-        "autonomy_level": settings["autonomy_level"],
-        "autonomy_enforced": autonomy_enforced,
         "triage_model": triage_model,
         # PS-08: the sealed provider keys are for the host daemon (header-less lane) only;
         # never hand ciphertext to a browser session, member or not.
@@ -147,7 +138,9 @@ def wake_scan(
         # Same discipline: ciphertext, header-less daemon lane only. The daemon opens it in memory
         # at spawn time and puts it in the agent subprocess env (never logs it).
         "agent_keys_enc": (
-            {runtime: None for runtime in agent_key_blobs} if browser else agent_key_blobs
+            {runtime: None for runtime in agent_key_blobs}
+            if browser
+            else agent_key_blobs
         ),
         "ack_model": ack_model,
         "candidates": candidates,

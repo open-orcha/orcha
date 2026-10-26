@@ -62,14 +62,14 @@ it("shows server status and task OFF while replacing standalone hold, assign and
   expect(within(menu).getByText("Open workflow task controls")).toBeVisible();
   expect(writes).toEqual([]);
 });
-it("opens saved evidence before diagnostics and keeps legacy result acceptance unavailable", async () => {
+it("opens saved evidence before diagnostics and keeps acceptance in workflow controls", async () => {
   taskStatus = "needs_verification";
   page(); const link = await screen.findByRole("link", { name: "Result summary — version 2" });
   expect(link).toHaveAttribute("href", "/api/tasks/build/deliverables/result/versions/2/raw");
   expect(link.compareDocumentPosition(screen.getByRole("tablist", { name: "Task sections" })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   expect(screen.queryByRole("region", { name: "Verification" })).toBeNull();
   expect(screen.queryByRole("button", { name: /^Accept/ })).toBeNull();
-  expect(screen.getByText(/plan or result approval are unavailable/)).toBeVisible();
+  expect(screen.getByText(/No result acceptance has been recorded/)).toBeVisible();
   expect(writes).toEqual([]);
 });
 it("uses the same evidence-first workflow guard on Needs you without exposing legacy acceptance", async () => {

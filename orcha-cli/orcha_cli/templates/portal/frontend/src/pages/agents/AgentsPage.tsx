@@ -34,7 +34,7 @@ import { runOutcome, type WorkerRun } from "../activity/runModel";
 import { clockTime, relTime, shortId, trunc } from "../../lib/format";
 import { Shell } from "../../shell/Shell";
 import { CircleIconButton, FilterPills, PageToolbar, Pager, scrollMainTo } from "../../shell/PageChrome";
-import { actingHuman, agentAutonomy, agentByAlias, planAwaitsHuman, planMessageOf, useActingAuthority, useSnapshot } from "../../state/SnapshotProvider";
+import { actingHuman, agentByAlias, planAwaitsHuman, planMessageOf, useActingAuthority, useSnapshot } from "../../state/SnapshotProvider";
 import type { Identity } from "../../extensions";
 import type { Agent, OrchaRequest, Snapshot, Task } from "../../types";
 import { Conversation } from "./Conversation";
@@ -885,7 +885,6 @@ export function AgentsPage() {
     // progress notes) — the same rule Needs you / the Overview / attention counts use
     const planGated = (t: Task) => {
       if (!planMessageOf(t) || t.plan_decision || t.status === "completed" || t.status === "cancelled") return false;
-      const pm = planMessageOf(t);
       return t.autonomy !== "on";
     };
     const needsYou = (t: Task) => t.status === "needs_verification" || t.status === "awaiting_human" || planAwaitsHuman(snap, t) || (t.status === "awaiting_request" && planGated(t));

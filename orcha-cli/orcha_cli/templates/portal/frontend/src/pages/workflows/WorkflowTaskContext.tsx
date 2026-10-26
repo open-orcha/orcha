@@ -111,8 +111,8 @@ export function WorkflowTaskStatus({ taskId, fallback, showLabel = false, classN
 }
 
 /** Saved results precede diagnostics, including when reached from a direct
- * task URL. No acceptance actor or historical warning is invented from the
- * assignee/current owner; those projections still need the integration API. */
+ * task URL. Acceptance attribution comes only from the immutable server
+ * record; it is never inferred from the assignee or current owner. */
 export function WorkflowTaskInspector({ taskId }: { taskId: string }) {
   const { index, member, stale } = useTaskWorkflow(taskId);
   const { snap, identity, identityTrusted, identityPending } = useSnapshot();
@@ -128,7 +128,15 @@ export function WorkflowTaskInspector({ taskId }: { taskId: string }) {
       {member.task.withdrawn_at && <p>Withdrawn by {snap?.agents.find((agent) => agent.id === member.task.withdrawn_by)?.alias ?? "Name unavailable"}: {member.task.withdrawn_reason ?? "Reason unavailable"}</p>}
       <p>Task autonomy {member.task.autonomy === "on" ? "ON" : "OFF"}. Only the human project owner can change it. Changes affect future actions.</p>
       <p>{member.task.autonomy === "on" ? "The agent may approve its plan and finished work." : "The plan and finished work need approval."} Holds, prerequisites, stop instructions and the human Finish action still apply.</p>
-      <p>Task autonomy changes and plan or result approval are unavailable until the task approval connection is ready.</p>
+      {member.task.acceptance ? <section aria-label="Recorded task acceptance">
+        <h3>Recorded acceptance</h3>
+        <p>Accepted by {member.task.acceptance.actor_alias} ({member.task.acceptance.actor_kind === "human" ? "person" : "agent"}) for work revision {member.task.acceptance.work_revision}, with task autonomy {member.task.acceptance.autonomy_at_acceptance.toUpperCase()} at revision {member.task.acceptance.autonomy_revision}.</p>
+        <p><time dateTime={member.task.acceptance.accepted_at}>{new Date(member.task.acceptance.accepted_at).toLocaleString()}</time> · {member.task.acceptance.acceptance_source === "task_autonomy" ? "Agent acceptance authorized by task autonomy" : "Human acceptance"}</p>
+        <ul>{member.task.acceptance.evidence_items.map((item) => <li key={item.item_id}>
+          <a href={`/api/tasks/${encodeURIComponent(taskId)}/deliverables/${encodeURIComponent(item.deliverable_id)}/versions/${item.deliverable_version}/raw`}>Accepted evidence version {item.deliverable_version}</a>
+          <span> · SHA-256 {item.sha256}</span>
+        </li>)}</ul>
+      </section> : <p>No result acceptance has been recorded for this work revision.</p>}
       {workflowWriteReason(member.detail.capability, verified) && <p>{workflowWriteReason(member.detail.capability, verified)}</p>}
       {member.task.blockers.length > 0 && <ul aria-label="Workflow blockers">{member.task.blockers.map((b, i) => <li key={i}>{b.message}</li>)}</ul>}
       {member.task.display_state.warning && <p className="wf-warning">{member.task.display_state.warning}</p>}

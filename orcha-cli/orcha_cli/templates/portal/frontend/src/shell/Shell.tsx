@@ -16,13 +16,12 @@
  * The theme toggle lives in Settings › Interface and the ⌘K palette.
  */
 import { UpdateNotice } from "./UpdateNotice";
-import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { sendJSON, getJSON } from "../api/client";
 import { relTime, trunc, esc } from "../lib/format";
 import { ensureCidInLocation } from "../lib/scope";
 import {
-  autLevel,
   identitySelfHuman,
   isAnsweredKind,
   NOT_MEMBER_REASON,
@@ -46,7 +45,6 @@ import { Sidebar } from "./Sidebar";
 import { ProjectTabs, isProjectSectionPage } from "./ProjectTabs";
 import { ProjectFace, useProjectPalette } from "./projectPalette";
 import { notifierState } from "../lib/notifier";
-import { autonomyDescFor, autonomyLabelFor, useProjectMode } from "../lib/projectMode";
 import { payloadTitle as payloadSummary } from "../components/primitives/Payload";
 import { HealthChip } from "../components/primitives/HealthChip";
 import { projectPauseLine, useContainerBudgets } from "../pages/agents/budget/budgetModel";
@@ -211,20 +209,6 @@ function useAutonomyActions() {
       toast((enabled ? "Couldn't resume wakes" : "Couldn't pause wakes") + " — " + apiErrorText(e), "danger");
     }
   };
-  const setLevel = async (lvl: string, label: string) => {
-    const cid = snap?.container?.id;
-    if (!cid) { toast("No container", "danger"); return; }
-    try {
-      await sendJSON("POST", `/api/containers/${encodeURIComponent(cid)}/autonomy`, {
-        level: lvl, actor_agent_id: who ? who.id : null,
-      });
-      toast("Autonomy · " + label, "ok");
-      void refresh();
-    } catch (e) {
-      toast("Couldn't change autonomy \u2014 " + apiErrorText(e), "danger");
-    }
-  };
-
   // Offline: the displayed state may be stale, so execution changes are held
   // until the backend answers again (the confirm would otherwise race it).
   // A 403/404 snapshot is NOT offline (the backend answered): say why instead.
@@ -234,7 +218,7 @@ function useAutonomyActions() {
       : kind === "not_found" ? "Project not found"
       : offline ? "Offline — reconnect to change execution controls"
       : grantDenied || authority.reason,
-    setWakes, setLevel,
+    setWakes,
   };
 }
 
@@ -284,111 +268,6 @@ function NotifierSwitch() {
             <span className="v2-switch-track" aria-hidden="true"><span className="v2-switch-thumb" /></span>
           </button>
         </div>
-      </div>
-      {pending && (
-        <Modal
-          title={pending.title}
-          desc={pending.desc}
-          danger={pending.danger}
-          primary={pending.primary}
-          onPrimary={() => { const p = pending; setPending(null); p.run(); }}
-          onClose={() => setPending(null)}
-        />
-      )}
-    </>
-  );
-}
-
-/* AUTONOMY (#autTop): the 3-level segmented selector (plan|pr|full). The
- * active level lights in its spec tone; orthogonal to the notifier — it
- * renders the same whether Running or Paused, just dimmed (still editable)
- * while paused so you can pre-set it before resuming. */
-function AutonomyLevels() {
-  const { snap, who, reason, setLevel } = useAutonomyActions();
-  const { cid } = useSnapshot();
-  // General (non-code) projects word "Build to PR" as "Execute" (presentation only)
-  const mode = useProjectMode(cid).mode;
-  const labelOf = (rg: (typeof AUT_LEVELS)[number]) => autonomyLabelFor(rg.level, rg.label, mode);
-  const meaningOf = (rg: (typeof AUT_LEVELS)[number]) => autonomyDescFor(rg.level, rg.meaning, mode);
-  const toast = useToast();
-  const [pending, setPending] = useState<PendingAut | null>(null);
-  const paused = !!(snap?.container && (snap.container as { wakes_enabled?: boolean }).wakes_enabled === false);
-  const level = autLevel(snap);
-  const canAct = !!who;
-  const denied = reason || "Pick an acting human to change autonomy";
-  const groupRef = useRef<HTMLDivElement | null>(null);
-  const known = autonomyLabel(level);
-  const activeIdx = Math.max(0, AUT_LEVELS.findIndex((x) => x.level === level));
-  const [focusIdx, setFocusIdx] = useState(activeIdx);
-  useEffect(() => { setFocusIdx(activeIdx); }, [activeIdx]);
-
-  // roving tabindex (ARIA radiogroup): arrows/Home/End MOVE focus only; Enter/
-  // Space (native button activation) opens the same confirm as a click, so a
-  // level never changes without the confirm.
-  const onKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
-    const n = AUT_LEVELS.length;
-    let next: number | null = null;
-    if (e.key === "ArrowRight" || e.key === "ArrowDown") next = (focusIdx + 1) % n;
-    else if (e.key === "ArrowLeft" || e.key === "ArrowUp") next = (focusIdx - 1 + n) % n;
-    else if (e.key === "Home") next = 0;
-    else if (e.key === "End") next = n - 1;
-    if (next == null) return;
-    e.preventDefault();
-    setFocusIdx(next);
-    groupRef.current?.querySelectorAll<HTMLButtonElement>("button[role=radio]")[next]?.focus();
-  };
-
-  const click = (lvl: string) => {
-    if (!canAct) { toast(denied, "warn"); return; }
-    const rg = AUT_LEVELS.find((x) => x.level === lvl);
-    if (!rg || rg.level === level) return;
-    setPending({
-      title: `Set autonomy to ${labelOf(rg)}?`, desc: mode === "general" ? meaningOf(rg) : autonomyImpact(rg.level, paused), primary: `Set ${labelOf(rg)}`,
-      danger: rg.level === "full",
-      run: () => void setLevel(rg.level, labelOf(rg)),
-    });
-  };
-
-  return (
-    <>
-      <div className="ctl-group" id="autGroup">
-        <span className="aut-lab">Autonomy</span>
-        <div
-          ref={groupRef}
-          className={"aut" + (canAct ? "" : " locked") + (paused ? " dimmed" : "")} id="autTop" role="radiogroup"
-          aria-label="Container autonomy level" onKeyDown={onKeyDown}
-        >
-          {!known.known ? (
-            // a legacy / server-set level: shown SELECTED so the control never
-            // reads as broken, but not clickable — picking a preset replaces it
-            <span className="seg lvl custom on" role="radio" aria-checked="true" aria-disabled="true"
-              title={"Level set on server: " + (level || "unset") + " — pick a preset to replace it"}>
-              <span className="d" aria-hidden="true" />Custom
-            </span>
-          ) : null}
-          {AUT_LEVELS.map((rg, i) => {
-            const active = rg.level === level;
-            const cls = "seg lvl " + rg.tone + (active ? " on" : "");
-            const tip = canAct
-              ? (active ? "Current autonomy: " + labelOf(rg) + (paused ? " — applies when running" : "") : `Set autonomy to ${labelOf(rg)} — ${meaningOf(rg)}`)
-              : denied;
-            return (
-              <button
-                key={rg.level} type="button" className={cls} role="radio" aria-checked={active} title={tip}
-                tabIndex={i === focusIdx ? 0 : -1} aria-disabled={canAct ? undefined : true}
-                onFocus={() => setFocusIdx(i)} onClick={() => click(rg.level)}
-              >
-                {/* no leading dot: the selected fill already marks the level (Linear segmented control) */}
-                {labelOf(rg)}
-              </button>
-            );
-          })}
-        </div>
-        <p className="v2-exec-lvl-d" aria-live="polite">
-          {known.known
-            ? meaningOf(AUT_LEVELS.find((x) => x.level === level)!)
-            : <span title="Not one of the three presets — picking a level above replaces it.">Level set on server: {level || "unset"}</span>}
-        </p>
       </div>
       {pending && (
         <Modal

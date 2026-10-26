@@ -7,13 +7,10 @@ snapshot of those projects), so ``GET /api/containers`` ships ``needs_you`` comp
 Both sides MUST agree — ``tests/test_containers_needs_you.py`` pins the parity case by
 case. The rule, per project:
 
-  * plan    — task ``in_progress``, no ``plan_approval`` decision recorded, an agent-
-              authored opening plan message exists, and the plan author's (else the
-              first assignee's) EFFECTIVE autonomy is ``plan`` (``autonomy.py``, the ONE
-              rule: enforced → container level, else the agent override, else the
-              container level). Author/assignee resolve by alias among LIVE agents only,
-              exactly like the snapshot the portal reads.
-  * verify  — task ``needs_verification`` while the container level is not ``full``.
+  * plan    — task ``in_progress``, no ``plan_approval`` decision recorded, an
+              agent-authored opening plan exists, and that task's autonomy is OFF.
+  * verify  — every task ``needs_verification``. An ON worker result self-accepts
+              before reaching this state; an outside result always needs a person.
   * request — request ``escalated``, or ``open`` with no target or a live human target.
 
 One entity counts once. The number counts only the decisions the REQUESTING user can
@@ -69,7 +66,7 @@ def needs_you_by_container(
 ) -> Dict[str, Dict[str, int]]:
     """Per-container {plan, verify, request} counts of decisions the acting human may make.
 
-    ``containers`` rows need ``id``, ``autonomy_level`` and ``autonomy_enforced``.
+    ``containers`` rows need ``id``.
     ``acting_by_cid[str(cid)]`` is the acting human's agent row (``id``, ``member_role``),
     ``None`` (nobody resolved — count only unassigned decisions), or ``READ_ONLY``.
     """
@@ -78,8 +75,6 @@ def needs_you_by_container(
     if not rows:
         return out
     cids = [str(c["id"]) for c in rows]
-    by_cid = {str(c["id"]): c for c in rows}
-
     # LIVE agents are still needed for request targeting, never for task authority.
     cur.execute(
         f"""SELECT id, container_id, alias, kind
@@ -135,7 +130,7 @@ def needs_you_by_container(
                 continue  # no agent plan posted: not a pending plan
             if t["autonomy"] != "on":
                 kind = "plan"
-        elif t["autonomy"] != "on":
+        elif t["status"] == "needs_verification":
             kind = "verify"
         if kind and not _task_for_other(t, acting):
             out[cid][kind] += 1

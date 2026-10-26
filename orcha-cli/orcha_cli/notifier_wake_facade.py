@@ -72,8 +72,8 @@ def _ack_config_from_scan(scan: dict) -> Optional[dict]:
     return _wake_actions.ack_config_from_scan(scan)
 
 
-def _log_graded_wake(verdict: dict, autonomy_level, acted: bool) -> None:
-    _wake_actions.log_graded_wake(verdict, autonomy_level, acted)
+def _log_graded_wake(verdict: dict, task_autonomy, acted: bool) -> None:
+    _wake_actions.log_graded_wake(verdict, task_autonomy, acted)
 
 
 def _advance_wake_cursor(api_base: str, cand: dict, event) -> None:
@@ -83,9 +83,7 @@ def _advance_wake_cursor(api_base: str, cand: dict, event) -> None:
 
 
 def _request_actionable(api_base: str, rid: str) -> Optional[bool]:
-    return _wake_actions.request_actionable(
-        api_base, rid, get_json=_compat()._get_json
-    )
+    return _wake_actions.request_actionable(api_base, rid, get_json=_compat()._get_json)
 
 
 def _apply_wake_act(
@@ -174,7 +172,9 @@ def _build_persona(
     )
 
 
-def spawn_headless(cwd: str, prompt: str, flags: Optional[str], dry_run: bool, **kwargs):
+def spawn_headless(
+    cwd: str, prompt: str, flags: Optional[str], dry_run: bool, **kwargs
+):
     """Launch a one-shot coding-agent worker through the patchable facade."""
     return _headless.spawn_headless(
         cwd,
@@ -188,9 +188,7 @@ def spawn_headless(cwd: str, prompt: str, flags: Optional[str], dry_run: bool, *
 
 def spawn_resident(cwd: str, **kwargs):
     """Launch a warm conversation worker through the patchable facade."""
-    return _resident_spawn.spawn_resident(
-        cwd, services=_compat(), **kwargs
-    )
+    return _resident_spawn.spawn_resident(cwd, services=_compat(), **kwargs)
 
 
 def select_transport(cand: dict) -> str:

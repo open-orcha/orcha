@@ -8,10 +8,18 @@ from portal_backend.application import app
 from portal_backend.database import db_cursor
 from portal_backend.guards import require_task, valid_uuid
 from portal_backend.identity_routes import require_member_read, require_owner
-from portal_backend.schemas.task_operations import TaskAutonomyUpdate
+from portal_backend.schemas.task_operations import (
+    TaskApprovalHistory,
+    TaskAutonomyResult,
+    TaskAutonomyUpdate,
+)
 
 
-@app.put("/api/tasks/{tid}/autonomy")
+@app.put(
+    "/api/tasks/{tid}/autonomy",
+    response_model=TaskAutonomyResult,
+    openapi_extra={"x-workflow-operation": "task_autonomy"},
+)
 def update_task_autonomy(tid: str, body: TaskAutonomyUpdate, request: Request):
     if not valid_uuid(tid):
         raise HTTPException(400, "task_id is not a valid UUID")
@@ -23,7 +31,9 @@ def update_task_autonomy(tid: str, body: TaskAutonomyUpdate, request: Request):
         if task["is_root"]:
             raise HTTPException(409, "the project root task always requires a person")
         if task["status"] in {"completed", "cancelled"}:
-            raise HTTPException(409, "finished tasks keep their recorded autonomy history")
+            raise HTTPException(
+                409, "finished tasks keep their recorded autonomy history"
+            )
         if task.get("autonomy") == body.autonomy:
             return {
                 "task_id": tid,
@@ -63,7 +73,11 @@ def update_task_autonomy(tid: str, body: TaskAutonomyUpdate, request: Request):
         }
 
 
-@app.get("/api/tasks/{tid}/approvals")
+@app.get(
+    "/api/tasks/{tid}/approvals",
+    response_model=TaskApprovalHistory,
+    openapi_extra={"x-workflow-operation": "task_approvals"},
+)
 def task_approvals(tid: str, request: Request):
     if not valid_uuid(tid):
         raise HTTPException(400, "task_id is not a valid UUID")
@@ -71,11 +85,14 @@ def task_approvals(tid: str, request: Request):
         task = require_task(cur, tid)
         require_member_read(cur, request, str(task["container_id"]))
         cur.execute(
-            """SELECT id,phase,work_revision,requirements_sha256,submission_sha256,
-                      actor_id,actor_kind,autonomy_at_approval,autonomy_revision,
-                      permission_source,approved_at
-                 FROM task_approval_records WHERE task_id=%s
-                 ORDER BY approved_at,id""",
+            """SELECT r.id,r.phase,r.work_revision,r.requirements_sha256,
+                      r.submission_sha256,r.actor_id,r.actor_kind,a.alias actor_alias,
+                      r.autonomy_at_approval,r.autonomy_revision,
+                      r.permission_source,r.approved_at
+                 FROM task_approval_records r
+                 JOIN agents a ON a.id=r.actor_id
+                WHERE r.task_id=%s
+                ORDER BY r.approved_at,r.id""",
             (tid,),
         )
         return {"task_id": tid, "approvals": cur.fetchall()}

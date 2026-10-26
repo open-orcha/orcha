@@ -2,26 +2,27 @@
 
 #288 already gives us T0 (structural skip) + T1 (cheap triage suppress) + T3 (full embodiment).
 This adds the missing **T2 "cheap-act"** rung: a routine next-hop handoff (ack an answered request,
-ack an approved verify) that today wastefully boots a full Opus worker is instead completed on the
-cheap 'ack' substrate WITHOUT a spawn — but ONLY when the container is at autonomy_level='full'.
-At the default ('plan'/'pr') the daemon LOGS the would-be T2 (the #284 token measurement reads it)
-and falls through to a full boot, so prod behaviour is byte-identical until full autonomy is chosen.
+ack an approved verify) that today wastefully boots a full worker is instead completed on the
+cheap 'ack' substrate WITHOUT a spawn — but ONLY when that exact task has autonomy ON.
+At the default OFF setting the daemon LOGS the would-be T2 (the #284 token measurement reads it)
+and falls through to a full boot.
 
 Seams under test (all PURE / fail-open):
   - main._triage_hint_for         — tags a routine event with a `t2` action (server).
   - llm_util.handoff_ack          — the cheap judge-AND-compose call; FAIL-CLOSED (escalate).
   - notifier.decide_wake_tier     — grades a candidate into structural|llm|act|full (daemon).
   - notifier._apply_wake_act      — completes the handoff via existing routes, else escalates.
-  - notifier.tick()               — the autonomy gate + the #284 log + spawn-vs-no-spawn fork.
+  - notifier.tick()               — task autonomy gate + the #284 log + spawn-vs-no-spawn fork.
 
 NON-NEGOTIABLE teeth (each BITES a specific mutation, noted in the test):
   (A) decide_wake_tier NEVER downgrades a #288 suppress into an act    (suppress passthrough)
   (B) a routine handoff that #288 would full-boot grades `act`         (the boot-saving rung)
   (C) handoff_ack FAILS CLOSED (ack=False) on error/uncertainty        (never auto-ack real work)
   (D) _apply_wake_act ESCALATES (returns False) when the cheap model won't ack  (no dropped work)
-  (E) tick gates the act behind autonomy='full' — default = log-only + full boot (no behaviour change)
+  (E) tick gates the act behind task autonomy ON — default OFF = log-only + full boot
   (F) when T2 acts, NO spawn happens and the cursor advances
 """
+
 import json
 import pathlib
 import sys
@@ -35,10 +36,10 @@ from orcha_cli import notifier  # noqa: E402
 from orcha_cli import llm_util as L  # noqa: E402
 import main  # noqa: E402
 
-
 # ===========================================================================================
 # decide_wake_tier — grades a candidate into the cheapest sufficient substrate
 # ===========================================================================================
+
 
 def _cand(hint, **extra):
     c = {"agent_id": str(uuid.uuid4()), "alias": "X", "triage_hint": hint}
@@ -49,7 +50,8 @@ def _cand(hint, **extra):
 def test_tier_structural_passthrough_suppress():
     """TOOTH A: a bare structural hint grades 'structural' (suppress) — decide_wake_tier returns the
     #288 verdict VERBATIM, never an 'act'. MUTATION: if decide_wake_tier ignored the suppress verdict
-    and looked at t2 first, a structural FYI could become a write. Here it stays a suppress."""
+    and looked at t2 first, a structural FYI could become a write. Here it stays a suppress.
+    """
     hint = {"tier": "structural", "event_name": "request_closed", "request_id": None}
     out = notifier.decide_wake_tier(_cand(hint))
     assert out["tier"] == "structural"
@@ -59,20 +61,35 @@ def test_tier_llm_skip_passthrough_suppress():
     """TOOTH A: llm hint + triage 'skip' -> tier 'llm' (suppress), NOT 'act'. A pure-ack answer is
     already handled by #288 T1; T2 must not steal it into a redundant write."""
     rid = str(uuid.uuid4())
-    hint = {"tier": "llm", "event_name": "request_answered", "request_id": rid, "text": "thanks!",
-            "t2": {"action": "ack_close", "request_id": rid}}
-    out = notifier.decide_wake_tier(_cand(hint), triage_fn=lambda t: {"wake": False, "reason": "ack"})
+    hint = {
+        "tier": "llm",
+        "event_name": "request_answered",
+        "request_id": rid,
+        "text": "thanks!",
+        "t2": {"action": "ack_close", "request_id": rid},
+    }
+    out = notifier.decide_wake_tier(
+        _cand(hint), triage_fn=lambda t: {"wake": False, "reason": "ack"}
+    )
     assert out["tier"] == "llm" and out["request_id"] == rid
 
 
 def test_tier_act_on_routine_handoff_that_would_full_boot():
     """TOOTH B (the rung): llm hint where triage says WAKE (would full-boot today) BUT the event
     carries a t2 action -> tier 'act'. This is the only place a full boot is converted to a cheap
-    act. MUTATION: drop the t2 branch in decide_wake_tier -> this grades 'full' -> RED."""
+    act. MUTATION: drop the t2 branch in decide_wake_tier -> this grades 'full' -> RED.
+    """
     tid = str(uuid.uuid4())
-    hint = {"tier": "llm", "event_name": "task_verified", "request_id": None, "text": "great work",
-            "t2": {"action": "ack_verify", "task_id": tid}}
-    out = notifier.decide_wake_tier(_cand(hint), triage_fn=lambda t: {"wake": True, "reason": "note"})
+    hint = {
+        "tier": "llm",
+        "event_name": "task_verified",
+        "request_id": None,
+        "text": "great work",
+        "t2": {"action": "ack_verify", "task_id": tid},
+    }
+    out = notifier.decide_wake_tier(
+        _cand(hint), triage_fn=lambda t: {"wake": True, "reason": "note"}
+    )
     assert out["tier"] == "act"
     assert out["action"] == "ack_verify" and out["task_id"] == tid
     assert out["text"] == "great work"
@@ -87,24 +104,34 @@ def test_tier_pending_task_request_forces_full_over_stale_t2_act():
     step needs. MUTATION: drop the guard -> an owed task request gets cheap-acted, the accept-task
     spawn is skipped, and the task is stranded -> RED here."""
     tid = str(uuid.uuid4())
-    hint = {"tier": "llm", "event_name": "task_verified", "request_id": None, "text": "great work",
-            "t2": {"action": "ack_verify", "task_id": tid}}
+    hint = {
+        "tier": "llm",
+        "event_name": "task_verified",
+        "request_id": None,
+        "text": "great work",
+        "t2": {"action": "ack_verify", "task_id": tid},
+    }
 
     calls = []
+
     def _spy(text):
         calls.append(text)
         return {"wake": True, "reason": "note"}
 
     # Flag SET: full boot, and the cheap-act / triage path is never reached.
-    owed = notifier.decide_wake_tier(_cand(hint, has_pending_task_request=True), triage_fn=_spy)
+    owed = notifier.decide_wake_tier(
+        _cand(hint, has_pending_task_request=True), triage_fn=_spy
+    )
     assert owed["tier"] == "full"
-    assert "action" not in owed          # NOT cheap-acted
-    assert calls == []                   # guard short-circuited before triage / cheap-act
+    assert "action" not in owed  # NOT cheap-acted
+    assert calls == []  # guard short-circuited before triage / cheap-act
 
     # Flag CLEAR: the SAME fixture grades 'act' — so the guard is the only thing that changed.
-    acted = notifier.decide_wake_tier(_cand(hint, has_pending_task_request=False), triage_fn=_spy)
+    acted = notifier.decide_wake_tier(
+        _cand(hint, has_pending_task_request=False), triage_fn=_spy
+    )
     assert acted["tier"] == "act" and acted["action"] == "ack_verify"
-    assert calls != []                   # triage WAS consulted on the non-owed path
+    assert calls != []  # triage WAS consulted on the non-owed path
 
 
 def test_tier_full_when_no_hint():
@@ -118,17 +145,30 @@ def test_tier_full_on_unknown_t2_action():
     """FAIL-OPEN: a t2 tag naming an action the daemon doesn't implement -> tier 'full' (boot), never
     a silent no-op. MUTATION: accept any truthy t2 -> an unknown action would skip the spawn -> work
     silently dropped. Here an unknown action escalates to a full boot."""
-    hint = {"tier": "llm", "event_name": "task_verified", "text": "x",
-            "t2": {"action": "delete_everything"}}
-    out = notifier.decide_wake_tier(_cand(hint), triage_fn=lambda t: {"wake": True, "reason": "n"})
+    hint = {
+        "tier": "llm",
+        "event_name": "task_verified",
+        "text": "x",
+        "t2": {"action": "delete_everything"},
+    }
+    out = notifier.decide_wake_tier(
+        _cand(hint), triage_fn=lambda t: {"wake": True, "reason": "n"}
+    )
     assert out["tier"] == "full"
 
 
 def test_tier_full_when_triage_wakes_and_no_t2_tag():
     """A novel llm event with NO t2 tag and triage=wake -> tier 'full' (today's behaviour preserved
     for everything we haven't tagged as routine)."""
-    hint = {"tier": "llm", "event_name": "request_answered", "request_id": "r", "text": "please fix"}
-    out = notifier.decide_wake_tier(_cand(hint), triage_fn=lambda t: {"wake": True, "reason": "fu"})
+    hint = {
+        "tier": "llm",
+        "event_name": "request_answered",
+        "request_id": "r",
+        "text": "please fix",
+    }
+    out = notifier.decide_wake_tier(
+        _cand(hint), triage_fn=lambda t: {"wake": True, "reason": "fu"}
+    )
     assert out["tier"] == "full"
 
 
@@ -136,8 +176,11 @@ def test_tier_full_when_triage_wakes_and_no_t2_tag():
 # main._triage_hint_for — the server tags routine events with a t2 action
 # ===========================================================================================
 
+
 def test_hint_task_verified_approved_note_tags_ack_verify():
-    h = main._triage_hint_for("task_verified", {"approved": True, "feedback": "nice", "task_id": "t-1"})
+    h = main._triage_hint_for(
+        "task_verified", {"approved": True, "feedback": "nice", "task_id": "t-1"}
+    )
     assert h["tier"] == "llm"
     assert h["t2"] == {"action": "ack_verify", "task_id": "t-1"}
 
@@ -158,15 +201,24 @@ def test_hint_approved_without_note_has_no_t2():
 # llm_util.handoff_ack — the cheap judge-AND-compose call, FAIL-CLOSED
 # ===========================================================================================
 
+
 class _FakeProv(L.Provider):
     name = "fake"
+
     def __init__(self, tool_input=None, raise_exc=None):
         self._inp, self._raise = tool_input, raise_exc
-    def complete(self, *, spec, system, messages, tools=None, tool_choice=None, api_key=None):
+
+    def complete(
+        self, *, spec, system, messages, tools=None, tool_choice=None, api_key=None
+    ):
         if self._raise:
             raise self._raise
-        return {"text": "", "tool_calls": [{"name": "emit_result", "input": self._inp}],
-                "usage": {}, "stop_reason": "tool_use"}
+        return {
+            "text": "",
+            "tool_calls": [{"name": "emit_result", "input": self._inp}],
+            "usage": {},
+            "stop_reason": "tool_use",
+        }
 
 
 def test_handoff_ack_routine_acks_and_composes():
@@ -178,13 +230,17 @@ def test_handoff_ack_routine_acks_and_composes():
 def test_handoff_ack_non_routine_escalates():
     """ack=False -> {ack:False} (escalate to a full boot)."""
     prov = _FakeProv({"ack": False, "text": "needs real work"})
-    assert L.handoff_ack("please rebase and re-run", provider=prov) == {"ack": False, "text": ""}
+    assert L.handoff_ack("please rebase and re-run", provider=prov) == {
+        "ack": False,
+        "text": "",
+    }
 
 
 def test_handoff_ack_error_fails_closed():
     """TOOTH C: ANY error -> {ack:False}. This is the MIRROR of triage's fail-OPEN — a flaky cheap
     model must never auto-ack something that might need real work. MUTATION: fail-open to ack=True
-    here would let an LLM outage silently swallow handoffs -> this asserts ack is False."""
+    here would let an LLM outage silently swallow handoffs -> this asserts ack is False.
+    """
     prov = _FakeProv(raise_exc=RuntimeError("boom"))
     assert L.handoff_ack("x", provider=prov) == {"ack": False, "text": ""}
 
@@ -206,22 +262,35 @@ def test_handoff_ack_malformed_missing_ack_escalates():
 # notifier._apply_wake_act — complete the handoff via existing routes, else escalate
 # ===========================================================================================
 
+
 def _fake_llm(decision=None, raise_exc=None):
     def handoff_ack(text, *, config=None, api_key=None):
         if raise_exc:
             raise raise_exc
         return decision
+
     return types.SimpleNamespace(handoff_ack=handoff_ack)
 
 
 def test_apply_act_ack_close_posts_triage_close_and_cursor(monkeypatch):
     """TOOTH F: ack_close -> POST triage-close with the composed line, THEN advance the cursor; True."""
     posts = []
-    monkeypatch.setattr(notifier, "_post_json", lambda url, body, **k: posts.append((url, body)) or {})
-    monkeypatch.setattr(notifier, "_llm_util", _fake_llm({"ack": True, "text": "thanks, closing"}))
+    monkeypatch.setattr(
+        notifier, "_post_json", lambda url, body, **k: posts.append((url, body)) or {}
+    )
+    monkeypatch.setattr(
+        notifier, "_llm_util", _fake_llm({"ack": True, "text": "thanks, closing"})
+    )
     cand = {"agent_id": "a-1", "alias": "X", "ack_through_ts": 7.0, "max_event_ts": 9.0}
-    verdict = {"tier": "act", "action": "ack_close", "request_id": "r-9", "text": "the answer"}
-    ok = notifier._apply_wake_act("http://api", cand, "request_answered", verdict, quiet=True)
+    verdict = {
+        "tier": "act",
+        "action": "ack_close",
+        "request_id": "r-9",
+        "text": "the answer",
+    }
+    ok = notifier._apply_wake_act(
+        "http://api", cand, "request_answered", verdict, quiet=True
+    )
     assert ok is True
     urls = [u for u, _ in posts]
     assert "http://api/api/requests/r-9/triage-close" in urls
@@ -233,66 +302,115 @@ def test_apply_act_ack_close_posts_triage_close_and_cursor(monkeypatch):
 
 def test_apply_act_ack_verify_posts_task_message_and_cursor(monkeypatch):
     posts = []
-    monkeypatch.setattr(notifier, "_post_json", lambda url, body, **k: posts.append((url, body)) or {})
-    monkeypatch.setattr(notifier, "_llm_util", _fake_llm({"ack": True, "text": "acknowledged, thanks!"}))
-    cand = {"agent_id": "a-1", "alias": "X", "ack_through_ts": None, "max_event_ts": 4.0}
-    verdict = {"tier": "act", "action": "ack_verify", "task_id": "t-2", "text": "great work"}
-    ok = notifier._apply_wake_act("http://api", cand, "task_verified", verdict, quiet=True)
+    monkeypatch.setattr(
+        notifier, "_post_json", lambda url, body, **k: posts.append((url, body)) or {}
+    )
+    monkeypatch.setattr(
+        notifier, "_llm_util", _fake_llm({"ack": True, "text": "acknowledged, thanks!"})
+    )
+    cand = {
+        "agent_id": "a-1",
+        "alias": "X",
+        "ack_through_ts": None,
+        "max_event_ts": 4.0,
+    }
+    verdict = {
+        "tier": "act",
+        "action": "ack_verify",
+        "task_id": "t-2",
+        "text": "great work",
+    }
+    ok = notifier._apply_wake_act(
+        "http://api", cand, "task_verified", verdict, quiet=True
+    )
     assert ok is True
     msg = next((b for u, b in posts if u.endswith("/api/tasks/t-2/messages")), None)
     assert msg is not None
     assert msg["author_agent_id"] == "a-1" and msg["body"] == "acknowledged, thanks!"
     ack = next(b for u, b in posts if u.endswith("/wake-ack"))
-    assert ack["delivered_ts"] == 4.0      # falls back to max_event_ts
+    assert ack["delivered_ts"] == 4.0  # falls back to max_event_ts
 
 
 def test_apply_act_escalates_when_model_declines(monkeypatch):
     """TOOTH D: handoff_ack ack=False -> NO write, NO cursor advance, returns False (escalate).
     MUTATION: if _apply_wake_act wrote before checking the ack verdict, a non-routine handoff would
-    be silently acked. Here zero posts go out and it returns False (-> the caller full-boots)."""
+    be silently acked. Here zero posts go out and it returns False (-> the caller full-boots).
+    """
     posts = []
-    monkeypatch.setattr(notifier, "_post_json", lambda url, body, **k: posts.append((url, body)) or {})
+    monkeypatch.setattr(
+        notifier, "_post_json", lambda url, body, **k: posts.append((url, body)) or {}
+    )
     monkeypatch.setattr(notifier, "_llm_util", _fake_llm({"ack": False, "text": ""}))
     cand = {"agent_id": "a-1", "alias": "X", "max_event_ts": 1.0}
-    verdict = {"tier": "act", "action": "ack_close", "request_id": "r-9", "text": "please fix the bug"}
-    ok = notifier._apply_wake_act("http://api", cand, "request_answered", verdict, quiet=True)
+    verdict = {
+        "tier": "act",
+        "action": "ack_close",
+        "request_id": "r-9",
+        "text": "please fix the bug",
+    }
+    ok = notifier._apply_wake_act(
+        "http://api", cand, "request_answered", verdict, quiet=True
+    )
     assert ok is False and posts == []
 
 
 def test_apply_act_no_llm_client_escalates(monkeypatch):
     """No cheap substrate available -> escalate (False), no writes."""
     posts = []
-    monkeypatch.setattr(notifier, "_post_json", lambda url, body, **k: posts.append((url, body)) or {})
+    monkeypatch.setattr(
+        notifier, "_post_json", lambda url, body, **k: posts.append((url, body)) or {}
+    )
     monkeypatch.setattr(notifier, "_llm_util", None)
     verdict = {"tier": "act", "action": "ack_close", "request_id": "r-9", "text": "x"}
-    ok = notifier._apply_wake_act("http://api", {"agent_id": "a", "alias": "X"},
-                                  "request_answered", verdict, quiet=True)
+    ok = notifier._apply_wake_act(
+        "http://api",
+        {"agent_id": "a", "alias": "X"},
+        "request_answered",
+        verdict,
+        quiet=True,
+    )
     assert ok is False and posts == []
 
 
 def test_apply_act_write_failure_escalates_without_cursor(monkeypatch):
     """The cheap model acked but the write FAILED (_post_json None) -> return False and DON'T advance
-    the cursor (so the event re-grades next tick and ultimately full-boots — never lost)."""
+    the cursor (so the event re-grades next tick and ultimately full-boots — never lost).
+    """
     posts = []
+
     def fake_post(url, body, **k):
         posts.append(url)
         return None if "triage-close" in url else {}
+
     monkeypatch.setattr(notifier, "_post_json", fake_post)
-    monkeypatch.setattr(notifier, "_llm_util", _fake_llm({"ack": True, "text": "closing"}))
+    monkeypatch.setattr(
+        notifier, "_llm_util", _fake_llm({"ack": True, "text": "closing"})
+    )
     cand = {"agent_id": "a-1", "alias": "X", "max_event_ts": 1.0}
     verdict = {"tier": "act", "action": "ack_close", "request_id": "r-9", "text": "x"}
-    ok = notifier._apply_wake_act("http://api", cand, "request_answered", verdict, quiet=True)
+    ok = notifier._apply_wake_act(
+        "http://api", cand, "request_answered", verdict, quiet=True
+    )
     assert ok is False
-    assert not any(u.endswith("/wake-ack") for u in posts)   # cursor NOT advanced after a failed write
+    assert not any(
+        u.endswith("/wake-ack") for u in posts
+    )  # cursor NOT advanced after a failed write
 
 
 def test_apply_act_missing_target_id_escalates(monkeypatch):
     posts = []
-    monkeypatch.setattr(notifier, "_post_json", lambda url, body, **k: posts.append(url) or {})
+    monkeypatch.setattr(
+        notifier, "_post_json", lambda url, body, **k: posts.append(url) or {}
+    )
     monkeypatch.setattr(notifier, "_llm_util", _fake_llm({"ack": True, "text": "hi"}))
     verdict = {"tier": "act", "action": "ack_close", "request_id": None, "text": "x"}
-    ok = notifier._apply_wake_act("http://api", {"agent_id": "a", "alias": "X"},
-                                  "request_answered", verdict, quiet=True)
+    ok = notifier._apply_wake_act(
+        "http://api",
+        {"agent_id": "a", "alias": "X"},
+        "request_answered",
+        verdict,
+        quiet=True,
+    )
     assert ok is False and posts == []
 
 
@@ -300,14 +418,33 @@ def test_apply_act_missing_target_id_escalates(monkeypatch):
 # tick() — the autonomy gate + the #284 measurement log + spawn-vs-no-spawn fork
 # ===========================================================================================
 
+
 def _ephemeral_t2_cand():
-    return {"agent_id": "00000000-0000-0000-0000-000000000007", "alias": "Inv",
-            "should_wake": True, "headless_cwd": "/tmp/x", "tmux_target": None,
-            "wake_enabled": True, "pending_events": 1, "auto_start_task_ids": [],
-            "reason": "wake", "latest_event": "task_verified", "max_event_ts": 5.0,
-            "headless_flags": None, "model": "claude-opus-4-8", "model_runtime": "claude",
-            "triage_hint": {"tier": "llm", "event_name": "task_verified", "text": "great work",
-                            "t2": {"action": "ack_verify", "task_id": "t-7"}}}
+    return {
+        "agent_id": "00000000-0000-0000-0000-000000000007",
+        "alias": "Inv",
+        "should_wake": True,
+        "headless_cwd": "/tmp/x",
+        "tmux_target": None,
+        "wake_enabled": True,
+        "pending_events": 1,
+        "auto_start_task_ids": [],
+        "context_task_id": "t-7",
+        "task_autonomy": "off",
+        "task_autonomy_revision": 1,
+        "reason": "wake",
+        "latest_event": "task_verified",
+        "max_event_ts": 5.0,
+        "headless_flags": None,
+        "model": "claude-opus-4-8",
+        "model_runtime": "claude",
+        "triage_hint": {
+            "tier": "llm",
+            "event_name": "task_verified",
+            "text": "great work",
+            "t2": {"action": "ack_verify", "task_id": "t-7"},
+        },
+    }
 
 
 def _wire_tick(monkeypatch, scan, *, ack_decision):
@@ -318,101 +455,133 @@ def _wire_tick(monkeypatch, scan, *, ack_decision):
     monkeypatch.setattr(notifier, "build_wake_prompt", lambda c: "PROMPT")
     monkeypatch.setattr(notifier, "derive_wake_event", lambda c: "task_verified")
     monkeypatch.setattr(notifier, "_build_persona", lambda api, aid, **k: None)
-    monkeypatch.setattr(notifier, "_triage_wake", lambda text, config=None: {"wake": True, "reason": "note"})
+    monkeypatch.setattr(
+        notifier,
+        "_triage_wake",
+        lambda text, config=None: {"wake": True, "reason": "note"},
+    )
     monkeypatch.setattr(notifier, "_llm_util", _fake_llm(ack_decision))
     spawns = []
-    monkeypatch.setattr(notifier, "spawn_headless",
-                        lambda *a, **k: spawns.append(a) or (True, "claude-cmd", None))
+    monkeypatch.setattr(
+        notifier,
+        "spawn_headless",
+        lambda *a, **k: spawns.append(a) or (True, "claude-cmd", None),
+    )
     posts = []
+
     def fake_post(url, body, **k):
         posts.append((url, body))
         return {"claimed": True} if url.endswith("/wake-claim") else {}
+
     monkeypatch.setattr(notifier, "_post_json", fake_post)
     return spawns, posts
 
 
-def test_tick_t2_acts_under_full_autonomy(monkeypatch):
-    """TOOTH F: autonomy='full' + a routine handoff -> the cheap-act fires (task message posted),
-    NO spawn, the cursor advances. MUTATION: drop the `if tier == 'act'` branch -> a spawn happens."""
-    scan = {"active": True, "autonomy_level": "full", "ack_model": None,
-            "candidates": [_ephemeral_t2_cand()]}
-    spawns, posts = _wire_tick(monkeypatch, scan, ack_decision={"ack": True, "text": "thanks!"})
-    out = notifier.tick("http://x", "cid", dry_run=False, cooldown=15, min_idle=0, quiet=True)
-    assert spawns == []                                                  # NO full embodiment
-    assert any(u.endswith("/api/tasks/t-7/messages") for u, _ in posts)  # cheap-act write went out
+def test_tick_t2_acts_under_task_autonomy_on(monkeypatch):
+    """TOOTH F: task autonomy ON + routine handoff -> the cheap-act fires (message posted),
+    NO spawn, the cursor advances. MUTATION: drop the `if tier == 'act'` branch -> a spawn happens.
+    """
+    cand = _ephemeral_t2_cand()
+    cand["task_autonomy"] = "on"
+    scan = {"active": True, "ack_model": None, "candidates": [cand]}
+    spawns, posts = _wire_tick(
+        monkeypatch, scan, ack_decision={"ack": True, "text": "thanks!"}
+    )
+    out = notifier.tick(
+        "http://x", "cid", dry_run=False, cooldown=15, min_idle=0, quiet=True
+    )
+    assert spawns == []  # NO full embodiment
+    assert any(
+        u.endswith("/api/tasks/t-7/messages") for u, _ in posts
+    )  # cheap-act write went out
     assert out["woke"][0]["suppressed"] == "act" and out["woke"][0]["sent"] is False
 
 
-def test_tick_t2_log_only_under_default_autonomy(monkeypatch, capsys):
-    """TOOTH E (the gate): autonomy='plan' (the DEFAULT) -> the cheap-act NEVER fires, a full boot
+def test_tick_t2_log_only_under_default_task_autonomy(monkeypatch, capsys):
+    """TOOTH E (the gate): task autonomy OFF (the default) -> no cheap act, a full boot
     happens (today's behaviour), AND a graded_wake measurement record is logged for #284.
     MUTATION: drop the `_t2_enabled` guard (always act) -> a spawn would NOT happen -> RED here.
 
     REGRESSION (Gate 2nd-pass): the daemon NEVER configures the logging module and runs --quiet, so
     the record must reach STDOUT (the daemon's captured log) at runtime — assert against real stdout
     (capsys) here, NOT caplog (which forcibly attaches a handler the runtime never has). This tooth
-    goes RED against a `logging.getLogger(...).info(...)` impl whose INFO record is dropped."""
-    scan = {"active": True, "autonomy_level": "plan", "ack_model": None,
-            "candidates": [_ephemeral_t2_cand()]}
-    spawns, posts = _wire_tick(monkeypatch, scan, ack_decision={"ack": True, "text": "thanks!"})
+    goes RED against a `logging.getLogger(...).info(...)` impl whose INFO record is dropped.
+    """
+    scan = {"active": True, "ack_model": None, "candidates": [_ephemeral_t2_cand()]}
+    spawns, posts = _wire_tick(
+        monkeypatch, scan, ack_decision={"ack": True, "text": "thanks!"}
+    )
     notifier.tick("http://x", "cid", dry_run=False, cooldown=15, min_idle=0, quiet=True)
-    assert len(spawns) == 1                                              # full boot DID happen
-    assert not any("/api/tasks/t-7/messages" in u for u, _ in posts)     # cheap-act did NOT fire
+    assert len(spawns) == 1  # full boot DID happen
+    assert not any(
+        "/api/tasks/t-7/messages" in u for u, _ in posts
+    )  # cheap-act did NOT fire
     # The #284 record must land on stdout even though the daemon runs --quiet (it is NOT gated).
-    line = next(ln for ln in capsys.readouterr().out.splitlines() if "graded_wake" in ln)
+    line = next(
+        ln for ln in capsys.readouterr().out.splitlines() if "graded_wake" in ln
+    )
     rec = json.loads(line.split("graded_wake", 1)[1])
     assert rec["event"] == "graded_wake" and rec["tier"] == "act"
     assert rec["acted"] is False and rec["would_boot"] is True
-    assert rec["autonomy_level"] == "plan" and rec["action"] == "ack_verify"
+    assert rec["task_autonomy"] == "off" and rec["action"] == "ack_verify"
 
 
-def test_tick_t2_acts_on_per_agent_effective_full_in_plan_container(monkeypatch):
-    """mig 043 (per-agent autonomy overrides): the T2 gate is keyed off the CANDIDATE's
-    server-computed `effective_autonomy`, not the scan-wide container level. Container at
-    'plan' (T2 historically closed) + a candidate overridden to effective 'full' -> the
-    cheap-act FIRES for that candidate, no spawn. MUTATION: key the gate off
-    context['t2_enabled'] / scan autonomy_level again -> no act, a spawn happens -> RED."""
+def test_tick_t2_ignores_legacy_agent_and_container_autonomy(monkeypatch, capsys):
+    """Legacy agent/container Full settings never widen an OFF task's authority."""
     cand = _ephemeral_t2_cand()
-    cand["effective_autonomy"] = "full"          # server-computed via portal_backend/autonomy.py
+    cand["effective_autonomy"] = "full"
     cand["autonomy_override"] = "full"
-    scan = {"active": True, "autonomy_level": "plan", "ack_model": None,
-            "candidates": [cand]}
-    spawns, posts = _wire_tick(monkeypatch, scan, ack_decision={"ack": True, "text": "thanks!"})
-    out = notifier.tick("http://x", "cid", dry_run=False, cooldown=15, min_idle=0, quiet=True)
-    assert spawns == []                                                  # NO full embodiment
-    assert any(u.endswith("/api/tasks/t-7/messages") for u, _ in posts)  # cheap-act write went out
-    assert out["woke"][0]["suppressed"] == "act"
+    scan = {
+        "active": True,
+        "autonomy_level": "full",
+        "autonomy_enforced": True,
+        "ack_model": None,
+        "candidates": [cand],
+    }
+    spawns, posts = _wire_tick(
+        monkeypatch, scan, ack_decision={"ack": True, "text": "thanks!"}
+    )
+    notifier.tick("http://x", "cid", dry_run=False, cooldown=15, min_idle=0, quiet=True)
+    assert len(spawns) == 1
+    assert not any("/api/tasks/t-7/messages" in u for u, _ in posts)
+    line = next(
+        ln for ln in capsys.readouterr().out.splitlines() if "graded_wake" in ln
+    )
+    assert json.loads(line.split("graded_wake", 1)[1])["task_autonomy"] == "off"
 
 
-def test_tick_t2_closed_for_per_agent_effective_plan_in_full_container(monkeypatch, capsys):
-    """mig 043 (the narrowing direction): container at 'full' (T2 historically open) but the
-    candidate is narrowed to effective 'plan' (override, or container-enforced recompute) -> the
-    cheap-act NEVER fires for that candidate; a full boot happens, and the #284 graded_wake record
-    logs the EFFECTIVE level that gated ('plan', not the container 'full'). MUTATION: ignore the
-    per-candidate field (scan-wide gate only) -> a narrowed agent gets auto-acted -> RED."""
+def test_tick_t2_task_on_ignores_legacy_agent_plan(monkeypatch):
+    """A legacy narrowed agent setting cannot revoke authority granted by the ON task."""
     cand = _ephemeral_t2_cand()
+    cand["task_autonomy"] = "on"
     cand["effective_autonomy"] = "plan"
     cand["autonomy_override"] = "plan"
-    scan = {"active": True, "autonomy_level": "full", "ack_model": None,
-            "candidates": [cand]}
-    spawns, posts = _wire_tick(monkeypatch, scan, ack_decision={"ack": True, "text": "thanks!"})
+    scan = {
+        "active": True,
+        "autonomy_level": "plan",
+        "ack_model": None,
+        "candidates": [cand],
+    }
+    spawns, posts = _wire_tick(
+        monkeypatch, scan, ack_decision={"ack": True, "text": "thanks!"}
+    )
     notifier.tick("http://x", "cid", dry_run=False, cooldown=15, min_idle=0, quiet=True)
-    assert len(spawns) == 1                                              # full boot DID happen
-    assert not any("/api/tasks/t-7/messages" in u for u, _ in posts)     # cheap-act did NOT fire
-    line = next(ln for ln in capsys.readouterr().out.splitlines() if "graded_wake" in ln)
-    rec = json.loads(line.split("graded_wake", 1)[1])
-    assert rec["autonomy_level"] == "plan" and rec["acted"] is False     # the level that GATED
+    assert spawns == []
+    assert any(u.endswith("/api/tasks/t-7/messages") for u, _ in posts)
 
 
 def test_tick_t2_escalates_to_full_boot_when_model_declines(monkeypatch):
-    """FAIL-SAFE: autonomy='full' but the cheap model judges the handoff non-routine (ack=False) ->
+    """FAIL-SAFE: task autonomy ON but the cheap model judges the handoff non-routine ->
     full boot, no dropped work. The cheapest-SUFFICIENT contract: cheap when sufficient, escalate
     when not."""
-    scan = {"active": True, "autonomy_level": "full", "ack_model": None,
-            "candidates": [_ephemeral_t2_cand()]}
-    spawns, posts = _wire_tick(monkeypatch, scan, ack_decision={"ack": False, "text": ""})
+    cand = _ephemeral_t2_cand()
+    cand["task_autonomy"] = "on"
+    scan = {"active": True, "ack_model": None, "candidates": [cand]}
+    spawns, posts = _wire_tick(
+        monkeypatch, scan, ack_decision={"ack": False, "text": ""}
+    )
     notifier.tick("http://x", "cid", dry_run=False, cooldown=15, min_idle=0, quiet=True)
-    assert len(spawns) == 1                                              # escalated to a full boot
+    assert len(spawns) == 1  # escalated to a full boot
     assert not any("/api/tasks/t-7/messages" in u for u, _ in posts)
 
 
@@ -420,15 +589,16 @@ def test_tick_t2_escalates_to_full_boot_when_model_declines(monkeypatch):
 # wake-scan endpoint — the server surfaces the T2 gate + the cheap-act model (integration tooth)
 # ===========================================================================================
 
-async def test_wakescan_surfaces_autonomy_and_ack_model(client, container):
-    """INTEGRATION tooth: the real GET /wake-scan response carries `autonomy_level` (the T2 gate)
-    and `ack_model` (the cheap-act model override) so the daemon grades + routes without a second
-    round-trip. A fresh container defaults to autonomy_level='plan' (gate CLOSED — zero behaviour
-    change) and ack_model=None (#290 default Haiku). MUTATION: drop EITHER key from wake_scan's
-    return dict -> the daemon reads None, the gate is unreadable, T2 silently never acts -> RED."""
-    r = await client.get(f"/api/containers/{container['id']}/wake-scan",
-                         params={"cooldown": 0, "min_idle": 0})
+
+async def test_wakescan_surfaces_task_autonomy_and_ack_model(client, container):
+    """The scan exposes per-task authority and no legacy project authority."""
+    r = await client.get(
+        f"/api/containers/{container['id']}/wake-scan",
+        params={"cooldown": 0, "min_idle": 0},
+    )
     assert r.status_code == 200, r.text
     body = r.json()
-    assert body["autonomy_level"] == "plan"          # the gate defaults CLOSED (mig021 default)
+    assert "autonomy_level" not in body and "autonomy_enforced" not in body
+    assert all(c["task_autonomy"] == "off" for c in body["candidates"])
+    assert all(c["task_autonomy_revision"] == 1 for c in body["candidates"])
     assert "ack_model" in body and body["ack_model"] is None

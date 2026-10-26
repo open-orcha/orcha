@@ -344,6 +344,14 @@ def _restore_plan(agent, snapshot, redacted_fields):
             continue
         target = snapshot[field]
         current = agent[field]
+        if field == "autonomy_override":
+            # Task autonomy is now the only execution authority. Keep historical
+            # overrides visible as audit evidence, but never make them live again.
+            if current != target:
+                blocked.append(
+                    (field, "is historical; task autonomy is now the only authority")
+                )
+            continue
         if field in _TEXT_FIELDS and field in (redacted_fields or []):
             if redact(current)[0] == target:
                 continue  # already equal (modulo the redacted secret)

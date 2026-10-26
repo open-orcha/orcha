@@ -1,5 +1,5 @@
 // Generated from FastAPI OpenAPI slices. DO NOT EDIT.
-// Workflow source SHA-256: 773ae1afc4df63a52c567c5869277b2f179d6ae19ab6ab66e77a0b09be991f32
+// Workflow source SHA-256: 5d9a0426c866cddc5b37e70666f5129872a6eead62a42e5d5dc60adca9e85099
 // Evidence GET source SHA-256: a3a98a4093221faf85216c9e00bfa7d9ed5384c9c435b1f23dd5333f0bf45413
 // Regenerate with tools/generate-workflow-contract.mjs and both source files.
 
@@ -8,6 +8,27 @@ export type AcceptBasis = {
   "idempotency_key": string;
   "reason"?: string;
   "evidence": EvidenceBasis;
+};
+
+export type AcceptTask = {
+  "expected_revision": number;
+  "idempotency_key": string;
+  "reason"?: string;
+  "expected_work_revision": number;
+  "evidence": EvidenceReference;
+};
+
+export type AcceptedEvidenceItem = {
+  "item_id": string;
+  "deliverable_id": string;
+  "deliverable_version": number;
+  "sha256": string;
+  "kind"?: "result_summary" | "file_changes" | "log_excerpt" | "owner_result" | "outside_result" | null;
+  "source"?: "worker" | "owner" | "outside" | "cancelled_attempt" | "released_attempt" | null;
+  "snapshot_phase"?: "submission" | "terminal" | null;
+  "complete"?: boolean | null;
+  "note"?: string | null;
+  "storage_state"?: "readable" | "missing" | "corrupt" | "missing_after_restore" | null;
 };
 
 export type Activity = {
@@ -308,6 +329,53 @@ export type ReviewRound = {
   "next_review"?: NewTask | null;
 };
 
+export type TaskAcceptance = {
+  "id": string;
+  "work_revision": number;
+  "actor_id": string;
+  "actor_kind": "human" | "ai";
+  "actor_alias": string;
+  "autonomy_at_acceptance": "off" | "on";
+  "autonomy_revision": number;
+  "acceptance_source": string;
+  "evidence_set_id": string;
+  "evidence_items": Array<AcceptedEvidenceItem>;
+  "accepted_at": string;
+};
+
+export type TaskApprovalHistory = {
+  "task_id": string;
+  "approvals": Array<TaskApprovalRecord>;
+};
+
+export type TaskApprovalRecord = {
+  "id": string;
+  "phase": "plan" | "completion";
+  "work_revision": number;
+  "requirements_sha256": string;
+  "submission_sha256": string;
+  "actor_id": string;
+  "actor_kind": "human" | "ai";
+  "actor_alias": string;
+  "autonomy_at_approval": "off" | "on";
+  "autonomy_revision": number;
+  "permission_source": string;
+  "approved_at": string;
+};
+
+export type TaskAutonomyResult = {
+  "task_id": string;
+  "autonomy": "off" | "on";
+  "autonomy_revision": number;
+  "changed": boolean;
+  "changed_at"?: string | null;
+};
+
+export type TaskAutonomyUpdate = {
+  "autonomy": "off" | "on";
+  "actor_agent_id"?: string | null;
+};
+
 export type TaskBatch = {
   "expected_revision": number;
   "idempotency_key": string;
@@ -471,6 +539,7 @@ export type WorkflowTask = {
   "outside_result_state"?: string | null;
   "current_evidence_set_id"?: string | null;
   "evidence_state"?: string | null;
+  "acceptance"?: TaskAcceptance | null;
 };
 
 export type WorkflowTaskEvidence = {
@@ -516,6 +585,8 @@ export type SavedEvidenceItem = {
 
 export type WorkflowModels = {
   AcceptBasis: AcceptBasis;
+  AcceptTask: AcceptTask;
+  AcceptedEvidenceItem: AcceptedEvidenceItem;
   Activity: Activity;
   ActivityPage: ActivityPage;
   AddEvidence: AddEvidence;
@@ -551,6 +622,11 @@ export type WorkflowModels = {
   RetryTask: RetryTask;
   ReviewHistory: ReviewHistory;
   ReviewRound: ReviewRound;
+  TaskAcceptance: TaskAcceptance;
+  TaskApprovalHistory: TaskApprovalHistory;
+  TaskApprovalRecord: TaskApprovalRecord;
+  TaskAutonomyResult: TaskAutonomyResult;
+  TaskAutonomyUpdate: TaskAutonomyUpdate;
   TaskBatch: TaskBatch;
   TaskMutation: TaskMutation;
   TransferOwner: TransferOwner;
@@ -593,6 +669,147 @@ export const workflowSchemas = {
       "expected_revision",
       "idempotency_key",
       "evidence"
+    ]
+  },
+  "AcceptTask": {
+    "properties": {
+      "expected_revision": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "idempotency_key": {
+        "type": "string",
+        "maxLength": 200,
+        "minLength": 1
+      },
+      "reason": {
+        "type": "string",
+        "maxLength": 4000
+      },
+      "expected_work_revision": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "evidence": {
+        "$ref": "#/components/schemas/EvidenceReference"
+      }
+    },
+    "additionalProperties": false,
+    "type": "object",
+    "required": [
+      "expected_revision",
+      "idempotency_key",
+      "expected_work_revision",
+      "evidence"
+    ]
+  },
+  "AcceptedEvidenceItem": {
+    "properties": {
+      "item_id": {
+        "type": "string"
+      },
+      "deliverable_id": {
+        "type": "string"
+      },
+      "deliverable_version": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "sha256": {
+        "type": "string",
+        "pattern": "^[a-f0-9]{64}$"
+      },
+      "kind": {
+        "anyOf": [
+          {
+            "type": "string",
+            "enum": [
+              "result_summary",
+              "file_changes",
+              "log_excerpt",
+              "owner_result",
+              "outside_result"
+            ]
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "source": {
+        "anyOf": [
+          {
+            "type": "string",
+            "enum": [
+              "worker",
+              "owner",
+              "outside",
+              "cancelled_attempt",
+              "released_attempt"
+            ]
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "snapshot_phase": {
+        "anyOf": [
+          {
+            "type": "string",
+            "enum": [
+              "submission",
+              "terminal"
+            ]
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "complete": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "note": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "storage_state": {
+        "anyOf": [
+          {
+            "type": "string",
+            "enum": [
+              "readable",
+              "missing",
+              "corrupt",
+              "missing_after_restore"
+            ]
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "type": "object",
+    "required": [
+      "item_id",
+      "deliverable_id",
+      "deliverable_version",
+      "sha256"
     ]
   },
   "Activity": {
@@ -2062,6 +2279,226 @@ export const workflowSchemas = {
       "outcome"
     ]
   },
+  "TaskAcceptance": {
+    "properties": {
+      "id": {
+        "type": "string"
+      },
+      "work_revision": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "actor_id": {
+        "type": "string"
+      },
+      "actor_kind": {
+        "type": "string",
+        "enum": [
+          "human",
+          "ai"
+        ]
+      },
+      "actor_alias": {
+        "type": "string"
+      },
+      "autonomy_at_acceptance": {
+        "type": "string",
+        "enum": [
+          "off",
+          "on"
+        ]
+      },
+      "autonomy_revision": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "acceptance_source": {
+        "type": "string"
+      },
+      "evidence_set_id": {
+        "type": "string"
+      },
+      "evidence_items": {
+        "items": {
+          "$ref": "#/components/schemas/AcceptedEvidenceItem"
+        },
+        "type": "array",
+        "minItems": 1
+      },
+      "accepted_at": {
+        "type": "string",
+        "format": "date-time"
+      }
+    },
+    "type": "object",
+    "required": [
+      "id",
+      "work_revision",
+      "actor_id",
+      "actor_kind",
+      "actor_alias",
+      "autonomy_at_acceptance",
+      "autonomy_revision",
+      "acceptance_source",
+      "evidence_set_id",
+      "evidence_items",
+      "accepted_at"
+    ]
+  },
+  "TaskApprovalHistory": {
+    "properties": {
+      "task_id": {
+        "type": "string"
+      },
+      "approvals": {
+        "items": {
+          "$ref": "#/components/schemas/TaskApprovalRecord"
+        },
+        "type": "array"
+      }
+    },
+    "type": "object",
+    "required": [
+      "task_id",
+      "approvals"
+    ]
+  },
+  "TaskApprovalRecord": {
+    "properties": {
+      "id": {
+        "type": "string"
+      },
+      "phase": {
+        "type": "string",
+        "enum": [
+          "plan",
+          "completion"
+        ]
+      },
+      "work_revision": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "requirements_sha256": {
+        "type": "string",
+        "pattern": "^[a-f0-9]{64}$"
+      },
+      "submission_sha256": {
+        "type": "string",
+        "pattern": "^[a-f0-9]{64}$"
+      },
+      "actor_id": {
+        "type": "string"
+      },
+      "actor_kind": {
+        "type": "string",
+        "enum": [
+          "human",
+          "ai"
+        ]
+      },
+      "actor_alias": {
+        "type": "string"
+      },
+      "autonomy_at_approval": {
+        "type": "string",
+        "enum": [
+          "off",
+          "on"
+        ]
+      },
+      "autonomy_revision": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "permission_source": {
+        "type": "string"
+      },
+      "approved_at": {
+        "type": "string",
+        "format": "date-time"
+      }
+    },
+    "type": "object",
+    "required": [
+      "id",
+      "phase",
+      "work_revision",
+      "requirements_sha256",
+      "submission_sha256",
+      "actor_id",
+      "actor_kind",
+      "actor_alias",
+      "autonomy_at_approval",
+      "autonomy_revision",
+      "permission_source",
+      "approved_at"
+    ]
+  },
+  "TaskAutonomyResult": {
+    "properties": {
+      "task_id": {
+        "type": "string"
+      },
+      "autonomy": {
+        "type": "string",
+        "enum": [
+          "off",
+          "on"
+        ]
+      },
+      "autonomy_revision": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "changed": {
+        "type": "boolean"
+      },
+      "changed_at": {
+        "anyOf": [
+          {
+            "type": "string",
+            "format": "date-time"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "type": "object",
+    "required": [
+      "task_id",
+      "autonomy",
+      "autonomy_revision",
+      "changed"
+    ]
+  },
+  "TaskAutonomyUpdate": {
+    "properties": {
+      "autonomy": {
+        "type": "string",
+        "enum": [
+          "off",
+          "on"
+        ]
+      },
+      "actor_agent_id": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "type": "object",
+    "required": [
+      "autonomy"
+    ]
+  },
   "TaskBatch": {
     "properties": {
       "expected_revision": {
@@ -2925,6 +3362,16 @@ export const workflowSchemas = {
             "type": "null"
           }
         ]
+      },
+      "acceptance": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/TaskAcceptance"
+          },
+          {
+            "type": "null"
+          }
+        ]
       }
     },
     "type": "object",
@@ -3223,6 +3670,23 @@ export const workflowRoutes = [
     "body": "WorkflowDraft"
   },
   {
+    "path": "/api/tasks/{tid}/accept",
+    "method": "post",
+    "operation": "accept",
+    "body": "AcceptTask"
+  },
+  {
+    "path": "/api/tasks/{tid}/approvals",
+    "method": "get",
+    "operation": "task_approvals"
+  },
+  {
+    "path": "/api/tasks/{tid}/autonomy",
+    "method": "put",
+    "operation": "task_autonomy",
+    "body": "TaskAutonomyUpdate"
+  },
+  {
     "path": "/api/tasks/{tid}/dependencies",
     "method": "put",
     "operation": "dependencies",
@@ -3256,6 +3720,12 @@ export const workflowRoutes = [
     "path": "/api/tasks/{tid}/reissue-stop",
     "method": "post",
     "operation": "reissue_stop",
+    "body": "TaskMutation"
+  },
+  {
+    "path": "/api/tasks/{tid}/reject",
+    "method": "post",
+    "operation": "reject",
     "body": "TaskMutation"
   },
   {

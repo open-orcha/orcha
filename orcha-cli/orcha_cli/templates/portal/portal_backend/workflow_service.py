@@ -551,6 +551,7 @@ class WorkflowService:
                 last["current_evidence_set_id"] if last else None
             )
             row["evidence_state"] = last["evidence_state"] if last else None
+            row["acceptance"] = s["acceptances"].get(tid)
             terminal = task["status"] in {"completed", "cancelled"}
             started = not never_started(tid)
             current = next(
@@ -1007,7 +1008,10 @@ class WorkflowService:
                 and t["start_hold"]
                 and not w["launch_enabled"]
             ):
-                reason = ("workflow_not_started", "Use Start to release the first tasks.")
+                reason = (
+                    "workflow_not_started",
+                    "Use Start to release the first tasks.",
+                )
             elif (
                 kind == "release"
                 and "human" in holds
@@ -1129,6 +1133,20 @@ class WorkflowService:
     def reconcile(self, wid):
         require_capability()
         self.lock(wid)
+        # The host records worker termination before its follow-up
+        # confirm-stopped call. If that follow-up is lost, retain the exclusive
+        # turn but make the recovery state and owner attention durable. A quiet
+        # heartbeat alone is deliberately not proof that a process stopped.
+        self.cur.execute(
+            """UPDATE workflow_executions SET state='recovery_needed'
+                 WHERE workflow_id=%s
+                   AND state IN ('reserved','running','awaiting_review')
+                   AND worker_stopped_at IS NULL
+                   AND run_id IN (
+                       SELECT run_id FROM worker_runs WHERE ended_at IS NOT NULL
+                   )""",
+            (wid,),
+        )
         s = self.snapshot(wid)
         for tid, task in s["tasks"].items():
             state = stored_status(
@@ -1654,7 +1672,11 @@ class WorkflowService:
             conflict("task_limit", "The workflow task limit would be exceeded.")
         release = set(release)
         if len(release) != len(set(release) & set(ids)):
-            conflict("release_not_selected", "Only imported tasks can be released.", status=422)
+            conflict(
+                "release_not_selected",
+                "Only imported tasks can be released.",
+                status=422,
+            )
         if release and not w["launch_enabled"]:
             conflict("workflow_not_started", "Use Start to release the first tasks.")
         original = {}
@@ -2026,7 +2048,10 @@ class WorkflowService:
         if choice["source_kind"] == "worker" and is_owner:
             lost = ("evidence_not_pending", "No outside result is waiting for review.")
         elif choice["source_kind"] == "evidence_review" and assigned:
-            lost = ("owner_evidence_pending", "An outside result is waiting for review.")
+            lost = (
+                "owner_evidence_pending",
+                "An outside result is waiting for review.",
+            )
         if lost:
             conflict(
                 "not_eligible",
@@ -2275,9 +2300,13 @@ class WorkflowService:
                 "evidence_version_stale", "Refresh the current result and evidence."
             )
         if e["evidence_state"] == "missing":
-            conflict("evidence_missing", "Evidence is missing - add it before accepting.")
+            conflict(
+                "evidence_missing", "Evidence is missing - add it before accepting."
+            )
         if e["evidence_state"] != "saved":
-            conflict("evidence_not_saved", "The evidence for this result is not saved yet.")
+            conflict(
+                "evidence_not_saved", "The evidence for this result is not saved yet."
+            )
         if e["source_kind"] == "evidence_review" and p["kind"] != "human":
             # §16.1: an outside result is accepted by a person, whatever the task autonomy.
             conflict(
@@ -2684,6 +2713,11 @@ class WorkflowService:
                 "UPDATE agent_tasks SET assignment_status='done' WHERE task_id=%s",
                 (task["id"],),
             )
+            # Cancellation is a stop-work boundary. A scheduled task wake must
+            # not revive the worker after the workflow has been cancelled.
+            self.cur.execute(
+                "DELETE FROM agent_self_wake WHERE task_id=%s", (task["id"],)
+            )
         self.audit(w, p, "workflow_cancelled", {"reason": b["reason"]})
 
     def op_accept_goal(self, w, actor, b, tid):
@@ -2949,7 +2983,7 @@ class WorkflowService:
         )
 
     def op_move(self, w, actor, b, tid):
-        """Move a closed, never-started component; one verified actor owns both sides."""
+        """Move a closed, never-started component at the source owner's direction."""
         p = self.owner(w, actor)
         self.active(w)
         ids = b["task_ids"]
@@ -2970,7 +3004,9 @@ class WorkflowService:
                 conflict(
                     "revision_required", "Refresh both workflows before moving tasks."
                 )
-            self.owner(destination, actor)
+            # A verified human source owner may move work into another active
+            # workflow. The destination owner is notified by the durable audit
+            # event and can hold, return or withdraw it through normal controls.
             self.active(destination)
             count = self.one(
                 "SELECT count(*) AS n FROM tasks WHERE workflow_id=%s",

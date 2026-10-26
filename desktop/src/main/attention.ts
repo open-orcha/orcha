@@ -44,6 +44,8 @@ interface TaskRow {
   plan_message?: unknown
   /** Aliases of the agents assigned to the task (snapshot task rows). */
   assignees?: unknown
+  /** Task-only approval authority. Missing on an older server means safe default OFF. */
+  autonomy?: unknown
 }
 
 const TITLE_MAX = 80
@@ -65,9 +67,6 @@ function requestTitle(r: RequestRow): string {
 export interface ComputeAttentionOptions {
   /** Container id — appended to every item path as `cid=` (GAP-07). */
   cid?: string | null
-  /** Container autonomy level from the snapshot. Unknown/absent is treated as `plan`,
-   *  matching the portal's own default (SnapshotProvider.autLevel). */
-  autonomy?: string | null
 }
 
 function withCid(path: string, cid: string | null | undefined): string {
@@ -87,8 +86,9 @@ function isPendingPlan(t: TaskRow): boolean {
 
 /** Pure: which requests/tasks are waiting on a HUMAN right now — the canonical V2
  *  definition (docs/orcha-v2-architecture.md §3.1), evaluated per container:
- *  - task_plan:      pending plan, only when autonomy === 'plan';
- *  - task_verify:    needs_verification, unless autonomy === 'full';
+ *  - task_plan:      pending plan when that task's autonomy is OFF;
+ *  - task_verify:    every needs_verification task; ON worker results self-accept
+ *                    before this state, while outside results still need a person;
  *  - request_answer: open request targeting a human (or untargeted), or any `escalated` request;
  *  - request_close:  FOLLOW-UP — answered request a human raised (listed, never counted).
  *  Order: plans, verifications, requests, then follow-ups. The desktop host has no acting-
@@ -101,7 +101,6 @@ export function computeAttention(
   opts: ComputeAttentionOptions = {}
 ): AttentionItem[] {
   const humans = new Set(agents.filter((a) => a.kind === 'human').map((a) => a.id))
-  const autonomy = opts.autonomy || 'plan'
   const cid = opts.cid ?? null
   const base = { project: stack.project, projectShort: stack.projectShort, ...(cid ? { cid } : {}) }
   const plans: AttentionItem[] = []
@@ -110,9 +109,10 @@ export function computeAttention(
   const followUps: AttentionItem[] = []
   for (const t of tasks) {
     const path = withCid(`/tasks?task=${t.id}`, cid)
-    if (autonomy === 'plan' && isPendingPlan(t)) {
+    const selfApproves = t.autonomy === 'on'
+    if (!selfApproves && isPendingPlan(t)) {
       plans.push({ ...base, kind: 'task_plan', id: t.id, title: clip(t.title), path })
-    } else if (t.status === 'needs_verification' && autonomy !== 'full') {
+    } else if (t.status === 'needs_verification') {
       verifs.push({ ...base, kind: 'task_verify', id: t.id, title: clip(t.title), path })
     }
   }
@@ -322,7 +322,7 @@ interface ContainerListRow {
   name?: unknown
 }
 interface SnapshotResponse {
-  container?: { autonomy_level?: unknown; github_repo?: unknown } | null
+  container?: { github_repo?: unknown } | null
   agents?: AgentRow[]
   tasks?: TaskRow[]
   requests?: RequestRow[]
@@ -371,8 +371,7 @@ export async function fetchStackAttention(
     const agents = Array.isArray(snap.agents) ? snap.agents : []
     const tasks = Array.isArray(snap.tasks) ? snap.tasks : []
     const requests = Array.isArray(snap.requests) ? snap.requests : []
-    const autonomy = typeof snap.container?.autonomy_level === 'string' ? snap.container.autonomy_level : null
-    const found = computeAttention(stack, agents, requests, tasks, { cid, autonomy })
+    const found = computeAttention(stack, agents, requests, tasks, { cid })
     items.push(...found)
     const partial =
       (typeof snap.task_total === 'number' && snap.task_total > tasks.length) ||

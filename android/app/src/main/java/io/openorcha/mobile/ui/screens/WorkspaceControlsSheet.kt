@@ -39,30 +39,17 @@ import io.openorcha.mobile.ui.components.ltype
 import io.openorcha.mobile.ui.icons.OrchaIcons
 import io.openorcha.mobile.ui.theme.Orcha
 
-/* GH #148 — the execution controls sheet: two orthogonal controls sharing one
-   sheet. Notifier (wakes_enabled) is the power switch; Autonomy (autonomy_level)
-   is the gearbox. Pausing the notifier never re-shifts the gearbox and vice-versa.
-   Linear layout mirrors iOS ContainerControlsSheet.swift. The sheet and its
-   confirmation dialogs read Orcha.palette at composition time inside OrchaTheme,
-   so a theme switch recolours them instantly. */
-
-private val AUTONOMY_LEVELS = listOf(
-    Triple("plan", "Plan-only", "Agents wake and propose — every plan stops for your approval before it executes."),
-    Triple("pr", "Build to PR", "Agents execute approved plans up to an open PR; you still merge."),
-    Triple("full", "Full", "Agents may carry approved work to completion without further gates."),
-)
+/* Project-wide wake control. Approval authority lives on each task. */
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ContainerControlsSheet(
     wakesEnabled: Boolean,
-    autonomyLevel: String,
     containerActive: Boolean,
     canAct: Boolean,
     busy: Boolean,
     onDismiss: () -> Unit,
     onSetWakes: (Boolean) -> Unit,
-    onSetAutonomy: (String) -> Unit,
 ) {
     val p = Orcha.palette
     val interactive = containerActive && canAct && !busy

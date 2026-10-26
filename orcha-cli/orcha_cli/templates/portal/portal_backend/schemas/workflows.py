@@ -208,6 +208,41 @@ class DisplayState(BaseModel):
     list_warning: bool = False
 
 
+class TaskAcceptance(BaseModel):
+    """Immutable result acceptance for this exact task/work revision."""
+
+    id: str
+    work_revision: int = Field(ge=1)
+    actor_id: str
+    actor_kind: Literal["human", "ai"]
+    actor_alias: str
+    autonomy_at_acceptance: Literal["off", "on"]
+    autonomy_revision: int = Field(ge=1)
+    acceptance_source: str
+    evidence_set_id: str
+    evidence_items: list["AcceptedEvidenceItem"] = Field(min_length=1)
+    accepted_at: datetime
+
+
+class AcceptedEvidenceItem(BaseModel):
+    item_id: str
+    deliverable_id: str
+    deliverable_version: int = Field(ge=1)
+    sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    kind: Literal[
+        "result_summary", "file_changes", "log_excerpt", "owner_result", "outside_result"
+    ] | None = None
+    source: Literal[
+        "worker", "owner", "outside", "cancelled_attempt", "released_attempt"
+    ] | None = None
+    snapshot_phase: Literal["submission", "terminal"] | None = None
+    complete: bool | None = None
+    note: str | None = None
+    storage_state: Literal[
+        "readable", "missing", "corrupt", "missing_after_restore"
+    ] | None = None
+
+
 class WorkflowTask(BaseModel):
     id: str
     title: str
@@ -236,6 +271,7 @@ class WorkflowTask(BaseModel):
     outside_result_state: str | None = None
     current_evidence_set_id: str | None = None
     evidence_state: str | None = None
+    acceptance: TaskAcceptance | None = None
 
 
 class Progress(BaseModel):

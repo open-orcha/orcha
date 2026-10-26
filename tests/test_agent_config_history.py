@@ -1,7 +1,8 @@
 """Agent config history + rollback (migration 055_agent_config_revisions).
 
-Covers: a revision on every mutating config route (PATCH profile / autonomy_override,
-POST model, POST reasoning-effort, PATCH auto-wake) with field-level before/after + actor;
+Covers: a revision on every live mutating config route (PATCH profile, POST model,
+POST reasoning-effort, PATCH auto-wake) with field-level before/after + actor;
+historical autonomy overrides remain visible but cannot be restored;
 no-op and failed writes record nothing; lazy 'initial' backfill; filters + paging;
 restore semantics (new 'restore' revisions through the same routes, history untouched);
 authority (human actor, grants, viewer read-only); secret exclusion; row immutability.
@@ -85,15 +86,26 @@ async def test_noop_and_failed_writes_record_nothing(client, boss_and_bot, make_
     assert h["total"] == 1 and h["revisions"][0]["kind"] == "initial"
 
 
-async def test_alias_rename_and_autonomy_override_set_and_clear(client, boss_and_bot):
+async def test_alias_rename_and_retired_autonomy_override(client, boss_and_bot, db):
     human, aid = boss_and_bot
-    await client.patch(f"/api/agents/{aid}", json={"actor_agent_id": human, "alias": "Bot2"})
-    await client.patch(f"/api/agents/{aid}", json={"actor_agent_id": human, "autonomy_override": "full"})
-    await client.patch(f"/api/agents/{aid}", json={"actor_agent_id": human, "autonomy_override": None})
+    r = await client.patch(
+        f"/api/agents/{aid}",
+        json={"actor_agent_id": human, "alias": "Bot2"},
+    )
+    assert r.status_code == 200, r.text
+    for value in ("full", None):
+        r = await client.patch(
+            f"/api/agents/{aid}",
+            json={"actor_agent_id": human, "autonomy_override": value},
+        )
+        assert r.status_code == 410, r.text
+        assert r.json()["detail"]["code"] == "task_autonomy_only"
     revs = (await _history(client, aid))["revisions"]
-    assert _changes(revs[0]) == {"autonomy_override": ("full", None)}
-    assert _changes(revs[1]) == {"autonomy_override": (None, "full")}
-    assert _changes(revs[2]) == {"alias": ("Bot", "Bot2")}
+    assert _changes(revs[0]) == {"alias": ("Bot", "Bot2")}
+    assert len(revs) == 2
+    assert db.execute(
+        "SELECT autonomy_override FROM agents WHERE id=%s", (aid,)
+    )[0]["autonomy_override"] is None
 
 
 async def test_model_change_records_model_effort_and_derived_provider(client, boss_and_bot):
@@ -192,23 +204,23 @@ async def test_restore_reapplies_and_appends_without_rewriting(client, boss_and_
     assert len(ev) == 3
 
 
-async def test_restore_multi_field_through_all_routes(client, boss_and_bot):
+async def test_restore_multi_field_through_supported_routes(client, boss_and_bot):
     human, aid = boss_and_bot
-    # revision #2 is the target: effort=high on opus, wake 600, override pr
+    # revision #2 is the target: effort=high on opus and wake 600. Historical
+    # autonomy overrides remain in the audit snapshot but cannot be restored.
     await client.post(f"/api/agents/{aid}/reasoning-effort", json={"reasoning_effort": "high"})
     await client.patch(f"/api/agents/{aid}/auto-wake", json={"actor_agent_id": human, "interval_secs": 600})
-    await client.patch(f"/api/agents/{aid}", json={"actor_agent_id": human, "autonomy_override": "pr"})
     target_no = (await _history(client, aid))["latest_revision_no"]
     target = (await _rev(client, aid, target_no))["snapshot"]
     # drift everything
     await client.post(f"/api/agents/{aid}/model", json={"model": "claude-haiku-4-5-20251001"})  # clears effort
     await client.patch(f"/api/agents/{aid}/auto-wake", json={"actor_agent_id": human})
-    await client.patch(f"/api/agents/{aid}", json={"actor_agent_id": human, "autonomy_override": None,
+    await client.patch(f"/api/agents/{aid}", json={"actor_agent_id": human,
                                                    "role": "drifted", "system_prompt": "drift"})
     r = await client.post(f"/api/agents/{aid}/config-revisions/{target_no}/restore", json={"actor_agent_id": human})
     assert r.status_code == 200, r.text
     out = r.json()
-    assert set(out["applied"]) == {"role", "system_prompt", "autonomy_override", "model",
+    assert set(out["applied"]) == {"role", "system_prompt", "model",
                                    "reasoning_effort", "auto_wake_interval_secs"}
     assert all(x["kind"] == "restore" and x["restored_from"] == target_no for x in out["revisions"])
     assert {x["source"] for x in out["revisions"]} == {"profile", "model", "reasoning_effort", "auto_wake"}
@@ -221,6 +233,40 @@ async def test_restore_multi_field_through_all_routes(client, boss_and_bot):
     r = await client.post(f"/api/agents/{aid}/config-revisions/{target_no}/restore", json={"actor_agent_id": human})
     assert r.status_code == 200 and r.json()["applied"] == []
     assert (await _history(client, aid))["latest_revision_no"] == latest
+
+
+async def test_historical_autonomy_override_is_explicitly_restore_blocked(
+    client, boss_and_bot, db
+):
+    human, aid = boss_and_bot
+    # Simulate a pre-migration revision and legacy live value without using the
+    # now-retired profile API.
+    db.execute("UPDATE agents SET autonomy_override='pr' WHERE id=%s", (aid,))
+    await client.patch(
+        f"/api/agents/{aid}",
+        json={"actor_agent_id": human, "role": "records legacy autonomy"},
+    )
+    target_no = (await _history(client, aid))["latest_revision_no"]
+    db.execute("UPDATE agents SET autonomy_override=NULL WHERE id=%s", (aid,))
+
+    preview = await _rev(client, aid, target_no)
+    blocked = {item["field"]: item["reason"] for item in preview["restore_blocked"]}
+    assert "autonomy_override" in blocked
+    assert "task autonomy" in blocked["autonomy_override"]
+    assert all(
+        item["field"] != "autonomy_override" for item in preview["restore_preview"]
+    )
+
+    r = await client.post(
+        f"/api/agents/{aid}/config-revisions/{target_no}/restore",
+        json={"actor_agent_id": human},
+    )
+    assert r.status_code == 409, r.text
+    assert r.json()["detail"]["blocked"][0]["field"] == "autonomy_override"
+    row = db.execute(
+        "SELECT autonomy_override FROM agents WHERE id=%s", (aid,)
+    )[0]
+    assert row["autonomy_override"] is None
 
 
 async def test_restore_requires_human_actor(client, boss_and_bot):
@@ -279,7 +325,9 @@ async def _invite(client, cid, login, role="member"):
     return r.json()["agent_id"]
 
 
-async def test_authority_matrix_under_proxy(client, container, make_agent, trust_proxy):
+async def test_authority_matrix_under_proxy(
+    client, container, make_agent, trust_proxy, db
+):
     cid = container["id"]
     await make_agent("root", "operator", kind="human")
     assert (await client.get(f"/api/me?cid={cid}", headers=OCTO)).status_code == 200
@@ -309,9 +357,9 @@ async def test_authority_matrix_under_proxy(client, container, make_agent, trust
     assert r.status_code == 200, r.text
     [rev] = r.json()["revisions"]
     assert rev["actor"]["agent_id"] == hubot and rev["restored_from"] == 1
-    # an autonomy restore needs manage_autonomy too (checked up front, whole restore refused)
-    r = await client.patch(f"/api/agents/{aid}", json={"actor_agent_id": "x", "autonomy_override": "full"},
-                           headers=OCTO)
-    assert r.status_code == 200
+    # A legacy value remains audit-visible, but restoring it is blocked outright;
+    # manage_autonomy no longer revives per-agent execution authority.
+    db.execute("UPDATE agents SET autonomy_override='full' WHERE id=%s", (aid,))
     r = await client.post(url, json={}, headers=HUBOT)
-    assert r.status_code == 403 and "manage_autonomy" in r.text
+    assert r.status_code == 409, r.text
+    assert r.json()["detail"]["blocked"][0]["field"] == "autonomy_override"

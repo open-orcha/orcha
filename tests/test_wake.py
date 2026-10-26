@@ -9,6 +9,7 @@ wake-scan reads agent_events from the same connection, so committed rows are
 visible. Transport side-effects (tmux/claude) are never executed here — we test
 the pure decision/selection functions and shim liveness.
 """
+
 import json
 import pathlib
 import sys
@@ -20,8 +21,8 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "orcha-c
 from orcha_cli import notifier  # noqa: E402
 from conftest import ts_from_now
 
-
 # ---------- reachability registry ----------
+
 
 @pytest.mark.asyncio
 async def test_reachability_defaults_to_wake_on(client, make_agent):
@@ -30,37 +31,46 @@ async def test_reachability_defaults_to_wake_on(client, make_agent):
     r = await client.get(f"/api/agents/{aid}/reachability")
     assert r.status_code == 200, r.text
     d = r.json()
-    assert d["recorded"] is False        # no row yet
-    assert d["wake_enabled"] is True     # but wake is ON by default
-    assert d["tmux_target"] is None      # and unreachable until a pane is recorded
+    assert d["recorded"] is False  # no row yet
+    assert d["wake_enabled"] is True  # but wake is ON by default
+    assert d["tmux_target"] is None  # and unreachable until a pane is recorded
 
 
 @pytest.mark.asyncio
 async def test_reachability_partial_upsert_preserves_optout(client, make_agent):
     aid = (await make_agent("A"))["agent_id"]
     # SessionStart records a pane.
-    r = await client.post(f"/api/agents/{aid}/reachability",
-                          json={"tmux_target": "main:0.1", "headless_cwd": "/proj"})
+    r = await client.post(
+        f"/api/agents/{aid}/reachability",
+        json={"tmux_target": "main:0.1", "headless_cwd": "/proj"},
+    )
     assert r.json()["tmux_target"] == "main:0.1"
     assert r.json()["wake_enabled"] is True
     # Human opts out (wake_enabled only) — must NOT clobber the pane.
-    r = await client.post(f"/api/agents/{aid}/reachability", json={"wake_enabled": False})
+    r = await client.post(
+        f"/api/agents/{aid}/reachability", json={"wake_enabled": False}
+    )
     d = r.json()
     assert d["wake_enabled"] is False
-    assert d["tmux_target"] == "main:0.1"      # preserved
-    assert d["headless_cwd"] == "/proj"        # preserved
+    assert d["tmux_target"] == "main:0.1"  # preserved
+    assert d["headless_cwd"] == "/proj"  # preserved
     # A later SessionStart refresh of the pane must NOT silently re-enable wakes.
-    r = await client.post(f"/api/agents/{aid}/reachability", json={"tmux_target": "main:2.0"})
+    r = await client.post(
+        f"/api/agents/{aid}/reachability", json={"tmux_target": "main:2.0"}
+    )
     d = r.json()
     assert d["tmux_target"] == "main:2.0"
-    assert d["wake_enabled"] is False          # opt-out sticks
+    assert d["wake_enabled"] is False  # opt-out sticks
 
 
 # ---------- wake-scan decision (the truth table) ----------
 
+
 async def _scan(client, cid, aid, *, cooldown=15.0, min_idle=30.0):
-    r = await client.get(f"/api/containers/{cid}/wake-scan",
-                         params={"cooldown": cooldown, "min_idle": min_idle})
+    r = await client.get(
+        f"/api/containers/{cid}/wake-scan",
+        params={"cooldown": cooldown, "min_idle": min_idle},
+    )
     assert r.status_code == 200, r.text
     body = r.json()
     cand = next((c for c in body["candidates"] if c["agent_id"] == aid), None)
@@ -76,7 +86,9 @@ def _emit_event(db, *, container_id, agent_id, event_name, ts, payload=None):
 
 
 @pytest.mark.asyncio
-async def test_pending_event_on_idle_agent_should_wake(client, container, make_agent, make_request):
+async def test_pending_event_on_idle_agent_should_wake(
+    client, container, make_agent, make_request
+):
     a = await make_agent("A")
     b = await make_agent("B")
     # A asks B → request_created event keyed to B. B has no heartbeat → idle.
@@ -89,8 +101,11 @@ async def test_pending_event_on_idle_agent_should_wake(client, container, make_a
 
 # ---------- ISS-77 (#200): event-driven wakes regardless of task status ----------
 
+
 @pytest.mark.asyncio
-async def test_request_answered_wakes_requester(client, container, make_agent, make_request):
+async def test_request_answered_wakes_requester(
+    client, container, make_agent, make_request
+):
     """ISS-77 (#200): `request_answered` is a genuine 'my request was answered → wake + act' signal
     (it does NOT self-echo), so a dev whose request gets answered wakes. It is never suppressed as a
     non-waking audit echo on the ephemeral wake path (only digest_snapshotted is)."""
@@ -98,8 +113,10 @@ async def test_request_answered_wakes_requester(client, container, make_agent, m
     c = await make_agent("C")
     # B asks C; C answers → request_answered keyed to B (the requester).
     req = await make_request(b["agent_id"], "need a hand", target_alias="C")
-    r = await client.post(f"/api/requests/{req['id']}/respond",
-                          json={"responder_agent_id": c["agent_id"], "response": "here"})
+    r = await client.post(
+        f"/api/requests/{req['id']}/respond",
+        json={"responder_agent_id": c["agent_id"], "response": "here"},
+    )
     assert r.status_code == 200, r.text
     _, cand = await _scan(client, container["id"], b["agent_id"], min_idle=0)
     assert cand["latest_event"] == "request_answered"
@@ -107,28 +124,36 @@ async def test_request_answered_wakes_requester(client, container, make_agent, m
 
 
 @pytest.mark.asyncio
-async def test_in_progress_task_does_not_suppress_event_wake(client, container, make_agent, make_task, make_request):
+async def test_in_progress_task_does_not_suppress_event_wake(
+    client, container, make_agent, make_task, make_request
+):
     """ISS-77 (#200): an in_progress task must NOT suppress a wake on a genuine pending event. Events
     drive wakes, not task status. A dev holding an in_progress task (with NO ready auto-start target)
-    still wakes when a real event lands — here `request_answered` (its own request got answered)."""
+    still wakes when a real event lands — here `request_answered` (its own request got answered).
+    """
     b = await make_agent("B")
     c = await make_agent("C")
     # A standalone assigned task with no deps is claimed in_progress at create, so it is NOT a
     # ready auto-start target. The ONLY thing that can wake B here is the pending event.
     await make_task("build it", "done", assignee_alias="B")
     req = await make_request(b["agent_id"], "need a hand", target_alias="C")
-    r = await client.post(f"/api/requests/{req['id']}/respond",
-                          json={"responder_agent_id": c["agent_id"], "response": "here"})
+    r = await client.post(
+        f"/api/requests/{req['id']}/respond",
+        json={"responder_agent_id": c["agent_id"], "response": "here"},
+    )
     assert r.status_code == 200, r.text
     _, cand = await _scan(client, container["id"], b["agent_id"], min_idle=0)
-    assert cand["auto_start_task_ids"] == []        # the in_progress task is NOT an auto-start target
+    assert (
+        cand["auto_start_task_ids"] == []
+    )  # the in_progress task is NOT an auto-start target
     assert cand["latest_event"] == "request_answered"
-    assert cand["should_wake"] is True              # the event wakes despite the in_progress task
+    assert cand["should_wake"] is True  # the event wakes despite the in_progress task
 
 
 @pytest.mark.asyncio
 async def test_wake_scan_includes_ranked_notification_manifest(
-        client, container, make_agent, make_task, make_request):
+    client, container, make_agent, make_task, make_request
+):
     """#247 B1: wake_scan consumes the notification registry and returns a rank-ordered manifest.
 
     The locked rule is visible here: a human-origin request outranks a P0 task event. The task's
@@ -139,17 +164,26 @@ async def test_wake_scan_includes_ranked_notification_manifest(
     human = await make_agent("Operator", kind="human")
 
     task = await make_task("urgent task", "done", assignee_alias="B", priority=0)
-    await make_request(human["agent_id"], "operator needs an answer", target_alias="B", priority=80)
-    req = await make_request(b["agent_id"], "is the review clean?", target_alias="C", priority=5)
-    r = await client.post(f"/api/requests/{req['id']}/respond",
-                          json={"responder_agent_id": c["agent_id"], "response": "clean"})
+    await make_request(
+        human["agent_id"], "operator needs an answer", target_alias="B", priority=80
+    )
+    req = await make_request(
+        b["agent_id"], "is the review clean?", target_alias="C", priority=5
+    )
+    r = await client.post(
+        f"/api/requests/{req['id']}/respond",
+        json={"responder_agent_id": c["agent_id"], "response": "clean"},
+    )
     assert r.status_code == 200, r.text
 
     _, cand = await _scan(client, container["id"], b["agent_id"], min_idle=0)
     manifest = cand["notifications"]
     assert cand["pending_events"] == 3
     assert [n["event_name"] for n in manifest[:3]] == [
-        "request_created", "task_assigned", "request_answered"]
+        "request_created",
+        "task_assigned",
+        "request_answered",
+    ]
     assert [n["rank"] for n in manifest[:3]] == [3, 4, 6]
     assert manifest[0]["actor_kind"] == "human"
     assert manifest[1]["deeplink"] == {"kind": "task", "id": task["id"]}
@@ -165,15 +199,29 @@ async def test_wake_scan_ranks_before_manifest_limit(client, container, make_age
     """
     b = await make_agent("B")
     aid = b["agent_id"]
-    rows = [(container["id"], aid, aid, float(i), json.dumps({"request_id": f"old-{i}", "preview": "old"}))
-            for i in range(1, 526)]
+    rows = [
+        (
+            container["id"],
+            aid,
+            aid,
+            float(i),
+            json.dumps({"request_id": f"old-{i}", "preview": "old"}),
+        )
+        for i in range(1, 526)
+    ]
     db.execute(
         "INSERT INTO agent_events (container_id, target_id, event_key, event_name, ts, payload) VALUES "
         + ", ".join(["(%s, %s, %s, 'request_answered', %s, %s)"] * len(rows)),
         tuple(v for row in rows for v in row),
     )
-    _emit_event(db, container_id=container["id"], agent_id=aid, event_name="prompt",
-                ts=1000.0, payload={"message": "stop and read this first"})
+    _emit_event(
+        db,
+        container_id=container["id"],
+        agent_id=aid,
+        event_name="prompt",
+        ts=1000.0,
+        payload={"message": "stop and read this first"},
+    )
 
     _, cand = await _scan(client, container["id"], aid, min_idle=0)
     manifest = cand["notifications"]
@@ -185,59 +233,92 @@ async def test_wake_scan_ranks_before_manifest_limit(client, container, make_age
 
 # ---------- A3: prompt-event (wake an agent with a directed message) ----------
 
+
 @pytest.mark.asyncio
-async def test_prompt_event_wakes_agent_and_carries_message(client, container, make_agent):
+async def test_prompt_event_wakes_agent_and_carries_message(
+    client, container, make_agent
+):
     """A3: POST /prompt publishes a wakeable `prompt` event; wake-scan surfaces the message text
     for the daemon to inject, and /wait delivers it to an interactive listener."""
     b = await make_agent("B")
     aid = b["agent_id"]
-    r = await client.post(f"/api/agents/{aid}/prompt", json={"message": "re-check the failing test"})
+    r = await client.post(
+        f"/api/agents/{aid}/prompt", json={"message": "re-check the failing test"}
+    )
     assert r.status_code == 201, r.text
     assert r.json()["event"] == "prompt"
 
     _, cand = await _scan(client, container["id"], aid)
-    assert cand["should_wake"] is True                       # an idle agent with a prompt wakes
+    assert cand["should_wake"] is True  # an idle agent with a prompt wakes
     assert cand["pending_events"] >= 1
     assert cand["latest_event"] == "prompt"
-    assert cand["prompt_messages"] == ["re-check the failing test"]   # surfaced for the worker
+    assert cand["prompt_messages"] == [
+        "re-check the failing test"
+    ]  # surfaced for the worker
 
     # an interactive listener sees it via /wait, with the message in the payload
-    w = await client.get(f"/api/agents/{aid}/wait", params={"since_ts": 0, "timeout": 1})
+    w = await client.get(
+        f"/api/agents/{aid}/wait", params={"since_ts": 0, "timeout": 1}
+    )
     evt = w.json()
     assert evt["event"] == "prompt" and evt["message"] == "re-check the failing test"
 
 
 # ---------- GH #138: conversation_turn as a safety-net directed message ----------
 
+
 @pytest.mark.asyncio
-async def test_conversation_turn_surfaces_alongside_a_work_wake(client, container, make_agent, db):
+async def test_conversation_turn_surfaces_alongside_a_work_wake(
+    client, container, make_agent, db
+):
     """GH #138 safety net: a lingering unanswered chat message must not go unseen forever if the
     resident's own retry never fires — when this agent wakes on the WORK lane for an unrelated
     reason (here, a `prompt`), the chat content rides along in prompt_messages too."""
     b = await make_agent("B")
     aid = b["agent_id"]
-    _emit_event(db, container_id=container["id"], agent_id=aid, event_name="conversation_turn",
-                ts=1000.0, payload={"conversation_id": "c1", "content": "are you still there?"})
-    r = await client.post(f"/api/agents/{aid}/prompt", json={"message": "re-check the failing test"})
+    _emit_event(
+        db,
+        container_id=container["id"],
+        agent_id=aid,
+        event_name="conversation_turn",
+        ts=1000.0,
+        payload={"conversation_id": "c1", "content": "are you still there?"},
+    )
+    r = await client.post(
+        f"/api/agents/{aid}/prompt", json={"message": "re-check the failing test"}
+    )
     assert r.status_code == 201, r.text
 
     _, cand = await _scan(client, container["id"], aid)
     assert cand["should_wake"] is True
     assert "re-check the failing test" in cand["prompt_messages"]
-    chat = next((m for m in cand["prompt_messages"] if "are you still there?" in m), None)
-    assert chat is not None, f"conversation_turn content missing from {cand['prompt_messages']}"
+    chat = next(
+        (m for m in cand["prompt_messages"] if "are you still there?" in m), None
+    )
+    assert (
+        chat is not None
+    ), f"conversation_turn content missing from {cand['prompt_messages']}"
     assert "still waiting on a reply" in chat
 
 
 @pytest.mark.asyncio
-async def test_conversation_turn_alone_does_not_wake_work_lane(client, container, make_agent, db):
+async def test_conversation_turn_alone_does_not_wake_work_lane(
+    client, container, make_agent, db
+):
     """GH #91/#90 (unchanged by #138): a bare, unanswered chat message is the CONVERSATION lane's
     own surface — it must NOT by itself wake a WORK embodiment. The safety net only rides along
-    when the agent wakes for some OTHER reason; it never becomes a spurious wake source itself."""
+    when the agent wakes for some OTHER reason; it never becomes a spurious wake source itself.
+    """
     b = await make_agent("B")
     aid = b["agent_id"]
-    _emit_event(db, container_id=container["id"], agent_id=aid, event_name="conversation_turn",
-                ts=1000.0, payload={"conversation_id": "c1", "content": "hello?"})
+    _emit_event(
+        db,
+        container_id=container["id"],
+        agent_id=aid,
+        event_name="conversation_turn",
+        ts=1000.0,
+        payload={"conversation_id": "c1", "content": "hello?"},
+    )
 
     _, cand = await _scan(client, container["id"], aid)
     assert cand["should_wake"] is False
@@ -247,56 +328,85 @@ async def test_conversation_turn_alone_does_not_wake_work_lane(client, container
 
 @pytest.mark.asyncio
 async def test_conversation_turn_consumed_by_conv_lane_never_rides_a_work_wake(
-        client, container, make_agent, db):
+    client, container, make_agent, db
+):
     """A chat turn the CONVERSATION lane already serviced (conv_delivered_ts >= its ts) must NOT
     be re-injected into a later work wake as "unanswered" — the GH #138 safety net is only for
     turns the conversation lane never consumed. Regression: an answered chat question rode along
-    a request_answered work wake and the worker re-answered it instead of the wake's real work."""
+    a request_answered work wake and the worker re-answered it instead of the wake's real work.
+    """
     b = await make_agent("B")
     aid = b["agent_id"]
-    _emit_event(db, container_id=container["id"], agent_id=aid, event_name="conversation_turn",
-                ts=1000.0, payload={"conversation_id": "c1", "content": "already answered chat"})
+    _emit_event(
+        db,
+        container_id=container["id"],
+        agent_id=aid,
+        event_name="conversation_turn",
+        ts=1000.0,
+        payload={"conversation_id": "c1", "content": "already answered chat"},
+    )
     # the conversation lane consumed the turn: its ack advanced conv_delivered_ts to the turn's ts
-    r = await client.post(f"/api/agents/{aid}/wake-ack",
-                          json={"kind": "ephemeral", "event": "conversation_turn",
-                                "lane": "conversation", "delivered_ts": 1000.0})
+    r = await client.post(
+        f"/api/agents/{aid}/wake-ack",
+        json={
+            "kind": "ephemeral",
+            "event": "conversation_turn",
+            "lane": "conversation",
+            "delivered_ts": 1000.0,
+        },
+    )
     assert r.status_code == 200, r.text
     # an unrelated WORK wake fires later
-    r = await client.post(f"/api/agents/{aid}/prompt", json={"message": "re-check the failing test"})
+    r = await client.post(
+        f"/api/agents/{aid}/prompt", json={"message": "re-check the failing test"}
+    )
     assert r.status_code == 201, r.text
 
     _, cand = await _scan(client, container["id"], aid)
     assert cand["should_wake"] is True
     assert "re-check the failing test" in cand["prompt_messages"]
-    assert not any("already answered chat" in m for m in cand["prompt_messages"]), \
-        f"consumed conversation_turn re-injected into a work wake: {cand['prompt_messages']}"
+    assert not any(
+        "already answered chat" in m for m in cand["prompt_messages"]
+    ), f"consumed conversation_turn re-injected into a work wake: {cand['prompt_messages']}"
 
 
 @pytest.mark.asyncio
 async def test_prompt_records_sender_and_validates(client, container, make_agent):
     a = await make_agent("A")
     b = await make_agent("B")
-    r = await client.post(f"/api/agents/{b['agent_id']}/prompt",
-                          json={"message": "poke", "from_agent_id": a["agent_id"]})
+    r = await client.post(
+        f"/api/agents/{b['agent_id']}/prompt",
+        json={"message": "poke", "from_agent_id": a["agent_id"]},
+    )
     assert r.status_code == 201, r.text
-    w = await client.get(f"/api/agents/{b['agent_id']}/wait", params={"since_ts": 0, "timeout": 1})
+    w = await client.get(
+        f"/api/agents/{b['agent_id']}/wait", params={"since_ts": 0, "timeout": 1}
+    )
     assert w.json()["from_agent_id"] == a["agent_id"]
     # bad from_agent_id → 400; empty message → 422 (min_length)
-    assert (await client.post(f"/api/agents/{b['agent_id']}/prompt",
-                              json={"message": "x", "from_agent_id": "not-a-uuid"})).status_code == 400
-    assert (await client.post(f"/api/agents/{b['agent_id']}/prompt",
-                              json={"message": ""})).status_code == 422
+    assert (
+        await client.post(
+            f"/api/agents/{b['agent_id']}/prompt",
+            json={"message": "x", "from_agent_id": "not-a-uuid"},
+        )
+    ).status_code == 400
+    assert (
+        await client.post(f"/api/agents/{b['agent_id']}/prompt", json={"message": ""})
+    ).status_code == 422
 
 
 @pytest.mark.asyncio
 async def test_prompt_unknown_agent_404(client, make_agent):
     import uuid
+
     r = await client.post(f"/api/agents/{uuid.uuid4()}/prompt", json={"message": "hi"})
     assert r.status_code == 404, r.text
 
 
 @pytest.mark.asyncio
-async def test_all_pending_prompts_surfaced_no_silent_drop(client, container, make_agent):
+async def test_all_pending_prompts_surfaced_no_silent_drop(
+    client, container, make_agent
+):
     """A3 P2: the daemon acks ALL pending events at once (max_event_ts), so wake-scan must surface
     EVERY pending prompt — a row cap would let prompts past it be acked-away unseen (no prompt
     inbox to recover them)."""
@@ -306,42 +416,56 @@ async def test_all_pending_prompts_surfaced_no_silent_drop(client, container, ma
         r = await client.post(f"/api/agents/{aid}/prompt", json={"message": f"msg-{i}"})
         assert r.status_code == 201, r.text
     _, cand = await _scan(client, container["id"], aid)
-    assert len(cand["prompt_messages"]) == 11                       # all surfaced, none dropped
-    assert cand["prompt_messages"][0] == "msg-0"                    # oldest-first
+    assert len(cand["prompt_messages"]) == 11  # all surfaced, none dropped
+    assert cand["prompt_messages"][0] == "msg-0"  # oldest-first
     assert cand["prompt_messages"][-1] == "msg-10"
-    assert cand["ack_through_ts"] == cand["max_event_ts"]          # nothing truncated → ack all
+    assert cand["ack_through_ts"] == cand["max_event_ts"]  # nothing truncated → ack all
 
 
 @pytest.mark.asyncio
-async def test_prompt_batch_capped_by_size_then_delivered_next_wake(client, container, make_agent):
+async def test_prompt_batch_capped_by_size_then_delivered_next_wake(
+    client, container, make_agent
+):
     """A3 P2: a big prompt backlog must NOT all concatenate into one argv (spawn would fail and
     retry forever). wake-scan caps the batch by aggregate size and acks only through the last
-    INCLUDED prompt; the rest stay pending and arrive on the next wake (forward progress, no loss)."""
+    INCLUDED prompt; the rest stay pending and arrive on the next wake (forward progress, no loss).
+    """
     b = await make_agent("B")
     aid = b["agent_id"]
     big = "x" * 3990
-    for i in range(8):                                              # 8 * ~3994 = ~31952 > 24000 cap
-        r = await client.post(f"/api/agents/{aid}/prompt", json={"message": f"P{i}-{big}"})
+    for i in range(8):  # 8 * ~3994 = ~31952 > 24000 cap
+        r = await client.post(
+            f"/api/agents/{aid}/prompt", json={"message": f"P{i}-{big}"}
+        )
         assert r.status_code == 201, r.text
 
     _, cand = await _scan(client, container["id"], aid)
     n1 = len(cand["prompt_messages"])
-    assert 0 < n1 < 8                                               # truncated to a bounded batch
-    assert sum(len(m) for m in cand["prompt_messages"]) <= 24_000   # aggregate within argv budget
-    assert cand["ack_through_ts"] < cand["max_event_ts"]           # ack stops at last included
+    assert 0 < n1 < 8  # truncated to a bounded batch
+    assert (
+        sum(len(m) for m in cand["prompt_messages"]) <= 24_000
+    )  # aggregate within argv budget
+    assert cand["ack_through_ts"] < cand["max_event_ts"]  # ack stops at last included
 
     # the daemon acks only through ack_through_ts → the remainder is still pending
-    await client.post(f"/api/agents/{aid}/wake-ack",
-                      json={"kind": "ephemeral", "delivered_ts": cand["ack_through_ts"]})
+    await client.post(
+        f"/api/agents/{aid}/wake-ack",
+        json={"kind": "ephemeral", "delivered_ts": cand["ack_through_ts"]},
+    )
     _, cand2 = await _scan(client, container["id"], aid)
-    assert len(cand2["prompt_messages"]) >= 1                       # remainder delivered next wake
-    assert cand2["prompt_messages"][0] not in cand["prompt_messages"]   # new ones (progress, no loss)
+    assert len(cand2["prompt_messages"]) >= 1  # remainder delivered next wake
+    assert (
+        cand2["prompt_messages"][0] not in cand["prompt_messages"]
+    )  # new ones (progress, no loss)
 
 
 # ---------- ISS-55 / ISS-56: task-thread messages wake AND surface + attribute ----------
 
+
 @pytest.mark.asyncio
-async def test_task_message_surfaced_into_wake_prompt(client, container, make_agent, make_task):
+async def test_task_message_surfaced_into_wake_prompt(
+    client, container, make_agent, make_task
+):
     """ISS-55: a teammate/human note on a task thread wakes the assignee — and its content is now
     SURFACED into the wake prompt (was prompt-only) so the woken worker reads + answers the thread
     instead of no-op'ing. ISS-56: wake-scan carries the triggering event's task_id so the
@@ -352,7 +476,9 @@ async def test_task_message_surfaced_into_wake_prompt(client, container, make_ag
     # publishes a `task_message` event keyed to B.
     t = await make_task("ship the thing", "done when shipped", assignee_alias="B")
     tid = t["id"]
-    r = await client.post(f"/api/tasks/{tid}/messages", json={"body": "please rebase onto main"})
+    r = await client.post(
+        f"/api/tasks/{tid}/messages", json={"body": "please rebase onto main"}
+    )
     assert r.status_code == 201, r.text
 
     _, cand = await _scan(client, container["id"], aid, min_idle=0)
@@ -362,7 +488,7 @@ async def test_task_message_surfaced_into_wake_prompt(client, container, make_ag
     # adds the `task_message` directed message. BOTH surface; the task_message is the one framed
     # with the body + RESPOND directive.
     msgs = cand["prompt_messages"]
-    assert any("new task assigned" in m for m in msgs)             # ISS-86 task_assigned surface
+    assert any("new task assigned" in m for m in msgs)  # ISS-86 task_assigned surface
     surfaced = next(m for m in msgs if "please rebase onto main" in m)
     assert tid in surfaced
     assert "RESPOND on it" in surfaced
@@ -378,7 +504,9 @@ async def test_prompt_only_wake_has_no_task_id(client, container, make_agent):
     """Regression: a pure A3 `prompt` wake (no task thread) still surfaces the message but leaves
     wake_task_id None — only task_message events attribute a task."""
     aid = (await make_agent("B"))["agent_id"]
-    r = await client.post(f"/api/agents/{aid}/prompt", json={"message": "look at the logs"})
+    r = await client.post(
+        f"/api/agents/{aid}/prompt", json={"message": "look at the logs"}
+    )
     assert r.status_code == 201, r.text
     _, cand = await _scan(client, container["id"], aid, min_idle=0)
     assert cand["prompt_messages"] == ["look at the logs"]
@@ -386,39 +514,53 @@ async def test_prompt_only_wake_has_no_task_id(client, container, make_agent):
 
 
 @pytest.mark.asyncio
-async def test_mixed_prompt_and_task_message_backlog_both_surfaced(client, container, make_agent, make_task):
+async def test_mixed_prompt_and_task_message_backlog_both_surfaced(
+    client, container, make_agent, make_task
+):
     """A mixed backlog (an A3 prompt, the assignment's task_assigned, AND a task_message) surfaces
     ALL THREE oldest-first, and the latest task event sets wake_task_id."""
     b = await make_agent("B")
     aid = b["agent_id"]
-    r1 = await client.post(f"/api/agents/{aid}/prompt", json={"message": "first: a poke"})
+    r1 = await client.post(
+        f"/api/agents/{aid}/prompt", json={"message": "first: a poke"}
+    )
     assert r1.status_code == 201, r1.text
-    t = await make_task("thread task", "dod", assignee_alias="B")   # → task_assigned (ISS-86)
+    t = await make_task(
+        "thread task", "dod", assignee_alias="B"
+    )  # → task_assigned (ISS-86)
     tid = t["id"]
-    r2 = await client.post(f"/api/tasks/{tid}/messages", json={"body": "second: a thread note"})
+    r2 = await client.post(
+        f"/api/tasks/{tid}/messages", json={"body": "second: a thread note"}
+    )
     assert r2.status_code == 201, r2.text
 
     _, cand = await _scan(client, container["id"], aid, min_idle=0)
     msgs = cand["prompt_messages"]
     assert len(msgs) == 3
-    assert msgs[0] == "first: a poke"                              # A3 prompt, verbatim, oldest
-    assert any("new task assigned" in m for m in msgs)            # ISS-86 task_assigned surface
-    assert any("second: a thread note" in m for m in msgs)       # task_message, framed
+    assert msgs[0] == "first: a poke"  # A3 prompt, verbatim, oldest
+    assert any("new task assigned" in m for m in msgs)  # ISS-86 task_assigned surface
+    assert any("second: a thread note" in m for m in msgs)  # task_message, framed
     assert cand["wake_task_id"] == tid
 
 
 # ---------- ISS-86 / #245: create-and-assign wakes a cold agent ----------
 
+
 @pytest.mark.asyncio
-async def test_create_and_assign_does_not_suppress_wake(client, container, make_agent, make_task, db):
+async def test_create_and_assign_does_not_suppress_wake(
+    client, container, make_agent, make_task, db
+):
     """ISS-86/#245 (GAP A): create-and-assign must NOT bump the cold assignee's heartbeat. The bug
     was that create_task did, shrinking idle_seconds so wake-scan read the freshly-assigned cold
     agent as ACTIVE and suppressed the task_assigned wake for ~min_idle. With the bump gone, a
-    just-assigned agent (no prior heartbeat) is still idle at the DEFAULT min_idle and wakes."""
+    just-assigned agent (no prior heartbeat) is still idle at the DEFAULT min_idle and wakes.
+    """
     b = await make_agent("B")
     await make_task("build the widget", "done when shipped", assignee_alias="B")
     # The assignment did not stamp last_heartbeat_at (it stays NULL → idle).
-    row = db.execute("SELECT last_heartbeat_at FROM agents WHERE id=%s", (b["agent_id"],))
+    row = db.execute(
+        "SELECT last_heartbeat_at FROM agents WHERE id=%s", (b["agent_id"],)
+    )
     assert row[0]["last_heartbeat_at"] is None
     # default min_idle=30: the cold assignee is still idle → should_wake (was suppressed by the bump)
     _, cand = await _scan(client, container["id"], b["agent_id"])
@@ -428,7 +570,8 @@ async def test_create_and_assign_does_not_suppress_wake(client, container, make_
 
 @pytest.mark.asyncio
 async def test_create_and_assign_surfaces_task_assigned_directed_message(
-        client, container, make_agent, make_task):
+    client, container, make_agent, make_task
+):
     """ISS-86/#245 (Option C): a create-and-assign task lands `in_progress`, so it is NOT a `ready`
     auto-start target /orcha-next would list. wake-scan now SURFACES the `task_assigned` event as a
     directed message (framed by the task's status) so the woken worker knows WHICH task to begin and
@@ -439,36 +582,43 @@ async def test_create_and_assign_surfaces_task_assigned_directed_message(
     _, cand = await _scan(client, container["id"], b["agent_id"], min_idle=0)
     assert cand["should_wake"] is True
     assert cand["latest_event"] == "task_assigned"
-    assert cand["auto_start_task_ids"] == []                       # in_progress → NOT an auto-start
+    assert cand["auto_start_task_ids"] == []  # in_progress → NOT an auto-start
     assert len(cand["prompt_messages"]) == 1
     surfaced = cand["prompt_messages"][0]
     assert tid in surfaced and "build the widget" in surfaced
     assert "in_progress" in surfaced and "/orcha-next will NOT list it" in surfaced
-    assert cand["wake_task_id"] == tid                             # ISS-56 attribution
+    assert cand["wake_task_id"] == tid  # ISS-56 attribution
     # build_wake_prompt injects it as a directed message for the worker to act on
     p = notifier.build_wake_prompt(cand)
     assert "DIRECTED MESSAGE FOR YOU" in p and "build the widget" in p
 
 
 @pytest.mark.asyncio
-async def test_task_assigned_for_finished_task_not_surfaced(client, container, make_agent, make_task, db):
+async def test_task_assigned_for_finished_task_not_surfaced(
+    client, container, make_agent, make_task, db
+):
     """ISS-86/#245 (Option C): a `task_assigned` whose task was completed/cancelled before the wake
     surfaces NOTHING (no stale 'new task' directive) but is still acked — the cursor advances past
-    it so it does not wedge. Teeth: flipping the task to a live status would re-surface it."""
+    it so it does not wedge. Teeth: flipping the task to a live status would re-surface it.
+    """
     b = await make_agent("B")
     t = await make_task("obsolete work", "n/a", assignee_alias="B")
     db.execute("UPDATE tasks SET status='cancelled' WHERE id=%s", (t["id"],))
     _, cand = await _scan(client, container["id"], b["agent_id"], min_idle=0)
-    assert cand["prompt_messages"] == []                           # nothing stale surfaced
-    assert cand["wake_task_id"] is None                            # no attribution to a dead task
-    assert cand["ack_through_ts"] == cand["max_event_ts"]          # but acked (advances past it)
+    assert cand["prompt_messages"] == []  # nothing stale surfaced
+    assert cand["wake_task_id"] is None  # no attribution to a dead task
+    assert (
+        cand["ack_through_ts"] == cand["max_event_ts"]
+    )  # but acked (advances past it)
 
 
 # ---------- GH #126: task-boundary guard for live-worker task switching ----------
 
+
 @pytest.mark.asyncio
 async def test_task_assigned_guarded_when_agent_has_live_run_on_different_task(
-        client, container, make_agent, make_task, db):
+    client, container, make_agent, make_task, db
+):
     """GH #126 repro: a live worker with a running work-lane run on Task A must NOT have a newly
     assigned Task B's `task_assigned` event framed as "begin the work directly", nor win
     wake_task_id -- either would silently attribute Task B's work to Task A's run (the live
@@ -480,13 +630,17 @@ async def test_task_assigned_guarded_when_agent_has_live_run_on_different_task(
     task_a = await make_task("Task A — in flight", "n/a", assignee_alias="B")
     db.execute(
         "INSERT INTO worker_runs (agent_id, task_id, status, lane) VALUES (%s, %s, 'running', 'work')",
-        (aid, task_a["id"]))
+        (aid, task_a["id"]),
+    )
     db.execute(
         f"""INSERT INTO agent_wake_state (agent_id, wake_lease_until, lease_kind)
            VALUES (%s, {ts_from_now(3600)}, 'ephemeral')
            ON CONFLICT (agent_id) DO UPDATE SET wake_lease_until = EXCLUDED.wake_lease_until""",
-        (aid,))
-    task_b = await make_task("Task B — newly assigned mid-run", "n/a", assignee_alias="B")
+        (aid,),
+    )
+    task_b = await make_task(
+        "Task B — newly assigned mid-run", "n/a", assignee_alias="B"
+    )
 
     _, cand = await _scan(client, container["id"], aid, min_idle=0)
     msgs = cand["prompt_messages"]
@@ -502,14 +656,18 @@ async def test_task_assigned_guarded_when_agent_has_live_run_on_different_task(
 
     # While the live run continues, re-scanning (even after acking through the safe cursor) keeps
     # deferring Task B — it never gets silently dropped.
-    await client.post(f"/api/agents/{aid}/wake-ack",
-                      json={"kind": "ephemeral", "delivered_ts": cand["ack_through_ts"]})
+    await client.post(
+        f"/api/agents/{aid}/wake-ack",
+        json={"kind": "ephemeral", "delivered_ts": cand["ack_through_ts"]},
+    )
     _, cand2 = await _scan(client, container["id"], aid, min_idle=0)
     assert not any(task_b["id"] in m for m in cand2["prompt_messages"])
 
     # Once the live run ends, Task B flows through normally on the next wake.
-    db.execute("UPDATE worker_runs SET status='exited' WHERE agent_id=%s AND task_id=%s",
-               (aid, task_a["id"]))
+    db.execute(
+        "UPDATE worker_runs SET status='exited' WHERE agent_id=%s AND task_id=%s",
+        (aid, task_a["id"]),
+    )
     _, cand3 = await _scan(client, container["id"], aid, min_idle=0)
     surfaced_b = next(m for m in cand3["prompt_messages"] if task_b["id"] in m)
     assert "begin the work directly" in surfaced_b
@@ -517,7 +675,9 @@ async def test_task_assigned_guarded_when_agent_has_live_run_on_different_task(
 
 
 @pytest.mark.asyncio
-async def test_task_assigned_not_guarded_when_no_live_run(client, container, make_agent, make_task):
+async def test_task_assigned_not_guarded_when_no_live_run(
+    client, container, make_agent, make_task
+):
     """Regression/specificity: with NO live worker_runs row for this agent, a task_assigned still
     surfaces as "begin the work directly" and wins wake_task_id — the GH #126 guard only fires when
     there is an actual conflicting live run, never as a blanket suppression."""
@@ -533,7 +693,8 @@ async def test_task_assigned_not_guarded_when_no_live_run(client, container, mak
 
 @pytest.mark.asyncio
 async def test_task_assigned_not_guarded_when_live_run_is_same_task(
-        client, container, make_agent, make_task, db):
+    client, container, make_agent, make_task, db
+):
     """Specificity: a live run already bound to THIS SAME task must not trip the guard (re-surfacing
     a task_assigned for the task the agent is already legitimately working)."""
     b = await make_agent("B")
@@ -541,12 +702,14 @@ async def test_task_assigned_not_guarded_when_live_run_is_same_task(
     t = await make_task("same task as the live run", "n/a", assignee_alias="B")
     db.execute(
         "INSERT INTO worker_runs (agent_id, task_id, status, lane) VALUES (%s, %s, 'running', 'work')",
-        (aid, t["id"]))
+        (aid, t["id"]),
+    )
     db.execute(
         f"""INSERT INTO agent_wake_state (agent_id, wake_lease_until, lease_kind)
            VALUES (%s, {ts_from_now(3600)}, 'ephemeral')
            ON CONFLICT (agent_id) DO UPDATE SET wake_lease_until = EXCLUDED.wake_lease_until""",
-        (aid,))
+        (aid,),
+    )
     _, cand = await _scan(client, container["id"], aid, min_idle=0)
     msgs = cand["prompt_messages"]
     surfaced = next(m for m in msgs if t["id"] in m)
@@ -557,7 +720,8 @@ async def test_task_assigned_not_guarded_when_live_run_is_same_task(
 
 @pytest.mark.asyncio
 async def test_task_assigned_not_guarded_by_stale_orphan_run_row(
-        client, container, make_agent, make_task, db):
+    client, container, make_agent, make_task, db
+):
     """Specificity: a `worker_runs` row stuck at status='running' with NO live wake lease (e.g. the
     daemon crashed mid-run and never flipped it to exited/killed) is a stale orphan, not a live
     run -- it must not trip the guard and strand a fresh worker's assignment forever. Gated on the
@@ -567,9 +731,12 @@ async def test_task_assigned_not_guarded_by_stale_orphan_run_row(
     task_a = await make_task("Task A — orphaned run row", "n/a", assignee_alias="B")
     db.execute(
         "INSERT INTO worker_runs (agent_id, task_id, status, lane) VALUES (%s, %s, 'running', 'work')",
-        (aid, task_a["id"]))
+        (aid, task_a["id"]),
+    )
     # No agent_wake_state lease inserted -- the row is a stale orphan, nothing is actually live.
-    task_b = await make_task("Task B — assigned while orphan row lingers", "n/a", assignee_alias="B")
+    task_b = await make_task(
+        "Task B — assigned while orphan row lingers", "n/a", assignee_alias="B"
+    )
 
     _, cand = await _scan(client, container["id"], aid, min_idle=0)
     msgs = cand["prompt_messages"]
@@ -581,24 +748,30 @@ async def test_task_assigned_not_guarded_by_stale_orphan_run_row(
 
 
 @pytest.mark.asyncio
-async def test_paused_container_suppresses_wakes(client, container, make_agent, make_request):
+async def test_paused_container_suppresses_wakes(
+    client, container, make_agent, make_request
+):
     human = await make_agent("H", kind="human")
     a = await make_agent("A")
     b = await make_agent("B")
     await make_request(a["agent_id"], "need input", target_alias="B")
-    r = await client.post(f"/api/containers/{container['id']}/status",
-                          json={"status": "paused", "actor_agent_id": human["agent_id"]})
+    r = await client.post(
+        f"/api/containers/{container['id']}/status",
+        json={"status": "paused", "actor_agent_id": human["agent_id"]},
+    )
     assert r.status_code == 200, r.text
     body, cand = await _scan(client, container["id"], b["agent_id"])
     assert body["active"] is False
-    assert cand["should_wake"] is False        # respects /orcha-pause
+    assert cand["should_wake"] is False  # respects /orcha-pause
 
 
 @pytest.mark.asyncio
 async def test_wake_disabled_opt_out(client, container, make_agent, make_request):
     a = await make_agent("A")
     b = await make_agent("B")
-    await client.post(f"/api/agents/{b['agent_id']}/reachability", json={"wake_enabled": False})
+    await client.post(
+        f"/api/agents/{b['agent_id']}/reachability", json={"wake_enabled": False}
+    )
     await make_request(a["agent_id"], "need input", target_alias="B")
     _, cand = await _scan(client, container["id"], b["agent_id"])
     assert cand["should_wake"] is False
@@ -606,7 +779,9 @@ async def test_wake_disabled_opt_out(client, container, make_agent, make_request
 
 
 @pytest.mark.asyncio
-async def test_active_agent_not_woken_until_idle(client, container, make_agent, make_request, db):
+async def test_active_agent_not_woken_until_idle(
+    client, container, make_agent, make_request, db
+):
     a = await make_agent("A")
     # B registers WITH an initial task → looks active. GH #91/#90: the WORK-idle gate now keys on
     # work_last_heartbeat_at (not the agent-wide heartbeat), so seed a fresh work-lane heartbeat to
@@ -615,10 +790,13 @@ async def test_active_agent_not_woken_until_idle(client, container, make_agent, 
     db.execute(
         """INSERT INTO agent_wake_state (agent_id, work_last_heartbeat_at) VALUES (%s, now())
            ON CONFLICT (agent_id) DO UPDATE SET work_last_heartbeat_at = now()""",
-        (b["agent_id"],))
+        (b["agent_id"],),
+    )
     await make_request(a["agent_id"], "need input", target_alias="B")
     _, cand = await _scan(client, container["id"], b["agent_id"], min_idle=30)
-    assert cand["should_wake"] is False        # recent work heartbeat → cooperative, don't barge in
+    assert (
+        cand["should_wake"] is False
+    )  # recent work heartbeat → cooperative, don't barge in
     assert "active" in cand["reason"]
     # With min_idle=0 the idle gate is off → it should wake.
     _, cand = await _scan(client, container["id"], b["agent_id"], min_idle=0)
@@ -633,9 +811,14 @@ async def test_wake_ack_advances_cursor(client, container, make_agent, make_requ
     _, cand = await _scan(client, container["id"], b["agent_id"])
     assert cand["pending_events"] == 1
     # Daemon acks delivery up to the latest event ts.
-    r = await client.post(f"/api/agents/{b['agent_id']}/wake-ack",
-                          json={"delivered_ts": cand["max_event_ts"], "kind": "tmux",
-                                "event": "request_created"})
+    r = await client.post(
+        f"/api/agents/{b['agent_id']}/wake-ack",
+        json={
+            "delivered_ts": cand["max_event_ts"],
+            "kind": "tmux",
+            "event": "request_created",
+        },
+    )
     assert r.status_code == 200, r.text
     # Re-scan: that event is now behind the cursor.
     _, cand2 = await _scan(client, container["id"], b["agent_id"], cooldown=0)
@@ -654,8 +837,10 @@ async def test_wake_ack_cooldown_debounce(client, container, make_agent, make_re
     b = await make_agent("B")
     await make_request(a["agent_id"], "q", target_alias="B")
     # Unreachable ack (no delivery) still stamps last_woken_at for the cooldown.
-    await client.post(f"/api/agents/{b['agent_id']}/wake-ack",
-                      json={"kind": "unreachable", "event": "request_created"})
+    await client.post(
+        f"/api/agents/{b['agent_id']}/wake-ack",
+        json={"kind": "unreachable", "event": "request_created"},
+    )
     _, cand = await _scan(client, container["id"], b["agent_id"], cooldown=600)
     assert cand["in_cooldown"] is True
     assert cand["should_wake"] is False
@@ -668,15 +853,22 @@ async def test_wake_ack_cooldown_debounce(client, container, make_agent, make_re
 @pytest.mark.asyncio
 async def test_wake_ack_cursor_never_moves_backwards(client, make_agent):
     aid = (await make_agent("A"))["agent_id"]
-    await client.post(f"/api/agents/{aid}/wake-ack", json={"delivered_ts": 1000.0, "kind": "tmux"})
-    r = await client.post(f"/api/agents/{aid}/wake-ack", json={"delivered_ts": 5.0, "kind": "tmux"})
-    assert r.json()["delivered_ts"] == 1000.0   # GREATEST guard
+    await client.post(
+        f"/api/agents/{aid}/wake-ack", json={"delivered_ts": 1000.0, "kind": "tmux"}
+    )
+    r = await client.post(
+        f"/api/agents/{aid}/wake-ack", json={"delivered_ts": 5.0, "kind": "tmux"}
+    )
+    assert r.json()["delivered_ts"] == 1000.0  # GREATEST guard
 
 
 # ---------- auto-start target detection + targeted task_ready ----------
 
+
 @pytest.mark.asyncio
-async def test_assigned_ready_task_is_autostart_target(client, container, make_agent, make_task):
+async def test_assigned_ready_task_is_autostart_target(
+    client, container, make_agent, make_task
+):
     b = await make_agent("B")
     # A standalone task assigned to B with no deps is in_progress (claimed at create),
     # so it is NOT a ready auto-start target. Make one that is ready instead: create
@@ -687,7 +879,9 @@ async def test_assigned_ready_task_is_autostart_target(client, container, make_a
 
 
 @pytest.mark.asyncio
-async def test_targeted_task_ready_wakes_owner_on_unblock(client, container, make_agent, make_task, db, work_headers):
+async def test_targeted_task_ready_wakes_owner_on_unblock(
+    client, container, make_agent, make_task, db, work_headers
+):
     human = await make_agent("H", kind="human")
     a = await make_agent("A")
     b = await make_agent("B")
@@ -698,11 +892,15 @@ async def test_targeted_task_ready_wakes_owner_on_unblock(client, container, mak
     _, cand = await _scan(client, container["id"], b["agent_id"])
     assert t["id"] not in cand["auto_start_task_ids"]
     # A finishes D; human verifies → D completed, T unblocks to 'ready'.
-    await client.post(f"/api/tasks/{d['id']}/done",
-                      json={"agent_id": a["agent_id"], "result": "ok"},
-                      headers=await work_headers(a["agent_id"]))
-    r = await client.post(f"/api/tasks/{d['id']}/verify",
-                          json={"approve": True, "actor_agent_id": human["agent_id"]})
+    await client.post(
+        f"/api/tasks/{d['id']}/done",
+        json={"agent_id": a["agent_id"], "result": "ok"},
+        headers=await work_headers(a["agent_id"]),
+    )
+    r = await client.post(
+        f"/api/tasks/{d['id']}/verify",
+        json={"approve": True, "actor_agent_id": human["agent_id"]},
+    )
     assert r.status_code == 200, r.text
     assert t["id"] in r.json()["unblocked"]
     # A targeted task_ready landed on B (not just the container-wide one).
@@ -721,9 +919,11 @@ async def test_targeted_task_ready_wakes_owner_on_unblock(client, container, mak
 
 # ---------- notifier pure functions (no real terminals) ----------
 
+
 def test_build_wake_prompt_is_safe_and_directive():
     p = notifier.build_wake_prompt(
-        {"alias": "Forge", "pending_events": 2, "auto_start_task_ids": ["x"]})
+        {"alias": "Forge", "pending_events": 2, "auto_start_task_ids": ["x"]}
+    )
     assert "Forge" in p
     # R2.4: one-shot worker — a single inbox pass then EXIT, NOT the /orcha-listen
     # long-poll watch loop that caused the runaway pileup.
@@ -731,7 +931,7 @@ def test_build_wake_prompt_is_safe_and_directive():
     assert "EXIT" in p
     assert "do NOT enter the `/orcha-listen`" in p
     assert "/orcha-next --alias Forge" in p
-    assert "needs_verification" in p           # never self-certify, baked into the prompt
+    assert "needs_verification" in p  # never self-certify, baked into the prompt
     # R2.2: drain the FULL backlog (all items, until empty), not just the first.
     assert "FULL inbox" in p
     assert "EMPTY" in p
@@ -741,11 +941,31 @@ def test_build_wake_prompt_is_safe_and_directive():
     assert "loop" in p
 
 
+def test_build_wake_prompt_uses_only_the_context_tasks_authority():
+    base = {
+        "alias": "Forge",
+        "pending_events": 1,
+        "context_task_id": "task",
+        "task_autonomy_revision": 4,
+    }
+    on = notifier.build_wake_prompt({**base, "task_autonomy": "on"})
+    assert "TASK AUTONOMY ON (revision 4)" in on
+    assert "approve your own plan" in on and "human-only workflow Finish" in on
+    off = notifier.build_wake_prompt({**base, "task_autonomy": "off"})
+    assert "TASK AUTONOMY OFF (revision 4)" in off
+    assert "request human approval for your plan" in off and "finished work" in off
+    assert "container autonomy" not in on + off and "agent override" not in on + off
+
+
 def test_build_wake_prompt_surfaces_directed_message():
     """A3: a prompt-event's message is injected verbatim so the worker acts on it specifically."""
     p = notifier.build_wake_prompt(
-        {"alias": "Forge", "pending_events": 1,
-         "prompt_messages": ["re-check the failing test and report back"]})
+        {
+            "alias": "Forge",
+            "pending_events": 1,
+            "prompt_messages": ["re-check the failing test and report back"],
+        }
+    )
     assert "DIRECTED MESSAGE FOR YOU" in p
     assert '"re-check the failing test and report back"' in p
     # still a one-shot drain-then-exit worker
@@ -757,26 +977,48 @@ def test_build_wake_prompt_directed_message_on_task_steers_to_full_body():
     message path), the worker is told to read the FULL task body (description + definition_of_done)
     riding in its 'Your task' section, not act on the message preview / title alone."""
     p = notifier.build_wake_prompt(
-        {"alias": "Forge", "pending_events": 1, "wake_task_id": "t-42",
-         "prompt_messages": ["see my note on the thread"]})
+        {
+            "alias": "Forge",
+            "pending_events": 1,
+            "wake_task_id": "t-42",
+            "prompt_messages": ["see my note on the thread"],
+        }
+    )
     assert "DIRECTED MESSAGE FOR YOU" in p
     assert "definition_of_done" in p
     assert "Your task" in p and "title alone" in p
     # no task resolved → no body directive (a plain inbox-only directed message)
     p2 = notifier.build_wake_prompt(
-        {"alias": "Forge", "pending_events": 1, "prompt_messages": ["ping"]})
+        {"alias": "Forge", "pending_events": 1, "prompt_messages": ["ping"]}
+    )
     assert "Your task" not in p2
 
 
 def test_build_wake_prompt_renders_ranked_manifest():
     p = notifier.build_wake_prompt(
-        {"alias": "Forge", "pending_events": 2,
-         "notifications": [
-             {"rank": 3, "rank_label": "human_conversation", "surface": "request:R-human",
-              "actor_alias": "Kedar", "object_priority": 80, "preview": "operator needs an answer"},
-             {"rank": 4, "rank_label": "task", "surface": "task:T-urgent",
-              "actor_alias": "Helm", "object_priority": 0, "preview": "urgent task"},
-         ]})
+        {
+            "alias": "Forge",
+            "pending_events": 2,
+            "notifications": [
+                {
+                    "rank": 3,
+                    "rank_label": "human_conversation",
+                    "surface": "request:R-human",
+                    "actor_alias": "Kedar",
+                    "object_priority": 80,
+                    "preview": "operator needs an answer",
+                },
+                {
+                    "rank": 4,
+                    "rank_label": "task",
+                    "surface": "task:T-urgent",
+                    "actor_alias": "Helm",
+                    "object_priority": 0,
+                    "preview": "urgent task",
+                },
+            ],
+        }
+    )
     assert "RANKED WAKE MANIFEST" in p
     assert "rank 3 human-conversation -> request:R-human from Kedar p=80" in p
     assert p.index("rank 3 human-conversation") < p.index("rank 4 task")
@@ -789,12 +1031,22 @@ def test_build_wake_prompt_task_request_steers_into_work():
     by an accept-and-progress directive — otherwise the warm drain answers/defers it and the work
     never spawns."""
     p = notifier.build_wake_prompt(
-        {"alias": "Ledger", "pending_events": 1,
-         "notifications": [
-             {"rank": 5, "rank_label": "request_in", "surface": "request:R-build",
-              "actor_alias": "Helm", "object_priority": 10, "preview": "BUILD fix for issue #359",
-              "is_task_request": True},
-         ]})
+        {
+            "alias": "Ledger",
+            "pending_events": 1,
+            "notifications": [
+                {
+                    "rank": 5,
+                    "rank_label": "request_in",
+                    "surface": "request:R-build",
+                    "actor_alias": "Helm",
+                    "object_priority": 10,
+                    "preview": "BUILD fix for issue #359",
+                    "is_task_request": True,
+                },
+            ],
+        }
+    )
     # surfaced as work, not a generic request-in
     assert "rank 5 task-request-in -> request:R-build from Helm p=10" in p
     # steered into the work
@@ -810,11 +1062,21 @@ def test_build_wake_prompt_info_request_is_not_steered_into_a_task():
     """Guard the #359 carve-out: an ORDINARY (info) request must NOT trigger the accept-task
     directive or the task-request label — only `is_task_request` items do."""
     p = notifier.build_wake_prompt(
-        {"alias": "Ledger", "pending_events": 1,
-         "notifications": [
-             {"rank": 5, "rank_label": "request_in", "surface": "request:R-ask",
-              "actor_alias": "Helm", "object_priority": 10, "preview": "quick question"},
-         ]})
+        {
+            "alias": "Ledger",
+            "pending_events": 1,
+            "notifications": [
+                {
+                    "rank": 5,
+                    "rank_label": "request_in",
+                    "surface": "request:R-ask",
+                    "actor_alias": "Helm",
+                    "object_priority": 10,
+                    "preview": "quick question",
+                },
+            ],
+        }
+    )
     assert "rank 5 request-in -> request:R-ask" in p
     assert "task-request-in" not in p
     assert "/orcha-accept-task" not in p
@@ -831,8 +1093,13 @@ def test_build_wake_prompt_no_directed_section_without_prompts():
 
 def test_build_wake_prompt_handles_multiple_directed_messages():
     p = notifier.build_wake_prompt(
-        {"alias": "Forge", "pending_events": 2, "prompt_messages": ["first ask", "second ask"]})
-    assert "DIRECTED MESSAGES FOR YOU" in p          # plural
+        {
+            "alias": "Forge",
+            "pending_events": 2,
+            "prompt_messages": ["first ask", "second ask"],
+        }
+    )
+    assert "DIRECTED MESSAGES FOR YOU" in p  # plural
     assert '(prompt 1) "first ask"' in p and '(prompt 2) "second ask"' in p
 
 
@@ -840,41 +1107,67 @@ def test_build_wake_prompt_stable_instructions_form_consistent_prefix():
     """GH #34: the fixed operating instructions (steps 1-3) are the same text every wake for a
     given agent/branch — only the trailing '[orcha wake] ...' summary (count/manifest/directed
     message) is unique per wake. The instructions must render FIRST so two consecutive wakes
-    share a real string prefix, instead of the always-different manifest breaking it at byte 0."""
+    share a real string prefix, instead of the always-different manifest breaking it at byte 0.
+    """
     p1 = notifier.build_wake_prompt(
-        {"alias": "Forge", "pending_events": 1,
-         "notifications": [{"rank": 1, "rank_label": "request_in", "surface": "request:R-1",
-                             "actor_alias": "Kedar", "preview": "first wake's ask"}]})
+        {
+            "alias": "Forge",
+            "pending_events": 1,
+            "notifications": [
+                {
+                    "rank": 1,
+                    "rank_label": "request_in",
+                    "surface": "request:R-1",
+                    "actor_alias": "Kedar",
+                    "preview": "first wake's ask",
+                }
+            ],
+        }
+    )
     p2 = notifier.build_wake_prompt(
-        {"alias": "Forge", "pending_events": 3,
-         "notifications": [{"rank": 1, "rank_label": "task", "surface": "task:T-9",
-                             "actor_alias": "Helm", "preview": "second wake's completely different ask"}]})
-    assert p1 != p2   # the manifests really do differ...
+        {
+            "alias": "Forge",
+            "pending_events": 3,
+            "notifications": [
+                {
+                    "rank": 1,
+                    "rank_label": "task",
+                    "surface": "task:T-9",
+                    "actor_alias": "Helm",
+                    "preview": "second wake's completely different ask",
+                }
+            ],
+        }
+    )
+    assert p1 != p2  # the manifests really do differ...
     assert p1.startswith("You are a ONE-SHOT headless worker")
     assert p2.startswith("You are a ONE-SHOT headless worker")
     volatile_marker = "[orcha wake] Forge:"
     stable_end = p1.index(volatile_marker)
-    assert p2.index(volatile_marker) == stable_end       # ...at the identical offset
-    assert p1[:stable_end] == p2[:stable_end]             # ...and everything before it matches
+    assert p2.index(volatile_marker) == stable_end  # ...at the identical offset
+    assert p1[:stable_end] == p2[:stable_end]  # ...and everything before it matches
     assert "ONE-SHOT" in p1[:stable_end] and "needs_verification" in p1[:stable_end]
 
 
 def test_sidecar_drain_prompt_surfaces_directed_messages():
     """#247 B3 Gate P1b: `prompt`/`task_message`/`task_assigned` events have NO inbox surface — the
     drain sidecar must be FED their content (else acking the cursor silently drops them). The lean
-    drain prompt quotes each directed message verbatim while staying a one-shot, no-task-start worker."""
+    drain prompt quotes each directed message verbatim while staying a one-shot, no-task-start worker.
+    """
     p = notifier.build_resident_sidecar_drain_prompt(
-        "Vox", 2, ["read task T-7's thread and RESPOND", "ack the decision on T-9"])
-    assert "DIRECTED MESSAGES FOR YOU" in p                              # plural
+        "Vox", 2, ["read task T-7's thread and RESPOND", "ack the decision on T-9"]
+    )
+    assert "DIRECTED MESSAGES FOR YOU" in p  # plural
     assert '(message 1) "read task T-7\'s thread and RESPOND"' in p
     assert '(message 2) "ack the decision on T-9"' in p
-    assert "do not claim or start a task" in p.lower()                   # still lean: NO task auto-start
-    assert "/orcha-listen" in p                                          # still one-shot, no watch loop
+    assert "do not claim or start a task" in p.lower()  # still lean: NO task auto-start
+    assert "/orcha-listen" in p  # still one-shot, no watch loop
 
 
 def test_sidecar_drain_prompt_no_directed_section_without_messages():
     """No directed messages (only request/decision events that DO have an inbox surface) → no quoted
-    block; the sidecar just drains the backlog count. Singular vs plural framing also exercised above."""
+    block; the sidecar just drains the backlog count. Singular vs plural framing also exercised above.
+    """
     p = notifier.build_resident_sidecar_drain_prompt("Vox", 3)
     assert "DIRECTED MESSAGE" not in p
     p1 = notifier.build_resident_sidecar_drain_prompt("Vox", 1, ["the only ask"])
@@ -884,24 +1177,34 @@ def test_sidecar_drain_prompt_no_directed_section_without_messages():
 def test_resident_drain_prompt_builder_removed():
     """ISS-78 (A2): the in-session resident drain is gone — the warm resident idle-YIELDS and an
     ordinary ephemeral worker drains the backlog via build_wake_prompt in its own session — so the
-    dedicated drain-prompt builder no longer exists (its removal proves the in-session path is dead)."""
+    dedicated drain-prompt builder no longer exists (its removal proves the in-session path is dead).
+    """
     assert not hasattr(notifier, "build_resident_drain_prompt")
 
 
 def test_select_transport_prefers_live_tmux(monkeypatch):
     monkeypatch.setattr(notifier, "tmux_pane_live", lambda t: True)
-    assert notifier.select_transport({"tmux_target": "m:0.0", "headless_cwd": "/p"}) == "tmux"
+    assert (
+        notifier.select_transport({"tmux_target": "m:0.0", "headless_cwd": "/p"})
+        == "tmux"
+    )
 
 
 def test_select_transport_falls_back_to_ephemeral(monkeypatch):
     monkeypatch.setattr(notifier, "tmux_pane_live", lambda t: False)
-    assert notifier.select_transport({"tmux_target": "m:0.0", "headless_cwd": "/p"}) == "ephemeral"
+    assert (
+        notifier.select_transport({"tmux_target": "m:0.0", "headless_cwd": "/p"})
+        == "ephemeral"
+    )
     assert notifier.select_transport({"headless_cwd": "/p"}) == "ephemeral"
 
 
 def test_select_transport_unreachable_when_no_route(monkeypatch):
     monkeypatch.setattr(notifier, "tmux_pane_live", lambda t: False)
-    assert notifier.select_transport({"tmux_target": None, "headless_cwd": None}) == "unreachable"
+    assert (
+        notifier.select_transport({"tmux_target": None, "headless_cwd": None})
+        == "unreachable"
+    )
 
 
 def test_dry_run_transports_never_execute():
@@ -913,6 +1216,7 @@ def test_dry_run_transports_never_execute():
 
 
 # ---------- headless worker boots AS the agent (persona + digest injection) ----------
+
 
 @pytest.mark.asyncio
 async def test_persona_endpoint_returns_system_prompt(client, make_agent):
@@ -927,6 +1231,7 @@ async def test_persona_endpoint_returns_system_prompt(client, make_agent):
 @pytest.mark.asyncio
 async def test_persona_endpoint_404_unknown_agent(client):
     import uuid
+
     r = await client.get(f"/api/agents/{uuid.uuid4()}/persona")
     assert r.status_code == 404
 
@@ -934,7 +1239,8 @@ async def test_persona_endpoint_404_unknown_agent(client):
 def test_format_persona_combines_persona_and_digest():
     out = notifier.format_persona(
         {"system_prompt": "You are Tim."},
-        {"digest": {"current_focus": "wake epic", "decisions": ["ship A first"]}})
+        {"digest": {"current_focus": "wake epic", "decisions": ["ship A first"]}},
+    )
     assert "You are Tim." in out
     assert "Where you left off" in out
     assert "prior reasoning, not live truth" in out
@@ -959,7 +1265,8 @@ def test_format_persona_handles_missing_pieces():
 
 def test_format_persona_always_injects_human_comms_guardrail():
     """#325: every wake that boots AS an agent carries the plain-language guardrail —
-    even with no digest yet — so a fresh agent doesn't address humans in internal jargon."""
+    even with no digest yet — so a fresh agent doesn't address humans in internal jargon.
+    """
     out = notifier.format_persona({"system_prompt": "You are Tim."}, None)
     assert "You are Tim." in out
     assert "Talking to humans" in out
@@ -980,24 +1287,27 @@ def test_format_persona_always_injects_multi_human_steering():
     assert "Chat guidance is advisory" in out
     # like the comms guardrail, it rides on the PERSONA — never on a persona-less render
     assert "Multi-human steering" not in notifier.format_persona(
-        None, {"digest": {"current_focus": "X"}})
+        None, {"digest": {"current_focus": "X"}}
+    )
 
 
 def test_multi_human_steering_rides_conversation_lane_too():
     """The conversation responder gets the same conflict rules — chat is exactly where
     contradictory human steering shows up first."""
     out = notifier.format_persona(
-        {"system_prompt": "You are Tim."}, None, lane="conversation")
+        {"system_prompt": "You are Tim."}, None, lane="conversation"
+    )
     assert "Multi-human steering" in out
     assert "conversation responder" in out
     # steering block stays in the stable prefix: ahead of the volatile digest sections
     out2 = notifier.format_persona(
-        {"system_prompt": "You are Tim."},
-        {"digest": {"current_focus": "wake epic"}})
+        {"system_prompt": "You are Tim."}, {"digest": {"current_focus": "wake epic"}}
+    )
     assert out2.index("Multi-human steering") < out2.index("Where you left off")
 
 
 # ---------- Agent→PR: repo-workflow guidance (docs/agent-prs.md) ----------
+
 
 def _repo_workspace(root):
     """A workspace that looks repo-credentialed: git checkout + rotating token file."""
@@ -1012,7 +1322,9 @@ def test_format_persona_repo_workflow_rides_on_credentialed_workspace(tmp_path):
     standing branch→PR contract — never the default branch, orcha/<task-slug> branches,
     push, `gh pr create`, and merge stays human."""
     ws = _repo_workspace(tmp_path)
-    out = notifier.format_persona({"system_prompt": "You are Tim."}, None, workdir=str(ws))
+    out = notifier.format_persona(
+        {"system_prompt": "You are Tim."}, None, workdir=str(ws)
+    )
     assert "Working with the repository" in out
     assert "NEVER commit to the default branch" in out
     assert "orcha/<task-slug>" in out
@@ -1047,8 +1359,9 @@ def test_format_persona_repo_workflow_gated_out_without_credentials(tmp_path):
     full = tmp_path / "full"
     full.mkdir()
     ws = _repo_workspace(full)
-    persona_less = notifier.format_persona(None, {"digest": {"current_focus": "X"}},
-                                           workdir=str(ws))
+    persona_less = notifier.format_persona(
+        None, {"digest": {"current_focus": "X"}}, workdir=str(ws)
+    )
     assert "Working with the repository" not in persona_less
 
 
@@ -1065,20 +1378,28 @@ def test_format_persona_repo_workflow_stays_in_stable_prefix(tmp_path):
     """GH #34: the block is stable per-workspace, so it renders with the other standing
     sections — after multi-human steering, ahead of the volatile digest tail."""
     ws = _repo_workspace(tmp_path)
-    out = notifier.format_persona({"system_prompt": "P"},
-                                  {"digest": {"current_focus": "wake epic"}},
-                                  workdir=str(ws))
+    out = notifier.format_persona(
+        {"system_prompt": "P"},
+        {"digest": {"current_focus": "wake epic"}},
+        workdir=str(ws),
+    )
     assert out.index("Multi-human steering") < out.index("Working with the repository")
     assert out.index("Working with the repository") < out.index("Where you left off")
 
 
 def test_format_persona_surfaces_audience_register_ahead_of_facts():
     """#325: the digest's `audience` slice renders as 'Who you're talking to', and lands
-    BEFORE the 'Where you left off' facts so the conversational register frames the work."""
+    BEFORE the 'Where you left off' facts so the conversational register frames the work.
+    """
     out = notifier.format_persona(
         {"system_prompt": "You are Tim."},
-        {"digest": {"current_focus": "wake epic",
-                    "audience": "Talking to Kedar — non-engineer; wants plain answers."}})
+        {
+            "digest": {
+                "current_focus": "wake epic",
+                "audience": "Talking to Kedar — non-engineer; wants plain answers.",
+            }
+        },
+    )
     assert "Who you're talking to" in out
     assert "non-engineer" in out
     # register comes ahead of the facts
@@ -1088,13 +1409,14 @@ def test_format_persona_surfaces_audience_register_ahead_of_facts():
 def test_format_persona_omits_audience_section_when_absent():
     """#325: a digest without `audience` (e.g. a pre-#325 row) renders no register section."""
     out = notifier.format_persona(
-        {"system_prompt": "You are Tim."},
-        {"digest": {"current_focus": "wake epic"}})
+        {"system_prompt": "You are Tim."}, {"digest": {"current_focus": "wake epic"}}
+    )
     assert "Who you're talking to" not in out
     assert "Current focus: wake epic" in out
 
 
 # ---------- GH #34 (scoped): stable-prefix ordering ----------
+
 
 def test_format_persona_stable_sections_form_consistent_prefix():
     """GH #34: persona/guardrail/task-body/protocol never change between two wakes of the same
@@ -1103,17 +1425,32 @@ def test_format_persona_stable_sections_form_consistent_prefix():
     string prefix of both renders (a provider-side cache hits on a stable prefix, not the whole
     string)."""
     persona = {"system_prompt": "You are Tim."}
-    protocol = {"task_id": "t-1", "title": "Ship the thing", "description": "Do the work",
-                "definition_of_done": "Tests green",
-                "protocol": {"notes": "Report back when done"}}
-    out1 = notifier.format_persona(persona, {"digest": {"current_focus": "wake N"}}, protocol)
-    out2 = notifier.format_persona(persona, {"digest": {"current_focus": "wake N+1",
-                                                          "decisions": ["a brand-new decision"]}},
-                                   protocol)
-    assert out1 != out2   # the digests really do differ...
+    protocol = {
+        "task_id": "t-1",
+        "title": "Ship the thing",
+        "description": "Do the work",
+        "definition_of_done": "Tests green",
+        "protocol": {"notes": "Report back when done"},
+    }
+    out1 = notifier.format_persona(
+        persona, {"digest": {"current_focus": "wake N"}}, protocol
+    )
+    out2 = notifier.format_persona(
+        persona,
+        {
+            "digest": {
+                "current_focus": "wake N+1",
+                "decisions": ["a brand-new decision"],
+            }
+        },
+        protocol,
+    )
+    assert out1 != out2  # the digests really do differ...
     stable_end = out1.index("## Where you left off")
-    assert out2.index("## Where you left off") == stable_end   # ...at the identical offset
-    assert out1[:stable_end] == out2[:stable_end]               # ...and everything before it matches
+    assert (
+        out2.index("## Where you left off") == stable_end
+    )  # ...at the identical offset
+    assert out1[:stable_end] == out2[:stable_end]  # ...and everything before it matches
     # sanity: the shared prefix actually carries the stable sections, not just whitespace
     assert "You are Tim." in out1[:stable_end]
     assert "## Your task" in out1[:stable_end]
@@ -1123,15 +1460,29 @@ def test_format_persona_stable_sections_form_consistent_prefix():
 def test_format_persona_resume_context_renders_after_protocol_grouped_with_digest():
     """GH #34: the self-wake resume context (GH #122) is at least as volatile as the digest — a
     fresh wait-point most times it fires — so it must render AFTER the protocol section, grouped
-    with the digest at the volatile tail, not spliced between the task body and the protocol."""
+    with the digest at the volatile tail, not spliced between the task body and the protocol.
+    """
     persona = {"system_prompt": "You are Tim."}
-    protocol = {"task_id": "t-1", "title": "Ship the thing", "description": "Do the work",
-                "protocol": {"notes": "Report back"}, "resume_context": "waiting on CI"}
-    out = notifier.format_persona(persona, {"digest": {"current_focus": "wake epic"}},
-                                  protocol, render_resume=True)
+    protocol = {
+        "task_id": "t-1",
+        "title": "Ship the thing",
+        "description": "Do the work",
+        "protocol": {"notes": "Report back"},
+        "resume_context": "waiting on CI",
+    }
+    out = notifier.format_persona(
+        persona,
+        {"digest": {"current_focus": "wake epic"}},
+        protocol,
+        render_resume=True,
+    )
     assert out.index("## Your task") < out.index("## Standing protocol")
-    assert out.index("## Standing protocol") < out.index("Resuming — you scheduled this wake")
-    assert out.index("Resuming — you scheduled this wake") < out.index("## Where you left off")
+    assert out.index("## Standing protocol") < out.index(
+        "Resuming — you scheduled this wake"
+    )
+    assert out.index("Resuming — you scheduled this wake") < out.index(
+        "## Where you left off"
+    )
 
 
 def test_spawn_headless_injects_persona_and_alias(monkeypatch, tmp_path):
@@ -1144,15 +1495,25 @@ def test_spawn_headless_injects_persona_and_alias(monkeypatch, tmp_path):
 
     monkeypatch.setattr(notifier.shutil, "which", lambda x: "/usr/bin/claude")
     monkeypatch.setattr(notifier.subprocess, "Popen", FakePopen)
-    sent, _, proc = notifier.spawn_headless(str(tmp_path), "wake!", None, dry_run=False,
-                                      alias="Tim", system_prompt="You are Tim.")
-    assert sent is True and proc.pid == 4321   # the Popen handle is returned, not the bare pid
+    sent, _, proc = notifier.spawn_headless(
+        str(tmp_path),
+        "wake!",
+        None,
+        dry_run=False,
+        alias="Tim",
+        system_prompt="You are Tim.",
+    )
+    assert (
+        sent is True and proc.pid == 4321
+    )  # the Popen handle is returned, not the bare pid
     argv = captured["argv"]
     assert argv[:3] == ["claude", "-p", "wake!"]
     assert "--append-system-prompt" in argv
     assert argv[argv.index("--append-system-prompt") + 1] == "You are Tim."
-    assert "--dangerously-skip-permissions" in argv   # unattended: no tty to answer prompts
-    assert captured["env"].get("ORCHA_ALIAS") == "Tim"   # worker resolves AS Tim
+    assert (
+        "--dangerously-skip-permissions" in argv
+    )  # unattended: no tty to answer prompts
+    assert captured["env"].get("ORCHA_ALIAS") == "Tim"  # worker resolves AS Tim
     assert captured["cwd"] == str(tmp_path)
 
 
@@ -1167,8 +1528,9 @@ def test_spawn_headless_passes_model(monkeypatch, tmp_path):
 
     monkeypatch.setattr(notifier.shutil, "which", lambda x: "/usr/bin/claude")
     monkeypatch.setattr(notifier.subprocess, "Popen", FakePopen)
-    notifier.spawn_headless(str(tmp_path), "wake!", None, dry_run=False,
-                            alias="Tim", model="claude-fable-5")
+    notifier.spawn_headless(
+        str(tmp_path), "wake!", None, dry_run=False, alias="Tim", model="claude-fable-5"
+    )
     argv = captured["argv"]
     assert "--model" in argv
     assert argv[argv.index("--model") + 1] == "claude-fable-5"
@@ -1180,7 +1542,8 @@ def test_spawn_headless_passes_model(monkeypatch, tmp_path):
 def test_spawn_headless_includes_partial_messages(monkeypatch, tmp_path):
     """ISS-#251: the headless Claude worker must boot with --include-partial-messages so its
     stream-json log emits token/thinking deltas DURING a turn. Without them a worker generating
-    or thinking for >stall_secs goes log-silent and the stall watchdog SIGKILLs it mid-work."""
+    or thinking for >stall_secs goes log-silent and the stall watchdog SIGKILLs it mid-work.
+    """
     captured = {}
 
     class FakePopen:
@@ -1194,12 +1557,16 @@ def test_spawn_headless_includes_partial_messages(monkeypatch, tmp_path):
     argv = captured["argv"]
     assert "--include-partial-messages" in argv
     # it must accompany stream-json output (the flag is only meaningful there)
-    assert "--output-format" in argv and argv[argv.index("--output-format") + 1] == "stream-json"
+    assert (
+        "--output-format" in argv
+        and argv[argv.index("--output-format") + 1] == "stream-json"
+    )
 
 
 def test_spawn_headless_scrubs_leaked_conversation_flag(monkeypatch, tmp_path):
     """A work-lane spawn must not inherit ORCHA_CONVERSATION_WORKER from the daemon's own
-    (possibly contaminated) environment, or the conv-guard hook wrongly blocks its Edit/Write."""
+    (possibly contaminated) environment, or the conv-guard hook wrongly blocks its Edit/Write.
+    """
     captured = {}
 
     class FakePopen:
@@ -1210,8 +1577,9 @@ def test_spawn_headless_scrubs_leaked_conversation_flag(monkeypatch, tmp_path):
     monkeypatch.setenv("ORCHA_CONVERSATION_WORKER", "1")
     monkeypatch.setattr(notifier.shutil, "which", lambda x: "/usr/bin/claude")
     monkeypatch.setattr(notifier.subprocess, "Popen", FakePopen)
-    notifier.spawn_headless(str(tmp_path), "wake!", None, dry_run=False, alias="Tim",
-                            conversation=False)
+    notifier.spawn_headless(
+        str(tmp_path), "wake!", None, dry_run=False, alias="Tim", conversation=False
+    )
     assert "ORCHA_CONVERSATION_WORKER" not in captured["env"]
 
 
@@ -1227,8 +1595,9 @@ def test_spawn_headless_conversation_still_sets_flag(monkeypatch, tmp_path):
     monkeypatch.delenv("ORCHA_CONVERSATION_WORKER", raising=False)
     monkeypatch.setattr(notifier.shutil, "which", lambda x: "/usr/bin/claude")
     monkeypatch.setattr(notifier.subprocess, "Popen", FakePopen)
-    notifier.spawn_headless(str(tmp_path), "wake!", None, dry_run=False, alias="Tim",
-                            conversation=True)
+    notifier.spawn_headless(
+        str(tmp_path), "wake!", None, dry_run=False, alias="Tim", conversation=True
+    )
     assert captured["env"].get("ORCHA_CONVERSATION_WORKER") == "1"
 
 
@@ -1287,9 +1656,15 @@ def test_spawn_headless_codex_runtime(monkeypatch, tmp_path):
     monkeypatch.setattr(notifier.shutil, "which", lambda x: f"/usr/bin/{x}")
     monkeypatch.setattr(notifier.subprocess, "Popen", FakePopen)
     sent, _, proc = notifier.spawn_headless(
-        str(tmp_path), "wake!", "--dangerously-skip-permissions --search",
-        dry_run=False, alias="Tim", system_prompt="You are Tim.",
-        model="gpt-5.5", runtime="codex")
+        str(tmp_path),
+        "wake!",
+        "--dangerously-skip-permissions --search",
+        dry_run=False,
+        alias="Tim",
+        system_prompt="You are Tim.",
+        model="gpt-5.5",
+        runtime="codex",
+    )
     assert sent is True and proc.pid == 1
     argv = captured["argv"]
     assert argv[:3] == ["codex", "exec", "--json"]
@@ -1306,7 +1681,8 @@ def test_spawn_headless_codex_runtime(monkeypatch, tmp_path):
 
 def test_spawn_headless_codex_resume_reattaches_session(monkeypatch, tmp_path):
     """#286: a Codex resume_session_id builds `codex exec resume <sid> ...` and feeds the BARE
-    prompt — the persona/history live in the restored rollout, so they are NOT prepended."""
+    prompt — the persona/history live in the restored rollout, so they are NOT prepended.
+    """
     captured = {}
 
     class FakePopen:
@@ -1317,13 +1693,25 @@ def test_spawn_headless_codex_resume_reattaches_session(monkeypatch, tmp_path):
     monkeypatch.setattr(notifier.shutil, "which", lambda x: f"/usr/bin/{x}")
     monkeypatch.setattr(notifier.subprocess, "Popen", FakePopen)
     sent, repr_, proc = notifier.spawn_headless(
-        str(tmp_path), "just the new turn", None, dry_run=False, alias="Tim",
-        system_prompt="You are Tim.", model="gpt-5.5", runtime="codex",
-        resume_session_id="11111111-2222-3333-4444-555555555555")
+        str(tmp_path),
+        "just the new turn",
+        None,
+        dry_run=False,
+        alias="Tim",
+        system_prompt="You are Tim.",
+        model="gpt-5.5",
+        runtime="codex",
+        resume_session_id="11111111-2222-3333-4444-555555555555",
+    )
     assert sent is True and proc.pid == 7
     argv = captured["argv"]
     # the `resume <sid>` pair sits right after `exec`, before the shared flags
-    assert argv[:4] == ["codex", "exec", "resume", "11111111-2222-3333-4444-555555555555"]
+    assert argv[:4] == [
+        "codex",
+        "exec",
+        "resume",
+        "11111111-2222-3333-4444-555555555555",
+    ]
     assert "--json" in argv and "--model" in argv
     # BARE prompt — persona is NOT prepended on resume (it's in the rollout)
     assert argv[-1] == "just the new turn"
@@ -1343,12 +1731,20 @@ def test_spawn_headless_codex_cold_has_no_resume_token(monkeypatch, tmp_path):
 
     monkeypatch.setattr(notifier.shutil, "which", lambda x: f"/usr/bin/{x}")
     monkeypatch.setattr(notifier.subprocess, "Popen", FakePopen)
-    notifier.spawn_headless(str(tmp_path), "wake!", None, dry_run=False, alias="Tim",
-                            system_prompt="You are Tim.", model="gpt-5.5", runtime="codex")
+    notifier.spawn_headless(
+        str(tmp_path),
+        "wake!",
+        None,
+        dry_run=False,
+        alias="Tim",
+        system_prompt="You are Tim.",
+        model="gpt-5.5",
+        runtime="codex",
+    )
     argv = captured["argv"]
     assert "resume" not in argv
     assert argv[:3] == ["codex", "exec", "--json"]
-    assert argv[-1].startswith("You are Tim.")          # cold still prepends persona
+    assert argv[-1].startswith("You are Tim.")  # cold still prepends persona
 
 
 def test_spawn_headless_codex_uses_app_fallback_when_not_on_path(monkeypatch, tmp_path):
@@ -1366,22 +1762,36 @@ def test_spawn_headless_codex_uses_app_fallback_when_not_on_path(monkeypatch, tm
     monkeypatch.setattr(notifier, "_CODEX_EXEC_FALLBACKS", (str(codex),))
     monkeypatch.setattr(notifier.subprocess, "Popen", FakePopen)
     sent, _, proc = notifier.spawn_headless(
-        str(tmp_path), "wake!", None, dry_run=False, alias="Tim",
-        model="gpt-5.5", runtime="codex")
+        str(tmp_path),
+        "wake!",
+        None,
+        dry_run=False,
+        alias="Tim",
+        model="gpt-5.5",
+        runtime="codex",
+    )
     assert sent is True and proc.pid == 1
     assert captured["argv"][:3] == [str(codex), "exec", "--json"]
 
 
 def test_spawn_headless_dry_run_shows_model():
-    sent, repr_, _ = notifier.spawn_headless("/proj", "wake", None, dry_run=True,
-                                             alias="Tim", model="claude-fable-5")
+    sent, repr_, _ = notifier.spawn_headless(
+        "/proj", "wake", None, dry_run=True, alias="Tim", model="claude-fable-5"
+    )
     assert sent is False and "--model claude-fable-5" in repr_
 
 
 def test_spawn_headless_codex_dry_run_shows_runtime():
-    sent, repr_, _ = notifier.spawn_headless("/proj", "wake", None, dry_run=True,
-                                             alias="Tim", model="gpt-5.5", runtime="codex",
-                                             system_prompt="x")
+    sent, repr_, _ = notifier.spawn_headless(
+        "/proj",
+        "wake",
+        None,
+        dry_run=True,
+        alias="Tim",
+        model="gpt-5.5",
+        runtime="codex",
+        system_prompt="x",
+    )
     assert sent is False
     assert "codex exec --json" in repr_
     assert "--model gpt-5.5" in repr_
@@ -1399,15 +1809,18 @@ def test_spawn_headless_flags_override_default_permission(monkeypatch, tmp_path)
     monkeypatch.setattr(notifier.shutil, "which", lambda x: "/usr/bin/claude")
     monkeypatch.setattr(notifier.subprocess, "Popen", FakePopen)
     # a headless_flags that sets its own permission mode must NOT also get the default
-    notifier.spawn_headless(str(tmp_path), "wake", "--permission-mode plan", dry_run=False, alias="T")
+    notifier.spawn_headless(
+        str(tmp_path), "wake", "--permission-mode plan", dry_run=False, alias="T"
+    )
     argv = captured["argv"]
     assert "--permission-mode" in argv
-    assert "--dangerously-skip-permissions" not in argv   # no double permission flag
+    assert "--dangerously-skip-permissions" not in argv  # no double permission flag
 
 
 def test_spawn_headless_dry_run_shows_persona_and_alias():
-    sent, repr_, _ = notifier.spawn_headless("/proj", "wake", None, dry_run=True,
-                                          alias="Tim", system_prompt="x")
+    sent, repr_, _ = notifier.spawn_headless(
+        "/proj", "wake", None, dry_run=True, alias="Tim", system_prompt="x"
+    )
     assert sent is False
     assert "ORCHA_ALIAS=Tim" in repr_
     assert "append-system-prompt" in repr_
@@ -1415,18 +1828,23 @@ def test_spawn_headless_dry_run_shows_persona_and_alias():
 
 # ---------- daemon lifecycle: restart on init, stop on down ----------
 
+
 def test_stop_daemon_noop_when_not_running(tmp_path):
     (tmp_path / ".claude").mkdir()
     (tmp_path / ".claude" / "orcha.json").write_text('{"api_base_url":"http://x"}')
-    assert notifier.stop_daemon(tmp_path, quiet=True) is False   # nothing to stop
+    assert notifier.stop_daemon(tmp_path, quiet=True) is False  # nothing to stop
 
 
 def test_ensure_daemon_restart_stops_old_then_starts_fresh(monkeypatch, tmp_path):
     (tmp_path / ".claude").mkdir()
     (tmp_path / ".claude" / "orcha.json").write_text('{"api_base_url":"http://x"}')
-    (tmp_path / ".claude" / ".orcha-notifier.pid").write_text("99999")  # pretend one runs
+    (tmp_path / ".claude" / ".orcha-notifier.pid").write_text(
+        "99999"
+    )  # pretend one runs
     killed, spawned = [], []
-    monkeypatch.setattr(notifier, "_pid_alive", lambda pid: pid == 99999 and 99999 not in killed)
+    monkeypatch.setattr(
+        notifier, "_pid_alive", lambda pid: pid == 99999 and 99999 not in killed
+    )
     monkeypatch.setattr(notifier.os, "kill", lambda pid, sig: killed.append(pid))
     monkeypatch.setattr(notifier.shutil, "which", lambda x: "/usr/bin/orcha")
 
@@ -1438,24 +1856,29 @@ def test_ensure_daemon_restart_stops_old_then_starts_fresh(monkeypatch, tmp_path
     monkeypatch.setattr(notifier.subprocess, "Popen", FakePopen)
     ok = notifier.ensure_daemon(tmp_path, quiet=True, restart=True)
     assert ok is True
-    assert 99999 in killed   # stale daemon stopped first (so the new one binds the new container)
-    assert spawned           # fresh daemon spawned
+    assert (
+        99999 in killed
+    )  # stale daemon stopped first (so the new one binds the new container)
+    assert spawned  # fresh daemon spawned
 
 
 # ---------- container-global singleton (incident 2026-06-10: cross-worktree double-spawn) ----------
+
 
 def _worktree(tmp_path, name, cid="cid-1"):
     wt = tmp_path / name
     (wt / ".claude").mkdir(parents=True)
     (wt / ".claude" / "orcha.json").write_text(
-        '{"api_base_url":"http://x","current_container_id":"%s"}' % cid)
+        '{"api_base_url":"http://x","current_container_id":"%s"}' % cid
+    )
     return wt
 
 
 def _patch_global_pid_dir(monkeypatch, tmp_path):
     gdir = tmp_path / "global-pids"
-    monkeypatch.setattr(notifier, "_global_pid_path",
-                        lambda cid: gdir / f"notifier-{cid}.pid")
+    monkeypatch.setattr(
+        notifier, "_global_pid_path", lambda cid: gdir / f"notifier-{cid}.pid"
+    )
     # keep these tests hermetic: the [P2 #224] pre-claim probe must not hit the network
     # ("the API knows the container" is the default; refusal cases override per-test)
     monkeypatch.setattr(notifier, "_probe_container", lambda api, cid: "ok")
@@ -1475,16 +1898,18 @@ def test_ensure_daemon_refuses_cross_worktree_duplicate(monkeypatch, tmp_path):
     # reuse-aware), not bare `_pid_alive` — mock it so pid 77777 reads as our live daemon without
     # shelling out to a real `ps` (whose subprocess.run would also trip the Popen spy below).
     monkeypatch.setattr(notifier, "_pid_alive", lambda pid: pid == 77777)
-    monkeypatch.setattr(notifier, "_daemon_pid_live", lambda pid, cid=None: pid == 77777)
+    monkeypatch.setattr(
+        notifier, "_daemon_pid_live", lambda pid, cid=None: pid == 77777
+    )
     # ISS-22 r3: the SERVING-lane claim check goes through _daemon_pid_healthy now
-    monkeypatch.setattr(notifier, "_daemon_pid_healthy",
-                        lambda pid, cid=None, cwd=None: pid == 77777)
+    monkeypatch.setattr(
+        notifier, "_daemon_pid_healthy", lambda pid, cid=None, cwd=None: pid == 77777
+    )
     spawned = []
-    monkeypatch.setattr(notifier.subprocess, "Popen",
-                        lambda *a, **k: spawned.append(a))
-    ok = notifier.ensure_daemon(wt_b, quiet=True)   # B has NO per-cwd pidfile
-    assert ok is True       # "already running" — satisfied, not an error
-    assert not spawned      # and crucially: NO second daemon
+    monkeypatch.setattr(notifier.subprocess, "Popen", lambda *a, **k: spawned.append(a))
+    ok = notifier.ensure_daemon(wt_b, quiet=True)  # B has NO per-cwd pidfile
+    assert ok is True  # "already running" — satisfied, not an error
+    assert not spawned  # and crucially: NO second daemon
 
 
 def test_ensure_daemon_spawn_claims_container(monkeypatch, tmp_path):
@@ -1508,7 +1933,10 @@ def test_ensure_daemon_spawn_claims_container(monkeypatch, tmp_path):
     assert notifier.ensure_daemon(wt, quiet=True) is True
     claim = notifier._global_pid_path("cid-1").read_text().splitlines()
     assert claim[0] == "4242" and claim[1] == str(wt)
-    assert argvs and argvs[0][-2:] == ["--container", "cid-1"]   # ps-legible + pgrep-able
+    assert argvs and argvs[0][-2:] == [
+        "--container",
+        "cid-1",
+    ]  # ps-legible + pgrep-able
 
 
 def test_ensure_daemon_stale_container_claim_respawns(monkeypatch, tmp_path):
@@ -1516,7 +1944,7 @@ def test_ensure_daemon_stale_container_claim_respawns(monkeypatch, tmp_path):
     gdir = _patch_global_pid_dir(monkeypatch, tmp_path)
     wt = _worktree(tmp_path, "Orcha")
     gdir.mkdir()
-    (gdir / "notifier-cid-1.pid").write_text("66666\n/gone")    # dead daemon's claim
+    (gdir / "notifier-cid-1.pid").write_text("66666\n/gone")  # dead daemon's claim
     monkeypatch.setattr(notifier, "_pid_alive", lambda pid: pid == 4242)
     monkeypatch.setattr(notifier.shutil, "which", lambda x: "/usr/bin/orcha")
     spawned = []
@@ -1528,7 +1956,7 @@ def test_ensure_daemon_stale_container_claim_respawns(monkeypatch, tmp_path):
 
     monkeypatch.setattr(notifier.subprocess, "Popen", FakePopen)
     assert notifier.ensure_daemon(wt, quiet=True) is True
-    assert spawned          # stale claim ignored → fresh daemon
+    assert spawned  # stale claim ignored → fresh daemon
 
 
 def test_ensure_daemon_restart_kills_cross_worktree_daemon(monkeypatch, tmp_path):
@@ -1538,8 +1966,9 @@ def test_ensure_daemon_restart_kills_cross_worktree_daemon(monkeypatch, tmp_path
     gdir.mkdir()
     (gdir / "notifier-cid-1.pid").write_text(f"77777\n{wt_a}")
     killed, spawned = [], []
-    monkeypatch.setattr(notifier, "_pid_alive",
-                        lambda pid: pid == 77777 and 77777 not in killed)
+    monkeypatch.setattr(
+        notifier, "_pid_alive", lambda pid: pid == 77777 and 77777 not in killed
+    )
     monkeypatch.setattr(notifier.os, "kill", lambda pid, sig: killed.append(pid))
     monkeypatch.setattr(notifier.shutil, "which", lambda x: "/usr/bin/orcha")
 
@@ -1551,7 +1980,7 @@ def test_ensure_daemon_restart_kills_cross_worktree_daemon(monkeypatch, tmp_path
     monkeypatch.setattr(notifier.subprocess, "Popen", FakePopen)
     assert notifier.ensure_daemon(wt_b, quiet=True, restart=True) is True
     assert 77777 in killed  # the other worktree's daemon was stopped
-    assert spawned          # then a fresh one spawned
+    assert spawned  # then a fresh one spawned
 
 
 def test_ensure_daemon_yields_to_inflight_concurrent_claim(monkeypatch, tmp_path):
@@ -1563,14 +1992,17 @@ def test_ensure_daemon_yields_to_inflight_concurrent_claim(monkeypatch, tmp_path
     gdir = _patch_global_pid_dir(monkeypatch, tmp_path)
     wt = _worktree(tmp_path, "Orcha")
     gdir.mkdir()
-    (gdir / "notifier-cid-1.pid").write_text("")     # fresh + unparseable: in-flight claimer
+    (gdir / "notifier-cid-1.pid").write_text(
+        ""
+    )  # fresh + unparseable: in-flight claimer
     monkeypatch.setattr(notifier, "_pid_alive", lambda pid: False)
     spawned = []
-    monkeypatch.setattr(notifier.subprocess, "Popen",
-                        lambda *a, **k: spawned.append(a))
-    assert notifier.ensure_daemon(wt, quiet=True) is True   # satisfied — someone's starting it
-    assert not spawned                                       # crucially: we did NOT also spawn
-    assert (gdir / "notifier-cid-1.pid").exists()            # and did NOT steal their claim
+    monkeypatch.setattr(notifier.subprocess, "Popen", lambda *a, **k: spawned.append(a))
+    assert (
+        notifier.ensure_daemon(wt, quiet=True) is True
+    )  # satisfied — someone's starting it
+    assert not spawned  # crucially: we did NOT also spawn
+    assert (gdir / "notifier-cid-1.pid").exists()  # and did NOT steal their claim
 
 
 def test_ensure_daemon_clears_lingering_unreadable_claim(monkeypatch, tmp_path):
@@ -1581,7 +2013,7 @@ def test_ensure_daemon_clears_lingering_unreadable_claim(monkeypatch, tmp_path):
     gdir.mkdir()
     claim = gdir / "notifier-cid-1.pid"
     claim.write_text("")
-    notifier.os.utime(claim, (1, 1))                 # ancient mtime → lingering, not in-flight
+    notifier.os.utime(claim, (1, 1))  # ancient mtime → lingering, not in-flight
     monkeypatch.setattr(notifier, "_pid_alive", lambda pid: pid == 4242)
     monkeypatch.setattr(notifier.shutil, "which", lambda x: "/usr/bin/orcha")
     spawned = []
@@ -1610,7 +2042,7 @@ def test_ensure_daemon_releases_claim_on_spawn_failure(monkeypatch, tmp_path):
 
     monkeypatch.setattr(notifier.subprocess, "Popen", boom)
     assert notifier.ensure_daemon(wt, quiet=True) is False
-    assert not (gdir / "notifier-cid-1.pid").exists()        # claim released
+    assert not (gdir / "notifier-cid-1.pid").exists()  # claim released
 
 
 def test_claim_container_atomic_single_winner(monkeypatch, tmp_path):
@@ -1621,19 +2053,24 @@ def test_claim_container_atomic_single_winner(monkeypatch, tmp_path):
     # bare `_pid_alive`) — without this mock the real `_ps_inspect` would see the pytest process
     # (not a "notifier") on our own pid and reject it as foreign, so the loser would wrongly re-win.
     monkeypatch.setattr(notifier, "_pid_alive", lambda pid: pid == notifier.os.getpid())
-    monkeypatch.setattr(notifier, "_daemon_pid_live", lambda pid, cid=None: pid == notifier.os.getpid())
+    monkeypatch.setattr(
+        notifier, "_daemon_pid_live", lambda pid, cid=None: pid == notifier.os.getpid()
+    )
     # ISS-22 r3: the loser's claim vet goes through `daemon_running_for_container`, whose
     # SERVING-lane check is `_daemon_pid_healthy` now. Left unmocked, the real check reads
     # pytest (no heartbeat, not a "notifier" in ps) as a WEDGED daemon and — because
     # `_daemon_pid_live` is mocked live above — `_terminate_and_wait` SIGTERMs the claim's
     # pid, which is pytest's own: the whole test session self-terminates (exit 143).
-    monkeypatch.setattr(notifier, "_daemon_pid_healthy",
-                        lambda pid, cid=None, cwd=None: pid == notifier.os.getpid())
+    monkeypatch.setattr(
+        notifier,
+        "_daemon_pid_healthy",
+        lambda pid, cid=None, cwd=None: pid == notifier.os.getpid(),
+    )
     won1, holder1 = notifier._claim_container("cid-1")
-    assert won1 is True and holder1 is None                  # first claimer wins
+    assert won1 is True and holder1 is None  # first claimer wins
     won2, holder2 = notifier._claim_container("cid-1")
-    assert won2 is False                                     # second claimer loses...
-    assert holder2 == (notifier.os.getpid(), "")             # ...to the live provisional claimant
+    assert won2 is False  # second claimer loses...
+    assert holder2 == (notifier.os.getpid(), "")  # ...to the live provisional claimant
 
 
 def test_stop_daemon_clears_container_claim(monkeypatch, tmp_path):
@@ -1644,15 +2081,20 @@ def test_stop_daemon_clears_container_claim(monkeypatch, tmp_path):
     gdir.mkdir()
     (gdir / "notifier-cid-1.pid").write_text(f"88888\n{wt}")
     killed = []
-    monkeypatch.setattr(notifier, "_pid_alive", lambda pid: pid == 88888 and 88888 not in killed)
+    monkeypatch.setattr(
+        notifier, "_pid_alive", lambda pid: pid == 88888 and 88888 not in killed
+    )
     monkeypatch.setattr(notifier.os, "kill", lambda pid, sig: killed.append(pid))
     # ISS-22 r3: `daemon_running` now health-vets the pidfile pid via `_daemon_pid_healthy`
     # (heartbeat-primary, fail-closed). Left unmocked, the real check reads fake pid 88888
     # as a WEDGED daemon, so `daemon_running` reaps it itself and returns None — and
     # stop_daemon reports False ("nothing to stop"). Model the docstring's premise — a
     # genuinely RUNNING daemon — so the test still proves stop_daemon's own teardown path.
-    monkeypatch.setattr(notifier, "_daemon_pid_healthy",
-                        lambda pid, cid=None, cwd=None: pid == 88888 and 88888 not in killed)
+    monkeypatch.setattr(
+        notifier,
+        "_daemon_pid_healthy",
+        lambda pid, cid=None, cwd=None: pid == 88888 and 88888 not in killed,
+    )
     assert notifier.stop_daemon(wt, quiet=True) is True
     assert not (gdir / "notifier-cid-1.pid").exists()
 
@@ -1660,7 +2102,8 @@ def test_stop_daemon_clears_container_claim(monkeypatch, tmp_path):
 def test_ensure_daemon_refuses_missing_container_before_claiming(monkeypatch, tmp_path):
     """[P2 #224 review] the MANAGED path (--ensure) must refuse a definitively-missing
     container BEFORE writing any pidfile/claim — not return success with a pidfile + claim
-    pointing at a child that immediately refused, burying the error in the daemon log."""
+    pointing at a child that immediately refused, burying the error in the daemon log.
+    """
     # GH #313: --ensure now scans `ps` for stray daemons; stub the scan so it neither
     # trips the Popen spy below nor sees real daemons on the test host.
     monkeypatch.setattr(notifier, "_container_daemons", lambda cid: {})
@@ -1668,17 +2111,17 @@ def test_ensure_daemon_refuses_missing_container_before_claiming(monkeypatch, tm
     wt = _worktree(tmp_path, "Orcha")
     monkeypatch.setattr(notifier, "_probe_container", lambda api, cid: "missing")
     spawned = []
-    monkeypatch.setattr(notifier.subprocess, "Popen",
-                        lambda *a, **k: spawned.append(a))
-    assert notifier.ensure_daemon(wt, quiet=True) is False       # refused, loudly via stderr
-    assert not spawned                                           # no child
-    assert not (gdir / "notifier-cid-1.pid").exists()            # no container claim
-    assert not (wt / ".claude" / ".orcha-notifier.pid").exists() # no per-cwd pidfile
+    monkeypatch.setattr(notifier.subprocess, "Popen", lambda *a, **k: spawned.append(a))
+    assert notifier.ensure_daemon(wt, quiet=True) is False  # refused, loudly via stderr
+    assert not spawned  # no child
+    assert not (gdir / "notifier-cid-1.pid").exists()  # no container claim
+    assert not (wt / ".claude" / ".orcha-notifier.pid").exists()  # no per-cwd pidfile
 
 
 def test_ensure_daemon_proceeds_when_api_unreachable(monkeypatch, tmp_path):
     """[P2 #224 review] a merely-unreachable API (orcha up still booting) must NOT block
-    --ensure — the child daemon re-probes with retries; only a definitive 404 refuses."""
+    --ensure — the child daemon re-probes with retries; only a definitive 404 refuses.
+    """
     _patch_global_pid_dir(monkeypatch, tmp_path)
     wt = _worktree(tmp_path, "Orcha")
     monkeypatch.setattr(notifier, "_probe_container", lambda api, cid: "unreachable")
@@ -1693,7 +2136,7 @@ def test_ensure_daemon_proceeds_when_api_unreachable(monkeypatch, tmp_path):
 
     monkeypatch.setattr(notifier.subprocess, "Popen", FakePopen)
     assert notifier.ensure_daemon(wt, quiet=True) is True
-    assert spawned                                               # boot race tolerated
+    assert spawned  # boot race tolerated
 
 
 def test_probe_container_distinguishes_missing_from_unreachable(monkeypatch):
@@ -1705,23 +2148,40 @@ def test_probe_container_distinguishes_missing_from_unreachable(monkeypatch):
         def _urlopen(url, timeout=None):
             if exc:
                 raise exc
+
             class _R:
-                def __enter__(self): return self
-                def __exit__(self, *a): return False
-                def read(self): return b"{}"
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *a):
+                    return False
+
+                def read(self):
+                    return b"{}"
+
             return _R()
+
         return _urlopen
 
     monkeypatch.setattr(notifier.urllib.request, "urlopen", _mk())
     assert notifier._probe_container("http://x", "cid") == "ok"
-    monkeypatch.setattr(notifier.urllib.request, "urlopen",
-                        _mk(urllib.error.HTTPError("u", 404, "nf", {}, io.BytesIO())))
+    monkeypatch.setattr(
+        notifier.urllib.request,
+        "urlopen",
+        _mk(urllib.error.HTTPError("u", 404, "nf", {}, io.BytesIO())),
+    )
     assert notifier._probe_container("http://x", "cid") == "missing"
-    monkeypatch.setattr(notifier.urllib.request, "urlopen",
-                        _mk(urllib.error.HTTPError("u", 500, "ise", {}, io.BytesIO())))
-    assert notifier._probe_container("http://x", "cid") == "ok"      # API alive — don't refuse
-    monkeypatch.setattr(notifier.urllib.request, "urlopen",
-                        _mk(urllib.error.URLError("refused")))
+    monkeypatch.setattr(
+        notifier.urllib.request,
+        "urlopen",
+        _mk(urllib.error.HTTPError("u", 500, "ise", {}, io.BytesIO())),
+    )
+    assert (
+        notifier._probe_container("http://x", "cid") == "ok"
+    )  # API alive — don't refuse
+    monkeypatch.setattr(
+        notifier.urllib.request, "urlopen", _mk(urllib.error.URLError("refused"))
+    )
     assert notifier._probe_container("http://x", "cid") == "unreachable"
 
 
@@ -1729,16 +2189,30 @@ def test_daemon_refuses_to_start_for_missing_container(monkeypatch, tmp_path):
     """[#218 hardening] a daemon whose container 404s at its API exits loudly instead of
     becoming a permanent no-op that looks alive in ps (stale-orcha.json postmortem)."""
     import argparse
+
     monkeypatch.setattr(notifier.pathlib.Path, "cwd", classmethod(lambda cls: tmp_path))
-    monkeypatch.setattr(notifier, "_api_and_cid", lambda cwd, api, cid: ("http://x", "ghost-cid"))
+    monkeypatch.setattr(
+        notifier, "_api_and_cid", lambda cwd, api, cid: ("http://x", "ghost-cid")
+    )
     monkeypatch.setattr(notifier, "_probe_container", lambda api, cid: "missing")
-    args = argparse.Namespace(ensure=False, once=False, api_base=None, container=None,
-                              dry_run=False, cooldown=15.0, min_idle=30.0, quiet=True,
-                              lease_ttl=1200.0, interval=2.0)
+    args = argparse.Namespace(
+        ensure=False,
+        once=False,
+        api_base=None,
+        container=None,
+        dry_run=False,
+        cooldown=15.0,
+        min_idle=30.0,
+        quiet=True,
+        lease_ttl=1200.0,
+        interval=2.0,
+    )
     with pytest.raises(SystemExit) as e:
         notifier.cmd_notifier(args)
     assert "does not exist" in str(e.value)
-    assert not (tmp_path / ".claude" / ".orcha-notifier.pid").exists()   # refused BEFORE claiming
+    assert not (
+        tmp_path / ".claude" / ".orcha-notifier.pid"
+    ).exists()  # refused BEFORE claiming
 
 
 def test_stop_daemon_stops_cross_worktree_daemon(monkeypatch, tmp_path):
@@ -1748,20 +2222,28 @@ def test_stop_daemon_stops_cross_worktree_daemon(monkeypatch, tmp_path):
 
     ISS-22: stop_daemon now BLOCKS until the daemon actually exits (it used to SIGTERM and
     return immediately). Model the daemon dying on SIGTERM (`77777 not in killed`) so the
-    bounded wait observes the exit and returns after a single SIGTERM — no SIGKILL escalation."""
+    bounded wait observes the exit and returns after a single SIGTERM — no SIGKILL escalation.
+    """
     gdir = _patch_global_pid_dir(monkeypatch, tmp_path)
     wt_a, wt_b = _worktree(tmp_path, "Orcha"), _worktree(tmp_path, "Orcha-agent")
     gdir.mkdir()
-    (gdir / "notifier-cid-1.pid").write_text(f"77777\n{wt_a}")   # A's daemon, alive
+    (gdir / "notifier-cid-1.pid").write_text(f"77777\n{wt_a}")  # A's daemon, alive
     killed = []
-    monkeypatch.setattr(notifier, "_pid_alive", lambda pid: pid == 77777 and 77777 not in killed)
+    monkeypatch.setattr(
+        notifier, "_pid_alive", lambda pid: pid == 77777 and 77777 not in killed
+    )
     # ISS-22 r3: serving-lane lookup (daemon_running_for_container) vets health first
-    monkeypatch.setattr(notifier, "_daemon_pid_healthy",
-                        lambda pid, cid=None, cwd=None: pid == 77777 and 77777 not in killed)
+    monkeypatch.setattr(
+        notifier,
+        "_daemon_pid_healthy",
+        lambda pid, cid=None, cwd=None: pid == 77777 and 77777 not in killed,
+    )
     monkeypatch.setattr(notifier.os, "kill", lambda pid, sig: killed.append(pid))
-    assert notifier.stop_daemon(wt_b, quiet=True) is True        # B has NO per-cwd pidfile
-    assert killed == [77777], "the A-started daemon must be SIGTERMed exactly once (it exits, no SIGKILL)"
-    assert not (gdir / "notifier-cid-1.pid").exists()            # claim cleared
+    assert notifier.stop_daemon(wt_b, quiet=True) is True  # B has NO per-cwd pidfile
+    assert killed == [
+        77777
+    ], "the A-started daemon must be SIGTERMed exactly once (it exits, no SIGKILL)"
+    assert not (gdir / "notifier-cid-1.pid").exists()  # claim cleared
 
 
 def test_stop_daemon_clears_stale_claim_without_kill(monkeypatch, tmp_path):
@@ -1770,13 +2252,13 @@ def test_stop_daemon_clears_stale_claim_without_kill(monkeypatch, tmp_path):
     gdir = _patch_global_pid_dir(monkeypatch, tmp_path)
     wt = _worktree(tmp_path, "Orcha")
     gdir.mkdir()
-    (gdir / "notifier-cid-1.pid").write_text("66666\n/gone")     # dead daemon's claim
+    (gdir / "notifier-cid-1.pid").write_text("66666\n/gone")  # dead daemon's claim
     killed = []
     monkeypatch.setattr(notifier, "_pid_alive", lambda pid: False)
     monkeypatch.setattr(notifier.os, "kill", lambda pid, sig: killed.append(pid))
-    assert notifier.stop_daemon(wt, quiet=True) is False         # nothing live to stop
+    assert notifier.stop_daemon(wt, quiet=True) is False  # nothing live to stop
     assert killed == []
-    assert not (gdir / "notifier-cid-1.pid").exists()            # debris cleaned
+    assert not (gdir / "notifier-cid-1.pid").exists()  # debris cleaned
 
 
 @pytest.mark.asyncio

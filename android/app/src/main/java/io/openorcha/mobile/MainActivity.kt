@@ -152,7 +152,6 @@ class MainActivity : ComponentActivity() {
                             viewModel.signInWithGitHub(this@MainActivity)
                         },
                         onSetWakes = viewModel::setWakes,
-                        onSetAutonomy = viewModel::setAutonomy,
                         onOpenTask = viewModel::openTask,
                         onRepoChanged = { viewModel.refreshSelected() },
                         onIconChanged = { viewModel.refreshSelected(); viewModel.probeContainers() },
@@ -182,7 +181,6 @@ class MainActivity : ComponentActivity() {
                             onDecidePlanFor = viewModel::decidePlanById,
                             onVerifyFor = viewModel::verifyTaskById,
                             onSetWakes = viewModel::setWakes,
-                            onSetAutonomy = viewModel::setAutonomy,
                             onOpenGithubHub = viewModel::showGithubHub,
                             onSearchQueryChange = viewModel::setSearchQuery,
                             onSwitchProject = viewModel::openContainer,

@@ -4,9 +4,9 @@
  * An attention item is one ENTITY awaiting a human decision the backend lets a
  * human make:
  *   plan    — task in_progress, no plan_decision, agent plan message present,
- *             and the plan author's (else assignee's) EFFECTIVE autonomy is
- *             "plan" (per-agent override aware — planAwaitsHuman);
- *   verify  — task needs_verification, container autonomy level is not "full";
+ *             and that task's autonomy is OFF;
+ *   verify  — every task needs_verification. An ON worker result self-accepts
+ *             before this state; outside results still require a person;
  *   request — request open to a human (target null or a human) OR escalated.
  * One entity counts once. The badge number counts items NOT assigned to someone
  * else (a reviewer / target human who is not the acting human). Notifications,
@@ -105,7 +105,7 @@ export function selectAttention(snap: Snapshot | null, actingHumanId: string | n
       const pm = planMessageOf(t);
       since = (pm && pm.at) || t.started_at || null;
       agentAlias = (pm && pm.from) || agentAlias;
-    } else if (t.status === "needs_verification" && t.autonomy !== "on") {
+    } else if (t.status === "needs_verification") {
       kind = "verify";
       since = t.completed_at || t.started_at || t.created_at || null;
     }

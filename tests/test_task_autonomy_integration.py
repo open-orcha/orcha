@@ -65,7 +65,10 @@ async def test_only_owner_can_toggle_and_change_applies_to_future_actions(
     await _claim(client, worker["agent_id"], work_headers)
     plan = await client.post(
         f"/api/tasks/{task['id']}/messages",
-        json={"author_agent_id": worker["agent_id"], "body": "Plan: implement and test."},
+        json={
+            "author_agent_id": worker["agent_id"],
+            "body": "Plan: implement and test.",
+        },
     )
     assert plan.status_code == 201 and plan.json()["plan_auto_approved"] is True
     plan_record = db.execute(
@@ -102,8 +105,12 @@ async def test_on_self_completes_and_off_human_completion_records_exact_authorit
     owner = await make_agent("Owner", kind="human")
     worker = await make_agent("Worker")
 
-    automatic = await make_task("Automatic", "Meet the criteria", assignee_alias="Worker")
-    assert (await _set(client, automatic["id"], owner["agent_id"], "on")).status_code == 200
+    automatic = await make_task(
+        "Automatic", "Meet the criteria", assignee_alias="Worker"
+    )
+    assert (
+        await _set(client, automatic["id"], owner["agent_id"], "on")
+    ).status_code == 200
     await _claim(client, worker["agent_id"], work_headers)
     completed = await client.post(
         f"/api/tasks/{automatic['id']}/done",
@@ -143,3 +150,15 @@ async def test_on_self_completes_and_off_human_completion_records_exact_authorit
         "autonomy_at_approval": "off",
         "permission_source": "human_verification",
     }
+    history = await client.get(f"/api/tasks/{manual['id']}/approvals")
+    assert history.status_code == 200, history.text
+    record = history.json()["approvals"][0]
+    assert record["phase"] == "completion"
+    assert record["work_revision"] == 1
+    assert record["actor_id"] == owner["agent_id"]
+    assert record["actor_alias"] == "Owner"
+    assert record["actor_kind"] == "human"
+    assert record["autonomy_at_approval"] == "off"
+    assert record["permission_source"] == "human_verification"
+    assert len(record["requirements_sha256"]) == 64
+    assert len(record["submission_sha256"]) == 64

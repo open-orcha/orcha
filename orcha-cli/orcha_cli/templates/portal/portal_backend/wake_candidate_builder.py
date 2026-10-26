@@ -41,8 +41,6 @@ def build_wake_candidate(
     valid_uuid,
     resolve_model,
     resolve_model_runtime,
-    container_autonomy_level="plan",
-    container_autonomy_enforced=False,
 ):
     """Return the stable wake-scan contract for one AI agent."""
     aid = str(agent["id"])
@@ -162,17 +160,22 @@ def build_wake_candidate(
     task_autonomy = "off"
     task_autonomy_revision = 1
     if launch_task_id:
-        cur.execute("""SELECT t.workflow_id,t.work_revision,t.autonomy,t.autonomy_revision,
+        cur.execute(
+            """SELECT t.workflow_id,t.work_revision,t.autonomy,t.autonomy_revision,
                               w.revision AS workflow_revision
-                       FROM tasks t LEFT JOIN workflows w ON w.id=t.workflow_id WHERE t.id=%s""", (launch_task_id,))
+                       FROM tasks t LEFT JOIN workflows w ON w.id=t.workflow_id WHERE t.id=%s""",
+            (launch_task_id,),
+        )
         launch_task = cur.fetchone()
         if launch_task:
             task_autonomy = launch_task["autonomy"] or "off"
             task_autonomy_revision = launch_task["autonomy_revision"] or 1
         if launch_task and launch_task["workflow_id"]:
-            workflow_launch = {"workflow_id": str(launch_task["workflow_id"]),
-                               "workflow_revision": launch_task["workflow_revision"],
-                               "workflow_work_revision": launch_task["work_revision"]}
+            workflow_launch = {
+                "workflow_id": str(launch_task["workflow_id"]),
+                "workflow_revision": launch_task["workflow_revision"],
+                "workflow_work_revision": launch_task["work_revision"],
+            }
     return {
         **workflow_launch,
         "agent_id": aid,
