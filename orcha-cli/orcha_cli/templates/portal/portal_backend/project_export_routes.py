@@ -6,9 +6,9 @@
 
 Authority: all three are owner-or-``manage_agents`` with a HUMAN actor, viewers refused
 (identity_routes.require_grant — the same two lanes as routines / agent management).
-Inside an import, the parts that need ``manage_autonomy`` elsewhere (per-agent autonomy
-override, auto-wake, budgets) are only applied when the actor also holds it; otherwise
-the preview says they will be skipped and they are.
+Inside an import, the parts that need ``manage_autonomy`` elsewhere (auto-wake and
+budgets) are only applied when the actor also holds it; otherwise the preview says they
+will be skipped and they are. Retired per-agent autonomy in an older bundle is ignored.
 
 Human confirmation: the preview returns ``preview_digest`` (a hash of the bundle AND the
 computed plan, which includes the target's current state). Import recomputes the plan
@@ -77,7 +77,7 @@ def _export_rows(cur, cid: str, include_budgets: bool) -> dict:
     name = cur.fetchone()["name"]
     cur.execute(
         """SELECT id, alias, role, system_prompt, model, reasoning_effort,
-                  auto_wake_interval_secs, autonomy_override, reports_to_agent_id
+                  auto_wake_interval_secs, reports_to_agent_id
              FROM agents
             WHERE container_id=%s AND kind='ai' AND terminated_at IS NULL
             ORDER BY created_at, alias""",
@@ -132,7 +132,7 @@ def _export_rows(cur, cid: str, include_budgets: bool) -> dict:
 def export_project_template(cid: str, body: TemplateExport, request: Request):
     """Export this project's reusable setup as a versioned, scrubbed JSON bundle
     (orcha.project-template v1): AI roster (role, prompt, model, effort, auto-wake,
-    autonomy override, reporting lines), routines, DoD presets, skills and — when
+    reporting lines), routines, DoD presets, skills and — when
     `include_budgets` — budget limits. Never: keys, tokens, PATs, member identities or
     any history. Owner-or-manage_agents; audited as `template_exported`."""
     _require_cid(cid)
@@ -308,7 +308,7 @@ def import_project_template(cid: str, body: TemplateImport, request: Request):
     `preview_digest` from the preview; if the project changed since (or the options
     differ) the plan differs and this is a 409 — preview again. All-or-nothing: one
     transaction under a project lock. Owner-or-manage_agents (+ manage_autonomy for the
-    autonomy / auto-wake / budget parts, which the plan otherwise skips)."""
+    auto-wake / budget parts, which the plan otherwise skips)."""
     _require_cid(cid)
     if not body.confirm:
         raise HTTPException(400, "an import must be confirmed after reviewing its preview (confirm: true)")

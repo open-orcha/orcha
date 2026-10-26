@@ -419,6 +419,7 @@ async def test_import_captures_exact_reviewed_result_and_refuses_changed_digest(
         evidence.validate_workflow_evidence(cur, task, reference)
     assert reference["state"] == "saved" and reference["run_id"] is None
     item = reference["items"][0]
+    assert (item["kind"], item["source"]) == ("import_result", "import")
     version = db.execute("SELECT stored_name FROM task_deliverable_versions WHERE deliverable_id=%s AND version=%s",
                          (item["deliverable_id"], item["deliverable_version"]))[0]
     saved = evidence.store.resolve_version_file(attempt["task"], item["deliverable_id"], version["stored_name"])

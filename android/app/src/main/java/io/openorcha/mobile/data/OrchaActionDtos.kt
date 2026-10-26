@@ -115,19 +115,6 @@ data class WakesResponse(
     @SerialName("wakes_enabled") val wakesEnabled: Boolean,
 )
 
-/** GH #148: the autonomy gearbox — `plan` | `pr` | `full`, human-gated server-side. */
-@Serializable
-data class AutonomyUpdateBody(
-    val level: String,
-    @SerialName("actor_agent_id") val actorAgentId: String,
-)
-
-@Serializable
-data class AutonomyResponse(
-    @SerialName("container_id") val containerId: String,
-    @SerialName("autonomy_level") val autonomyLevel: String,
-)
-
 @Serializable
 data class ConversationStartBody(
     @SerialName("actor_agent_id") val actorAgentId: String,

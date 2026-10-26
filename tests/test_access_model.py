@@ -153,7 +153,8 @@ async def test_repo_autonomy_agents_reviewer_grants(
         f"/api/containers/{cid}/autonomy",
         json={"level": "full", "actor_agent_id": hubot}, headers=HUBOT,
     )
-    assert r.status_code == 403, r.text
+    assert r.status_code == 410, r.text
+    assert r.json()["detail"]["code"] == "task_autonomy_only"
     r = await client.post(
         f"/api/containers/{cid}/status",
         json={"status": "paused", "actor_agent_id": hubot}, headers=HUBOT,
@@ -189,7 +190,9 @@ async def test_repo_autonomy_agents_reviewer_grants(
     )
     assert r.status_code == 403 and "assign_reviewers" in r.text
 
-    # grant the lot (owner PATCH) -> each unlocks
+    # Grant the remaining permissions.  The retired container-autonomy route stays
+    # unavailable even when the member still has the legacy permission for wake,
+    # budget, objective and icon controls.
     await _grant(
         client, cid, hubot,
         ["manage_repo", "manage_autonomy", "manage_agents", "assign_reviewers"],
@@ -201,10 +204,12 @@ async def test_repo_autonomy_agents_reviewer_grants(
         f"/api/containers/{cid}/wakes",
         json={"enabled": False, "actor_agent_id": hubot}, headers=HUBOT,
     )).status_code == 200
-    assert (await client.post(
+    retired_autonomy = await client.post(
         f"/api/containers/{cid}/autonomy",
         json={"level": "full", "actor_agent_id": hubot}, headers=HUBOT,
-    )).status_code == 200
+    )
+    assert retired_autonomy.status_code == 410
+    assert retired_autonomy.json()["detail"]["code"] == "task_autonomy_only"
     assert (await client.post(
         f"/api/containers/{cid}/agents",
         json={"alias": "b2", "role": "worker", "kind": "ai", "prompt": "x"},

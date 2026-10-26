@@ -250,7 +250,15 @@ def _capture_human_evidence(cur, task, basis, execution, *, captured_by, source)
                 "WHERE workflow_execution_id=%s AND generation=%s",
                 (execution["id"], execution["generation"]))
     sequence = cur.fetchone()["sequence"]
-    kind = "owner_result" if source == "owner" else "outside_result"
+    kinds = {
+        "owner": "owner_result",
+        "outside": "outside_result",
+        "import": "import_result",
+    }
+    try:
+        kind = kinds[source]
+    except KeyError as exc:
+        raise ValueError("Human evidence must identify its source") from exc
     evidence_set, _ = _new_set(
         cur, task, execution, run_id=None, sequence=sequence, purpose="acceptance",
         capture={"basis": basis, "captured_by": str(captured_by), "source": source},
@@ -316,7 +324,7 @@ def capture_import_evidence(cur, task, basis, execution, *, captured_by,
     snapshot = {"review": basis, "reviewed_result": task["result"],
                 "reviewed_result_digest": reviewed_result_digest}
     return _capture_human_evidence(cur, task, snapshot, execution,
-                                   captured_by=captured_by, source="owner")
+                                   captured_by=captured_by, source="import")
 
 
 def validate_workflow_evidence(cur, task, reference):

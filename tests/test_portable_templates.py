@@ -6,7 +6,8 @@ secret / key / token / member-identity scrubbing (nothing identifying survives i
 JSON); import into a NEW and an EXISTING project with a preview diff, alias collision
 handling (skip / rename / invalid rename), human confirmation bound to the preview
 digest, stale-preview refusal, audit events, owner / manage_agents authority (and the
-manage_autonomy-only parts), bundle validation, and a lossless round trip.
+manage_autonomy-only parts), retired-autonomy compatibility, bundle validation, and a
+lossless round trip.
 
 Migration 059 creates the tables (applied by conftest with every 0*.sql migration).
 """
@@ -84,7 +85,6 @@ async def seeded(client, container, make_agent, db):
     # config through the real routes
     await _ok(await client.post(f"/api/agents/{forge}/model", json={"model": "gpt-5.6-sol"}))
     await _ok(await client.post(f"/api/agents/{forge}/reasoning-effort", json={"reasoning_effort": "ultra"}))
-    await _ok(await client.patch(f"/api/agents/{pixel}", json={"actor_agent_id": owner, "autonomy_override": "pr"}))
     await _ok(await client.patch(f"/api/agents/{lead}/auto-wake", json={"actor_agent_id": owner, "interval_secs": 3600}))
     for aid, mgr in ((lead, owner), (forge, lead), (pixel, lead)):
         await _ok(await client.put(f"/api/agents/{aid}/reports-to",
@@ -121,7 +121,7 @@ async def test_export_carries_the_setup(client, seeded):
     roster = {a["alias"]: a for a in b["roster"]}
     assert set(roster) == {"Atlas", "Forge", "Pixel"}  # AI only; humans are never exported
     assert roster["Forge"]["model"] == "gpt-5.6-sol" and roster["Forge"]["reasoning_effort"] == "ultra"
-    assert roster["Pixel"]["autonomy_override"] == "pr"
+    assert "autonomy_override" not in roster["Pixel"]
     assert roster["Atlas"]["auto_wake_interval_secs"] == 3600
     assert roster["Forge"]["reports_to"] == {"kind": "agent", "ref": "Atlas"}
     assert roster["Atlas"]["reports_to"] == {"kind": "human_seat", "ref": "human-1"}
@@ -199,7 +199,7 @@ async def test_import_into_new_project_preview_then_apply(client, seeded, db):
                   m.alias AS mgr FROM agents a LEFT JOIN agents m ON m.id=a.reports_to_agent_id
             WHERE a.container_id=%s AND a.kind='ai'""", (cid2,))}
     assert rows["Forge"]["model"] == "gpt-5.6-sol" and rows["Forge"]["reasoning_effort"] == "ultra"
-    assert rows["Pixel"]["autonomy_override"] == "pr" and rows["Atlas"]["auto_wake_interval_secs"] == 3600
+    assert rows["Pixel"]["autonomy_override"] is None and rows["Atlas"]["auto_wake_interval_secs"] == 3600
     assert rows["Atlas"]["mgr"] == "operator" and rows["Forge"]["mgr"] == "Atlas"  # seat → the importer
     assert rows["Forge"]["is_auto_created"] is False and rows["Forge"]["member_role"] == "member"
     assert ANT_KEY not in rows["Atlas"]["system_prompt"]  # the scrubbed text is what lands
@@ -458,33 +458,40 @@ async def test_authority_matrix_under_proxy(client, container, make_agent, trust
     assert str(ev[0]["actor_id"]) == str(hubot)
 
 
-async def test_autonomy_parts_need_manage_autonomy(client, container, make_agent, trust_proxy, db):
+async def test_settings_need_manage_autonomy_and_legacy_agent_autonomy_is_ignored(
+    client, container, make_agent, trust_proxy, db
+):
     cid = container["id"]
     await make_agent("root", "operator", kind="human")
     await _ok(await client.get(f"/api/me?cid={cid}", headers=OCTO))
     hubot = await _invite(client, cid, "hubot", grants=["manage_agents"])
     bot = (await _ok(await client.post(f"/api/containers/{cid}/agents", headers=OCTO, json={
         "alias": "Bot", "role": "eng", "kind": "ai", "prompt": "p"}), 201))["agent_id"]
-    await _ok(await client.patch(f"/api/agents/{bot}", json={"actor_agent_id": "x", "autonomy_override": "full"}, headers=OCTO))
     await _ok(await client.patch(f"/api/agents/{bot}/auto-wake", json={"actor_agent_id": "x", "interval_secs": 120}, headers=OCTO))
     await _ok(await client.put(f"/api/agents/{bot}/budget", json={"monthly_limit_usd": 5}, headers=OCTO))
     bundle = await _ok(await _export(client, cid, headers=OCTO, include_budgets=True))
+    assert "autonomy_override" not in bundle["roster"][0]
+    # An older v1 template may still contain this retired field. It remains
+    # parseable, but cannot re-enable per-agent authority.
+    bundle["roster"][0]["autonomy_override"] = "full"
+    bundle["digest"] = pb.bundle_digest(bundle)
     opts = {"collisions": {"Bot": {"action": "rename", "rename_to": "Bot-2"}}}
     p, r = await _preview_and_import(client, cid, bundle, headers=HUBOT, options=opts)
     await _ok(r)
     item = p["sections"]["roster"][0]
     assert item["autonomy_override"] is None and item["auto_wake_interval_secs"] is None
+    assert any("history only" in n and "starts OFF" in n for n in item["notes"])
     assert any("Autonomy permission" in n for n in item["notes"])
     assert all(b["action"] == "skip" for b in p["sections"]["budgets"])
     row = db.execute("SELECT autonomy_override, auto_wake_interval_secs FROM agents WHERE alias='Bot-2'")[0]
     assert row == {"autonomy_override": None, "auto_wake_interval_secs": None}
     assert not db.execute("SELECT 1 FROM agent_budgets ab JOIN agents a ON a.id=ab.agent_id WHERE a.alias='Bot-2'")
-    # the owner gets them
+    # The owner gets auto-wake and budgets, but never the retired override.
     p, r = await _preview_and_import(client, cid, bundle, headers=OCTO,
                                      options={"collisions": {"Bot": {"action": "rename", "rename_to": "Bot-3"}}})
     await _ok(r)
     row = db.execute("SELECT autonomy_override, auto_wake_interval_secs FROM agents WHERE alias='Bot-3'")[0]
-    assert row == {"autonomy_override": "full", "auto_wake_interval_secs": 120}
+    assert row == {"autonomy_override": None, "auto_wake_interval_secs": 120}
 
 
 async def test_trust_off_requires_a_human_actor(client, container, make_agent):

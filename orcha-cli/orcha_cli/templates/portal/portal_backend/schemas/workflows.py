@@ -230,10 +230,12 @@ class AcceptedEvidenceItem(BaseModel):
     deliverable_version: int = Field(ge=1)
     sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
     kind: Literal[
-        "result_summary", "file_changes", "log_excerpt", "owner_result", "outside_result"
+        "result_summary", "file_changes", "log_excerpt", "owner_result",
+        "outside_result", "import_result",
     ] | None = None
     source: Literal[
-        "worker", "owner", "outside", "cancelled_attempt", "released_attempt"
+        "worker", "owner", "outside", "import", "cancelled_attempt",
+        "released_attempt",
     ] | None = None
     snapshot_phase: Literal["submission", "terminal"] | None = None
     complete: bool | None = None

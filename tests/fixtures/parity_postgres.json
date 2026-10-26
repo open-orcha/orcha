@@ -339,6 +339,8 @@
             "branch": "null",
             "conversation_ack_ts": "null",
             "conversation_id": "null|str",
+            "details_pruned_at": "null",
+            "details_state": "str",
             "diff": "null",
             "ended_at": "iso-datetime|null",
             "exit_code": "int|null",
@@ -574,7 +576,6 @@
             "active_run": "null",
             "alias": "str",
             "auto_wake_interval_secs": "null",
-            "autonomy_override": "null",
             "created_at": "iso-datetime",
             "current_task": {
               "anyOf": [
@@ -585,7 +586,6 @@
                 }
               ]
             },
-            "effective_autonomy": "str",
             "embodiment": "str",
             "github_login": "null",
             "heartbeat_age_secs": "float",
@@ -594,6 +594,7 @@
             "kind": "str",
             "last_active": "iso-datetime",
             "last_heartbeat_at": "iso-datetime",
+            "legacy_autonomy_override": "null",
             "member_role": "str",
             "model": "null|str",
             "pause_stops_running_run": "bool",
@@ -697,6 +698,10 @@
             "assignees": [
               "str"
             ],
+            "autonomy": "str",
+            "autonomy_changed_at": "null",
+            "autonomy_changed_by": "null",
+            "autonomy_revision": "int",
             "completed_at": "null",
             "created_at": "iso-datetime",
             "created_by_agent_id": "null|str",
@@ -761,7 +766,9 @@
             },
             "started_at": "iso-datetime|null",
             "status": "str",
-            "title": "str"
+            "title": "str",
+            "work_revision": "int",
+            "workflow_id": "null"
           }
         ]
       }
@@ -1085,6 +1092,10 @@
             "assignees": [
               "str"
             ],
+            "autonomy": "str",
+            "autonomy_changed_at": "null",
+            "autonomy_changed_by": "null",
+            "autonomy_revision": "int",
             "completed_at": "null",
             "created_at": "iso-datetime",
             "created_by_agent_id": "null|str",
@@ -1149,7 +1160,9 @@
             },
             "started_at": "iso-datetime|null",
             "status": "str",
-            "title": "str"
+            "title": "str",
+            "work_revision": "int",
+            "workflow_id": "null"
           }
         ],
         "total": "int"
@@ -1228,7 +1241,6 @@
     "GET /api/containers/{cid}/wake-scan": {
       "booleans": {
         "$.active": true,
-        "$.autonomy_enforced": false,
         "$.candidates[*].actionable_answer_pending": [
           false,
           false
@@ -1300,8 +1312,6 @@
           "claude": "null",
           "codex": "null"
         },
-        "autonomy_enforced": "bool",
-        "autonomy_level": "str",
         "candidates": [
           {
             "ack_through_ts": "float",
@@ -1311,14 +1321,12 @@
             "auto_start_task_ids": [],
             "auto_wake_due": "bool",
             "auto_wake_interval_secs": "null",
-            "autonomy_override": "null",
             "context_task_id": "str",
             "conv_embodiment_running": "bool",
             "conv_lease_active": "bool",
             "delivery_handled_event_ids": [
               "int"
             ],
-            "effective_autonomy": "str",
             "embodiment_running": "bool",
             "embodiment_silent_seconds": "null",
             "handled_event_ids": [
@@ -1371,6 +1379,8 @@
             "self_wake_injected": "bool",
             "self_wake_task_id": "null",
             "should_wake": "bool",
+            "task_autonomy": "str",
+            "task_autonomy_revision": "int",
             "tmux_target": "null",
             "triage_hint": "null",
             "wake_enabled": "bool",
@@ -1566,7 +1576,6 @@
             "active_run": "null",
             "alias": "str",
             "auto_wake_interval_secs": "null",
-            "autonomy_override": "null",
             "created_at": "iso-datetime",
             "current_task": {
               "anyOf": [
@@ -1577,7 +1586,6 @@
                 }
               ]
             },
-            "effective_autonomy": "str",
             "embodiment": "str",
             "github_login": "null",
             "heartbeat_age_secs": "float",
@@ -1586,6 +1594,7 @@
             "kind": "str",
             "last_active": "iso-datetime",
             "last_heartbeat_at": "iso-datetime",
+            "legacy_autonomy_override": "null",
             "member_role": "str",
             "model": "null|str",
             "pause_stops_running_run": "bool",
@@ -1689,6 +1698,10 @@
             "assignees": [
               "str"
             ],
+            "autonomy": "str",
+            "autonomy_changed_at": "null",
+            "autonomy_changed_by": "null",
+            "autonomy_revision": "int",
             "completed_at": "null",
             "created_at": "iso-datetime",
             "created_by_agent_id": "null|str",
@@ -1753,7 +1766,9 @@
             },
             "started_at": "iso-datetime|null",
             "status": "str",
-            "title": "str"
+            "title": "str",
+            "work_revision": "int",
+            "workflow_id": "null"
           }
         ]
       }
@@ -1909,6 +1924,8 @@
             "branch": "null",
             "conversation_ack_ts": "null",
             "conversation_id": "null",
+            "details_pruned_at": "null",
+            "details_state": "str",
             "diff": "null",
             "ended_at": "iso-datetime",
             "exit_code": "int",

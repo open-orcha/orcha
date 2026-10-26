@@ -125,7 +125,8 @@
               "file_changes",
               "log_excerpt",
               "owner_result",
-              "outside_result"
+              "outside_result",
+              "import_result"
             ],
             "title": "Kind"
           },
@@ -135,6 +136,7 @@
               "worker",
               "owner",
               "outside",
+              "import",
               "cancelled_attempt",
               "released_attempt"
             ],

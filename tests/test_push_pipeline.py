@@ -223,20 +223,19 @@ async def test_done_enqueues_task_verify(
     assert rows[0]["delivered_at"] is None and rows[0]["failed"] is None
 
 
-async def test_full_autonomy_done_enqueues_nothing(
+async def test_task_autonomy_on_done_enqueues_nothing(
     client, container, make_agent, make_task, work_headers, trust_proxy, db
 ):
-    """`full` auto-completes — no human gate, so no needs-you push."""
-    await _bind_owner(client, container, make_agent)
+    """Task ON auto-completes — no human gate, so no needs-you push."""
+    owner = await _bind_owner(client, container, make_agent)
     await _register(client, TOKEN_A, OCTO)
-    human = db.execute("SELECT id FROM agents WHERE kind='human'")[0]["id"]
-    r = await client.post(
-        f"/api/containers/{container['id']}/autonomy",
-        json={"level": "full", "actor_agent_id": str(human)},
-    )
-    assert r.status_code == 200, r.text
     dev = await make_agent("dev", "eng")
     t = await make_task("auto", "done", assignee_alias="dev")
+    r = await client.put(
+        f"/api/tasks/{t['task_id']}/autonomy",
+        json={"autonomy": "on", "actor_agent_id": owner["agent_id"]},
+    )
+    assert r.status_code == 200, r.text
     r = await client.post(
         f"/api/tasks/{t['task_id']}/done",
         json={"agent_id": dev["agent_id"], "result": "x"},

@@ -280,8 +280,8 @@ async def test_auto_complete_and_root_are_not_verifications(client, container, m
     cid = container["id"]
     human = (await make_agent("Owner", kind="human"))["agent_id"]
     forge = (await make_agent("Forge"))["agent_id"]
-    db.execute("UPDATE containers SET autonomy_level='full' WHERE id=%s", (cid,))
     t = (await make_task("auto", "dod", assignee_alias="Forge"))["id"]
+    db.execute("UPDATE tasks SET autonomy='on' WHERE id=%s", (t,))
     res = await _done(client, work_headers, forge, t)
     assert res["status"] == "completed" and res.get("auto_completed") is True
     # the human verifies the ROOT task (declares the project done)

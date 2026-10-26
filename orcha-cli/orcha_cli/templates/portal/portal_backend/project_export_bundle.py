@@ -10,7 +10,7 @@ Bundle format ``orcha.project-template`` v1 (JSON)::
       "exported_at": "...Z", "source": {"project_name": "..."},
       "includes": ["roster", "routines", "dod_presets", "skills", "budgets"?],
       "roster": [{alias, role, system_prompt, model, reasoning_effort,
-                  auto_wake_interval_secs, autonomy_override,
+                  auto_wake_interval_secs,
                   reports_to: {kind: "agent"|"human_seat", ref} | null}],
       "human_seats": [{ref: "human-1", label}],       # managers who are people, anonymised
       "routines": [{title, description, definition_of_done, assignee (AI alias) | null,
@@ -81,6 +81,7 @@ NEVER_EXPORTED = [
     "member identities (human names, GitHub logins, e-mails, roles and permissions)",
     "history: tasks, requests, runs, conversations, memory and spend",
     "budget overrides and notices",
+    "legacy project and per-agent autonomy settings (new tasks start OFF)",
 ]
 
 
@@ -194,7 +195,7 @@ def build_bundle(
     """Build a scrubbed v1 bundle from plain rows.
 
     ai_agents: live AI rows {id, alias, role, system_prompt, model, reasoning_effort,
-               auto_wake_interval_secs, autonomy_override, reports_to_agent_id}
+               auto_wake_interval_secs, reports_to_agent_id}
     humans:    every human row of the project (live or not) {id, alias, github_login,
                git_email} — used ONLY to recognise and scrub identities / seat refs.
     routines:  live routine rows {title, description, definition_of_done,
@@ -243,7 +244,6 @@ def build_bundle(
             "model": a.get("model"),
             "reasoning_effort": a.get("reasoning_effort"),
             "auto_wake_interval_secs": a.get("auto_wake_interval_secs"),
-            "autonomy_override": a.get("autonomy_override"),
             "reports_to": reports_to,
         })
 
@@ -336,6 +336,8 @@ class BundleAgent(_M):
     model: Optional[str] = Field(default=None, max_length=64)
     reasoning_effort: Optional[str] = Field(default=None, max_length=16)
     auto_wake_interval_secs: Optional[int] = Field(default=None, ge=0, le=10_000_000)
+    # Read-only compatibility for v1 bundles exported before task-only autonomy.
+    # The import plan always ignores this value and records a plain-language note.
     autonomy_override: Optional[Literal["plan", "pr", "full"]] = None
     reports_to: Optional[BundleReportsTo] = None
 
@@ -582,9 +584,14 @@ def plan_import(b: ProjectTemplateBundle, opts: ImportOptions, target: dict) -> 
                     notes.append("auto-wake under 60 s isn't allowed — left off")
                     wake = None
                 override = a.autonomy_override
-                if not can_auto and (wake is not None or override is not None):
-                    notes.append("autonomy override / auto-wake need the Autonomy permission — not applied")
-                    wake, override = None, None
+                if override is not None:
+                    notes.append(
+                        "legacy per-agent autonomy is history only — ignored; task autonomy starts OFF"
+                    )
+                    override = None
+                if not can_auto and wake is not None:
+                    notes.append("auto-wake needs the Autonomy permission — not applied")
+                    wake = None
                 item.update({
                     "role": a.role,
                     "model": model,

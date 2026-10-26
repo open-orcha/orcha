@@ -243,11 +243,6 @@ struct OrchaApiClient {
         try await post(base, "/api/containers/\(cid)/wakes", ["enabled": enabled, "actor_agent_id": actor])
     }
 
-    /// GH #148 — the autonomy gearbox (`plan` | `pr` | `full`). Human-gated on the server.
-    func setAutonomy(_ base: String, _ cid: String, actor: String, level: String) async throws {
-        try await post(base, "/api/containers/\(cid)/autonomy", ["level": level, "actor_agent_id": actor])
-    }
-
     /// Bind (`repo` = "owner/name") or unbind (`repo` = nil) the container's GitHub repo.
     /// A nil repo makes `send` drop the key entirely — the server's schema defaults the
     /// absent field to null, so `{}` and `{"repo": null}` both unbind (github_routes.py).

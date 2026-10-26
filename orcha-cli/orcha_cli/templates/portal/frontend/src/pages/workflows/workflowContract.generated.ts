@@ -1,6 +1,6 @@
 // Generated from FastAPI OpenAPI slices. DO NOT EDIT.
-// Workflow source SHA-256: 96f65f050db59126a6e91696cd21ed3341a9c3a599f9d85bc7491a93e9eb5ebf
-// Evidence GET source SHA-256: 48199aeae044539ac0417a909a441eb9d72db68b07e77d6b83e7db110a813fac
+// Workflow source SHA-256: 1efb4ebae382d0e3ca009b7be96fcaafbfd224028d4b0b11ed346a6be288587d
+// Evidence GET source SHA-256: f2a794298f992bd3ff3955fa5d6aefc30a97e373794a3c1e9d03c8f46796853e
 // Regenerate with tools/generate-workflow-contract.mjs and both source files.
 
 export type AcceptBasis = {
@@ -23,8 +23,8 @@ export type AcceptedEvidenceItem = {
   "deliverable_id": string;
   "deliverable_version": number;
   "sha256": string;
-  "kind"?: "result_summary" | "file_changes" | "log_excerpt" | "owner_result" | "outside_result" | null;
-  "source"?: "worker" | "owner" | "outside" | "cancelled_attempt" | "released_attempt" | null;
+  "kind"?: "result_summary" | "file_changes" | "log_excerpt" | "owner_result" | "outside_result" | "import_result" | null;
+  "source"?: "worker" | "owner" | "outside" | "import" | "cancelled_attempt" | "released_attempt" | null;
   "snapshot_phase"?: "submission" | "terminal" | null;
   "complete"?: boolean | null;
   "note"?: string | null;
@@ -578,8 +578,8 @@ export type SavedEvidenceItem = {
   "deliverable_id": string;
   "deliverable_version": number;
   "sha256": string;
-  "kind": "result_summary" | "file_changes" | "log_excerpt" | "owner_result" | "outside_result";
-  "source": "worker" | "owner" | "outside" | "cancelled_attempt" | "released_attempt";
+  "kind": "result_summary" | "file_changes" | "log_excerpt" | "owner_result" | "outside_result" | "import_result";
+  "source": "worker" | "owner" | "outside" | "import" | "cancelled_attempt" | "released_attempt";
   "snapshot_phase": "submission" | "terminal";
   "complete": boolean;
   "note": string | null;
@@ -734,7 +734,8 @@ export const workflowSchemas = {
               "file_changes",
               "log_excerpt",
               "owner_result",
-              "outside_result"
+              "outside_result",
+              "import_result"
             ]
           },
           {
@@ -750,6 +751,7 @@ export const workflowSchemas = {
               "worker",
               "owner",
               "outside",
+              "import",
               "cancelled_attempt",
               "released_attempt"
             ]
@@ -3627,7 +3629,8 @@ export const workflowSchemas = {
           "file_changes",
           "log_excerpt",
           "owner_result",
-          "outside_result"
+          "outside_result",
+          "import_result"
         ]
       },
       "source": {
@@ -3636,6 +3639,7 @@ export const workflowSchemas = {
           "worker",
           "owner",
           "outside",
+          "import",
           "cancelled_attempt",
           "released_attempt"
         ]

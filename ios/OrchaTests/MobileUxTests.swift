@@ -321,18 +321,7 @@ private let fixedNow = Date(timeIntervalSince1970: 1_751_400_000)
     }
 }
 
-/// GH #148 — the Notifier (`wakes_enabled`) / Autonomy (`autonomy_level`) split.
-@Suite struct AutonomySplitTests {
-    @Test func autonomyLabelCoversAllThreeLevels() {
-        #expect(MobileUx.autonomyLabel("plan") == "Plan-only")
-        #expect(MobileUx.autonomyLabel("pr") == "Build to PR")
-        #expect(MobileUx.autonomyLabel("full") == "Full")
-    }
-
-    @Test func autonomyLabelFallsBackToPlanOnlyForUnknownLevel() {
-        #expect(MobileUx.autonomyLabel("bogus") == "Plan-only")
-    }
-
+@Suite struct NotifierControlTests {
     private func decode(_ json: String) throws -> ContainerDto {
         try JSONDecoder().decode(ContainerDto.self, from: Data(json.utf8))
     }

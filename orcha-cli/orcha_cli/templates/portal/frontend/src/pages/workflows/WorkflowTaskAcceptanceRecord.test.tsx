@@ -35,8 +35,21 @@ it("distinguishes human acceptance and missing accepted files without substituti
 });
 it("shows immutable outside-result supplier attribution and same-person acceptance", () => {
   render(<WorkflowTaskAcceptanceRecord task={exampleTask({ acceptance: { ...acceptance, actor_id: "kedar", actor_alias: "Kedar", actor_kind: "human", evidence_items: [{ ...acceptance.evidence_items[0], source: "outside", captured_by: "kedar", captured_by_alias: "Kedar", captured_by_kind: "human" }] } })} />);
-  expect(screen.getByText(/Result supplied by Kedar \(person\).*same person supplied and accepted this outside result/)).toBeVisible();
+  expect(screen.getByText("Submitted by Kedar (verified).")).toBeVisible();
+  expect(screen.getByText("Owner-supplied result, accepted by the same person.")).toBeVisible();
   expect(screen.queryByText(/supplier attribution is unavailable/)).toBeNull();
+});
+it("describes imported results as pre-existing work reviewed on import", () => {
+  render(<WorkflowTaskAcceptanceRecord task={exampleTask({ acceptance: { ...acceptance, actor_id: "kedar", actor_alias: "Kedar", actor_kind: "human", acceptance_source: "import",
+    evidence_items: [{ ...acceptance.evidence_items[0], kind: "import_result", source: "import", captured_by: "kedar", captured_by_alias: "Kedar", captured_by_kind: "human" }] } })} />);
+  expect(screen.getByText("Completed before it joined this workflow; reviewed and accepted on import by Kedar.")).toBeVisible();
+  expect(screen.queryByText(/Submitted by/)).toBeNull();
+  expect(screen.queryByText(/Owner-supplied result/)).toBeNull();
+});
+it("fails closed when an older accepted item has no recorded source", () => {
+  render(<WorkflowTaskAcceptanceRecord task={exampleTask({ acceptance: { ...acceptance, actor_kind: "human", evidence_items: [{ ...acceptance.evidence_items[0], source: undefined }] } })} />);
+  expect(screen.getByText(/supplier attribution was not recorded/)).toBeVisible();
+  expect(screen.getByText(/no supported recovery path/)).toBeVisible();
 });
 it("blocks Finish when required supplier attribution cannot be reviewed", async () => {
   const task = exampleTask({ status: "completed", acceptance: { ...acceptance, actor_kind: "human", evidence_items: [{ ...acceptance.evidence_items[0], source: "outside", captured_by: null, captured_by_alias: null, captured_by_kind: null }] } });
@@ -50,7 +63,7 @@ it("blocks Finish when required supplier attribution cannot be reviewed", async 
   }));
   render(<MemoryRouter><WorkflowActions detail={detail} scope={{ origin: "https://orcha.example", project: "project", identity: "kedar" }} verified stale={false} onSaved={vi.fn()} /></MemoryRouter>);
   fireEvent.click(screen.getByRole("button", { name: "Finish checklist" }));
-  await screen.findByText(/Finish is unavailable until the recorded result suppliers/);
+  await screen.findByText(/legacy acceptances do not record who submitted the result/);
   expect(screen.getByRole("button", { name: "Finish workflow" })).toBeDisabled(); expect(writes).toEqual([]);
 });
 it("keeps Finish available when the accepted outside result has immutable supplier attribution", async () => {
@@ -63,5 +76,7 @@ it("keeps Finish available when the accepted outside result has immutable suppli
   render(<MemoryRouter><WorkflowActions detail={detail} scope={{ origin: "https://orcha.example", project: "project", identity: "kedar" }} verified stale={false} onSaved={vi.fn()} /></MemoryRouter>);
   fireEvent.click(screen.getByRole("button", { name: "Finish checklist" }));
   expect(await screen.findByRole("button", { name: "Finish workflow" })).toBeEnabled();
-  expect(screen.queryByText(/Finish is unavailable until the recorded result suppliers/)).toBeNull();
+  expect(screen.getByText("1 owner-supplied result accepted by the same person.")).toBeVisible();
+  expect(screen.getByRole("button", { name: "View" })).toBeEnabled();
+  expect(screen.queryByText(/legacy acceptances do not record who submitted the result/)).toBeNull();
 });

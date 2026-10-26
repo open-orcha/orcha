@@ -249,10 +249,6 @@ class OrchaApiClient {
     suspend fun setWakes(baseUrl: String, containerId: String, enabled: Boolean, actorId: String?): WakesResponse =
         postJson("${baseUrl.endpoint()}/api/containers/$containerId/wakes", WakesToggleBody(enabled, actorId))
 
-    /** GH #148: autonomy — move the plan/pr/full gearbox. Human-gated server-side. */
-    suspend fun setAutonomy(baseUrl: String, containerId: String, level: String, actorId: String): AutonomyResponse =
-        postJson("${baseUrl.endpoint()}/api/containers/$containerId/autonomy", AutonomyUpdateBody(level, actorId))
-
     private suspend inline fun <reified T : Any, reified R> postJson(url: String, payload: T): R =
         transport.post(url, payload)
 

@@ -1872,7 +1872,8 @@ function AssignControl({ t, children, className, paused = {} }: {
   const btnRef = useRef<HTMLButtonElement | null>(null);
   const [pickOpen, setPickOpen] = useState(false);
   const [confirm, setConfirm] = useState<null | { reassign: boolean; agentId: string; alias: string }>(null);
-  if (blockLegacy || !canAssign(t, snap)) return <>{children}</>;
+  if (blockLegacy) return <>{children}</>;
+  if (!canAssign(t, snap)) return <>{children}</>;
   const h = actor;
   const curAgent = cur ? agentByAlias(snap, cur) : null;
 

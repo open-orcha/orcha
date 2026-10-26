@@ -31,6 +31,16 @@ it("retains labelled activity on a connection failure and removes cached and fal
   expect(screen.getByRole("alert")).toHaveTextContent("Access to this workflow’s activity changed");
 });
 
+it("shows immutable supplier and same-person acceptance in Activity", async () => {
+  const accepted = { ...activity, id: "accepted", event: "workflow_task_accepted", detail: {
+    supplier_id: "kedar", supplier_alias: "Kedar", supplier_kind: "human", same_person_supplier: true,
+  } };
+  vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ activity: [accepted], next_before_at: null, next_before_id: null })));
+  render(<MemoryRouter><WorkflowActivity detail={exampleWorkflow({ activity: [] })} /></MemoryRouter>);
+  expect(await screen.findByText("Owner-supplied result, accepted by the same person.")).toBeVisible();
+  expect(screen.getByText("Submitted by Kedar (verified).")).toBeVisible();
+});
+
 it("does not unlock owner resolution with a selected name or an unavailable integration", () => {
   const detail = exampleWorkflow({ capability: writeCapability, tasks: [exampleTask({ available_actions: [{ action: "resolve_loop", enabled: true }] })] });
   const fetch = vi.fn(); vi.stubGlobal("fetch", fetch);

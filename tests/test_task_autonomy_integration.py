@@ -162,3 +162,31 @@ async def test_on_self_completes_and_off_human_completion_records_exact_authorit
     assert record["permission_source"] == "human_verification"
     assert len(record["requirements_sha256"]) == 64
     assert len(record["submission_sha256"]) == 64
+
+
+async def test_human_verification_preserves_legacy_task_without_saved_result(
+    client, make_agent, make_task, db
+):
+    owner = await make_agent("Owner", kind="human")
+    task = await make_task("Legacy manual task", "The owner confirms completion")
+    db.execute(
+        "UPDATE tasks SET status='needs_verification', result=NULL WHERE id=%s",
+        (task["id"],),
+    )
+
+    accepted = await client.post(
+        f"/api/tasks/{task['id']}/verify",
+        json={"approve": True, "actor_agent_id": owner["agent_id"]},
+    )
+
+    assert accepted.status_code == 200, accepted.text
+    assert accepted.json()["status"] == "completed"
+    record = db.execute(
+        "SELECT actor_kind,autonomy_at_approval,permission_source,submission_sha256 "
+        "FROM task_approval_records WHERE task_id=%s AND phase='completion'",
+        (task["id"],),
+    )[0]
+    assert record["actor_kind"] == "human"
+    assert record["autonomy_at_approval"] == "off"
+    assert record["permission_source"] == "human_verification"
+    assert len(record["submission_sha256"]) == 64

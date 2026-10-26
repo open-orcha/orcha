@@ -75,7 +75,10 @@ class ContractHooks(ws.WorkflowHooks):
 
     def capture_outside(self, cur, task, evidence, execution):
         assert evidence["submitted_by"], "capture_outside needs the durable submitter"
-        return self.save(task, **self.capturer(cur, evidence["submitted_by"]))
+        return self.save(
+            task, source="outside", kind="outside_result",
+            **self.capturer(cur, evidence["submitted_by"]),
+        )
 
     def capture_import(
         self, cur, task, evidence, execution, actor, reviewed_result_digest
@@ -86,11 +89,17 @@ class ContractHooks(ws.WorkflowHooks):
         self.import_captures.append(
             (str(task["id"]), str(actor["id"]), reviewed_result_digest)
         )
-        return self.save(task, **self.capturer(cur, actor["id"]))
+        return self.save(
+            task, source="import", kind="import_result",
+            **self.capturer(cur, actor["id"]),
+        )
 
     def capture_owner(self, cur, task, evidence, execution, actor):
         self.owner_captures.append((str(task["id"]), str(actor["id"]), evidence))
-        return self.save(task, **self.capturer(cur, actor["id"]))
+        return self.save(
+            task, source="owner", kind="owner_result",
+            **self.capturer(cur, actor["id"]),
+        )
 
     def capturer(self, cur, actor_id):
         cur.execute("SELECT id,alias,kind FROM agents WHERE id=%s", (actor_id,))
@@ -108,6 +117,8 @@ class ContractHooks(ws.WorkflowHooks):
         captured_by=None,
         captured_by_alias=None,
         captured_by_kind=None,
+        source=None,
+        kind=None,
     ):
         ref = {
             "evidence_set_id": uid(),
@@ -117,6 +128,7 @@ class ContractHooks(ws.WorkflowHooks):
                     "deliverable_id": uid(),
                     "deliverable_version": 1,
                     "sha256": "a" * 64,
+                    **({"source": source, "kind": kind} if source and kind else {}),
                     **(
                         {
                             "captured_by": captured_by,
@@ -663,6 +675,16 @@ def test_outside_result_needs_a_person_even_when_autonomy_allows_agents(
     assert err.value.detail["code"] == "human_approval_required"
     w = execute("accept", {"evidence": ref}, w["id"], tid)
     assert next(t for t in w["tasks"] if t["id"] == tid)["status"] == "completed"
+    with db_cursor(readonly=True) as (_, cur):
+        cur.execute(
+            "SELECT detail FROM workflow_history WHERE task_id=%s AND event='workflow_task_accepted'",
+            (tid,),
+        )
+        detail = cur.fetchone()["detail"]
+    assert detail["supplier_id"] == actor.id
+    assert detail["supplier_alias"] == "Owner"
+    assert detail["supplier_kind"] == "human"
+    assert detail["same_person_supplier"] is True
 
 
 def test_rejection_does_not_reactivate_assignee(setup_workflow):
@@ -1761,6 +1783,8 @@ def test_completed_import_needs_explicit_human_acceptance_of_exact_result(
     assert acceptance["evidence_items"][0]["captured_by"] == actor.id
     assert acceptance["evidence_items"][0]["captured_by_alias"] == "Owner"
     assert acceptance["evidence_items"][0]["captured_by_kind"] == "human"
+    assert acceptance["evidence_items"][0]["source"] == "import"
+    assert acceptance["evidence_items"][0]["kind"] == "import_result"
     with db_cursor(readonly=True) as (_, cur):
         cur.execute(
             "SELECT actor_id,actor_kind,acceptance_source FROM workflow_task_acceptances WHERE task_id=%s",

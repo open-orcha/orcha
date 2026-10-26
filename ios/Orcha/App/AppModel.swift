@@ -994,22 +994,11 @@ final class AppModel {
         }
     }
 
-    /// GH #148 — the notifier kill-switch. Independent of `setAutonomy`: flipping this never
-    /// changes the remembered autonomy level.
+    /// Project-wide notifier kill-switch. Task autonomy is managed on each task.
     func setWakes(enabled: Bool) async -> Bool {
         guard let cid = selectedContainer?.id else { return false }
         return await humanAction(enabled ? "Notifier resumed" : "Notifier paused") { base, actor in
             try await api.setWakes(base, cid, actor: actor, enabled: enabled)
-            await refresh()
-        }
-    }
-
-    /// GH #148 — the autonomy gearbox. Independent of `setWakes`: the level applies whether or
-    /// not the notifier is currently running.
-    func setAutonomy(level: String) async -> Bool {
-        guard let cid = selectedContainer?.id else { return false }
-        return await humanAction("Autonomy set to \(MobileUx.autonomyLabel(level))") { base, actor in
-            try await api.setAutonomy(base, cid, actor: actor, level: level)
             await refresh()
         }
     }

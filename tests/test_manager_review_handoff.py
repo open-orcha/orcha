@@ -440,11 +440,11 @@ async def test_prereview_off_routes_straight_to_human(
     assert not _prereview_requests(db, t["task_id"])
 
 
-async def test_full_autonomy_bypasses_routing(client, container, make_agent, make_task, db,
-                                              work_headers):
+async def test_task_autonomy_on_bypasses_routing(client, container, make_agent, make_task, db,
+                                                 work_headers):
     hussein, probe, atlas = await _team(make_agent, db)
-    db.execute("UPDATE containers SET autonomy_level='full' WHERE id=%s", (container["id"],))
     t = await make_task("x", "y", assignee_alias="probe")
+    db.execute("UPDATE tasks SET autonomy='on' WHERE id=%s", (t["task_id"],))
     out = await _done(client, work_headers, t["task_id"], probe)
     assert out["status"] == "completed"
     assert not _prereview_requests(db, t["task_id"])

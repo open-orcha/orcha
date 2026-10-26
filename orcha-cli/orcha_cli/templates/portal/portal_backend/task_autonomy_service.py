@@ -127,5 +127,10 @@ def completion_submission(task):
     if isinstance(result, str):
         return result
     if result is None:
-        return ""
+        # Legacy and root tasks can reach human verification without a saved result.
+        # Bind their approval to the actual persisted value instead of rejecting the
+        # long-standing verification flow or inventing result text that was never
+        # submitted.  The canonical JSON spelling also stays distinct from an
+        # explicitly saved empty string.
+        return "null"
     return json.dumps(result, sort_keys=True, ensure_ascii=False, separators=(",", ":"))

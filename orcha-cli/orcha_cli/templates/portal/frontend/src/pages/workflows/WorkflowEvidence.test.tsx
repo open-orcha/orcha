@@ -21,6 +21,16 @@ it("shows immutable saved versions and incomplete evidence without treating it a
   expect(await screen.findByRole("link", { name: "Saved file changes — version 4" })).toHaveAttribute("href", "/api/tasks/build/deliverables/file/versions/4/raw");
   expect(screen.getByText(/Incomplete saved evidence/)).toBeVisible(); expect(screen.queryByText(/No file changes/)).toBeNull();
 });
+it("labels a pre-workflow result as reviewed on import, not owner supplied", async () => {
+  const imported = evidence({ items: [{ item_id: "item", deliverable_id: "file", deliverable_version: 4, sha256: "a".repeat(64), kind: "import_result", source: "import", snapshot_phase: "submission", complete: true, note: null, storage_state: "readable",
+    captured_by: "kedar", captured_by_alias: "Kedar", captured_by_kind: "human" }] });
+  vi.stubGlobal("fetch", vi.fn(async () => jsonResponse(imported)));
+  render(<WorkflowEvidencePanel detail={workflow()} taskId="build" />);
+  expect(await screen.findByRole("link", { name: "Imported result review — version 4" })).toBeVisible();
+  expect(screen.getByText(/Completed before it joined this workflow/)).toBeVisible();
+  expect(screen.getByText("Reviewed and accepted on import by Kedar.")).toBeVisible();
+  expect(screen.queryByText(/Owner-supplied result/)).toBeNull();
+});
 it.each(["pending", "missing", "superseded"] as const)("does not offer %s evidence as an acceptance basis", async (state) => {
   vi.stubGlobal("fetch", vi.fn(async () => jsonResponse(evidence({ state }))));
   render(<WorkflowEvidencePanel detail={workflow()} taskId="build" onSelect={vi.fn()} />);

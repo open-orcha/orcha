@@ -2425,7 +2425,8 @@
                   "file_changes",
                   "log_excerpt",
                   "owner_result",
-                  "outside_result"
+                  "outside_result",
+                  "import_result"
                 ]
               },
               {
@@ -2442,6 +2443,7 @@
                   "worker",
                   "owner",
                   "outside",
+                  "import",
                   "cancelled_attempt",
                   "released_attempt"
                 ]

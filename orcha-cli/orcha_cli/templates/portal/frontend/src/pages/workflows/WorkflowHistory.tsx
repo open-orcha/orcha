@@ -46,6 +46,8 @@ export function WorkflowActivity({ detail }: { detail: WorkflowDetail }) {
     {page && page.activity.length === 0 && <p>No activity recorded.</p>}
     <ol>{(forbidden ? [] : page?.activity ?? detail.activity ?? []).map((entry) => <li key={entry.id}><p>{eventLabel(entry.event)} · {entry.actor_alias} ({entry.actor_kind === "human" ? "person" : "agent"})</p>
       <time dateTime={entry.created_at}>{new Date(entry.created_at).toLocaleString()}</time>
+      {entry.event === "workflow_task_accepted" && entry.detail.same_person_supplier === true && <p>Owner-supplied result, accepted by the same person.</p>}
+      {entry.event === "workflow_task_accepted" && typeof entry.detail.supplier_alias === "string" && <p>Submitted by {entry.detail.supplier_alias} (verified).</p>}
       {typeof entry.detail.reason === "string" && <p>{entry.detail.reason}</p>}
       {typeof entry.detail.warning === "string" && <p className="wf-warning">{entry.detail.warning}</p>}
       {entry.task_id && <WorkflowTaskLink cid={detail.container_id} taskId={entry.task_id}>{detail.tasks.find((t) => t.id === entry.task_id)?.title ?? "Open related task"}</WorkflowTaskLink>}

@@ -25,8 +25,8 @@ export function evidenceReference(set: SavedEvidenceSet): EvidenceReference {
 export function evidenceUsable(set: SavedEvidenceSet, revision: number): boolean {
   return set.state === "saved" && set.purpose === "acceptance" && set.work_revision === revision && set.items.length > 0 && set.items.every((item) => item.storage_state === "readable");
 }
-const kindName = { result_summary: "Result summary", file_changes: "Saved file changes", log_excerpt: "Saved log excerpt", owner_result: "Owner-supplied result", outside_result: "Outside result" };
-const sourceName = { worker: "Worker", owner: "Owner", outside: "Outside result", cancelled_attempt: "From a cancelled attempt", released_attempt: "From a released attempt" };
+const kindName = { result_summary: "Result summary", file_changes: "Saved file changes", log_excerpt: "Saved log excerpt", owner_result: "Owner-supplied result", outside_result: "Outside result", import_result: "Imported result review" };
+const sourceName = { worker: "Worker", owner: "Owner", outside: "Outside result", import: "Completed before it joined this workflow", cancelled_attempt: "From a cancelled attempt", released_attempt: "From a released attempt" };
 
 export function WorkflowEvidencePanel({ detail, taskId, selected, onSelect }: {
   detail: WorkflowDetail; taskId: string; selected?: string;
@@ -70,7 +70,9 @@ export function WorkflowEvidencePanel({ detail, taskId, selected, onSelect }: {
         {item.storage_state === "readable" ? <a href={`/api/tasks/${encodeURIComponent(taskId)}/deliverables/${encodeURIComponent(item.deliverable_id)}/versions/${item.deliverable_version}/raw`}>{kindName[item.kind]} — version {item.deliverable_version}</a>
           : <span>{kindName[item.kind]} — version {item.deliverable_version}: {item.storage_state === "missing_after_restore" ? "file missing after restore" : item.storage_state}</span>}
         <p>{sourceName[item.source]} · {item.snapshot_phase === "terminal" ? "Final snapshot" : "Submission snapshot"}</p>
-        {item.captured_by_alias && item.captured_by_kind && <p>Result supplied by {item.captured_by_alias} ({item.captured_by_kind === "human" ? "person" : "agent"}).</p>}
+        {item.source === "import" && item.captured_by_alias
+          ? <p>Reviewed and accepted on import by {item.captured_by_alias}.</p>
+          : item.captured_by_alias && item.captured_by_kind && <p>Submitted by {item.captured_by_alias} (verified).</p>}
         {!item.complete && <p className="wf-warning">Incomplete saved evidence{item.note ? `: ${item.note}` : ". Read its limits before accepting."}</p>}
         {item.complete && item.note && <p>{item.note}</p>}
       </li>)}</ul>

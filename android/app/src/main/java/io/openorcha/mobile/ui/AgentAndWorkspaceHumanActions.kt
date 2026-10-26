@@ -86,15 +86,9 @@ fun retireSelectedAgent() = runHumanAction("Agent retired") { selected, actor ->
     showWorkspace()
 }
 
-/** GH #148: notifier switch. Never touches autonomy_level — the two controls are orthogonal. */
+/** Project-wide notifier switch. Task autonomy is managed on each task. */
 fun setWakes(enabled: Boolean) = runHumanAction(if (enabled) "Wakes resumed" else "Wakes paused") { selected, actor ->
     api.setWakes(selected.baseUrl, selected.id, enabled, actor)
-    refreshSelected()
-}
-
-/** GH #148: autonomy gearbox. Never touches wakes_enabled — applies whether running or paused. */
-fun setAutonomy(level: String) = runHumanAction("Autonomy set to $level") { selected, actor ->
-    api.setAutonomy(selected.baseUrl, selected.id, level, actor)
     refreshSelected()
 }
 

@@ -9,8 +9,14 @@ from portal_backend.schemas.workflows import EvidenceItem
 
 
 class SavedEvidenceItem(EvidenceItem):
-    kind: Literal["result_summary", "file_changes", "log_excerpt", "owner_result", "outside_result"]
-    source: Literal["worker", "owner", "outside", "cancelled_attempt", "released_attempt"]
+    kind: Literal[
+        "result_summary", "file_changes", "log_excerpt", "owner_result",
+        "outside_result", "import_result",
+    ]
+    source: Literal[
+        "worker", "owner", "outside", "import", "cancelled_attempt",
+        "released_attempt",
+    ]
     snapshot_phase: Literal["submission", "terminal"]
     complete: bool
     note: str | None

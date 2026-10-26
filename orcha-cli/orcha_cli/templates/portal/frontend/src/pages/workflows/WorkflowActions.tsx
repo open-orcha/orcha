@@ -9,7 +9,7 @@ import { WorkflowOperationNotice } from "./WorkflowOperationNotice";
 import { WorkflowTaskLink } from "./WorkflowTaskReturn";
 import { WorkflowEvidencePanel } from "./WorkflowEvidence";
 import { WorkflowAcceptance } from "./WorkflowAcceptance";
-import { acceptanceAttributionUnavailable, WorkflowTaskAcceptanceRecord } from "./WorkflowTaskAcceptanceRecord";
+import { acceptanceAttributionUnavailable, samePersonOutsideAcceptance, WorkflowTaskAcceptanceRecord } from "./WorkflowTaskAcceptanceRecord";
 import { useWorkflowForm } from "./workflowFormState";
 import { impactMatches, readWorkflowImpact, WorkflowImpactView } from "./WorkflowImpact";
 
@@ -52,6 +52,7 @@ export function WorkflowActions({ detail, scope, verified, stale, onSaved }: {
   }
   const blocked = preview && action ? actionReason(preview, action, verified) : "Checking this action…";
   const allAccepted = preview && preview.progress.total > 0 && preview.progress.total === preview.progress.accepted;
+  const samePersonAccepted = preview?.tasks.filter(samePersonOutsideAcceptance) ?? [];
   const checkedSelection = impactMatches(impact, selected, ["start"]);
   const confirmBlocked = busy || unresolved || stale || !!blocked || !preview || !action
     || (action === "start" && !selected.length && !allAccepted)
@@ -115,7 +116,8 @@ export function WorkflowActions({ detail, scope, verified, stale, onSaved }: {
           <p>Goal: {preview.goal}</p><p>{preview.goal_accepted_revision === preview.goal_revision ? "Current goal accepted." : "The current goal still needs acceptance with saved evidence."}</p>
           <ul>{preview.objectives.map((o) => <li key={o.id}>{o.title} — {o.criteria} — {o.accepted_revision === o.revision ? "Accepted" : "Needs acceptance"}</li>)}</ul>
           <ul>{preview.completion.blockers.map((b, i) => <li key={i}>{b.message}{b.task_id && <> <WorkflowTaskLink cid={scope.project} taskId={b.task_id}>Open task</WorkflowTaskLink></>}</li>)}</ul>
-          {preview.tasks.some(acceptanceAttributionUnavailable) && <p>Finish is unavailable until the recorded result suppliers can be reviewed. This server version does not expose that attribution.</p>}
+          {samePersonAccepted.length > 0 && <p>{samePersonAccepted.length} owner-supplied {samePersonAccepted.length === 1 ? "result" : "results"} accepted by the same person. <Button onClick={() => setEvidenceTask(samePersonAccepted[0].id)}>View</Button></p>}
+          {preview.tasks.some(acceptanceAttributionUnavailable) && <p>Finish is unavailable because one or more legacy acceptances do not record who submitted the result. There is no supported recovery path for those records yet.</p>}
           <h3>Saved evidence</h3>
           {preview.tasks.filter((t) => t.acceptance).map((t) => <WorkflowTaskAcceptanceRecord key={t.id} task={t} />)}
           <label>Inspect a task’s saved evidence<select value={evidenceTask} onChange={(e) => setEvidenceTask(e.target.value)}><option value="">Choose a task</option>{preview.tasks.map((t) => <option key={t.id} value={t.id}>{t.title}</option>)}</select></label>

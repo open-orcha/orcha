@@ -41,10 +41,12 @@ it("shows the exact recorded acceptance actor, authority and evidence version", 
   mockReads((url) => url.includes("/evidence") ? jsonResponse({ task_id: "build", workflow_id: "release", current_evidence_set_id: null, sets: [] })
     : jsonResponse({ capability: writeCapability, workflows: [exampleWorkflow({ tasks: [task] })] }));
   render(<App />);
-  expect(await screen.findByText(/Accepted by Build Agent \(agent\) for work revision 3/)).toHaveTextContent("task autonomy ON at revision 2");
+  expect(await screen.findByText(/Accepted by Build Agent \(agent\) for work revision 3/)).toBeVisible();
+  expect(screen.getByText("Task autonomy ON at acceptance · setting revision 2.")).toBeVisible();
   expect(screen.getByText(/Agent acceptance authorized by task autonomy/)).toBeVisible();
-  expect(screen.getByRole("link", { name: "Accepted evidence version 4" })).toHaveAttribute("href", "/api/tasks/build/deliverables/result/versions/4/raw");
-  expect(screen.getByText(`· SHA-256 ${"a".repeat(64)}`)).toBeVisible();
+  expect(screen.getByRole("link", { name: "Accepted evidence — version 4" })).toHaveAttribute("href", "/api/tasks/build/deliverables/result/versions/4/raw");
+  fireEvent.click(screen.getByText("Recorded file fingerprint"));
+  expect(screen.getByText(/SHA-256/)).toHaveTextContent("a".repeat(64));
   expect(screen.queryByText(/Accepted by andrew/)).toBeNull();
 });
 it("checks later workflow pages before releasing legacy actions and preserves drafts", async () => {

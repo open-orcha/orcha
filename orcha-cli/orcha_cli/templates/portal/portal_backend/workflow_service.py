@@ -2228,6 +2228,7 @@ class WorkflowService:
                 _json(exact["items"]),
             ),
         )
+        return exact
 
     def accept_task(
         self,
@@ -2314,7 +2315,7 @@ class WorkflowService:
                 "A person must accept an outside result.",
                 status=403,
             )
-        self._record_acceptance(t, actor, b["evidence"])
+        exact = self._record_acceptance(t, actor, b["evidence"])
         self.cur.execute(
             "UPDATE tasks SET status='completed',completed_at=%s,awaiting_owner_decision=NULL,owner_decision_at=NULL WHERE id=%s",
             (sql.utcnow(), tid),
@@ -2328,11 +2329,28 @@ class WorkflowService:
         )
         if e["worker_stopped_at"] or e["source_kind"] == "evidence_review":
             self._release_execution(e, "accepted")
+        supplier = next(
+            (
+                item
+                for item in exact["items"]
+                if item.get("source") in {"owner", "outside"}
+            ),
+            None,
+        )
         self.audit(
             w,
             p,
             "workflow_task_accepted",
-            {"evidence": b["evidence"], "work_revision": t["work_revision"]},
+            {
+                "evidence": b["evidence"],
+                "work_revision": t["work_revision"],
+                "supplier_id": supplier.get("captured_by") if supplier else None,
+                "supplier_alias": supplier.get("captured_by_alias") if supplier else None,
+                "supplier_kind": supplier.get("captured_by_kind") if supplier else None,
+                "same_person_supplier": bool(
+                    supplier and str(supplier.get("captured_by")) == str(p["id"])
+                ),
+            },
             tid,
         )
 
