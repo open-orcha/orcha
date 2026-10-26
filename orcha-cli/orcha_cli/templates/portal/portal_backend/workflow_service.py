@@ -1745,8 +1745,11 @@ class WorkflowService:
                 conflict(
                     "review_only_run", "An outside result does not launch a worker."
                 )
-        if choice["source_kind"] == "evidence_review" and not self.basis_valid(
-            s["outside_evidence"][tid]["evidence"], s["tasks"]
+        if choice["source_kind"] == "evidence_review" and (
+            # Submitted against an older version of the task (criteria or
+            # dependencies edited since), or its supporting evidence changed.
+            s["outside_evidence"][tid]["work_revision"] != task["work_revision"]
+            or not self.basis_valid(s["outside_evidence"][tid]["evidence"], s["tasks"])
         ):
             conflict(
                 "evidence_version_stale",

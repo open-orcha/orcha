@@ -420,6 +420,36 @@ def test_outside_evidence_withdrawal_preserves_owner_gate(setup_workflow, gate, 
         )
 
 
+def test_outside_result_for_an_older_task_version_is_not_admitted(setup_workflow):
+    _, actor, _, _, hooks, execute = setup_workflow
+    w = prepare_and_start(setup_workflow, create(setup_workflow, count=1))
+    tid = w["tasks"][0]["id"]
+
+    def submit():
+        execute(
+            "external_result", {"evidence": {"narrative": "Done elsewhere"}}, w["id"], tid
+        )
+        with db_cursor(readonly=True) as (_, cur):
+            return ws.WorkflowService(cur, hooks).one(
+                "SELECT id FROM task_outside_evidence WHERE task_id=%s AND state='pending'",
+                (tid,),
+            )["id"]
+
+    evidence = submit()
+    # Editing the never-started task's prerequisites makes a new task version.
+    execute("dependencies", {"depends_on": []}, w["id"], tid)
+    with pytest.raises(HTTPException) as err:
+        with db_cursor() as (_, cur):
+            ws.WorkflowService(cur, hooks).reserve_turn(tid, actor)
+    assert err.value.detail["code"] == "evidence_version_stale"
+    # Resubmitting against the current version lets it be reviewed.
+    execute("withdraw_evidence", {"evidence_id": evidence}, w["id"], tid)
+    submit()
+    with db_cursor() as (_, cur):
+        e = ws.WorkflowService(cur, hooks).reserve_turn(tid, actor)
+    assert e["source_kind"] == "evidence_review"
+
+
 def test_outside_result_submitter_or_owner_may_withdraw_it(setup_workflow):
     _, first_owner, worker, other, hooks, execute = setup_workflow
     w = prepare_and_start(setup_workflow, create(setup_workflow, count=1))
