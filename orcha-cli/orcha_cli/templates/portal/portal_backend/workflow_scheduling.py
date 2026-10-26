@@ -126,6 +126,14 @@ def _base_blockers(
         not evidence or evidence["state"] != "pending"
     ):
         add("no_pending_evidence", "There is no outside result waiting for review.")
+    elif source_kind == "evidence_review" and (
+        evidence.get("work_revision") != task.get("work_revision")
+    ):
+        # Submitted before the task's criteria or prerequisites were edited.
+        add(
+            "evidence_version_stale",
+            "The outside result is for an older version of this task; withdraw it and submit again.",
+        )
     prerequisites = dependencies.get(task["id"], ())
     if len(prerequisites) > 3 or any(p not in tasks for p in prerequisites):
         add("invalid_graph", "The prerequisite graph needs repair.")

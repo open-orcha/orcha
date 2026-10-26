@@ -438,10 +438,21 @@ def test_outside_result_for_an_older_task_version_is_not_admitted(setup_workflow
     evidence = submit()
     # Editing the never-started task's prerequisites makes a new task version.
     execute("dependencies", {"depends_on": []}, w["id"], tid)
+    # The board says why it cannot start before anyone tries (plan 9 eligibility).
+    with db_cursor(readonly=True) as (_, cur):
+        row = ws.WorkflowService(cur, hooks).detail(w["id"])["tasks"][0]
+    assert not row["can_start"]
+    assert [b["code"] for b in row["blockers"]] == ["evidence_version_stale"]
+    assert row["display_state"]["label"].startswith(
+        "Outside result waiting - The outside result is for an older version"
+    )
     with pytest.raises(HTTPException) as err:
         with db_cursor() as (_, cur):
             ws.WorkflowService(cur, hooks).reserve_turn(tid, actor)
-    assert err.value.detail["code"] == "evidence_version_stale"
+    assert err.value.detail["code"] == "not_eligible"
+    assert [b["code"] for b in err.value.detail["blockers"]] == [
+        "evidence_version_stale"
+    ]
     # Resubmitting against the current version lets it be reviewed.
     execute("withdraw_evidence", {"evidence_id": evidence}, w["id"], tid)
     submit()
