@@ -1161,7 +1161,7 @@ async def test_local_member_can_create_and_proxy_identity_ignores_local_claim(
     owner = setup_workflow[1].id
     other = setup_workflow[3]
     monkeypatch.delenv("ORCHA_TRUST_PROXY_USER", raising=False)
-    monkeypatch.delenv("ORCHA_BIND", raising=False)
+    monkeypatch.setenv("ORCHA_BIND", "loopback")
     response = await client.post(
         f"/api/containers/{cid}/workflows",
         json={"title": "Local", "goal": "A local result", "idempotency_key": "local"},
@@ -1206,7 +1206,7 @@ async def test_local_workflow_claim_rejects_remote_ai_viewer_and_other_project(
             (outsider, other_cid),
         )
     monkeypatch.delenv("ORCHA_TRUST_PROXY_USER", raising=False)
-    monkeypatch.delenv("ORCHA_BIND", raising=False)
+    monkeypatch.setenv("ORCHA_BIND", "loopback")
     local = {"Host": "localhost", "Origin": "http://localhost"}
 
     for actor_id, reason in [
@@ -1228,10 +1228,27 @@ async def test_local_workflow_claim_rejects_remote_ai_viewer_and_other_project(
     response = await client.get(
         f"/api/containers/{cid}/workflows/capability",
         headers={
+            "Host": "127.attacker.example",
+            "Origin": "http://127.attacker.example",
+            "X-Orcha-Local-Actor": owner.id,
+        },
+    )
+    assert response.json()["reason"] == "local_workflow_writes_unavailable"
+
+    response = await client.get(
+        f"/api/containers/{cid}/workflows/capability",
+        headers={
             "Host": "localhost",
             "Origin": "https://orcha.example",
             "X-Orcha-Local-Actor": owner.id,
         },
+    )
+    assert response.json()["reason"] == "local_workflow_writes_unavailable"
+
+    monkeypatch.delenv("ORCHA_BIND", raising=False)
+    response = await client.get(
+        f"/api/containers/{cid}/workflows/capability",
+        headers={**local, "X-Orcha-Local-Actor": owner.id},
     )
     assert response.json()["reason"] == "local_workflow_writes_unavailable"
 
@@ -1249,6 +1266,58 @@ async def test_local_workflow_claim_rejects_remote_ai_viewer_and_other_project(
         headers={**local, "X-Orcha-Local-Actor": owner.id},
     )
     assert response.json()["reason"] == "verified_sign_in_required"
+
+
+@pytest.mark.asyncio
+async def test_workflow_plan_decision_requires_loopback_live_non_viewer(
+    client, setup_workflow, monkeypatch
+):
+    cid, owner, worker, _, _, _ = setup_workflow
+    workflow = create(setup_workflow, count=1)
+    task_id = workflow["tasks"][0]["id"]
+    viewer, retired = uid(), uid()
+    with db_cursor() as (_, cur):
+        cur.execute(
+            "INSERT INTO agents(id,container_id,alias,role,kind,member_role) VALUES (%s,%s,'Viewer','test','human','viewer')",
+            (viewer, cid),
+        )
+        cur.execute(
+            """INSERT INTO agents(id,container_id,alias,role,kind,member_role,terminated_at)
+               VALUES (%s,%s,'Retired','test','human','owner',now())""",
+            (retired, cid),
+        )
+    monkeypatch.delenv("ORCHA_TRUST_PROXY_USER", raising=False)
+    monkeypatch.setenv("ORCHA_BIND", "loopback")
+    local = {"Host": "localhost", "Origin": "http://localhost"}
+
+    def decision(actor_id):
+        return {
+            "subject_type": "plan_approval",
+            "subject_id": task_id,
+            "decision": "approve",
+            "actor_agent_id": actor_id,
+            "target_agent_id": worker,
+        }
+
+    for actor_id in (viewer, retired):
+        response = await client.post(
+            "/api/decisions", json=decision(actor_id), headers=local
+        )
+        assert response.status_code == 403
+        assert response.json()["detail"]["code"] == "verified_member_required"
+
+    response = await client.post(
+        "/api/decisions",
+        json=decision(owner.id),
+        headers={"Host": "127.attacker.example", "Origin": "http://127.attacker.example"},
+    )
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "local_workflow_writes_unavailable"
+
+    response = await client.post(
+        "/api/decisions", json=decision(owner.id), headers=local
+    )
+    assert response.status_code == 201, response.text
 
 
 def admission_fixture():

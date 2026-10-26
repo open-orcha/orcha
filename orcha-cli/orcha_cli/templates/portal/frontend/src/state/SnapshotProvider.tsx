@@ -608,7 +608,7 @@ export function taskById(snap: Snapshot | null, id: unknown): Task | null {
   return snap.tasks.find((t) => String(t.id) === String(id)) || null;
 }
 export function humans(snap: Snapshot | null): Agent[] {
-  return (snap?.agents ?? []).filter((a) => a.kind === "human");
+  return (snap?.agents ?? []).filter((a) => a.kind === "human" && a.member_role !== "viewer");
 }
 
 // a request is "to the human" if its target resolves to a human agent, or has
@@ -664,8 +664,8 @@ function actingKey(snap: Snapshot | null): string {
  *    snapshot → THAT is the acting human (the localStorage pick is ignored);
  *  - identity present but agent_id null/unresolvable (trusted non-member,
  *    e.g. a viewer) → NULL. Never falls through to another human.
- *  - no identity (open default) → legacy: persisted per-container pick, else
- *    the first kind='human' agent.
+ *  - no identity (open default) → persisted per-container pick, else the first
+ *    current non-viewer human. A viewer is never an acting authority.
  */
 export function actingIdentityHuman(
   snap: Snapshot | null,

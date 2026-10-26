@@ -23,8 +23,8 @@ import { selectAttention } from "./attention";
 const raw = (name: string) => ({
   container: { id: "c1", name, status: "active", autonomy_level: "plan" },
   agents: [
-    { id: "h1", alias: "owner", kind: "human", status: "idle" },
-    { id: "h2", alias: "viewer", kind: "human", status: "idle" },
+    { id: "h1", alias: "owner", kind: "human", status: "idle", member_role: "owner" },
+    { id: "h2", alias: "viewer", kind: "human", status: "idle", member_role: "viewer" },
   ],
   tasks: [{ id: "t1", title: "Verify", status: "needs_verification", assignees: [] }],
   requests: [{ id: "r1", type: "info", status: "open", requester_id: "a1", target_id: null, payload: "q" }],
@@ -57,6 +57,10 @@ describe("actingAuthority (pure)", () => {
     expect(a.readOnly).toBe(true);
   });
   it("self-host (untrusted, no identity): legacy first-human pick", () => {
+    expect(actingAuthority(snap, null, { pending: false, trusted: false }).human?.id).toBe("h1");
+  });
+  it("self-host never restores a persisted viewer as the acting human", () => {
+    localStorage.setItem("orcha:actingHuman:c1", "h2");
     expect(actingAuthority(snap, null, { pending: false, trusted: false }).human?.id).toBe("h1");
   });
   it("member: acts as their own human", () => {

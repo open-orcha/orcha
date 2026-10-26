@@ -14,6 +14,7 @@ let taskStatus: string;
 let legacyAutonomy: string;
 let planBody: string | null;
 let taskAutonomy: "on" | "off";
+let humanRole: string;
 let readsFail = false;
 let writes: string[];
 const evidence: WorkflowTaskEvidence = {
@@ -24,7 +25,7 @@ const evidence: WorkflowTaskEvidence = {
 };
 beforeEach(() => {
   _resetNeedsHistory();
-  taskStatus = "not_ready"; legacyAutonomy = "full"; readsFail = false; writes = []; planBody = null; taskAutonomy = "off";
+  taskStatus = "not_ready"; legacyAutonomy = "full"; readsFail = false; writes = []; planBody = null; taskAutonomy = "off"; humanRole = "member";
   workflow = exampleWorkflow({ evidence_capability: { available: true, reason: null }, tasks: [exampleTask({ current_evidence_set_id: "saved", evidence_state: "saved" })] });
   window.scrollTo = vi.fn();
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -37,7 +38,7 @@ beforeEach(() => {
     if (url === "/api/containers") return jsonResponse([{ id: "project", name: "Orcha", status: "active" }]);
     if (url.startsWith("/api/containers/project")) return jsonResponse({
       container: { id: "project", name: "Orcha", status: "active", autonomy_level: legacyAutonomy },
-      agents: [{ id: "kedar", alias: "Kedar", kind: "human", status: "idle", member_role: "member" }, { id: "andrew", alias: "Andrew", kind: "ai", status: "working", autonomy_override: "full" }],
+      agents: [{ id: "kedar", alias: "Kedar", kind: "human", status: "idle", member_role: humanRole }, { id: "andrew", alias: "Andrew", kind: "ai", status: "working", autonomy_override: "full" }],
       tasks: [{ id: "build", title: "Build Android", status: taskStatus, autonomy: taskAutonomy, autonomy_revision: 1, priority: 100, assignees: ["Andrew"], created_by_agent_id: "kedar", created_at: "2026-10-25T10:00:00Z", definition_of_done: "Pairing checks pass", result: "Build checks passed", message_summary: { count: 0, last: null }, plan_message: planBody ? { body: planBody, author_alias: "Andrew", at: "2026-10-25T10:00:00Z" } : null }], requests: [],
     });
     if (url.endsWith("/messages")) return jsonResponse({ messages: [] });
@@ -84,6 +85,15 @@ it("offers an OFF workflow plan decision to the selected local human", async () 
   const workflowRead = vi.mocked(fetch).mock.calls.find(([url, init]) =>
     String(url).endsWith("/workflows/capability") && (init?.headers as Record<string, string> | undefined)?.["X-Orcha-Local-Actor"] === "kedar");
   expect(workflowRead).toBeDefined();
+  expect(writes).toEqual([]);
+});
+it("keeps a locally selected viewer read-only for an OFF workflow plan", async () => {
+  extensions.identityTrusted = () => false;
+  humanRole = "viewer"; taskStatus = "in_progress"; planBody = "Andrew plans the build.";
+  workflow.tasks[0] = { ...workflow.tasks[0], autonomy: "off", autonomy_revision: 1, status: "in_progress" };
+  workflow.capability = { workflow_read: true, workflow_human_write: false, reason: "verified_member_required" };
+  page(); await screen.findByRole("link", { name: "Mobile release" });
+  expect(screen.queryByRole("region", { name: "Plan approval" })).toBeNull();
   expect(writes).toEqual([]);
 });
 it("shows server status and task OFF while replacing standalone hold, assign and cancellation controls", async () => {

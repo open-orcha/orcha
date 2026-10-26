@@ -66,6 +66,9 @@ services:
       # proxy). Unset/empty for self-hosters → the header is ignored entirely. Passed
       # through from the host env like ORCHA_LLM_API_KEY above.
       ORCHA_TRUST_PROXY_USER: ${ORCHA_TRUST_PROXY_USER:-}
+      # The stock Docker portal is published on host loopback below. Workflow
+      # writes fail closed unless the runtime explicitly confirms this bind.
+      ORCHA_BIND: loopback
       # Local run (deploy/local): a GitHub personal access token used only when
       # neither App token source above resolves — lets a laptop stack reach the
       # GitHub features with zero App registration. Also settable per-container
@@ -84,7 +87,7 @@ services:
       # ...and the project's real name for display (the mount path's basename is
       # always just "workspace" inside the container).
       ORCHA_LOCAL_REPO_NAME: {{ project_name }}
-    ports: ["{{ api_port }}:8000"]
+    ports: ["127.0.0.1:{{ api_port }}:8000"]
     volumes:
       - ./migrations:/app/migrations:ro   # R1: portal reads migrations to apply pending ones (no wipe)
       # SSE worker-run streaming: the daemon writes each worker's NDJSON log to the host's

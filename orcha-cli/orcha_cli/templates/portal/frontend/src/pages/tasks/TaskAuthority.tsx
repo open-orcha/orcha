@@ -13,10 +13,12 @@ export function useWorkflowPlanApproval(taskId: string): boolean {
   const { member, stale } = useTaskWorkflow(taskId);
   const { identityPending } = useSnapshot();
   const authority = useActingAuthority();
+  const capabilityReason = member?.detail.capability.reason;
   return !!member && !stale && !identityPending && !!authority.human
+    && authority.human.member_role !== "viewer"
     && member.task.autonomy === "off" && typeof member.task.autonomy_revision === "number"
     && member.detail.capability.workflow_read === true
-    && !["integration_required", "local_workflow_writes_unavailable"].includes(member.detail.capability.reason ?? "");
+    && (member.detail.capability.workflow_human_write === true || capabilityReason === "workflow_owner_required");
 }
 
 export function TaskAuthority({ task }: { task: Task }) {

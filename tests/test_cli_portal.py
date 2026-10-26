@@ -107,6 +107,12 @@ def test_native_portal_env_reports_its_bind_fresh_from_orcha_json(tmp_path):
     assert "ORCHA_BIND" not in cli_portal.build_portal_env(root, CFG, base_env={})  # Docker-era config
 
 
+def test_docker_portal_template_is_explicitly_loopback_bound():
+    template = (cli_portal.templates_dir() / "docker-compose.yml.j2").read_text()
+    assert "ORCHA_BIND: loopback" in template
+    assert 'ports: ["127.0.0.1:{{ api_port }}:8000"]' in template
+
+
 def test_portal_dir_is_the_packaged_portal():
     portal = cli_portal.portal_dir()
     assert (portal / "main.py").is_file()

@@ -5,6 +5,7 @@ the human selected in its UI, and the server validates that person against the l
 project membership. Authenticated work tokens remain the only agent identity lane.
 """
 
+import ipaddress
 import os
 from typing import Literal
 from urllib.parse import urlsplit
@@ -30,22 +31,22 @@ LOCAL_ACTOR_HEADER = "X-Orcha-Local-Actor"
 
 def _loopback_host(host):
     value = (host or "").strip().strip("[]").lower()
-    return (
-        value == "localhost"
-        or value.endswith(".localhost")
-        or value == "::1"
-        or value.startswith("127.")
-    )
+    if value == "localhost" or value.endswith(".localhost"):
+        return True
+    try:
+        return ipaddress.ip_address(value).is_loopback
+    except ValueError:
+        return False
 
 
-def _local_actor_claim(request):
+def _local_actor_claim(request, claimed_actor_id=None):
     """Return a local UI claim only on a loopback, non-proxy connection.
 
-    ``ORCHA_BIND=lan`` is an explicit remote-access mode. Docker-era local portals
-    leave the variable unset, so the request and browser Origin must also name a
-    loopback host. The proxy-trust switch always wins and ignores this header.
+    The server must explicitly report a loopback bind. An unset value is an old or
+    unmanaged deployment and therefore fails closed. The request and browser Origin
+    must also name a loopback host. Proxy trust always wins and ignores local claims.
     """
-    if _proxy_trusted() or (os.environ.get("ORCHA_BIND") or "").strip() == "lan":
+    if _proxy_trusted() or (os.environ.get("ORCHA_BIND") or "").strip() != "loopback":
         return None
     if not _loopback_host(request.url.hostname):
         return None
@@ -54,7 +55,64 @@ def _local_actor_claim(request):
     ).strip()
     if not browser_source or not _loopback_host(urlsplit(browser_source).hostname):
         return None
-    return (request.headers.get(LOCAL_ACTOR_HEADER) or "").strip() or None
+    header_actor = (request.headers.get(LOCAL_ACTOR_HEADER) or "").strip() or None
+    claimed_actor = str(claimed_actor_id).strip() if claimed_actor_id else None
+    if header_actor and claimed_actor and header_actor != claimed_actor:
+        conflict(
+            "actor_mismatch",
+            "The selected local project member changed. Refresh and try again.",
+            status=403,
+        )
+    return claimed_actor or header_actor
+
+
+def resolve_human_actor(cur, request, cid, *, claimed_actor_id=None):
+    """Resolve a live non-viewer human through the hosted or local trust lane."""
+    login = proxy_login(request)
+    if not login:
+        local_actor_id = _local_actor_claim(request, claimed_actor_id)
+        if local_actor_id:
+            cur.execute(
+                """SELECT id,kind,member_role FROM agents
+                   WHERE id=%s AND container_id=%s AND terminated_at IS NULL""",
+                (local_actor_id, cid),
+            )
+            row = cur.fetchone()
+            if not row or row["member_role"] == "viewer":
+                conflict(
+                    "verified_member_required",
+                    "A current non-viewer project membership is required.",
+                    status=403,
+                )
+            if row["kind"] != "human":
+                conflict(
+                    "human_required",
+                    "Choose a human project member for this action.",
+                    status=403,
+                )
+            return service.WorkflowActor(str(row["id"]), True)
+        conflict(
+            (
+                "verified_sign_in_required"
+                if _proxy_trusted()
+                else "local_workflow_writes_unavailable"
+            ),
+            "Open the loopback-bound local portal and choose a current human member, "
+            "or connect through verified sign-in.",
+            status=403,
+        )
+    cur.execute(
+        "SELECT id FROM agents WHERE container_id=%s AND kind='human' AND terminated_at IS NULL AND member_role<>'viewer' AND lower(github_login)=lower(%s)",
+        (cid, login),
+    )
+    rows = cur.fetchall()
+    if len(rows) != 1:
+        conflict(
+            "verified_member_required",
+            "A unique current project membership is required.",
+            status=403,
+        )
+    return service.WorkflowActor(str(rows[0]["id"]), True)
 
 
 def resolve_actor(cur, request, cid, *, allow_agent=False):
@@ -82,51 +140,7 @@ def resolve_actor(cur, request, cid, *, allow_agent=False):
             "A worker token cannot authorize a human action.",
             status=403,
         )
-    login = proxy_login(request)
-    if not login:
-        local_actor_id = _local_actor_claim(request)
-        if local_actor_id:
-            cur.execute(
-                """SELECT id,kind,member_role FROM agents
-                   WHERE id=%s AND container_id=%s AND terminated_at IS NULL""",
-                (local_actor_id, cid),
-            )
-            row = cur.fetchone()
-            if not row or row["member_role"] == "viewer":
-                conflict(
-                    "verified_member_required",
-                    "A current non-viewer project membership is required.",
-                    status=403,
-                )
-            if row["kind"] != "human":
-                conflict(
-                    "human_required",
-                    "Choose a human project member for this action.",
-                    status=403,
-                )
-            return service.WorkflowActor(str(row["id"]), True)
-        conflict(
-            (
-                "verified_sign_in_required"
-                if _proxy_trusted()
-                else "local_workflow_writes_unavailable"
-            ),
-            "Open the local portal and choose a current human member, "
-            "or connect through verified sign-in.",
-            status=403,
-        )
-    cur.execute(
-        "SELECT id FROM agents WHERE container_id=%s AND kind='human' AND terminated_at IS NULL AND member_role<>'viewer' AND lower(github_login)=lower(%s)",
-        (cid, login),
-    )
-    rows = cur.fetchall()
-    if len(rows) != 1:
-        conflict(
-            "verified_member_required",
-            "A unique current project membership is required.",
-            status=403,
-        )
-    return service.WorkflowActor(str(rows[0]["id"]), True)
+    return resolve_human_actor(cur, request, cid)
 
 
 def read_context(cur, request, wid):
