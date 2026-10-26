@@ -28,3 +28,17 @@
 .wf-graph text { fill: var(--v2-text); font-size: 13px; }
 .wf-page :focus-visible, .wf-draft :focus-visible { outline: 2px solid var(--v2-accent); outline-offset: 3px; }
 @media (max-width: 720px) { .wf-page, .wf-draft { font-size: 16px; } .wf-task-draft { padding: 12px; } .wf-draft .wf-choice { padding: 8px 0; } }
+.wf-filters { display: flex; flex-wrap: wrap; gap: 16px; margin: 20px 0; }
+.wf-filters label, .wf-page label { display: grid; gap: 6px; }
+.wf-page input:not([type="checkbox"]), .wf-page textarea, .wf-page select { box-sizing: border-box; max-width: 100%; font: inherit; color: var(--v2-text); background: var(--v2-surface); border: 1px solid var(--v2-border-strong); border-radius: 6px; padding: 8px 10px; }
+.wf-page textarea { width: 100%; min-height: 80px; }
+.wf-page .wf-choice { display: flex; align-items: flex-start; gap: 8px; margin: 12px 0; }
+.wf-form-body { margin: 0; padding: 0; border: 0; min-width: 0; }
+.wf-form-body > label { margin: 12px 0; }
+.wf-page fieldset { min-width: 0; }
+.wf-page .v2-btn, .wf-draft .v2-btn { height: auto; min-height: 44px; max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+.wf-page .v2-dialog-f { flex-wrap: wrap; }
+.wf-page select, .wf-draft select { min-width: 0; }
+.wf-page section, .wf-page details { overflow-wrap: anywhere; }
+.wf-page details > summary { padding: 12px 0; cursor: pointer; }
+.wf-page pre { white-space: pre-wrap; overflow-wrap: anywhere; }

@@ -1,0 +1,53 @@
+import { useState } from "react";
+import { Button } from "../../components/primitives/Button";
+import { Dialog } from "../../components/primitives/Dialog";
+import { actionReason, workflowPaths } from "./workflowApi";
+import { WorkflowChange } from "./WorkflowChange";
+import type { WorkflowDetail } from "./workflowContract.generated";
+import type { DraftScope } from "./workflowDraft";
+import { useWorkflowForm } from "./workflowFormState";
+import { useWorkflowOperation } from "./workflowOperations";
+import { WorkflowObjectiveEditor } from "./WorkflowObjectiveEditor";
+
+export function WorkflowSettings({ detail, scope, verified, stale, humans, onSaved }: {
+  detail: WorkflowDetail; scope: DraftScope; verified: boolean; stale: boolean; humans: { id: string; alias: string }[]; onSaved: (detail: WorkflowDetail) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useWorkflowForm(scope, `settings:${detail.id}`, { title: detail.title, goal: detail.goal,
+    mode: detail.execution_mode, taskLimit: String(detail.task_limit), roundLimit: String(detail.round_limit), reason: "", owner: "" });
+  const op = useWorkflowOperation(scope, `workflow:${detail.id}`);
+  const frozen = op?.state === "sending" || op?.state === "uncertain";
+  const invalid = !draft.title.trim() || !draft.goal.trim() || !draft.reason.trim() ? "Give the workflow a name, goal and reason for the change."
+    : ![draft.taskLimit, draft.roundLimit].every((value) => /^\d+$/.test(value) && Number.isSafeInteger(Number(value)) && Number(value) > 0) ? "Enter positive whole-number limits." : null;
+  return <><Button onClick={() => setOpen(true)}>Workflow settings</Button>
+    {open && <Dialog title="Workflow settings" size="lg" className="wf-page" onClose={() => { if (!frozen) setOpen(false); }} footer={<Button disabled={frozen} onClick={() => setOpen(false)}>Keep draft and close</Button>}>
+      <p>Changing the goal or scope requires renewed goal acceptance. After Start, changing how work runs requires Pause and all current turns to end; changing a setting never stops a worker.</p>
+      <fieldset disabled={frozen || stale || !!actionReason(detail, "patch", verified)} className="wf-form-body">
+        <label>Workflow name<input maxLength={200} value={draft.title} onChange={(e) => setDraft({ ...draft, title: e.target.value })} /></label>
+        <label>Goal<textarea maxLength={4000} value={draft.goal} onChange={(e) => setDraft({ ...draft, goal: e.target.value })} /></label>
+        <label>How work runs<select value={draft.mode} onChange={(e) => setDraft({ ...draft, mode: e.target.value as "serial" | "parallel" })}><option value="serial">One task at a time</option><option value="parallel">Independent tasks together</option></select></label>
+        <p>Tasks with dependencies take their turn alone, including review and worker stopping.</p>
+        <label>Task limit<input type="number" min={1} value={draft.taskLimit} onChange={(e) => setDraft({ ...draft, taskLimit: e.target.value })} /></label>
+        <label>Review-round limit<input type="number" min={1} value={draft.roundLimit} onChange={(e) => setDraft({ ...draft, roundLimit: e.target.value })} /></label>
+        <label>Reason<textarea maxLength={4000} value={draft.reason} onChange={(e) => setDraft({ ...draft, reason: e.target.value })} /></label>
+      </fieldset>
+      <WorkflowChange detail={detail} scope={scope} verified={verified} stale={stale} operation="patch" url={workflowPaths.detail(detail.id)} method="PATCH"
+        label="Settings change" invalid={invalid || actionReason(detail, "patch", verified)} body={{ title: draft.title.trim(), goal: draft.goal.trim(), execution_mode: draft.mode,
+          task_limit: Number(draft.taskLimit), round_limit: Number(draft.roundLimit), reason: draft.reason.trim() }} onSaved={(result) => { setOpen(false); onSaved(result); }}
+        check={(latest) => actionReason(latest, "patch", verified) || (latest.launch_enabled && latest.status !== "paused" && latest.execution_mode !== draft.mode ? "Pause new starts and wait for current turns before changing how work runs." : null)}>
+        {(latest) => <><p>{latest.title} → {draft.title}. Goal: {draft.goal}</p><p>Task limit: {draft.taskLimit}. Review-round limit: {draft.roundLimit}. No automatic start or resume follows this save.</p></>}
+      </WorkflowChange>
+      <h3>Objectives</h3>
+      {detail.objectives.length === 0 && <p>No objectives were added to this workflow.</p>}
+      {detail.objectives.map((objective) => <WorkflowObjectiveEditor key={objective.id} detail={detail} objectiveId={objective.id} scope={scope} verified={verified} stale={stale} onSaved={onSaved} />)}
+      <h3>Transfer ownership</h3><p>The new owner must be an eligible human member. Task assignees do not become workflow owners.</p>
+      <label>New owner<select value={draft.owner} disabled={frozen || stale || !!actionReason(detail, "transfer_owner", verified)} onChange={(e) => setDraft({ ...draft, owner: e.target.value })}>
+        <option value="">Choose a person</option>{humans.filter((h) => h.id !== detail.owner_human_id).map((h) => <option key={h.id} value={h.id}>{h.alias}</option>)}</select></label>
+      <WorkflowChange detail={detail} scope={scope} verified={verified} stale={stale} operation="transfer_owner" url={workflowPaths.detail(detail.id) + "/transfer-owner"}
+        label="Ownership transfer" invalid={!draft.owner ? "Choose a new owner." : actionReason(detail, "transfer_owner", verified)} body={{ new_owner_id: draft.owner, reason: draft.reason.trim() }}
+        check={(latest) => actionReason(latest, "transfer_owner", verified)} onSaved={(result) => { setOpen(false); onSaved(result); }}>
+        {() => <p>{humans.find((h) => h.id === draft.owner)?.alias ?? "The selected person"} will control this workflow. This does not transfer project ownership or change task autonomy.</p>}
+      </WorkflowChange>
+    </Dialog>}
+  </>;
+}
