@@ -454,6 +454,40 @@ def test_late_result_after_cancel_is_refused_as_stale_generation(setup_workflow)
     assert err.value.detail["code"] == "stale_generation"
 
 
+def test_plain_retry_restores_only_the_latest_assignee(setup_workflow):
+    cid, _, worker, _, hooks, execute = setup_workflow
+    second = uid()
+    with db_cursor() as (_, cur):
+        cur.execute(
+            "INSERT INTO agents(id,container_id,alias,role,kind,member_role) VALUES (%s,%s,'Second','test','ai','member')",
+            (second, cid),
+        )
+    w = prepare_and_start(setup_workflow, create(setup_workflow, count=1))
+    tid = w["tasks"][0]["id"]
+    e, _ = submit_result(setup_workflow, w, tid)
+    execute("reject", {}, w["id"], tid)
+    with db_cursor() as (_, cur):
+        svc = ws.WorkflowService(cur, hooks)
+        svc.release_confirmed(e["id"], e["generation"], "exited")
+    w = execute("retry", {"assignee_id": second}, w["id"], tid)
+    with db_cursor() as (_, cur):
+        # The replacement finished and the owner sent the task back again.
+        cur.execute(
+            "UPDATE agent_tasks SET assignment_status='done' WHERE task_id=%s", (tid,)
+        )
+        cur.execute(
+            "UPDATE tasks SET awaiting_owner_decision='changes_requested' WHERE id=%s",
+            (tid,),
+        )
+    execute("retry", {}, w["id"], tid)
+    with db_cursor(readonly=True) as (_, cur):
+        cur.execute(
+            "SELECT agent_id FROM agent_tasks WHERE task_id=%s AND assignment_status='assigned'",
+            (tid,),
+        )
+        assert [str(r["agent_id"]) for r in cur.fetchall()] == [str(second)]
+
+
 def test_withdraw_cannot_remove_last_or_accepted_task(setup_workflow):
     w = create(setup_workflow, count=1)
     _, tasks, _ = actions_for(setup_workflow, w["id"], setup_workflow[1])
