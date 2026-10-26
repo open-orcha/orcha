@@ -1,5 +1,5 @@
 // Generated from FastAPI OpenAPI slices. DO NOT EDIT.
-// Workflow source SHA-256: 9ec06a7f1db24b8223b04da8a9f82ab56ee937abd27490f5add7bd7917eb753f
+// Workflow source SHA-256: 773ae1afc4df63a52c567c5869277b2f179d6ae19ab6ab66e77a0b09be991f32
 // Evidence GET source SHA-256: a3a98a4093221faf85216c9e00bfa7d9ed5384c9c435b1f23dd5333f0bf45413
 // Regenerate with tools/generate-workflow-contract.mjs and both source files.
 
@@ -73,6 +73,7 @@ export type DisplayState = {
   "release_available"?: boolean;
   "release_available_at"?: string | null;
   "warning"?: string | null;
+  "list_warning"?: boolean;
 };
 
 export type EvidenceBasis = {
@@ -95,6 +96,31 @@ export type EvidenceReference = {
 
 export type HTTPValidationError = {
   "detail"?: Array<ValidationError>;
+};
+
+export type Impact = {
+  "kind": "start" | "release" | "cancellation";
+  "revision": number;
+  "graph_revision": number;
+  "scope_revision": number;
+  "task_revisions": Record<string, number>;
+  "holds"?: Array<"start" | "human">;
+  "tasks"?: Array<ImpactTask>;
+  "counts_by_state"?: Record<string, number>;
+  "accepted_retained"?: Array<string>;
+  "workers_to_stop"?: Array<WorkerToStop>;
+};
+
+export type ImpactTask = {
+  "task_id": string;
+  "title": string;
+  "work_revision": number;
+  "selected": boolean;
+  "current_status": string;
+  "resulting_status": "refused" | "unchanged" | "blocked" | "waiting_for_prerequisites" | "ready" | "takes_turn_alone";
+  "can_start": boolean;
+  "refusal"?: Blocker | null;
+  "blockers"?: Array<Blocker>;
 };
 
 export type ImportAcceptance = {
@@ -122,6 +148,7 @@ export type ImportTaskImpact = {
   "result_by_agent_id"?: string | null;
   "preparation_state": "draft" | "prepared";
   "start_hold": boolean;
+  "releasable"?: boolean;
   "human_hold_reason"?: string | null;
   "assignee_ids": Array<string>;
   "depends_on": Array<string>;
@@ -134,6 +161,7 @@ export type ImportTasks = {
   "task_ids": Array<string>;
   "acceptances"?: Record<string, ImportAcceptance>;
   "preview_digest": string;
+  "release_task_ids"?: Array<string>;
 };
 
 export type IntegrationCapability = {
@@ -262,6 +290,7 @@ export type ReviewHistory = {
   "reviewed_artifact": EvidenceReference;
   "reviewed_task_id"?: string | null;
   "reviewed_work_revision"?: number | null;
+  "review_work_revision"?: number | null;
   "resolved_by_owner"?: string | null;
   "resolved_reason"?: string | null;
 };
@@ -306,6 +335,12 @@ export type ValidationError = {
   "type": string;
   "input"?: unknown;
   "ctx"?: Record<string, unknown>;
+};
+
+export type WorkerToStop = {
+  "task_id": string;
+  "agent_id"?: string | null;
+  "name"?: string | null;
 };
 
 export type WorkflowCreate = {
@@ -360,6 +395,37 @@ export type WorkflowDraft = {
   "import_acceptances"?: Record<string, ImportAcceptance>;
 };
 
+export type WorkflowImpact = {
+  "id": string;
+  "container_id": string;
+  "title": string;
+  "goal": string;
+  "owner_human_id": string;
+  "status": "active" | "paused" | "completed" | "cancelled";
+  "execution_mode": "serial" | "parallel";
+  "launch_enabled": boolean;
+  "revision": number;
+  "graph_revision": number;
+  "scope_revision": number;
+  "goal_revision": number;
+  "goal_accepted_revision": number | null;
+  "task_limit": number;
+  "round_limit": number;
+  "limit_reached": boolean;
+  "capability": Capability;
+  "available_actions": Array<AvailableAction>;
+  "progress": Progress;
+  "completion": CompletionCheck;
+  "tasks": Array<WorkflowTask>;
+  "objectives": Array<Objective>;
+  "review_rounds"?: Array<ReviewHistory>;
+  "activity"?: Array<Activity>;
+  "activity_truncated"?: boolean;
+  "evidence_capability"?: IntegrationCapability;
+  "created_task_ids"?: Record<string, string>;
+  "impact": Impact;
+};
+
 export type WorkflowList = {
   "workflows": Array<WorkflowDetail>;
   "capability": Capability;
@@ -392,6 +458,8 @@ export type WorkflowTask = {
   "human_hold_reason": string | null;
   "awaiting_owner_decision": string | null;
   "withdrawn_at": string | null;
+  "withdrawn_by"?: string | null;
+  "withdrawn_reason"?: string | null;
   "priority": number;
   "assignee_ids": Array<string>;
   "depends_on": Array<string>;
@@ -461,6 +529,8 @@ export type WorkflowModels = {
   EvidenceItem: EvidenceItem;
   EvidenceReference: EvidenceReference;
   HTTPValidationError: HTTPValidationError;
+  Impact: Impact;
+  ImpactTask: ImpactTask;
   ImportAcceptance: ImportAcceptance;
   ImportPreview: ImportPreview;
   ImportTaskImpact: ImportTaskImpact;
@@ -485,9 +555,11 @@ export type WorkflowModels = {
   TaskMutation: TaskMutation;
   TransferOwner: TransferOwner;
   ValidationError: ValidationError;
+  WorkerToStop: WorkerToStop;
   WorkflowCreate: WorkflowCreate;
   WorkflowDetail: WorkflowDetail;
   WorkflowDraft: WorkflowDraft;
+  WorkflowImpact: WorkflowImpact;
   WorkflowList: WorkflowList;
   WorkflowPatch: WorkflowPatch;
   WorkflowTask: WorkflowTask;
@@ -817,6 +889,9 @@ export const workflowSchemas = {
             "type": "null"
           }
         ]
+      },
+      "list_warning": {
+        "type": "boolean"
       }
     },
     "type": "object",
@@ -906,6 +981,134 @@ export const workflowSchemas = {
       }
     },
     "type": "object"
+  },
+  "Impact": {
+    "properties": {
+      "kind": {
+        "type": "string",
+        "enum": [
+          "start",
+          "release",
+          "cancellation"
+        ]
+      },
+      "revision": {
+        "type": "integer"
+      },
+      "graph_revision": {
+        "type": "integer"
+      },
+      "scope_revision": {
+        "type": "integer"
+      },
+      "task_revisions": {
+        "additionalProperties": {
+          "type": "integer"
+        },
+        "type": "object"
+      },
+      "holds": {
+        "items": {
+          "type": "string",
+          "enum": [
+            "start",
+            "human"
+          ]
+        },
+        "type": "array"
+      },
+      "tasks": {
+        "items": {
+          "$ref": "#/components/schemas/ImpactTask"
+        },
+        "type": "array"
+      },
+      "counts_by_state": {
+        "additionalProperties": {
+          "type": "integer"
+        },
+        "type": "object"
+      },
+      "accepted_retained": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "workers_to_stop": {
+        "items": {
+          "$ref": "#/components/schemas/WorkerToStop"
+        },
+        "type": "array"
+      }
+    },
+    "type": "object",
+    "required": [
+      "kind",
+      "revision",
+      "graph_revision",
+      "scope_revision",
+      "task_revisions"
+    ]
+  },
+  "ImpactTask": {
+    "properties": {
+      "task_id": {
+        "type": "string"
+      },
+      "title": {
+        "type": "string"
+      },
+      "work_revision": {
+        "type": "integer"
+      },
+      "selected": {
+        "type": "boolean"
+      },
+      "current_status": {
+        "type": "string"
+      },
+      "resulting_status": {
+        "type": "string",
+        "enum": [
+          "refused",
+          "unchanged",
+          "blocked",
+          "waiting_for_prerequisites",
+          "ready",
+          "takes_turn_alone"
+        ]
+      },
+      "can_start": {
+        "type": "boolean"
+      },
+      "refusal": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/Blocker"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "blockers": {
+        "items": {
+          "$ref": "#/components/schemas/Blocker"
+        },
+        "type": "array"
+      }
+    },
+    "type": "object",
+    "required": [
+      "task_id",
+      "title",
+      "work_revision",
+      "selected",
+      "current_status",
+      "resulting_status",
+      "can_start"
+    ]
   },
   "ImportAcceptance": {
     "properties": {
@@ -1038,6 +1241,9 @@ export const workflowSchemas = {
       "start_hold": {
         "type": "boolean"
       },
+      "releasable": {
+        "type": "boolean"
+      },
       "human_hold_reason": {
         "anyOf": [
           {
@@ -1106,6 +1312,13 @@ export const workflowSchemas = {
       },
       "preview_digest": {
         "type": "string"
+      },
+      "release_task_ids": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array",
+        "maxItems": 200
       }
     },
     "additionalProperties": false,
@@ -1739,6 +1952,16 @@ export const workflowSchemas = {
           }
         ]
       },
+      "review_work_revision": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
       "resolved_by_owner": {
         "anyOf": [
           {
@@ -1957,6 +2180,37 @@ export const workflowSchemas = {
       "loc",
       "msg",
       "type"
+    ]
+  },
+  "WorkerToStop": {
+    "properties": {
+      "task_id": {
+        "type": "string"
+      },
+      "agent_id": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "name": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "type": "object",
+    "required": [
+      "task_id"
     ]
   },
   "WorkflowCreate": {
@@ -2228,6 +2482,155 @@ export const workflowSchemas = {
       "goal"
     ]
   },
+  "WorkflowImpact": {
+    "properties": {
+      "id": {
+        "type": "string"
+      },
+      "container_id": {
+        "type": "string"
+      },
+      "title": {
+        "type": "string"
+      },
+      "goal": {
+        "type": "string"
+      },
+      "owner_human_id": {
+        "type": "string"
+      },
+      "status": {
+        "type": "string",
+        "enum": [
+          "active",
+          "paused",
+          "completed",
+          "cancelled"
+        ]
+      },
+      "execution_mode": {
+        "type": "string",
+        "enum": [
+          "serial",
+          "parallel"
+        ]
+      },
+      "launch_enabled": {
+        "type": "boolean"
+      },
+      "revision": {
+        "type": "integer"
+      },
+      "graph_revision": {
+        "type": "integer"
+      },
+      "scope_revision": {
+        "type": "integer"
+      },
+      "goal_revision": {
+        "type": "integer"
+      },
+      "goal_accepted_revision": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "task_limit": {
+        "type": "integer"
+      },
+      "round_limit": {
+        "type": "integer"
+      },
+      "limit_reached": {
+        "type": "boolean"
+      },
+      "capability": {
+        "$ref": "#/components/schemas/Capability"
+      },
+      "available_actions": {
+        "items": {
+          "$ref": "#/components/schemas/AvailableAction"
+        },
+        "type": "array"
+      },
+      "progress": {
+        "$ref": "#/components/schemas/Progress"
+      },
+      "completion": {
+        "$ref": "#/components/schemas/CompletionCheck"
+      },
+      "tasks": {
+        "items": {
+          "$ref": "#/components/schemas/WorkflowTask"
+        },
+        "type": "array"
+      },
+      "objectives": {
+        "items": {
+          "$ref": "#/components/schemas/Objective"
+        },
+        "type": "array"
+      },
+      "review_rounds": {
+        "items": {
+          "$ref": "#/components/schemas/ReviewHistory"
+        },
+        "type": "array"
+      },
+      "activity": {
+        "items": {
+          "$ref": "#/components/schemas/Activity"
+        },
+        "type": "array"
+      },
+      "activity_truncated": {
+        "type": "boolean"
+      },
+      "evidence_capability": {
+        "$ref": "#/components/schemas/IntegrationCapability"
+      },
+      "created_task_ids": {
+        "additionalProperties": {
+          "type": "string"
+        },
+        "type": "object"
+      },
+      "impact": {
+        "$ref": "#/components/schemas/Impact"
+      }
+    },
+    "type": "object",
+    "required": [
+      "id",
+      "container_id",
+      "title",
+      "goal",
+      "owner_human_id",
+      "status",
+      "execution_mode",
+      "launch_enabled",
+      "revision",
+      "graph_revision",
+      "scope_revision",
+      "goal_revision",
+      "goal_accepted_revision",
+      "task_limit",
+      "round_limit",
+      "limit_reached",
+      "capability",
+      "available_actions",
+      "progress",
+      "completion",
+      "tasks",
+      "objectives",
+      "impact"
+    ]
+  },
   "WorkflowList": {
     "properties": {
       "workflows": {
@@ -2424,6 +2827,26 @@ export const workflowSchemas = {
           {
             "type": "string",
             "format": "date-time"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "withdrawn_by": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "withdrawn_reason": {
+        "anyOf": [
+          {
+            "type": "string"
           },
           {
             "type": "null"

@@ -121,8 +121,9 @@ function WorkflowScreen() {
     displayLabel: t.display_state.label, reasons: t.blockers.map((b) => b.message),
     prerequisites: t.depends_on.map((id) => ({ id, title: detail.tasks.find((p) => p.id === id)?.title ?? "Prerequisite unavailable" })),
     dependents: detail.tasks.filter((other) => other.depends_on.includes(t.id)).map((other) => ({ id: other.id, title: other.title })),
-    unconfirmedStopWarning: !!t.display_state.warning, releaseAvailableAt: t.display_state.release_available_at ?? null,
-    warning: t.display_state.warning,
+    unconfirmedStopWarning: t.display_state.list_warning === true, releaseAvailableAt: t.display_state.release_available_at ?? null,
+    warning: t.display_state.list_warning ? t.display_state.warning : null,
+    withdrawal: t.withdrawn_at ? { by: t.withdrawn_by ? actorName(t.withdrawn_by) : "Name unavailable", reason: t.withdrawn_reason ?? "Reason unavailable" } : null,
     // Missing task autonomy means OFF; legacy project/agent levels never grant it.
     autonomy: t.autonomy === "on",
   })) ?? [];

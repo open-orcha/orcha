@@ -67,7 +67,7 @@ it("rechecks permission before recording owner resolution and preserves the reas
 });
 
 const round: ReviewHistory = { id: "round", loop_key: "loop", round_number: 1, review_task_id: "review", correction_task_id: null,
-  reviewed_task_id: "build", reviewed_work_revision: 2, outcome: "changes_requested",
+  reviewed_task_id: "build", reviewed_work_revision: 2, review_work_revision: 5, outcome: "changes_requested",
   reviewed_artifact: { evidence_set_id: "original-evidence", items: [{ item_id: "original-item", deliverable_id: "original-file", deliverable_version: 4, sha256: "b".repeat(64) }] } };
 
 it("opens the recorded reviewed-task file version even after the task has newer work", () => {
@@ -76,6 +76,7 @@ it("opens the recorded reviewed-task file version even after the task has newer 
   })} /></MemoryRouter>);
   expect(screen.getByRole("link", { name: "Reviewed file 1 — version 4" })).toHaveAttribute("href", "/api/tasks/build/deliverables/original-file/versions/4/raw");
   expect(screen.getByText(/work revision 2/)).toBeVisible();
+  expect(screen.getByText("Review report work revision 5.")).toBeVisible();
   const reviewed = new URL(screen.getByRole("link", { name: "Build Android" }).getAttribute("href")!, "https://orcha.example");
   expect(reviewed.searchParams.get("workflowReturn")).toBe("/workflows/release?cid=project&tab=review");
 });

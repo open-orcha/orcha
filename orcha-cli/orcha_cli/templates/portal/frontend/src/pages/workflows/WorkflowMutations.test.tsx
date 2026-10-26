@@ -3,7 +3,7 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, expect, it, vi } from "vitest";
 import { WorkflowDraftEditor } from "./WorkflowDraftEditor";
 import { WorkflowActions } from "./WorkflowActions";
-import { exampleWorkflow, exampleTask, jsonResponse, writeCapability } from "./workflowTestFixtures";
+import { exampleWorkflow, exampleTask, exampleImpact, jsonResponse, writeCapability } from "./workflowTestFixtures";
 import { type DraftScope } from "./workflowDraft";
 const scope = (): DraftScope => ({ origin: "https://orcha.example", project: "project", identity: crypto.randomUUID() });
 const preview = { graph_revision: 4, preview_digest: "graph-fingerprint", selected_task_ids: [], required_task_ids: [], blockers: [], save_starts_work: false };
@@ -80,11 +80,16 @@ it("recovers a saved receipt without issuing a second write", async () => {
 });
 it("start submits only selected prepared task revisions and leaves human holds alone", async () => {
   const detail = exampleWorkflow({ capability: writeCapability, available_actions: [{ action: "start", enabled: true }], tasks: [exampleTask(), exampleTask({ id: "guide", title: "Write guide", human_hold_by: "kedar" })] });
-  const fetch = vi.fn(async () => jsonResponse(detail)); vi.stubGlobal("fetch", fetch); const onSaved = vi.fn();
+  const fetch = vi.fn(async (url: string) => jsonResponse(url.includes("start-check") ? exampleImpact(detail, url) : detail)); vi.stubGlobal("fetch", fetch); const onSaved = vi.fn();
   render(<MemoryRouter><WorkflowActions detail={detail} scope={scope()} verified stale={false} onSaved={onSaved} /></MemoryRouter>);
   fireEvent.click(screen.getByRole("button", { name: "Review start" })); const dialog = await screen.findByRole("dialog");
   await within(dialog).findByRole("checkbox", { name: /Build Android/ }); expect(within(dialog).getByRole("button", { name: "Start selected tasks" })).toBeDisabled();
-  fireEvent.click(within(dialog).getByRole("checkbox", { name: /Build Android/ })); fireEvent.click(within(dialog).getByRole("button", { name: "Start selected tasks" }));
+  fireEvent.click(within(dialog).getByRole("checkbox", { name: /Build Android/ }));
+  expect(within(dialog).getByRole("button", { name: "Start selected tasks" })).toBeDisabled();
+  fireEvent.click(within(dialog).getByRole("button", { name: "Check selected tasks" }));
+  await waitFor(() => expect(within(dialog).getByRole("button", { name: "Start selected tasks" })).toBeEnabled());
+  expect(within(dialog).getAllByText("Another task is using the workflow turn")).toHaveLength(2);
+  fireEvent.click(within(dialog).getByRole("button", { name: "Start selected tasks" }));
   await waitFor(() => expect(onSaved).toHaveBeenCalledTimes(1));
   const calls = fetch.mock.calls as unknown as [string, RequestInit][]; const body = JSON.parse(calls.find(([url]) => url.endsWith("/start"))![1].body as string);
   expect(body.task_ids).toEqual(["build"]); expect(body.task_revisions).toEqual({ build: 3 }); expect(body.holds).toEqual(["start"]); expect(body.expected_revision).toBe(7);

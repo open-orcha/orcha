@@ -58,6 +58,7 @@ export function WorkflowReviewHistory({ detail, renderActions }: { detail: Workf
     {detail.review_rounds === undefined ? <p>Review history is unavailable on this server version.</p> : detail.review_rounds.length === 0 ? <p>No review rounds recorded yet.</p>
       : <ol>{detail.review_rounds.map((round) => <li key={round.id}><h4>Round {round.round_number} — {round.outcome?.replaceAll("_", " ") ?? "Awaiting review"}</h4>
         <WorkflowTaskLink cid={detail.container_id} taskId={round.review_task_id}>{detail.tasks.find((t) => t.id === round.review_task_id)?.title ?? "Open review task"}</WorkflowTaskLink>
+        {round.outcome && <p>{round.review_work_revision != null ? `Review report work revision ${round.review_work_revision}.` : "The review report’s work revision is unavailable on this server version."}</p>}
         {round.correction_task_id && <> · <WorkflowTaskLink cid={detail.container_id} taskId={round.correction_task_id}>{detail.tasks.find((t) => t.id === round.correction_task_id)?.title ?? "Open correction task"}</WorkflowTaskLink></>}
         {round.outcome && round.reviewed_task_id && round.reviewed_work_revision != null ? <>
           <p>Reviewed <WorkflowTaskLink cid={detail.container_id} taskId={round.reviewed_task_id}>{detail.tasks.find((t) => t.id === round.reviewed_task_id)?.title ?? "the recorded task"}</WorkflowTaskLink> · work revision {round.reviewed_work_revision}.</p>
