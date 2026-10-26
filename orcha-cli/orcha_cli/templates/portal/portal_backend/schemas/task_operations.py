@@ -1,6 +1,6 @@
 """Request contracts for task operations endpoints."""
 
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -20,6 +20,16 @@ class TaskMessage(BaseModel):
 class TaskDone(BaseModel):
     agent_id: str
     result: str = Field(..., max_length=MAX_PAYLOAD_LEN)
+
+
+class TaskAutonomyUpdate(BaseModel):
+    """Only the project owner may change a task's future approval authority."""
+
+    autonomy: Literal["off", "on"]
+    actor_agent_id: Optional[str] = Field(
+        default=None,
+        description="Owner UUID fallback when verified proxy identity is unavailable",
+    )
 
 
 class AssignTask(BaseModel):

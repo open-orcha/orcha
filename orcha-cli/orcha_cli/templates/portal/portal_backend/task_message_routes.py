@@ -24,6 +24,9 @@ from portal_backend.push_outbox import push_plan_approval as _push_plan_approval
 from portal_backend.provider_keys import container_llm_key as _container_llm_key
 from portal_backend.schemas.task_operations import TaskMessage
 from portal_backend.result_notifications import answered_result_for_message, lock_result_requests
+from portal_backend.task_autonomy_service import record_approval
+from portal_backend.task_approval_policy import ApprovalPhase
+from portal_backend.task_list_query import PLAN_CUTOFF_SQL, PLAN_ROUND_ORDER_SQL, plan_author_sql
 
 
 @app.post("/api/tasks/{tid}/messages", status_code=201)
@@ -143,15 +146,75 @@ def post_message(tid: str, body: TaskMessage, request: Request):
                     "preview": body.body[:120],
                 },
             )
+        plan_auto_approved = False
+        if (
+            author_kind == "ai"
+            and t.get("autonomy") == "on"
+            and t["status"] == "in_progress"
+        ):
+            # Resolve the same current-round plan rendered by the portal. Only the
+            # assigned author of that exact message may use task autonomy.
+            cur.execute(
+                f"""SELECT m.id,m.body FROM tasks t
+                    CROSS JOIN (SELECT {PLAN_CUTOFF_SQL} AS c FROM tasks t WHERE t.id=%s) pc
+                    JOIN task_messages m ON m.task_id=t.id
+                    JOIN agents ma ON ma.id=m.author_id
+                    WHERE t.id=%s AND ma.kind <> 'human' AND {plan_author_sql('m')}
+                      AND m.created_at > pc.c
+                    ORDER BY {PLAN_ROUND_ORDER_SQL} LIMIT 1""",
+                (tid, tid),
+            )
+            current_plan = cur.fetchone()
+            if current_plan and str(current_plan["id"]) == mid:
+                record_approval(
+                    cur,
+                    t,
+                    body.author_agent_id,
+                    ApprovalPhase.PLAN,
+                    current_plan["body"],
+                    permission_source="task_autonomy",
+                )
+                cur.execute(
+                    """INSERT INTO decisions
+                         (container_id,subject_type,subject_id,decision,reason,
+                          actor_agent_id,target_agent_id)
+                       VALUES (%s,'plan_approval',%s,'approve',%s,%s,%s)""",
+                    (
+                        t["container_id"],
+                        tid,
+                        "Task autonomy was ON for this exact plan version.",
+                        body.author_agent_id,
+                        body.author_agent_id,
+                    ),
+                )
+                log_event(
+                    cur,
+                    t["container_id"],
+                    "ai",
+                    body.author_agent_id,
+                    "task",
+                    tid,
+                    "plan_self_approved",
+                    {
+                        "message_id": mid,
+                        "autonomy": "on",
+                        "autonomy_revision": t["autonomy_revision"],
+                    },
+                )
+                plan_auto_approved = True
         conn.commit()
     # Push pipeline (mig 041): an agent-authored post may be the task's OPENING
     # plan — the moment the approval gate becomes a needs-you item. AFTER the
     # commit, best-effort; the hook itself verifies "earliest agent-authored
     # message + in_progress + undecided" in its own transaction and no-ops on
     # every later post.
-    if author_kind is not None and author_kind != "human":
+    if author_kind is not None and author_kind != "human" and not plan_auto_approved:
         _push_plan_approval(str(t["container_id"]), tid, mid)
-    return {"message_id": mid, "task_id": tid}
+    return {
+        "message_id": mid,
+        "task_id": tid,
+        "plan_auto_approved": plan_auto_approved,
+    }
 
 
 @app.get("/api/tasks/{tid}/messages")

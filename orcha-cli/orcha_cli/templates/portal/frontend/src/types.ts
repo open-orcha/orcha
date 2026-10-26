@@ -104,6 +104,12 @@ export interface Task {
   id: string;
   title: string;
   status: string;
+  autonomy?: "off" | "on";
+  autonomy_revision?: number;
+  autonomy_changed_at?: string | null;
+  autonomy_changed_by?: string | null;
+  workflow_id?: string | null;
+  work_revision?: number;
   reviewer_agent_id?: string | null; // cloud collab v1: owner-assigned reviewer
   reviewer?: { alias?: string; github_login?: string | null } | string | null;
   /** mig 057: how the reviewer was chosen (null = never routed; undefined = older backend) */

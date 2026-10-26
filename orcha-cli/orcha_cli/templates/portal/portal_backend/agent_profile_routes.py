@@ -130,6 +130,14 @@ def update_agent(aid: str, body: AgentUpdate, request: Request):
             400,
             "no updatable field supplied (role / system_prompt / alias / autonomy_override)",
         )
+    if override_supplied:
+        raise HTTPException(
+            410,
+            {
+                "code": "task_autonomy_only",
+                "message": "Per-agent autonomy was retired. Change autonomy on the individual task.",
+            },
+        )
     with db_cursor() as (conn, cur):
         cur.execute("SELECT kind, container_id FROM agents WHERE id=%s", (aid,))
         row = cur.fetchone()
@@ -142,8 +150,6 @@ def update_agent(aid: str, body: AgentUpdate, request: Request):
         # both needs both.
         if profile_supplied:
             enforce_grant(cur, request, str(row["container_id"]), "manage_agents")
-        if override_supplied:
-            enforce_grant(cur, request, str(row["container_id"]), "manage_autonomy")
         body.actor_agent_id = trusted_actor(
             cur, request, str(row["container_id"]), body.actor_agent_id
         )
@@ -156,8 +162,6 @@ def update_agent(aid: str, body: AgentUpdate, request: Request):
         # mig 043: a human never marks a task done, so an override would be inert AND misleading —
         # reject it outright (mirrors the humans-carry-no-system_prompt guard). Clearing to null on
         # a human is a harmless no-op we still reject for a single consistent contract.
-        if override_supplied and row["kind"] == "human":
-            raise HTTPException(400, "humans carry no autonomy_override")
 
         sets, params, changed = [], [], []
         if body.role is not None:
@@ -174,10 +178,6 @@ def update_agent(aid: str, body: AgentUpdate, request: Request):
             sets.append("alias=%s")
             params.append(body.alias)
             changed.append("alias")
-        if override_supplied:
-            sets.append("autonomy_override=%s")
-            params.append(body.autonomy_override)
-            changed.append("autonomy_override")
         params.append(aid)
         before = config_before(cur, aid)  # config history: pre-change state (row-locked)
         try:

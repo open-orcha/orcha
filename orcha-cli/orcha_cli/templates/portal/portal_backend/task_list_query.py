@@ -94,6 +94,8 @@ def _task_list_sql(where: str, order: str) -> str:
                                      ORDER BY l.started_at DESC LIMIT 1"""))
     return f"""SELECT t.id, t.title, t.description, t.definition_of_done, t.status, t.priority,
                       t.is_root, t.created_by_agent_id, t.result,
+                      t.autonomy, t.autonomy_revision, t.autonomy_changed_at,
+                      t.autonomy_changed_by, t.workflow_id, t.work_revision,
                       -- SPEC-4: per-task working agreement {{review_chain,handoff_to,autonomy,notes}}
                       -- (NULL when unset). Rides the shared task-list builder so it surfaces on the
                       -- snapshot poll + GET /containers/{{cid}}/tasks with no extra call.

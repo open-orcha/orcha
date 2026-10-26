@@ -16,6 +16,7 @@ from portal_backend.workflow_service import WorkflowActor, WorkflowHooks, Workfl
 from portal_backend.workflow_worker_auth import lock_run, record_runner_contact, require_current_generation, token_execution
 from portal_backend.workflow_worker_launch import abort_launch, activate, continue_turn, launch_receipt, preallocate_run, require_runner
 from portal_backend.workflow_worker_stops import confirm_stopped, release_lost, stop_execution
+from portal_backend.workflow_integration import IntegratedWorkflowHooks
 
 
 def terminalize(cur, run_id, status, *, cause):
@@ -36,7 +37,7 @@ class WorkflowWorkerHooks(WorkflowHooks):
         return stop_execution(cur, execution, origin=origin, actor_id=actor.id, reason=reason, operation_key=str(uuid4()))
 
 
-runtime_hooks_factory = WorkflowWorkerHooks
+runtime_hooks_factory = IntegratedWorkflowHooks
 
 
 def _runner_run(cur, aid, run_id, credential):
@@ -93,9 +94,38 @@ def confirm_worker_stopped(aid: str, rid: str, body: WorkflowStopObserved,
                            x_orcha_runner_token: Optional[str] = Header(default=None)):
     require_capability()
     with db_cursor() as (_, cur):
-        _, w, _, e = _runner_run(cur, aid, rid, x_orcha_runner_token)
+        _, w, task, e = _runner_run(cur, aid, rid, x_orcha_runner_token)
         result = confirm_stopped(cur, e, run_id=rid, generation=body.generation, terminalize=terminalize)
-        WorkflowService(cur, runtime_hooks_factory()).reconcile(str(w["id"]))
+        svc = WorkflowService(cur, runtime_hooks_factory())
+        cur.execute(
+            "SELECT * FROM tasks WHERE id=%s",
+            (task["id"],),
+        )
+        current_task = cur.fetchone()
+        cur.execute(
+            "SELECT * FROM workflow_executions WHERE id=%s",
+            (e["id"],),
+        )
+        current_execution = cur.fetchone()
+        if (
+            current_task["status"] == "needs_verification"
+            and current_task.get("autonomy") == "on"
+            and current_execution["evidence_state"] == "saved"
+            and current_execution["current_evidence_set_id"]
+        ):
+            from portal_backend.workflow_evidence_service import evidence_reference
+
+            detail = svc.accept_task(
+                str(task["id"]),
+                WorkflowActor(aid, True, True),
+                evidence_reference(cur, current_execution["current_evidence_set_id"]),
+                expected_revision=w["revision"],
+                expected_work_revision=current_task["work_revision"],
+                idempotency_key=f"auto-accept:{e['id']}:{e['generation']}",
+            )
+            result = {**result, "task_status": "completed", "workflow": detail}
+        else:
+            svc.reconcile(str(w["id"]))
         return result
 
 

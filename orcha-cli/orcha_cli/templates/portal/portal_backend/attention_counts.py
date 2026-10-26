@@ -32,7 +32,6 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional
 
 from portal_backend import sql
 from portal_backend.task_list_query import PLAN_CUTOFF_SQL, PLAN_GATE_OPEN_SQL, PLAN_ROUND_ORDER_SQL, plan_author_sql
-from portal_backend.autonomy import effective_autonomy
 
 # The acting-human resolution result for one container.
 READ_ONLY = "read_only"
@@ -81,9 +80,9 @@ def needs_you_by_container(
     cids = [str(c["id"]) for c in rows]
     by_cid = {str(c["id"]): c for c in rows}
 
-    # LIVE agents only — the snapshot the portal resolves aliases against.
+    # LIVE agents are still needed for request targeting, never for task authority.
     cur.execute(
-        f"""SELECT id, container_id, alias, kind, autonomy_override
+        f"""SELECT id, container_id, alias, kind
              FROM agents
             WHERE {sql.in_list('container_id')} AND terminated_at IS NULL""",
         (sql.list_param(cids),),
@@ -97,7 +96,7 @@ def needs_you_by_container(
     # Candidate tasks: needs_verification, or an undecided in-progress task with an
     # agent-authored opening plan (task_list_query plan_message / plan_decision).
     cur.execute(
-        """SELECT t.id, t.container_id, t.status, t.reviewer_agent_id,
+        """SELECT t.id, t.container_id, t.status, t.autonomy, t.reviewer_agent_id,
                   EXISTS (SELECT 1 FROM agents ra WHERE ra.id = t.reviewer_agent_id)
                     AS reviewer_exists,
                   (SELECT ma.alias FROM (SELECT """ + PLAN_CUTOFF_SQL + """ AS c) pc
@@ -130,22 +129,13 @@ def needs_you_by_container(
         acting = acting_by_cid.get(cid)
         if acting == READ_ONLY:
             continue
-        c = by_cid[cid]
-        level = c["autonomy_level"] or "plan"
         kind = None
         if t["status"] == "in_progress":
             if t["plan_author"] is None:
                 continue  # no agent plan posted: not a pending plan
-            aliases = live_by_alias.get(cid, {})
-            who = aliases.get(t["plan_author"]) or aliases.get(t["first_assignee"])
-            eff = effective_autonomy(
-                level,
-                bool(c["autonomy_enforced"]),
-                who.get("autonomy_override") if who else None,
-            )
-            if eff == "plan":
+            if t["autonomy"] != "on":
                 kind = "plan"
-        elif level != "full":
+        elif t["autonomy"] != "on":
             kind = "verify"
         if kind and not _task_for_other(t, acting):
             out[cid][kind] += 1

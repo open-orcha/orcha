@@ -229,12 +229,8 @@ def test_notifier_never_prepares_or_spawns_before_reservation():
 
 
 async def test_api_capability_and_runner_credentials_are_required(turn, client, monkeypatch):
-    from portal_backend import workflow_service
     body = {"task_id": turn["tid"], "expected_workflow_revision": 1, "expected_work_revision": 1, "operation_key": "api"}
     url = f"/api/agents/{turn['aid']}/runs/reserve"
-    response = await client.post(url, json=body)
-    assert response.status_code == 503
-    monkeypatch.setattr(workflow_service, "WORKFLOWS_INTEGRATED", True)
     for headers in ({}, {"X-Orcha-Runner-Token": "not-a-credential"}):
         response = await client.post(url, json=body, headers=headers)
         assert response.status_code == 403
@@ -397,6 +393,64 @@ async def test_positive_exit_releases_stopped_work_but_keeps_review_turn(turn, d
         _, _, e = lock_run(cur, turn["launch"]["run_id"])
         assert confirm_stopped(cur, e, run_id=e["run_id"], generation=1, terminalize=terminalize)["state"] == expected
     assert db.execute("SELECT worker_stopped_at FROM workflow_executions WHERE id=%s", (turn["eid"],))[0]["worker_stopped_at"]
+
+
+@pytest.mark.parametrize("autonomy,accepted_by", [("off", "human"), ("on", "ai")])
+async def test_workflow_done_preserves_evidence_and_uses_task_only_acceptance(
+    turn, client, db, autonomy, accepted_by
+):
+    token = activate_turn(turn)["run_token"]
+    db.execute(
+        "UPDATE tasks SET autonomy=%s,autonomy_revision=2 WHERE id=%s",
+        (autonomy, turn["tid"]),
+    )
+    submitted = await client.post(
+        f"/api/tasks/{turn['tid']}/done",
+        json={"agent_id": turn["aid"], "result": "Saved workflow result"},
+        headers={"X-Orcha-Run-Token": token},
+    )
+    assert submitted.status_code == 200, submitted.text
+    assert submitted.json()["status"] == "needs_verification"
+    evidence = submitted.json()["evidence"]
+    assert evidence["state"] == "pending"
+
+    finished = await client.post(
+        f"/api/runs/{turn['launch']['run_id']}/finish",
+        json={"status": "exited", "exit_code": 0, "output": "tests passed", "diff": ""},
+    )
+    assert finished.status_code == 200, finished.text
+    stopped = await client.post(
+        f"/api/agents/{turn['aid']}/runs/{turn['launch']['run_id']}/confirm-stopped",
+        json={"generation": 1},
+        headers={"X-Orcha-Runner-Token": turn["secret"]},
+    )
+    assert stopped.status_code == 200, stopped.text
+
+    if autonomy == "off":
+        assert db.execute("SELECT status FROM tasks WHERE id=%s", (turn["tid"],))[0]["status"] == "needs_verification"
+        approved = await client.post(
+            f"/api/tasks/{turn['tid']}/verify",
+            json={"approve": True, "actor_agent_id": turn["human"]},
+        )
+        assert approved.status_code == 200, approved.text
+    else:
+        assert stopped.json()["task_status"] == "completed"
+
+    task = db.execute("SELECT status FROM tasks WHERE id=%s", (turn["tid"],))[0]
+    assert task["status"] == "completed"
+    acceptance = db.execute(
+        "SELECT actor_kind,autonomy_at_acceptance,autonomy_revision,evidence_set_id "
+        "FROM workflow_task_acceptances WHERE task_id=%s",
+        (turn["tid"],),
+    )[0]
+    assert acceptance["actor_kind"] == accepted_by
+    assert acceptance["autonomy_at_acceptance"] == autonomy
+    assert acceptance["autonomy_revision"] == 2
+    assert str(acceptance["evidence_set_id"]) == evidence["evidence_set_id"]
+    saved = db.execute(
+        "SELECT state FROM workflow_evidence_sets WHERE id=%s", (evidence["evidence_set_id"],)
+    )[0]
+    assert saved["state"] == "saved"
 
 
 async def test_ordinary_run_token_contact_check_never_opens_a_write_transaction(db, monkeypatch):

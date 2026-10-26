@@ -1,6 +1,7 @@
 """Approve completed work or return it to its assignees."""
 
 import json
+from uuid import uuid4
 
 from fastapi import HTTPException, Request
 
@@ -21,6 +22,8 @@ from portal_backend.review_routing import (
 )
 from portal_backend.schemas.task_operations import TaskVerify
 from portal_backend.verdikt_autofix import end_for_person as _end_autofix
+from portal_backend.task_autonomy_service import completion_submission, record_approval
+from portal_backend.task_approval_policy import ApprovalPhase
 
 _complete_and_unblock_getter = None
 
@@ -93,6 +96,61 @@ def verify_task(tid: str, body: TaskVerify, request: Request):
         # Mig 068: a person deciding ends a running Verdikt auto-fix loop (human authority).
         _end_autofix(cur, t, body.actor_agent_id, "accepted" if body.approve else "rejected")
 
+        if t.get("workflow_id"):
+            from portal_backend.workflow_evidence_service import evidence_reference
+            from portal_backend.workflow_integration import IntegratedWorkflowHooks
+            from portal_backend.workflow_service import WorkflowActor, WorkflowService
+
+            svc = WorkflowService(cur, IntegratedWorkflowHooks())
+            cur.execute("SELECT revision FROM workflows WHERE id=%s", (t["workflow_id"],))
+            workflow = cur.fetchone()
+            actor = WorkflowActor(body.actor_agent_id, True)
+            if body.approve:
+                cur.execute(
+                    """SELECT current_evidence_set_id FROM workflow_executions
+                       WHERE task_id=%s AND state IN
+                         ('reserved','running','awaiting_review','stopping','recovery_needed')
+                       ORDER BY generation DESC LIMIT 1""",
+                    (tid,),
+                )
+                execution = cur.fetchone()
+                if not execution or not execution["current_evidence_set_id"]:
+                    raise HTTPException(
+                        409,
+                        {"code": "evidence_version_stale", "message": "Refresh the saved workflow evidence before accepting."},
+                    )
+                detail = svc.accept_task(
+                    tid,
+                    actor,
+                    evidence_reference(cur, execution["current_evidence_set_id"]),
+                    expected_revision=workflow["revision"],
+                    expected_work_revision=t["work_revision"],
+                    idempotency_key=str(uuid4()),
+                )
+                conn.commit()
+                return {
+                    "task_id": tid,
+                    "status": "completed",
+                    "workflow_id": str(t["workflow_id"]),
+                    "workflow": detail,
+                }
+            detail = svc.reject_task(
+                tid,
+                actor,
+                body.feedback or "",
+                expected_revision=workflow["revision"],
+                expected_work_revision=t["work_revision"],
+                idempotency_key=str(uuid4()),
+            )
+            conn.commit()
+            return {
+                "task_id": tid,
+                "status": "not_ready",
+                "feedback": body.feedback,
+                "workflow_id": str(t["workflow_id"]),
+                "workflow": detail,
+            }
+
         # Parity r2 (D10 "actor verb object"): the verifier's note and the audit row are
         # ATTRIBUTED to the verifying human — the same rule decision_routing applies to
         # [DECISION] posts. A NULL author rendered as an anonymous system line and hid
@@ -101,6 +159,15 @@ def verify_task(tid: str, body: TaskVerify, request: Request):
             # #298: completion mechanics (mark completed, unblock downstream, complete-root)
             # are SHARED with the full-autonomy /done path via _complete_and_unblock so the two
             # paths can't drift. The verify-specific audit + wake events stay here.
+            record_approval(
+                cur,
+                t,
+                body.actor_agent_id,
+                ApprovalPhase.COMPLETION,
+                completion_submission(t),
+                human_review_authorized=True,
+                permission_source="human_verification",
+            )
             unblocked = _complete_and_unblock_getter()(cur, t["container_id"], tid)
 
             # #288/ISS-59: an approval may carry a verifier NOTE (e.g. "please do the

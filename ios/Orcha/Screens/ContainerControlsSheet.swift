@@ -42,10 +42,9 @@ struct ContainerControlsSheet: View {
                                 ?? "These controls need the owner role or the 'manage autonomy' permission.")
                         }
                         notifierSection
-                        autonomySection
                         dangerZone
                         if model.humanId == nil {
-                            Text("Change autonomy from the laptop.")
+                            Text("Task autonomy is changed on each task by the project owner.")
                                 .ltype(.meta)
                                 .foregroundStyle(p.muted)
                         }
@@ -77,23 +76,8 @@ struct ContainerControlsSheet: View {
             }
         } message: {
             Text((pendingWakes ?? true)
-                ? "Agents resume waking at the current autonomy level."
+                ? "Agents resume waking for eligible tasks."
                 : "Agents stop waking immediately. In-flight work finishes; nothing new starts. Humans & live terminals still work.")
-        }
-        .confirmationDialog(
-            "Switch to \(MobileUx.autonomyLabel(pendingLevel ?? autonomyLevel))?",
-            isPresented: Binding(get: { pendingLevel != nil }, set: { if !$0 { pendingLevel = nil } }),
-            titleVisibility: .visible
-        ) {
-            if let level = pendingLevel {
-                Button(MobileUx.autonomyLabel(level), role: level == "full" ? .destructive : nil) {
-                    pendingLevel = nil
-                    Task { await model.setAutonomy(level: level) }
-                }
-                Button("Cancel", role: .cancel) { pendingLevel = nil }
-            }
-        } message: {
-            Text(MobileUx.autonomyBlurb(pendingLevel ?? autonomyLevel))
         }
     }
 
@@ -118,7 +102,7 @@ struct ContainerControlsSheet: View {
                         tint: wakesEnabled ? p.ok : p.warn,
                         title: wakesEnabled ? "Running — agents wake normally" : "Paused — nothing wakes",
                         detail: wakesEnabled
-                            ? "Agents pick up work at the current autonomy level. Pausing stops new wakes; in-flight work finishes."
+                            ? "Agents pick up eligible tasks. Pausing stops new wakes; in-flight work finishes."
                             : "No agent starts new work. Humans and live terminals still work. Resume to pick up where they left off."
                     )
                 }

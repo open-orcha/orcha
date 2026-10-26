@@ -474,10 +474,10 @@ describe("runs", () => {
 
 /* ---- Plan waiting by effective autonomy + board root ------------------------- */
 describe("list chips and board", () => {
-  it("'Plan waiting' only when the plan author's effective autonomy is plan", async () => {
+  it("'Plan waiting' only when that task's autonomy is OFF", async () => {
     const tasks = SNAP.tasks as Record<string, unknown>[];
-    tasks[1] = { ...tasks[1], plan_message: { body: "plan A", author_alias: "forge" } };
-    tasks[2] = { ...tasks[2], status: "in_progress", assignees: ["infra"], plan_message: { body: "progress note", author_alias: "infra" } };
+    tasks[1] = { ...tasks[1], autonomy: "off", plan_message: { body: "plan A", author_alias: "forge" } };
+    tasks[2] = { ...tasks[2], autonomy: "on", status: "in_progress", assignees: ["infra"], plan_message: { body: "progress note", author_alias: "infra" } };
     renderPage("/tasks");
     await waitFor(() => expect(document.querySelector('.trow[data-id="t2bbbbbb"]')?.textContent).toContain("Plan waiting"));
     expect(document.querySelector('.trow[data-id="t3cccccc"]')?.textContent).not.toContain("Plan waiting");

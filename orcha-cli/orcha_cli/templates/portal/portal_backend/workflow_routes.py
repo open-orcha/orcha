@@ -19,8 +19,9 @@ from portal_backend.schemas import workflows as model
 from portal_backend import workflow_service as service
 from portal_backend.workflow_graph import conflict, validate_graph
 from portal_backend.worker_auth import require_work_lane
+from portal_backend.workflow_integration import IntegratedWorkflowHooks
 
-HOOKS = service.WorkflowHooks()
+HOOKS = IntegratedWorkflowHooks()
 
 
 def resolve_actor(cur, request, cid, *, allow_agent=False):
@@ -349,8 +350,15 @@ for path, operation, body_model in [
     ("release-lost-worker", "release_lost_worker", model.TaskMutation),
     ("withdraw-from-scope", "withdraw", model.TaskMutation),
     ("external-result", "external_result", model.OutsideResult),
+    ("accept", "accept", model.AcceptTask),
+    ("reject", "reject", model.TaskMutation),
 ]:
-    _task_action("/api/tasks/{tid}/" + path, operation, body_model)
+    _task_action(
+        "/api/tasks/{tid}/" + path,
+        operation,
+        body_model,
+        allow_agent=operation == "accept",
+    )
 
 
 @app.put(

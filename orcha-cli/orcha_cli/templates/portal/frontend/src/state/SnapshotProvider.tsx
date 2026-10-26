@@ -805,10 +805,7 @@ export function agentAutonomy(snap: Snapshot | null, a: Agent | null | undefined
  *  (per-agent override) posts progress notes, not plans awaiting approval, so
  *  those tasks no longer over-flag as "plan waiting" (screen review). */
 export function planAwaitsHuman(snap: Snapshot | null, t: Task): boolean {
-  if (!pendingPlan(t)) return false;
-  const pm = planMessageOf(t);
-  const who = agentByAlias(snap, pm?.from) || agentByAlias(snap, t.assignee);
-  return agentAutonomy(snap, who) === "plan";
+  return pendingPlan(t) && t.autonomy !== "on";
 }
 
 export interface AttnItems {
@@ -818,11 +815,10 @@ export interface AttnItems {
   count: number;
 }
 export function attnItems(snap: Snapshot | null): AttnItems {
-  const lvl = autLevel(snap);
   const tasks = snap?.tasks ?? [];
   const reqs = snap?.requests ?? [];
   const plans = tasks.filter((t) => planAwaitsHuman(snap, t));
-  const verifs = lvl === "full" ? [] : tasks.filter((t) => t.status === "needs_verification");
+  const verifs = tasks.filter((t) => t.status === "needs_verification" && t.autonomy !== "on");
   const escs = reqs.filter((r) => r.status === "open" && isToHuman(snap, r));
   return { plans, verifs, escs, count: plans.length + verifs.length + escs.length };
 }

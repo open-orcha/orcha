@@ -7,7 +7,6 @@ from fastapi import Header, HTTPException, Request
 from portal_backend.agent_status import bump_agent, log_event, recompute_agent_status
 from portal_backend.application import app
 from portal_backend import sql
-from portal_backend.autonomy import effective_autonomy
 from portal_backend.budget_routes import agent_budget_block
 from portal_backend.database import db_cursor
 from portal_backend.event_acknowledgement import _ack_events_handled
@@ -65,7 +64,8 @@ def agent_next(
                   WHERE t.container_id=%s AND t.status='ready' AND t.is_root = false
                   ORDER BY t.priority, t.created_at
                   LIMIT 1{sql.for_update(skip_locked=True)})
-                RETURNING id, title, description, definition_of_done, priority, protocol""",
+                RETURNING id, title, description, definition_of_done, priority, protocol,
+                          autonomy, autonomy_revision, workflow_id, work_revision""",
             (aid, cid),
         )
         task = cur.fetchone()
@@ -81,20 +81,6 @@ def agent_next(
         )
         _ack_events_handled(cur, aid, "task_assigned", "task_id", tid)
         _ack_events_handled(cur, aid, "task_ready", "task_id", tid)
-        # #298 + mig 043: expose BOTH the container level+enforced flag AND this claiming agent's
-        # EFFECTIVE level (additive — `autonomy_level` keeps its container-level meaning so no
-        # existing consumer breaks). The worker keys its advisory gh/git behavior off
-        # effective_autonomy — its own override (or the container level when enforced/inherit).
-        cur.execute(
-            "SELECT autonomy_level, autonomy_enforced FROM containers WHERE id=%s", (cid,)
-        )
-        c = cur.fetchone()
-        autonomy_level = c["autonomy_level"]
-        autonomy_enforced = c["autonomy_enforced"]
-        cur.execute("SELECT autonomy_override FROM agents WHERE id=%s", (aid,))
-        effective_level = effective_autonomy(
-            autonomy_level, autonomy_enforced, cur.fetchone()["autonomy_override"]
-        )
         bump_agent(cur, aid)
         recompute_agent_status(cur, aid)
         log_event(cur, cid, "ai", aid, "task", tid, "claimed", {"title": task["title"]})
@@ -107,8 +93,11 @@ def agent_next(
             "definition_of_done": task["definition_of_done"],
             "priority": task["priority"],
             "protocol": task["protocol"],
+            "autonomy": task["autonomy"],
+            "autonomy_revision": task["autonomy_revision"],
+            "workflow_id": str(task["workflow_id"]) if task["workflow_id"] else None,
+            "work_revision": task["work_revision"],
         },
-        "autonomy_level": autonomy_level,
-        "autonomy_enforced": autonomy_enforced,
-        "effective_autonomy": effective_level,
+        "task_autonomy": task["autonomy"],
+        "task_autonomy_revision": task["autonomy_revision"],
     }

@@ -5,9 +5,8 @@ route adapters must resolve identity, lock the current task and compute scheduli
 and evidence blockers before calling it. A returned permission is an audit snapshot,
 not a task transition, execution permit or workflow completion.
 
-The integration is not enabled yet: migration and mid-task toggle rules await the
-owner's decision. Existing routes keep their current behavior until those adapters
-and the workflow admission/evidence services are ready together.
+Owner-only toggles apply to future decisions. Existing approvals keep the mode,
+revision, actor and exact submitted work they were granted against.
 """
 
 from __future__ import annotations

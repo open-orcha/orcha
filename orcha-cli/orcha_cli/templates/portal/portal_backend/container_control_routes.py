@@ -90,46 +90,13 @@ def set_autonomy_level(cid: str, body: AutonomyUpdate, request: Request):
     """
     if not valid_uuid(cid):
         raise HTTPException(400, "container_id is not a valid UUID")
-    if body.level not in AUTONOMY_LEVELS:
-        raise HTTPException(400, f"level must be one of {AUTONOMY_LEVELS}")
-    with db_cursor() as (connection, cur):
-        require_container(cur, cid)
-        # Per-project identity: a trusted proxy login IS the actor (403 non-member).
-        # Access model: the wake/autonomy switches are owner-or-manage_autonomy.
-        enforce_grant(cur, request, cid, "manage_autonomy")
-        body.actor_agent_id = trusted_actor(cur, request, cid, body.actor_agent_id)
-        require_kind(cur, body.actor_agent_id, ("human",))
-        if body.autonomy_enforced is None:
-            cur.execute(
-                "UPDATE containers SET autonomy_level=%s WHERE id=%s "
-                "RETURNING autonomy_level, autonomy_enforced",
-                (body.level, cid),
-            )
-            detail = {"level": body.level}
-        else:
-            cur.execute(
-                "UPDATE containers SET autonomy_level=%s, autonomy_enforced=%s WHERE id=%s "
-                "RETURNING autonomy_level, autonomy_enforced",
-                (body.level, body.autonomy_enforced, cid),
-            )
-            detail = {"level": body.level, "autonomy_enforced": body.autonomy_enforced}
-        row = cur.fetchone()
-        log_event(
-            cur,
-            cid,
-            "human",
-            body.actor_agent_id,
-            "container",
-            cid,
-            "autonomy_changed",
-            detail,
-        )
-        connection.commit()
-    return {
-        "container_id": cid,
-        "autonomy_level": row["autonomy_level"],
-        "autonomy_enforced": row["autonomy_enforced"],
-    }
+    raise HTTPException(
+        410,
+        {
+            "code": "task_autonomy_only",
+            "message": "Project autonomy was retired. Change autonomy on the individual task.",
+        },
+    )
 
 
 @app.put(

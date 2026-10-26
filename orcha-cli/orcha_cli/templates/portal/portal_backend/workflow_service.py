@@ -32,7 +32,7 @@ from portal_backend.workflow_scheduling import (
     workflow_eligibility,
 )
 
-WORKFLOWS_INTEGRATED = False
+WORKFLOWS_INTEGRATED = True
 
 
 def require_capability():

@@ -10,6 +10,8 @@ from portal_backend.guards import require_kind, require_task, valid_uuid
 from portal_backend.identity_routes import trusted_actor
 from portal_backend.schemas.agent_state import DecisionCreate
 from portal_backend.task_list_query import PLAN_CUTOFF_SQL, PLAN_ROUND_ORDER_SQL, plan_author_sql
+from portal_backend.task_autonomy_service import record_approval
+from portal_backend.task_approval_policy import ApprovalPhase
 
 
 @app.post("/api/decisions", status_code=201)
@@ -40,7 +42,7 @@ def create_decision(body: DecisionCreate, request: Request):
             # Resolve the SAME current plan shown by the task card. Older clients may
             # still send the coordinator's id (or omit a target entirely).
             cur.execute(
-                f"""SELECT m.author_id FROM tasks t
+                f"""SELECT m.author_id,m.body FROM tasks t
                     CROSS JOIN (SELECT {PLAN_CUTOFF_SQL} AS c FROM tasks t WHERE t.id=%s) pc
                     JOIN task_messages m ON m.task_id=t.id
                     JOIN agents ma ON ma.id=m.author_id
@@ -112,6 +114,20 @@ def create_decision(body: DecisionCreate, request: Request):
         )
         row = cur.fetchone()
         decision_id = str(row["id"])
+        if (
+            body.subject_type == "plan_approval"
+            and body.decision == "approve"
+            and plan
+        ):
+            record_approval(
+                cur,
+                task,
+                body.actor_agent_id,
+                ApprovalPhase.PLAN,
+                plan["body"],
+                human_review_authorized=True,
+                permission_source="human_plan_decision",
+            )
         if body.target_agent_id is not None:
             publish_event(
                 cur,

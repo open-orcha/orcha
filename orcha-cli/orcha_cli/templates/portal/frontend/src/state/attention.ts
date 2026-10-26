@@ -26,7 +26,6 @@ import {
   actingAuthority,
   agentById,
   agentByAlias,
-  autLevel,
   isToHuman,
   planAwaitsHuman,
   planMessageOf,
@@ -94,7 +93,6 @@ function requestForOtherHuman(snap: Snapshot, r: OrchaRequest, actingId: string 
 export function selectAttention(snap: Snapshot | null, actingHumanId: string | null, opts: AttentionOpts = {}): Attention {
   if (!snap) return { items: [], count: null, partial: false, followUps: [] };
   const cid = snap.container?.id != null ? String(snap.container.id) : null;
-  const level = autLevel(snap);
   const acting = actingHumanId != null ? agentById(snap, actingHumanId) : null;
   const items: AttentionItem[] = [];
 
@@ -107,7 +105,7 @@ export function selectAttention(snap: Snapshot | null, actingHumanId: string | n
       const pm = planMessageOf(t);
       since = (pm && pm.at) || t.started_at || null;
       agentAlias = (pm && pm.from) || agentAlias;
-    } else if (level !== "full" && t.status === "needs_verification") {
+    } else if (t.status === "needs_verification" && t.autonomy !== "on") {
       kind = "verify";
       since = t.completed_at || t.started_at || t.created_at || null;
     }

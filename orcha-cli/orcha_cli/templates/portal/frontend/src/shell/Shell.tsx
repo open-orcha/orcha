@@ -408,8 +408,6 @@ function AutonomyControls() {
   return (
     <div className="ctl-wrap" id="ctlWrap">
       <NotifierSwitch />
-      <span className="ctl-div" aria-hidden="true" />
-      <AutonomyLevels />
     </div>
   );
 }
@@ -810,8 +808,7 @@ function NotificationCenter({ open, onClose, onUnread, onPaused }: { open: boole
 
 /* ---- Execution controls (header popover) --------------------------------- */
 function ExecutionControls() {
-  const { snap, connection, cid } = useSnapshot();
-  const pmode = useProjectMode(cid).mode;
+  const { snap, connection } = useSnapshot();
   const chrome = useChrome();
   const [localOpen, setLocalOpen] = useState(false);
   const open = chrome ? chrome.execOpen : localOpen;
@@ -819,19 +816,15 @@ function ExecutionControls() {
   const btnRef = useRef<HTMLButtonElement | null>(null);
   const paused = !!(snap?.container && snap.container.wakes_enabled === false);
   if (!snap?.container) return null;
-  const lvl = autonomyLabel(autLevel(snap));
   const offline = connection === "offline";
   // same honest states as the Overview: wakes_enabled alone doesn't mean
   // anything is actually waking agents
   const ns = notifierState(snap.container);
   const idle = ns === "stale" || ns === "none";
   const state = execChipState(snap.container);
-  // the chip shows ONE state word; the autonomy level (and, for a legacy
-  // level, its raw server value) lives in the tooltip and the popover
-  const level = lvl.known ? autonomyLabelFor(autLevel(snap), lvl.label, pmode) : "set on server (" + (autLevel(snap) || "unset") + ")";
-  const title = "Execution — " + wakesObserved(snap.container) + " · Autonomy: " + level
+  const title = "Execution — " + wakesObserved(snap.container)
     + (offline ? " (as last seen — offline)" : "");
-  const note = "Two independent controls: pausing wakes never changes the autonomy level and does not stop runs already in flight; changing autonomy never resumes wakes.";
+  const note = "This switch pauses new agent wakes and does not stop runs already in flight. Autonomy is set on each task.";
   return (
     <>
       <button

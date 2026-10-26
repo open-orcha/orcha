@@ -886,7 +886,7 @@ export function AgentsPage() {
     const planGated = (t: Task) => {
       if (!planMessageOf(t) || t.plan_decision || t.status === "completed" || t.status === "cancelled") return false;
       const pm = planMessageOf(t);
-      return agentAutonomy(snap, agentByAlias(snap, pm?.from) || agentByAlias(snap, t.assignee)) === "plan";
+      return t.autonomy !== "on";
     };
     const needsYou = (t: Task) => t.status === "needs_verification" || t.status === "awaiting_human" || planAwaitsHuman(snap, t) || (t.status === "awaiting_request" && planGated(t));
     const waiting = mine.filter(needsYou);

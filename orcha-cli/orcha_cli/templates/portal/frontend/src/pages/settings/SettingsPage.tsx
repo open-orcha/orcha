@@ -29,10 +29,10 @@ import { Icon, Modal, useToast } from "../../components/ui";
 import { Button, ButtonLink, Chip, Tooltip } from "../../components/primitives";
 import { EnvKeyHint, SecretInput, SettingRow, SettingRows, SettingsGroup, StatusLine, TestResult, settingsErrText } from "./settingsUi";
 import { useLocation } from "react-router-dom";
-import { Shell, autonomyLabel, execChipState, snapshotErrorKind, wakesObserved } from "../../shell/Shell";
+import { Shell, execChipState, snapshotErrorKind, wakesObserved } from "../../shell/Shell";
 import { useChrome } from "../../shell/chrome";
 import { extensions, type SettingsSection } from "../../extensions";
-import { actingHuman, autLevel, useSnapshot } from "../../state/SnapshotProvider";
+import { actingHuman, useSnapshot } from "../../state/SnapshotProvider";
 import { useGrantAuthority } from "./grantAuthority";
 import { AgentWorktreesSection } from "./AgentWorktreesSection";
 import { projectStatusMeta } from "../../cloud/projects/projectStatus";
@@ -1391,17 +1391,16 @@ export function ProjectIconRow({ cid, name }: { cid: string; name: string }) {
   );
 }
 
-/** Execution: worktree routing (P-05), the agent limit, + where the notifier / autonomy controls live. */
+/** Execution: worktree routing (P-05), the agent limit, and notifier control. */
 function ExecutionSection() {
   const { snap, cid } = useSnapshot();
   const chrome = useChrome();
   const c = snap?.container ?? null;
-  const level = autLevel(snap);
   // EX-14: with no project data there is nothing to show or change — one
   // honest line (+ Retry where it can help), no switch bound to a dead POST.
   if (!c) {
     return (
-      <SettingsGroup settab="execution" title="Notifier and autonomy" flush>
+      <SettingsGroup settab="execution" title="Notifier" flush>
         <ProjectLoadLine id="execLoad" />
       </SettingsGroup>
     );
@@ -1409,8 +1408,8 @@ function ExecutionSection() {
   return (
     <>
       <SettingsGroup
-        settab="execution" title="Notifier and autonomy" flush
-        help="The notifier wakes agents; autonomy decides how far they may go before a human decides. They are independent: pausing wakes never changes autonomy, and never stops runs already in progress."
+        settab="execution" title="Notifier" flush
+        help="The notifier wakes agents. Task autonomy is changed on the task itself; pausing wakes never stops runs already in progress."
         action={chrome ? (
           <Tooltip label="Change them from the header's Execution controls, with their confirmations." placement="top">
             <Button size="sm" variant="secondary" id="setOpenExec" onClick={() => chrome.setExecOpen(true)}>Change…</Button>
@@ -1424,9 +1423,6 @@ function ExecutionSection() {
                 two can never disagree; the line under it names the config. */}
             <SettingRow label="Notifier" desc={wakesObserved(c)}>
               <span className="set-val" id="setNotifierState">{execChipState(c)}</span>
-            </SettingRow>
-            <SettingRow label="Autonomy">
-              <span className="set-val">{autonomyLabel(level).label}</span>
             </SettingRow>
           </SettingRows>
         )}

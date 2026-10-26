@@ -287,6 +287,14 @@ def reset_container(cid: str, body: ContainerReset, request: Request):
             (cid, cid),
         )
         delete_rows("events", "DELETE FROM events WHERE container_id=%s", (cid,))
+        # Workflows own task/execution/evidence history. Remove the workflow root
+        # first so its cascading children cannot retain references to tasks.
+        delete_rows("workflows", "DELETE FROM workflows WHERE container_id=%s", (cid,))
+        delete_rows(
+            "container_task_graph_guard",
+            "DELETE FROM container_task_graph_guard WHERE container_id=%s",
+            (cid,),
+        )
         delete_rows("tasks", "DELETE FROM tasks WHERE container_id=%s", (cid,))
         delete_rows("agents", "DELETE FROM agents WHERE container_id=%s", (cid,))
         cur.execute(
@@ -303,6 +311,10 @@ def reset_container(cid: str, body: ContainerReset, request: Request):
             ),
         )
         root_id = str(cur.fetchone()["id"])
+        cur.execute(
+            "INSERT INTO container_task_graph_guard(container_id) VALUES (%s)",
+            (cid,),
+        )
         cur.execute("UPDATE containers SET root_task_id=%s WHERE id=%s", (root_id, cid))
         log_event(
             cur,

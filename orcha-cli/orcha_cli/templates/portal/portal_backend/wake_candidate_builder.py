@@ -1,6 +1,5 @@
 """Build one notifier wake candidate from persisted agent and event state."""
 
-from portal_backend.autonomy import effective_autonomy
 from portal_backend.drain_classification import (
     _DRAIN_DIRECTIVE,
     _DRAIN_RUN_ACKABLE,
@@ -160,10 +159,16 @@ def build_wake_candidate(
     resolved_model = resolve_model(agent["model"])
     launch_task_id = context_task_id or (auto_tasks[0] if auto_tasks else wake_task_id)
     workflow_launch = {}
+    task_autonomy = "off"
+    task_autonomy_revision = 1
     if launch_task_id:
-        cur.execute("""SELECT t.workflow_id,t.work_revision,w.revision AS workflow_revision
+        cur.execute("""SELECT t.workflow_id,t.work_revision,t.autonomy,t.autonomy_revision,
+                              w.revision AS workflow_revision
                        FROM tasks t LEFT JOIN workflows w ON w.id=t.workflow_id WHERE t.id=%s""", (launch_task_id,))
         launch_task = cur.fetchone()
+        if launch_task:
+            task_autonomy = launch_task["autonomy"] or "off"
+            task_autonomy_revision = launch_task["autonomy_revision"] or 1
         if launch_task and launch_task["workflow_id"]:
             workflow_launch = {"workflow_id": str(launch_task["workflow_id"]),
                                "workflow_revision": launch_task["workflow_revision"],
@@ -213,13 +218,6 @@ def build_wake_candidate(
         "reasoning_effort": resolve_reasoning_effort(
             agent["reasoning_effort"], resolved_model
         ),
-        # mig 043: this agent's own autonomy override (NULL = inherit) plus the EFFECTIVE level
-        # it acts under — additive, alongside the scan-wide container level+enforced flag. The
-        # worker keys its advisory gh/git behavior off effective_autonomy.
-        "autonomy_override": agent.get("autonomy_override"),
-        "effective_autonomy": effective_autonomy(
-            container_autonomy_level,
-            container_autonomy_enforced,
-            agent.get("autonomy_override"),
-        ),
+        "task_autonomy": task_autonomy,
+        "task_autonomy_revision": task_autonomy_revision,
     }

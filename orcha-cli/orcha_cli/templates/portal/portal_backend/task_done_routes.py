@@ -7,7 +7,6 @@ from fastapi import Header, HTTPException, Request
 
 from portal_backend.agent_status import bump_agent, log_event, recompute_agent_status
 from portal_backend.application import app
-from portal_backend.autonomy import effective_autonomy
 from portal_backend.database import db_cursor
 from portal_backend.event_acknowledgement import _ack_events_handled
 from portal_backend.events import publish_event as _publish_event
@@ -26,6 +25,11 @@ from portal_backend.slack_notify import (
     notify_task_needs_verification as _slack_notify_needs_verification,
 )
 from portal_backend.worker_auth import require_work_lane as _require_work_lane
+from portal_backend.task_autonomy_service import (
+    record_approval,
+    task_completion_blockers,
+)
+from portal_backend.task_approval_policy import ApprovalPhase
 
 _complete_and_unblock_getter = None
 _backstop_stranded_request_getter = None
@@ -89,38 +93,81 @@ def mark_done(
             raise HTTPException(
                 403, "this agent isn't assigned to that task — cannot mark it done"
             )
-        # #298 + mig 043: the ONE engine-enforced autonomy gate, now computed as the EFFECTIVE
-        # level for the ACTING agent (body.agent_id — the agent marking done; on this WORK-lane
-        # route the acting identity is exactly the one _require_work_lane above verified a
-        # work-token for, so the override lookup can never key off a spoofed sibling), not the
-        # bare container level. effective_autonomy() is the single shared rule EVERY consumer
-        # routes through: container level if the container ENFORCES it for everyone, else the
-        # agent's per-agent override, else the container level (NULL override = inherit). It
-        # decides the terminal state of THIS agent's /done:
-        #   plan | pr -> needs_verification (a human verifies — today's behavior, the safe default)
-        #   full      -> the task AUTO-COMPLETES (no human in the loop) via the SAME
-        #               _complete_and_unblock path /verify's approve branch uses, so a
-        #               full-autonomy completion is indistinguishable from a verified one
-        #               (downstream unblock + wakes + root→container). An agent with override='full'
-        #               auto-completes while a sibling at container 'plan' still parks — and an
-        #               enforced container flips both back to the container level. The free-text
-        #               per-task protocol.autonomy is DELIBERATELY ignored here — an unvalidated
-        #               string must never widen the hard gate; only these enum columns can.
-        cur.execute(
-            "SELECT autonomy_level, autonomy_enforced FROM containers WHERE id=%s",
-            (t["container_id"],),
-        )
-        c = cur.fetchone()
-        cur.execute(
-            "SELECT autonomy_override FROM agents WHERE id=%s", (body.agent_id,)
-        )
-        acting = cur.fetchone()
-        level = effective_autonomy(
-            c["autonomy_level"],
-            c["autonomy_enforced"],
-            acting["autonomy_override"] if acting else None,
-        )
         result_json = json.dumps({"result": body.result, "by_agent_id": body.agent_id})
+
+        if t.get("workflow_id"):
+            # Workflow work must first freeze the current run's evidence. Generic
+            # completion can never skip reservation, evidence, stop or scheduling rules.
+            from portal_backend.workflow_evidence_service import capture_workflow_submission
+            from portal_backend.workflow_integration import IntegratedWorkflowHooks
+            from portal_backend.workflow_service import WorkflowService
+
+            cur.execute(
+                """SELECT e.*,r.run_id FROM workflow_executions e
+                   JOIN embodiment_tokens tok ON tok.run_id=e.run_id
+                   JOIN worker_runs r ON r.run_id=e.run_id
+                   WHERE tok.run_token=%s AND tok.agent_id=%s AND e.task_id=%s
+                     AND tok.revoked_at IS NULL AND r.ended_at IS NULL
+                   ORDER BY e.generation DESC LIMIT 1""",
+                (x_orcha_run_token, body.agent_id, tid),
+            )
+            execution = cur.fetchone()
+            if not execution:
+                raise HTTPException(
+                    409,
+                    {"code": "workflow_execution_required", "message": "This workflow task must finish from its current reserved worker."},
+                )
+            cur.execute(
+                """SELECT COALESCE(max(source_sequence),0)+1 AS n
+                   FROM workflow_evidence_sets
+                   WHERE workflow_execution_id=%s AND generation=%s""",
+                (execution["id"], execution["generation"]),
+            )
+            sequence = cur.fetchone()["n"]
+            reference = capture_workflow_submission(
+                cur,
+                str(execution["run_id"]),
+                generation=execution["generation"],
+                work_revision=t["work_revision"],
+                source_sequence=sequence,
+                result=body.result,
+                source_revision=None,
+                captured_by=body.agent_id,
+                requires_file_changes=False,
+            )
+            cur.execute("UPDATE tasks SET result=%s WHERE id=%s", (result_json, tid))
+            WorkflowService(cur, IntegratedWorkflowHooks()).submit_for_review(
+                tid,
+                str(execution["id"]),
+                execution["generation"],
+                reference,
+            )
+            bump_agent(cur, body.agent_id)
+            recompute_agent_status(cur, body.agent_id)
+            log_event(
+                cur,
+                t["container_id"],
+                "ai",
+                body.agent_id,
+                "task",
+                tid,
+                "workflow_result_submitted",
+                {
+                    "autonomy": t.get("autonomy") or "off",
+                    "autonomy_revision": t["autonomy_revision"],
+                    "evidence_set_id": reference["evidence_set_id"],
+                },
+            )
+            conn.commit()
+            return {
+                "task_id": tid,
+                "status": "needs_verification",
+                "workflow_id": str(t["workflow_id"]),
+                "evidence": reference,
+                "auto_completion_pending_worker_stop": t.get("autonomy") == "on",
+            }
+
+        level = t.get("autonomy") or "off"
         cur.execute(
             "UPDATE agent_tasks SET assignment_status='done' WHERE agent_id=%s AND task_id=%s",
             (body.agent_id, tid),
@@ -130,9 +177,20 @@ def mark_done(
         # stop re-waking the now-finished assignee. Same txn as the /done (no loss if it rolls back).
         _ack_events_handled(cur, body.agent_id, "task_assigned", "task_id", tid)
         _ack_events_handled(cur, body.agent_id, "task_verified", "task_id", tid)
-        if level == "full":
+        if level == "on":
             cur.execute(
                 "UPDATE tasks SET result=%s WHERE id=%s", (result_json, tid)
+            )
+            approval_task = dict(t)
+            approval_task["result"] = result_json
+            record_approval(
+                cur,
+                approval_task,
+                body.agent_id,
+                ApprovalPhase.COMPLETION,
+                body.result,
+                blockers=task_completion_blockers(t),
+                permission_source="task_autonomy",
             )
             unblocked = _complete_and_unblock_getter()(cur, t["container_id"], tid)
             bump_agent(cur, body.agent_id)
@@ -147,7 +205,8 @@ def mark_done(
                 "status_changed",
                 {
                     "to": "completed",
-                    "autonomy_level": "full",
+                    "task_autonomy": "on",
+                    "autonomy_revision": t["autonomy_revision"],
                     "auto_completed": True,
                     "unblocked": unblocked,
                 },
@@ -190,7 +249,11 @@ def mark_done(
             "task",
             tid,
             "status_changed",
-            {"to": "needs_verification", "autonomy_level": level},
+            {
+                "to": "needs_verification",
+                "task_autonomy": "off",
+                "autonomy_revision": t["autonomy_revision"],
+            },
         )
         # Mig 057: finished work follows the org chart — route the review to the finisher's
         # human manager (or the owner / anyone, per the project setting) and, when an AI

@@ -85,14 +85,16 @@ describe("selectAttention", () => {
     expect(a.items.find((i) => i.key === "verify:tv2")!.assignedToOther).toBe(false);
   });
 
-  it("pr level: no plan approvals (agents proceed); verifications still gate", () => {
+  it("legacy project levels do not change task approval authority", () => {
     const a = selectAttention(snap("pr"), "h1");
-    expect(keys(a).some((k) => k.startsWith("plan:"))).toBe(false);
+    expect(keys(a)).toContain("plan:tp");
     expect(keys(a)).toContain("verify:tv");
   });
 
-  it("full level: neither plans nor verifications; requests still need a human", () => {
-    const a = selectAttention(snap("full"), "h1");
+  it("task autonomy ON removes that task's plan and completion approvals", () => {
+    const s = snap("full");
+    s.tasks.forEach((task) => { if (["tp", "tv", "tv2"].includes(task.id)) task.autonomy = "on"; });
+    const a = selectAttention(s, "h1");
     expect(keys(a).every((k) => k.startsWith("request:"))).toBe(true);
     expect(a.count).toBe(3);
   });

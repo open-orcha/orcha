@@ -67,7 +67,6 @@ fun ContainerControlsSheet(
     val p = Orcha.palette
     val interactive = containerActive && canAct && !busy
     var pendingWakes by remember { mutableStateOf<Boolean?>(null) }
-    var pendingLevel by remember { mutableStateOf<String?>(null) }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -92,7 +91,7 @@ fun ContainerControlsSheet(
             if (!containerActive) {
                 Note("This project is paused or stopped on the server — controls are read-only until it resumes.")
             } else if (!canAct) {
-                Note("Change autonomy from the laptop — this phone isn't paired to a person yet.")
+                Note("Task autonomy is changed on each task by the project owner.")
             }
 
             LSection("Execution state") {
@@ -111,7 +110,7 @@ fun ContainerControlsSheet(
                             tint = if (wakesEnabled) p.ok else p.warn,
                             title = if (wakesEnabled) "Running — agents wake normally" else "Paused — nothing wakes",
                             detail = if (wakesEnabled) {
-                                "Agents pick up work at the current autonomy level. Pausing stops new wakes; in-flight work finishes."
+                                "Agents pick up eligible tasks. Pausing stops new wakes; in-flight work finishes."
                             } else {
                                 "No agent starts new work. People and live terminals still work. Resume to pick up where they left off."
                             },
@@ -120,25 +119,6 @@ fun ContainerControlsSheet(
                 }
             }
 
-            LSection("Autonomy") {
-                LCard {
-                    Column(
-                        Modifier.alpha(if (interactive && wakesEnabled) 1f else 0.6f),
-                        verticalArrangement = Arrangement.spacedBy(LSpace.m),
-                    ) {
-                        LSegmented(
-                            AUTONOMY_LEVELS.map { it.first to it.second },
-                            autonomyLevel,
-                            { if (interactive && it != autonomyLevel) pendingLevel = it },
-                        )
-                        val current = AUTONOMY_LEVELS.firstOrNull { it.first == autonomyLevel } ?: AUTONOMY_LEVELS.first()
-                        Text(current.third, style = ltype(LType.Meta), color = p.muted)
-                        if (!wakesEnabled) {
-                            Text("Applies when execution is running.", style = ltype(LType.Micro), color = p.faint)
-                        }
-                    }
-                }
-            }
         }
     }
 
@@ -149,7 +129,7 @@ fun ContainerControlsSheet(
             text = {
                 Text(
                     if (next) {
-                        "Agents resume waking at the current autonomy level."
+                        "Agents resume waking for eligible tasks."
                     } else {
                         "Agents stop waking immediately. In-flight work finishes; nothing new starts. People and live terminals still work."
                     },
@@ -169,25 +149,6 @@ fun ContainerControlsSheet(
         )
     }
 
-    pendingLevel?.let { level ->
-        val (_, label, meaning) = AUTONOMY_LEVELS.first { it.first == level }
-        val destructive = level == "full"
-        AlertDialog(
-            onDismissRequest = { pendingLevel = null },
-            title = { Text("Switch autonomy to $label?", style = ltype(LType.Headline)) },
-            text = { Text(meaning, style = ltype(LType.Meta)) },
-            confirmButton = {
-                TextButton(onClick = { pendingLevel = null; onSetAutonomy(level) }) {
-                    Text("Switch to $label", color = if (destructive) p.danger else p.accent, fontWeight = FontWeight.SemiBold)
-                }
-            },
-            dismissButton = { TextButton(onClick = { pendingLevel = null }) { Text("Cancel", color = p.muted) } },
-            containerColor = p.surface,
-            titleContentColor = p.text,
-            textContentColor = p.text2,
-            shape = RoundedCornerShape(12.dp),
-        )
-    }
 }
 
 @Composable

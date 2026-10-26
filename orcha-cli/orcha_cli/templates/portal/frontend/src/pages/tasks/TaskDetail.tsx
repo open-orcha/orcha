@@ -58,10 +58,7 @@ import { AttachGlyph, Composer } from "../../components/primitives";
 import { PageHeader, Pager } from "../../shell/PageChrome";
 import {
   agentByAlias,
-  autLevel,
-  agentAutonomy,
   pendingPlan,
-  planAwaitsHuman,
   planMessageOf,
   useActingAuthority,
   useSnapshot,
@@ -125,6 +122,20 @@ export async function post(url: string, body?: unknown): Promise<{ ok: boolean; 
 async function patchReq(url: string, body?: unknown): Promise<{ ok: boolean; status: number; d: any }> {
   const r = await fetch(url, {
     method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body ?? {}),
+  });
+  let d: any = {};
+  try {
+    d = await r.json();
+  } catch {
+    /* empty/non-JSON body */
+  }
+  return { ok: r.ok, status: r.status, d };
+}
+async function putReq(url: string, body?: unknown): Promise<{ ok: boolean; status: number; d: any }> {
+  const r = await fetch(url, {
+    method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body ?? {}),
   });
@@ -843,11 +854,7 @@ export function GateSurface({
   const disabled = !h || busy;
   const author = isPlan && pm?.from ? agentByAlias(snap, pm.from) : null;
   const whoName = t.assignee || "the assignee";
-  const level = autLevel(snap);
-  // a plan is gated by its author's (else the assignee's) EFFECTIVE autonomy
-  // — per-agent overrides included — the same rule as Needs you / Overview
-  const planLevel = isPlan ? agentAutonomy(snap, author || agentByAlias(snap, t.assignee)) : level;
-  const gatedOff = isPlan ? !planAwaitsHuman(snap, t) : level === "full";
+  const gatedOff = t.autonomy === "on";
 
   const submit = async (approve: boolean, reasonTxt: string) => {
     if (!actor) {
@@ -940,7 +947,7 @@ export function GateSurface({
     ? "Approving lets " + whoName + " execute."
     : "Accepting marks the task completed. Rejecting returns it to " + whoName + ".";
   const audit = h ? " Logged to the audit trail as " + h.alias + "." : "";
-  const optionalNote = gatedOff ? "Optional at the “" + planLevel + "” autonomy level — not required, but you can still decide." : "";
+  const optionalNote = gatedOff ? "Task autonomy is ON, so the assigned agent may make this decision; a person can still intervene." : "";
   const helpText = [isVerify ? EVIDENCE_CAVEAT : "", optionalNote].filter(Boolean).join(" ");
 
   return (
@@ -3090,6 +3097,57 @@ function TaskAutofix({ t }: { t: Task }) {
   return <AutofixSection taskId={t.id} status={t.status} actorId={actor ? String(actor.id) : null} noActorReason={noHuman} />;
 }
 
+function TaskAutonomyControl({ t }: { t: Task }) {
+  const actor = useActor();
+  const { refresh } = useSnapshot();
+  const toast = useToast();
+  const [mode, setMode] = useState<"off" | "on">(t.autonomy === "on" ? "on" : "off");
+  const [busy, setBusy] = useState(false);
+  useEffect(() => setMode(t.autonomy === "on" ? "on" : "off"), [t.id, t.autonomy]);
+  const editable = !!actor && isActingOwner(actor) && !t.is_root && !["completed", "cancelled"].includes(t.status);
+  const next = mode === "on" ? "off" : "on";
+  const change = async () => {
+    if (!actor || !editable || busy) return;
+    setBusy(true);
+    let r: { ok: boolean; status: number; d: any };
+    try {
+      r = await putReq("/api/tasks/" + encodeURIComponent(t.id) + "/autonomy", {
+        autonomy: next,
+        actor_agent_id: actor.id,
+      });
+    } catch {
+      r = { ok: false, status: 0, d: { detail: "network error" } };
+    }
+    setBusy(false);
+    if (!r.ok) {
+      toast("Autonomy unchanged — " + (detailText(r.d) || "the change could not be saved"), "danger");
+      return;
+    }
+    setMode(r.d.autonomy === "on" ? "on" : "off");
+    toast("Task autonomy " + String(r.d.autonomy || next).toUpperCase(), "ok");
+    void refresh();
+  };
+  return (
+    <PropertySection title="Task authority">
+      <Property label="Autonomy">
+        <div className="td-autonomy" data-task-autonomy={mode}>
+          <Button
+            size="sm"
+            variant={mode === "on" ? "primary" : "secondary"}
+            disabled={!editable || busy}
+            busy={busy}
+            title={editable ? `Switch future approvals ${next.toUpperCase()}` : "Only the project owner can change autonomy on active tasks"}
+            onClick={() => void change()}
+          >
+            {mode.toUpperCase()}
+          </Button>
+          <span className="v2-muted">{mode === "on" ? "Agent may approve its own plan and work." : "A person approves the plan and finished work."}</span>
+        </div>
+      </Property>
+    </PropertySection>
+  );
+}
+
 function TaskDetail({
   t,
   tab,
@@ -3354,6 +3412,7 @@ function TaskDetail({
           </PropertySection>
           ) : null}
           <RecurringProperty t={t} />
+          <TaskAutonomyControl key={"autonomy-" + t.id} t={t} />
           <Relationships t={t} />
           <ProtocolPanel key={"proto-" + t.id} t={t} />
           <CloseCard key={"close-" + t.id} t={t} onActed={onActed} openRef={cancelRef} />

@@ -60,7 +60,10 @@ def reject_if_retired(cur, agent_id):
 def require_task(cur, task_id):
     """Return a task row or raise a public not-found response."""
     cur.execute(
-        "SELECT id, container_id, title, status, is_root FROM tasks WHERE id=%s",
+        """SELECT id,container_id,title,description,definition_of_done,protocol,
+                  status,is_root,result,workflow_id,work_revision,autonomy,
+                  autonomy_revision,start_hold,awaiting_owner_decision,withdrawn_at
+             FROM tasks WHERE id=%s""",
         (task_id,),
     )
     row = cur.fetchone()
