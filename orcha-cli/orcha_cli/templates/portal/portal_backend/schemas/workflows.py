@@ -324,6 +324,12 @@ class ImportTaskImpact(BaseModel):
     eligible: bool
     requires_acceptance: bool
     result_digest: str | None = None
+    # What the person reviews for a completed import, bound to preview_digest.
+    description: str | None = None
+    definition_of_done: str
+    completed_at: datetime | None = None
+    result_text: str | None = None
+    result_by_agent_id: str | None = None
     preparation_state: Literal["draft", "prepared"]
     start_hold: bool
     human_hold_reason: str | None = None

@@ -69,6 +69,21 @@ def result_digest(result):
     return _digest(result)
 
 
+def saved_result(result):
+    """(text, by_agent_id) a reviewer reads, from the same value result_digest hashes."""
+    if isinstance(result, str):
+        try:
+            result = json.loads(result)
+        except ValueError:
+            pass
+    body, by = result, None
+    if isinstance(result, dict):
+        body, by = result.get("result"), result.get("by_agent_id")
+    if body is None:
+        return None, None
+    return (body if isinstance(body, str) else _json(body)), (str(by) if by else None)
+
+
 def _row(row):
     # psycopg UUIDs must compare identically to API strings and SQLite UUIDs.
     return {k: str(v) if isinstance(v, UUID) else v for k, v in dict(row).items()}
@@ -1093,6 +1108,8 @@ class WorkflowService:
                 )
             ]
             complete = t["status"] == "completed"
+            # Same rows as preview_digest: a changed result or criteria changes it.
+            text, by = saved_result(t["result"]) if complete else (None, None)
             impacts.append(
                 {
                     "id": tid,
@@ -1102,6 +1119,11 @@ class WorkflowService:
                     "eligible": not any(b.get("task_id") == tid for b in blockers),
                     "requires_acceptance": complete,
                     "result_digest": result_digest(t["result"]) if complete else None,
+                    "description": t["description"],
+                    "definition_of_done": t["definition_of_done"],
+                    "completed_at": t["completed_at"] if complete else None,
+                    "result_text": text,
+                    "result_by_agent_id": by,
                     "preparation_state": (
                         "prepared"
                         if complete or (t["definition_of_done"].strip() and assignees)

@@ -876,6 +876,34 @@ def test_completed_import_needs_explicit_human_acceptance_of_exact_result(
     assert impact["requires_acceptance"] and impact[
         "result_digest"
     ] == ws.result_digest({"result": "Shipped build 1.2", "by_agent_id": None})
+    # The person sees the exact saved result and criteria the digest covers.
+    assert (impact["result_text"], impact["definition_of_done"]) == (
+        "Shipped build 1.2",
+        "A result",
+    )
+    stale = {"task_ids": [done], "preview_digest": preview["preview_digest"]}
+    with db_cursor() as (_, cur):
+        cur.execute(
+            "UPDATE tasks SET result=%s WHERE id=%s",
+            (json.dumps({"result": "Shipped build 1.3", "by_agent_id": worker}), done),
+        )
+    with db_cursor(readonly=True) as (_, cur):
+        preview = ws.WorkflowService(cur, hooks).preview_import(cid, [done])
+    impact = preview["task_impacts"][0]
+    assert preview["preview_digest"] != stale["preview_digest"]
+    assert impact["result_text"] == "Shipped build 1.3"
+    assert impact["result_by_agent_id"] == worker
+    with db_cursor() as (_, cur):
+        cur.execute(
+            "UPDATE tasks SET completed_at=%s WHERE id=%s", (sql.utcnow(), done)
+        )
+    with db_cursor(readonly=True) as (_, cur):
+        preview = ws.WorkflowService(cur, hooks).preview_import(cid, [done])
+    impact = preview["task_impacts"][0]
+    assert impact["completed_at"]
+    with pytest.raises(HTTPException) as err:
+        execute("import", dict(stale, acceptances={}), w["id"])
+    assert err.value.detail["code"] == "preview_changed"
     body = {"task_ids": [done], "preview_digest": preview["preview_digest"]}
 
     def refused(code, acceptances):
