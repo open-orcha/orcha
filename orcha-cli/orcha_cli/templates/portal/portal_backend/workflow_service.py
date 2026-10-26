@@ -159,6 +159,13 @@ def lock_container_graph(cur, cid):
     return cur.fetchone()["revision"]
 
 
+# §14.1: standalone not_ready/blocked imports become human-held with these reasons.
+IMPORT_HOLD_REASONS = {
+    "not_ready": "On hold before it joined this workflow",
+    "blocked": "Blocked before it joined this workflow",
+}
+
+
 class WorkflowService:
     def __init__(self, cur, hooks=None):
         self.cur = cur
@@ -1153,11 +1160,7 @@ class WorkflowService:
                         else "draft"
                     ),
                     "start_hold": not complete,
-                    "human_hold_reason": (
-                        "On hold before it joined this workflow"
-                        if t["status"] in {"not_ready", "blocked"}
-                        else None
-                    ),
+                    "human_hold_reason": IMPORT_HOLD_REASONS.get(t["status"]),
                     "assignee_ids": assignees,
                     "depends_on": deps.get(tid, []),
                 }
@@ -1206,8 +1209,9 @@ class WorkflowService:
             ),
         )
         w = self.workflow(wid)
+        created = {"title": w["title"]}
         if body.get("existing_task_ids"):
-            self._import(
+            created["original_states"] = self._import(
                 w,
                 actor,
                 body["existing_task_ids"],
@@ -1220,7 +1224,7 @@ class WorkflowService:
                 "INSERT INTO workflow_objectives(id,workflow_id,title,criteria) VALUES (%s,%s,%s,%s)",
                 (_id(), wid, o["title"], o["criteria"]),
             )
-        self.audit(w, p, "workflow_created", {"title": w["title"]}, scope=True)
+        self.audit(w, p, "workflow_created", created, scope=True)
         return wid
 
     def preview_draft(self, cid, body):
@@ -1379,8 +1383,10 @@ class WorkflowService:
         )["n"]
         if existing + len(ids) > w["task_limit"]:
             conflict("task_limit", "The workflow task limit would be exceeded.")
+        original = {}
         for tid in sorted(ids):
             t = self.one("SELECT * FROM tasks WHERE id=%s" + sql.for_update(), (tid,))
+            original[str(tid)] = t["status"]
             completed = t["status"] == "completed"
             held = t["status"] in {"not_ready", "blocked"}
             assigned = bool(
@@ -1398,7 +1404,7 @@ class WorkflowService:
                     not completed,
                     actor.id if held else None,
                     sql.utcnow() if held else None,
-                    "On hold before it joined this workflow" if held else None,
+                    IMPORT_HOLD_REASONS.get(t["status"]),
                     "completed" if completed else "not_ready",
                     tid,
                     t["status"],
@@ -1408,6 +1414,7 @@ class WorkflowService:
                 conflict("import_changed", "A selected task changed during import.")
             if completed:
                 self._accept_import(w, actor, tid, acceptances.get(tid))
+        return original
 
     def _accept_import(self, w, actor, tid, acceptance):
         """Explicit human acceptance of an imported completed result, same transaction.
@@ -1486,11 +1493,15 @@ class WorkflowService:
     def op_import(self, w, actor, b, tid):
         p = self.owner(w, actor)
         self.active(w)
-        self._import(
+        original = self._import(
             w, actor, b["task_ids"], b["preview_digest"], b.get("acceptances", {})
         )
         self.audit(
-            w, p, "workflow_tasks_imported", {"task_ids": b["task_ids"]}, scope=True
+            w,
+            p,
+            "workflow_tasks_imported",
+            {"task_ids": b["task_ids"], "original_states": original},
+            scope=True,
         )
 
     def op_prepare(self, w, actor, b, tid):
@@ -2029,7 +2040,13 @@ class WorkflowService:
             (p["id"], sql.utcnow(), b["reason"], tid),
         )
         self._stop(w, t, actor, "rejection", b["reason"])
-        self.audit(w, p, "workflow_task_rejected", {"reason": b["reason"]}, tid)
+        self.audit(
+            w,
+            p,
+            "workflow_task_rejected",
+            {"reason": b["reason"], "work_revision": t["work_revision"]},
+            tid,
+        )
 
     def op_stop(self, w, actor, b, tid):
         p = self.owner(w, actor)
