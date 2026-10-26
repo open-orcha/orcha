@@ -2665,6 +2665,55 @@
             ],
             "title": "Result Digest"
           },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "definition_of_done": {
+            "type": "string",
+            "title": "Definition Of Done"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "result_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result Text"
+          },
+          "result_by_agent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result By Agent Id"
+          },
           "preparation_state": {
             "type": "string",
             "enum": [
@@ -2710,6 +2759,7 @@
           "status",
           "eligible",
           "requires_acceptance",
+          "definition_of_done",
           "preparation_state",
           "start_hold",
           "assignee_ids",
