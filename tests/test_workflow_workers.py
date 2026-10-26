@@ -397,3 +397,15 @@ async def test_positive_exit_releases_stopped_work_but_keeps_review_turn(turn, d
         _, _, e = lock_run(cur, turn["launch"]["run_id"])
         assert confirm_stopped(cur, e, run_id=e["run_id"], generation=1, terminalize=terminalize)["state"] == expected
     assert db.execute("SELECT worker_stopped_at FROM workflow_executions WHERE id=%s", (turn["eid"],))[0]["worker_stopped_at"]
+
+
+async def test_ordinary_run_token_contact_check_never_opens_a_write_transaction(db, monkeypatch):
+    from portal_backend import workflow_worker_routes
+    opened = []
+    real = workflow_worker_routes.db_cursor
+    def recording(*a, **k):
+        opened.append(k.get("readonly", False))
+        return real(*a, **k)
+    monkeypatch.setattr(workflow_worker_routes, "db_cursor", recording)
+    assert workflow_worker_routes._contact("ordinary-non-workflow-token") is None
+    assert opened == [True]
