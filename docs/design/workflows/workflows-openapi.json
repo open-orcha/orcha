@@ -2505,6 +2505,43 @@
               }
             ],
             "title": "Storage State"
+          },
+          "captured_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Captured By"
+          },
+          "captured_by_alias": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Captured By Alias"
+          },
+          "captured_by_kind": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "human",
+                  "ai"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Captured By Kind"
           }
         },
         "type": "object",

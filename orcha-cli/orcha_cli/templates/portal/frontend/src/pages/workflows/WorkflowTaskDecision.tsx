@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Button } from "../../components/primitives/Button";
 import { availableActionReason, workflowPaths, workflowRequest } from "./workflowApi";
-import { evidenceReference, evidenceUsable, WorkflowEvidencePanel } from "./WorkflowEvidence";
+import { evidenceReference, evidenceSupplier, evidenceUsable, WorkflowEvidencePanel, type EvidenceSupplier } from "./WorkflowEvidence";
 import type { EvidenceReference, WorkflowDetail, WorkflowTask } from "./workflowContract.generated";
 import type { DraftScope } from "./workflowDraft";
 import { useWorkflowForm } from "./workflowFormState";
@@ -17,6 +17,8 @@ export function WorkflowTaskDecision({ detail, task, scope, verified, stale, onS
   const [action, setAction] = useState<"accept" | "reject">("accept");
   const [reason, setReason] = useWorkflowForm(scope, `task:${task.id}:decision`, "");
   const [evidence, setEvidence] = useState<EvidenceReference | null>(null);
+  const [supplier, setSupplier] = useState<EvidenceSupplier | null>(null);
+  const [supplierRequired, setSupplierRequired] = useState(false);
   const [preview, setPreview] = useState<{ detail: WorkflowDetail; basis: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -32,8 +34,9 @@ export function WorkflowTaskDecision({ detail, task, scope, verified, stale, onS
   const basis = JSON.stringify([detail.revision, task.work_revision, action, reason, evidence]);
   const current = preview?.basis === basis ? preview.detail : null;
   const invalid = permission(detail) || (action === "accept"
-    ? task.outside_result_id ? "Outside-result acceptance is unavailable until this server exposes its recorded supplier." : !detail.evidence_capability?.available || !evidence || evidence.evidence_set_id !== task.current_evidence_set_id
-      ? "Read and select the current saved evidence before accepting." : null
+    ? !detail.evidence_capability?.available || !evidence || evidence.evidence_set_id !== task.current_evidence_set_id
+      ? "Read and select the current saved evidence before accepting."
+      : supplierRequired && !supplier ? "Result supplier attribution is unavailable. This outside result cannot be accepted safely." : null
     : !reason.trim() ? "Explain what needs to change before requesting changes." : null);
 
   async function review() {
@@ -50,15 +53,17 @@ export function WorkflowTaskDecision({ detail, task, scope, verified, stale, onS
       if (action === "accept") {
         const saved = await workflowRequest("WorkflowTaskEvidence", workflowPaths.detail(detail.id) + `/tasks/${encodeURIComponent(task.id)}/evidence`);
         const selected = saved.sets.find((set) => set.evidence_set_id === evidence?.evidence_set_id);
-        if (selected?.items.some((item) => item.source === "outside" || item.source === "owner")) {
-          throw new Error("Outside-result acceptance is unavailable until this server exposes its recorded supplier.");
-        }
+        const refreshedSupplier = selected ? evidenceSupplier(selected) : { required: false, supplier: null };
         if (!latest.evidence_capability?.available || saved.task_id !== task.id || saved.workflow_id !== detail.id || !selected
           || selected.task_id !== task.id || selected.workflow_id !== detail.id
           || saved.current_evidence_set_id !== target.current_evidence_set_id || selected.evidence_set_id !== target.current_evidence_set_id
-          || !evidenceUsable(selected, target.work_revision) || JSON.stringify(evidenceReference(selected)) !== JSON.stringify(evidence)) {
-          setEvidence(null);
+          || !evidenceUsable(selected, target.work_revision) || JSON.stringify(evidenceReference(selected)) !== JSON.stringify(evidence)
+          || refreshedSupplier.required !== supplierRequired || JSON.stringify(refreshedSupplier.supplier) !== JSON.stringify(supplier)) {
+          setEvidence(null); setSupplier(null); setSupplierRequired(false);
           throw new Error("The saved evidence changed or is unavailable. Read the current files and select them again.");
+        }
+        if (refreshedSupplier.required && !refreshedSupplier.supplier) {
+          throw new Error("Result supplier attribution is unavailable. This outside result cannot be accepted safely.");
         }
       }
       setPreview({ detail: latest, basis });
@@ -86,8 +91,14 @@ export function WorkflowTaskDecision({ detail, task, scope, verified, stale, onS
     </fieldset>
     <fieldset disabled={busy || unresolved || stale || !!permission(detail)}><legend>Saved result to review</legend>
       <WorkflowEvidencePanel key={`${detail.id}:${task.id}:${task.work_revision}:${task.current_evidence_set_id}`} detail={detail} taskId={task.id}
-        selected={evidence?.evidence_set_id} onSelect={action === "accept" ? (next) => { setEvidence(next); setPreview(null); } : undefined} />
+        selected={evidence?.evidence_set_id} onSelect={action === "accept" ? (next, _revision, selected) => {
+          const attribution = selected ? evidenceSupplier(selected) : { required: false, supplier: null };
+          setEvidence(next); setSupplier(attribution.supplier); setSupplierRequired(attribution.required); setPreview(null);
+        } : undefined} />
     </fieldset>
+    {action === "accept" && supplierRequired && supplier && <p>Result supplied by {supplier.alias} ({supplier.kind === "human" ? "person" : "agent"}). {supplier.id === scope.identity
+      ? "You supplied this outside result; accepting your own result is allowed and will be recorded."
+      : "The supplier and acceptor will be recorded separately."}</p>}
     {invalid && <p>{invalid}</p>}{error && <p role="alert">{error}</p>}
     <Button disabled={busy || stale || unresolved || !!invalid} onClick={() => void review()}>{busy ? "Checking result…" : "Review decision"}</Button>
     {current && <>

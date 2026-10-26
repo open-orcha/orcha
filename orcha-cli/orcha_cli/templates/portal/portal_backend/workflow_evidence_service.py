@@ -114,12 +114,17 @@ def _save_item(cur, task, evidence_set, *, kind, source, phase, data, actor_id,
                  staged.sha256, note))
     cur.execute("UPDATE task_deliverables SET latest_version=%s,updated_at=now() WHERE id=%s",
                 (version, did))
+    cur.execute("SELECT alias,kind FROM agents WHERE id=%s", (actor_id,))
+    supplier = cur.fetchone()
+    if not supplier:
+        raise EvidenceStorageError("evidence_supplier_unavailable")
     cur.execute("""INSERT INTO workflow_evidence
                    (id,evidence_set_id,task_id,kind,source,snapshot_phase,deliverable_id,
-                    deliverable_version,sha256,complete,note,captured_by)
-                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                    deliverable_version,sha256,complete,note,captured_by,
+                    captured_by_alias,captured_by_kind)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
                 (str(uuid4()), evidence_set["id"], task["id"], kind, source, phase, did, version,
-                 staged.sha256, complete, note, actor_id))
+                 staged.sha256, complete, note, actor_id, supplier["alias"], supplier["kind"]))
 
 
 def _new_set(cur, task, execution, *, run_id, sequence, purpose, capture,
@@ -205,7 +210,8 @@ def evidence_reference(cur, set_id):
     evidence_set = cur.fetchone()
     if not evidence_set:
         _conflict("evidence_version_stale")
-    cur.execute("""SELECT e.*,v.stored_name FROM workflow_evidence e
+    cur.execute("""SELECT e.*,v.stored_name
+                   FROM workflow_evidence e
                    JOIN task_deliverable_versions v ON v.deliverable_id=e.deliverable_id
                      AND v.version=e.deliverable_version
                    WHERE e.evidence_set_id=%s ORDER BY e.kind,e.snapshot_phase,e.id""", (set_id,))
@@ -217,6 +223,9 @@ def evidence_reference(cur, set_id):
             "deliverable_id": str(row["deliverable_id"]),
             "deliverable_version": row["deliverable_version"], "sha256": row["sha256"],
             "complete": bool(row["complete"]), "note": row["note"],
+            "captured_by": str(row["captured_by"]) if row["captured_by"] else None,
+            "captured_by_alias": row["captured_by_alias"],
+            "captured_by_kind": row["captured_by_kind"],
             "storage_state": evidence_file_state(
                 task_id=str(evidence_set["task_id"]), deliverable_id=str(row["deliverable_id"]),
                 stored_name=row["stored_name"], sha256=row["sha256"]),

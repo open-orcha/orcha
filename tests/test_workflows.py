@@ -75,7 +75,7 @@ class ContractHooks(ws.WorkflowHooks):
 
     def capture_outside(self, cur, task, evidence, execution):
         assert evidence["submitted_by"], "capture_outside needs the durable submitter"
-        return self.save(task)
+        return self.save(task, **self.capturer(cur, evidence["submitted_by"]))
 
     def capture_import(
         self, cur, task, evidence, execution, actor, reviewed_result_digest
@@ -86,13 +86,29 @@ class ContractHooks(ws.WorkflowHooks):
         self.import_captures.append(
             (str(task["id"]), str(actor["id"]), reviewed_result_digest)
         )
-        return self.save(task)
+        return self.save(task, **self.capturer(cur, actor["id"]))
 
     def capture_owner(self, cur, task, evidence, execution, actor):
         self.owner_captures.append((str(task["id"]), str(actor["id"]), evidence))
-        return self.save(task)
+        return self.save(task, **self.capturer(cur, actor["id"]))
 
-    def save(self, task):
+    def capturer(self, cur, actor_id):
+        cur.execute("SELECT id,alias,kind FROM agents WHERE id=%s", (actor_id,))
+        actor = cur.fetchone()
+        return {
+            "captured_by": str(actor["id"]),
+            "captured_by_alias": actor["alias"],
+            "captured_by_kind": actor["kind"],
+        }
+
+    def save(
+        self,
+        task,
+        *,
+        captured_by=None,
+        captured_by_alias=None,
+        captured_by_kind=None,
+    ):
         ref = {
             "evidence_set_id": uid(),
             "items": [
@@ -101,6 +117,15 @@ class ContractHooks(ws.WorkflowHooks):
                     "deliverable_id": uid(),
                     "deliverable_version": 1,
                     "sha256": "a" * 64,
+                    **(
+                        {
+                            "captured_by": captured_by,
+                            "captured_by_alias": captured_by_alias,
+                            "captured_by_kind": captured_by_kind,
+                        }
+                        if captured_by
+                        else {}
+                    ),
                 }
             ],
         }
@@ -1733,6 +1758,9 @@ def test_completed_import_needs_explicit_human_acceptance_of_exact_result(
     assert acceptance["acceptance_source"] == "import"
     assert acceptance["evidence_set_id"]
     assert acceptance["evidence_items"][0]["sha256"] == "a" * 64
+    assert acceptance["evidence_items"][0]["captured_by"] == actor.id
+    assert acceptance["evidence_items"][0]["captured_by_alias"] == "Owner"
+    assert acceptance["evidence_items"][0]["captured_by_kind"] == "human"
     with db_cursor(readonly=True) as (_, cur):
         cur.execute(
             "SELECT actor_id,actor_kind,acceptance_source FROM workflow_task_acceptances WHERE task_id=%s",

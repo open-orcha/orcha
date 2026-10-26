@@ -15,6 +15,9 @@ class SavedEvidenceItem(EvidenceItem):
     complete: bool
     note: str | None
     storage_state: Literal["readable", "missing", "corrupt", "missing_after_restore"]
+    captured_by: str | None = None
+    captured_by_alias: str | None = None
+    captured_by_kind: Literal["human", "ai"] | None = None
 
 
 class SavedEvidenceSet(BaseModel):

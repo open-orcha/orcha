@@ -1,7 +1,8 @@
 import type { WorkflowTask } from "./workflowContract.generated";
 
 export function acceptanceAttributionUnavailable(task: WorkflowTask): boolean {
-  return !!task.acceptance?.evidence_items.some((item) => !item.source || ["outside", "owner"].includes(item.source));
+  return !!task.acceptance?.evidence_items.some((item) => ["outside", "owner"].includes(item.source ?? "")
+    && (!item.captured_by || !item.captured_by_alias || !item.captured_by_kind));
 }
 
 /** Display the recorded actor and exact files, never the current owner,
@@ -18,6 +19,10 @@ export function WorkflowTaskAcceptanceRecord({ task }: { task: WorkflowTask }) {
     {acceptanceAttributionUnavailable(task) && <p>Result supplier attribution is unavailable on this server version. It cannot establish whether the same person supplied and accepted this result.</p>}
     <ul>{acceptance.evidence_items.map((item) => <li key={item.item_id}>
       <a href={`/api/tasks/${encodeURIComponent(task.id)}/deliverables/${encodeURIComponent(item.deliverable_id)}/versions/${item.deliverable_version}/raw`}>Accepted evidence — version {item.deliverable_version}</a>
+      {item.captured_by_alias && item.captured_by_kind && <p>Result supplied by {item.captured_by_alias} ({item.captured_by_kind === "human" ? "person" : "agent"}).
+        {["outside", "owner"].includes(item.source ?? "") && item.captured_by === acceptance.actor_id
+          ? " The same person supplied and accepted this outside result."
+          : ""}</p>}
       {item.storage_state && item.storage_state !== "readable" && <p>Accepted file {item.storage_state.replaceAll("_", " ")}. Restore this exact version before further acceptance or Finish.</p>}
       <details><summary>Recorded file fingerprint</summary><p className="wf-fingerprint">SHA-256 {item.sha256}</p></details>
     </li>)}</ul>

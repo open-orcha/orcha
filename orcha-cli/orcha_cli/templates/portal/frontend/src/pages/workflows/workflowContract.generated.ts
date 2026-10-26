@@ -1,6 +1,6 @@
 // Generated from FastAPI OpenAPI slices. DO NOT EDIT.
-// Workflow source SHA-256: 5d9a0426c866cddc5b37e70666f5129872a6eead62a42e5d5dc60adca9e85099
-// Evidence GET source SHA-256: a3a98a4093221faf85216c9e00bfa7d9ed5384c9c435b1f23dd5333f0bf45413
+// Workflow source SHA-256: 96f65f050db59126a6e91696cd21ed3341a9c3a599f9d85bc7491a93e9eb5ebf
+// Evidence GET source SHA-256: 48199aeae044539ac0417a909a441eb9d72db68b07e77d6b83e7db110a813fac
 // Regenerate with tools/generate-workflow-contract.mjs and both source files.
 
 export type AcceptBasis = {
@@ -29,6 +29,9 @@ export type AcceptedEvidenceItem = {
   "complete"?: boolean | null;
   "note"?: string | null;
   "storage_state"?: "readable" | "missing" | "corrupt" | "missing_after_restore" | null;
+  "captured_by"?: string | null;
+  "captured_by_alias"?: string | null;
+  "captured_by_kind"?: "human" | "ai" | null;
 };
 
 export type Activity = {
@@ -581,6 +584,9 @@ export type SavedEvidenceItem = {
   "complete": boolean;
   "note": string | null;
   "storage_state": "readable" | "missing" | "corrupt" | "missing_after_restore";
+  "captured_by"?: string | null;
+  "captured_by_alias"?: string | null;
+  "captured_by_kind"?: "human" | "ai" | null;
 };
 
 export type WorkflowModels = {
@@ -796,6 +802,40 @@ export const workflowSchemas = {
               "missing",
               "corrupt",
               "missing_after_restore"
+            ]
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "captured_by": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "captured_by_alias": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "captured_by_kind": {
+        "anyOf": [
+          {
+            "type": "string",
+            "enum": [
+              "human",
+              "ai"
             ]
           },
           {
@@ -3627,6 +3667,40 @@ export const workflowSchemas = {
           "missing",
           "corrupt",
           "missing_after_restore"
+        ]
+      },
+      "captured_by": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "captured_by_alias": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "captured_by_kind": {
+        "anyOf": [
+          {
+            "type": "string",
+            "enum": [
+              "human",
+              "ai"
+            ]
+          },
+          {
+            "type": "null"
+          }
         ]
       }
     },

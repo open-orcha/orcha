@@ -81,6 +81,9 @@ async def test_pending_result_is_not_accepted_and_terminal_snapshot_is_exact(att
     assert saved["evidence_set_id"] == pending["evidence_set_id"]
     assert saved["state"] == "saved"
     assert {item["kind"] for item in saved["items"]} == {"result_summary", "file_changes", "log_excerpt"}
+    assert all(item["captured_by"] == attempt["worker"] for item in saved["items"])
+    assert all(item["captured_by_alias"] == "Evidence worker" for item in saved["items"])
+    assert all(item["captured_by_kind"] == "ai" for item in saved["items"])
     assert validate(attempt, saved)["items"] == saved["items"]
     run = db.execute("SELECT ended_at FROM worker_runs WHERE run_id=%s", (attempt["run"],))[0]
     turn = db.execute("SELECT * FROM workflow_executions WHERE id=%s", (attempt["execution"],))[0]

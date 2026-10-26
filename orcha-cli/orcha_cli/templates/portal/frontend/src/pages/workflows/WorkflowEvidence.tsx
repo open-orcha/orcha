@@ -3,6 +3,22 @@ import { Button } from "../../components/primitives/Button";
 import { workflowPaths, workflowRequest } from "./workflowApi";
 import type { EvidenceBasis, EvidenceReference, SavedEvidenceSet, WorkflowDetail, WorkflowTaskEvidence } from "./workflowContract.generated";
 
+export type EvidenceSupplier = { id: string; alias: string; kind: "human" | "ai" };
+export type EvidenceSupplierAssessment = { required: boolean; supplier: EvidenceSupplier | null };
+
+/** Outside and owner submissions must carry one immutable supplier snapshot.
+ * Worker evidence also exposes its capturer, but does not need this guard. */
+export function evidenceSupplier(set: SavedEvidenceSet): EvidenceSupplierAssessment {
+  const supplied = set.items.filter((item) => item.source === "outside" || item.source === "owner");
+  if (!supplied.length) return { required: false, supplier: null };
+  const first = supplied[0];
+  if (!first.captured_by || !first.captured_by_alias || !first.captured_by_kind) return { required: true, supplier: null };
+  if (supplied.some((item) => item.captured_by !== first.captured_by || item.captured_by_alias !== first.captured_by_alias || item.captured_by_kind !== first.captured_by_kind)) {
+    return { required: true, supplier: null };
+  }
+  return { required: true, supplier: { id: first.captured_by, alias: first.captured_by_alias, kind: first.captured_by_kind } };
+}
+
 export function evidenceReference(set: SavedEvidenceSet): EvidenceReference {
   return { evidence_set_id: set.evidence_set_id, items: set.items.map(({ item_id, deliverable_id, deliverable_version, sha256 }) => ({ item_id, deliverable_id, deliverable_version, sha256 })) };
 }
@@ -13,7 +29,8 @@ const kindName = { result_summary: "Result summary", file_changes: "Saved file c
 const sourceName = { worker: "Worker", owner: "Owner", outside: "Outside result", cancelled_attempt: "From a cancelled attempt", released_attempt: "From a released attempt" };
 
 export function WorkflowEvidencePanel({ detail, taskId, selected, onSelect }: {
-  detail: WorkflowDetail; taskId: string; selected?: string; onSelect?: (reference: EvidenceReference | null, revision: number) => void;
+  detail: WorkflowDetail; taskId: string; selected?: string;
+  onSelect?: (reference: EvidenceReference | null, revision: number, set: SavedEvidenceSet | null) => void;
 }) {
   const task = detail.tasks.find((t) => t.id === taskId);
   const [page, setPage] = useState<WorkflowTaskEvidence | null>(null);
@@ -40,11 +57,11 @@ export function WorkflowEvidencePanel({ detail, taskId, selected, onSelect }: {
   const usable = !!current && evidenceUsable(current, task.work_revision) && task.current_evidence_set_id === current.evidence_set_id;
   return <section aria-label={`Saved evidence for ${task.title}`} className="wf-evidence"><h3>Saved evidence — {task.title}</h3>
     {busy && <p role="status">Loading saved evidence…</p>}{error && <p role="alert">{error}</p>}
-    <Button disabled={busy} onClick={() => { setBefore(null); setRetry((n) => n + 1); onSelect?.(null, task.work_revision); }}>Refresh evidence</Button>
+    <Button disabled={busy} onClick={() => { setBefore(null); setRetry((n) => n + 1); onSelect?.(null, task.work_revision, null); }}>Refresh evidence</Button>
     {page && !current && <p>No current saved result is available. Earlier attempts do not count as acceptance.</p>}
     {current && !usable && <p className="wf-warning">{current.state === "pending" ? "Saving evidence… Acceptance is unavailable until it is saved." : "Evidence missing or changed — refresh the task or add evidence before accepting."}</p>}
     {onSelect && <label className="wf-choice"><input type="checkbox" checked={usable && selected === current?.evidence_set_id} disabled={busy || !usable || !!error}
-      onChange={(e) => onSelect(e.target.checked && current ? evidenceReference(current) : null, task.work_revision)} />Use current saved evidence from {task.title}</label>}
+      onChange={(e) => onSelect(e.target.checked && current ? evidenceReference(current) : null, task.work_revision, e.target.checked && current ? current : null)} />Use current saved evidence from {task.title}</label>}
     {page?.sets.map((set) => <section key={set.evidence_set_id} aria-label={`Evidence revision ${set.result_revision}`}>
       <h4>{set.evidence_set_id === page.current_evidence_set_id ? "Current evidence" : "Earlier evidence"} · result revision {set.result_revision} · work revision {set.work_revision}</h4>
       <p>{set.state === "pending" ? "Saving evidence…" : set.state === "missing" ? "Evidence missing" : set.state === "superseded" ? "Superseded evidence" : "Saved evidence"}{set.purpose === "attempt_record" && " · Attempt record; not a result for acceptance"}</p>
@@ -53,6 +70,7 @@ export function WorkflowEvidencePanel({ detail, taskId, selected, onSelect }: {
         {item.storage_state === "readable" ? <a href={`/api/tasks/${encodeURIComponent(taskId)}/deliverables/${encodeURIComponent(item.deliverable_id)}/versions/${item.deliverable_version}/raw`}>{kindName[item.kind]} — version {item.deliverable_version}</a>
           : <span>{kindName[item.kind]} — version {item.deliverable_version}: {item.storage_state === "missing_after_restore" ? "file missing after restore" : item.storage_state}</span>}
         <p>{sourceName[item.source]} · {item.snapshot_phase === "terminal" ? "Final snapshot" : "Submission snapshot"}</p>
+        {item.captured_by_alias && item.captured_by_kind && <p>Result supplied by {item.captured_by_alias} ({item.captured_by_kind === "human" ? "person" : "agent"}).</p>}
         {!item.complete && <p className="wf-warning">Incomplete saved evidence{item.note ? `: ${item.note}` : ". Read its limits before accepting."}</p>}
         {item.complete && item.note && <p>{item.note}</p>}
       </li>)}</ul>

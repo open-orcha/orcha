@@ -10,7 +10,8 @@ function evidence(): WorkflowTaskEvidence {
   return { task_id: task.id, workflow_id: detail.id, current_evidence_set_id: "evidence", next_before_revision: null, sets: [{ evidence_set_id: "evidence", task_id: task.id, workflow_id: detail.id,
     workflow_execution_id: "execution", run_id: "run", work_revision: 3, result_revision: 2, source_sequence: 1, generation: 1, state: "saved", purpose: "acceptance",
     missing_reason: null, terminal_cause: null, created_at: "2026-10-25T10:00:00Z", frozen_at: "2026-10-25T10:01:00Z", source_revision: null,
-    items: [{ item_id: "item", deliverable_id: "file", deliverable_version: 4, sha256: "a".repeat(64), kind: "result_summary", source: "worker", snapshot_phase: "terminal", complete: true, note: null, storage_state: "readable" }] }] };
+    items: [{ item_id: "item", deliverable_id: "file", deliverable_version: 4, sha256: "a".repeat(64), kind: "result_summary", source: "worker", snapshot_phase: "terminal", complete: true, note: null, storage_state: "readable",
+      captured_by: "worker", captured_by_alias: "Andrew", captured_by_kind: "ai" }] }] };
 }
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 async function selectEvidence() {
@@ -96,15 +97,32 @@ it("consumes confirmation on edited feedback, refreshed scope, or changed permis
   view.rerender(<WorkflowTaskDecision {...props} verified={false} />);
   expect(screen.getByRole("button", { name: "Review decision" })).toBeDisabled();
 });
-it("refuses outside-result acceptance until the recorded supplier contract is available", async () => {
+it("allows a person to accept their own outside result and records the two roles explicitly", async () => {
+  const writes: string[] = []; const saved = vi.fn(); const ownScope = scope();
+  vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+    if (init?.method === "POST") writes.push(url);
+    if (!url.endsWith("/evidence")) return jsonResponse(detail);
+    const current = evidence(); Object.assign(current.sets[0].items[0], { source: "outside", captured_by: ownScope.identity, captured_by_alias: "Kedar", captured_by_kind: "human" });
+    return jsonResponse(current);
+  }));
+  render(<WorkflowTaskDecision detail={detail} task={task} scope={ownScope} verified stale={false} onSaved={saved} />);
+  await selectEvidence();
+  expect(screen.getByText(/You supplied this outside result; accepting your own result is allowed/)).toBeVisible();
+  fireEvent.click(screen.getByRole("button", { name: "Review decision" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Confirm accept result" }));
+  await waitFor(() => expect(saved).toHaveBeenCalledOnce());
+  expect(writes).toEqual(["/api/tasks/build/accept"]);
+});
+it("refuses outside-result acceptance when immutable supplier attribution is missing", async () => {
   const writes: string[] = [];
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
     if (init?.method === "POST") writes.push(url);
     if (!url.endsWith("/evidence")) return jsonResponse(detail);
-    const current = evidence(); current.sets[0].items[0].source = "outside"; return jsonResponse(current);
+    const current = evidence(); Object.assign(current.sets[0].items[0], { source: "outside", captured_by: null, captured_by_alias: null, captured_by_kind: null }); return jsonResponse(current);
   }));
   render(<WorkflowTaskDecision detail={detail} task={task} scope={scope()} verified stale={false} onSaved={vi.fn()} />);
-  await selectEvidence(); fireEvent.click(screen.getByRole("button", { name: "Review decision" }));
-  expect(await screen.findByRole("alert")).toHaveTextContent(/recorded supplier/);
+  await selectEvidence();
+  expect(screen.getByText(/supplier attribution is unavailable/)).toBeVisible();
+  expect(screen.getByRole("button", { name: "Review decision" })).toBeDisabled();
   expect(screen.queryByRole("button", { name: "Confirm accept result" })).toBeNull(); expect(writes).toEqual([]);
 });

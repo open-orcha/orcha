@@ -241,6 +241,11 @@ class AcceptedEvidenceItem(BaseModel):
     storage_state: Literal[
         "readable", "missing", "corrupt", "missing_after_restore"
     ] | None = None
+    # Immutable supplier attribution captured with the evidence.  These remain
+    # optional so historical acceptance records stay readable after upgrade.
+    captured_by: str | None = None
+    captured_by_alias: str | None = None
+    captured_by_kind: Literal["human", "ai"] | None = None
 
 
 class WorkflowTask(BaseModel):
