@@ -821,6 +821,64 @@ def test_task_notices_go_to_the_verifier_where_set(setup_workflow, monkeypatch):
         ]
 
 
+def test_owner_attention_covers_recovery_lost_worker_and_choose_assignee(
+    setup_workflow, monkeypatch
+):
+    _, actor, worker, _, hooks, execute = setup_workflow
+    sent = []
+    monkeypatch.setattr(
+        ws,
+        "publish_event",
+        lambda cur, c, aid, kind, data: sent.append(
+            (str(aid), data.get("task_id"), data.get("reason"))
+        )
+        if kind == "workflow_attention"
+        else None,
+    )
+    w = prepare_and_start(
+        setup_workflow, create(setup_workflow, mode="parallel", count=2)
+    )
+    running, unassigned = (t["id"] for t in w["tasks"])
+    owner = str(actor.id)
+
+    def reconcile():
+        with db_cursor() as (_, cur):
+            ws.WorkflowService(cur, hooks).reconcile(w["id"])
+
+    with db_cursor() as (_, cur):
+        e = ws.WorkflowService(cur, hooks).reserve_turn(
+            running, ws.WorkflowActor(worker, True, True), run_id=uid()
+        )
+        cur.execute(
+            "UPDATE agent_tasks SET assignment_status='done' WHERE task_id=%s",
+            (unassigned,),
+        )
+    sent.clear()
+    reconcile()
+    reconcile()
+    assert sent == [(owner, unassigned, "choose_assignee")]
+    # A stop the worker never confirmed, silent past the release deadline.
+    long_ago = datetime.now(timezone.utc) - timedelta(hours=2)
+    with db_cursor() as (_, cur):
+        cur.execute(
+            "UPDATE workflow_executions SET state='stopping',first_stop_at=%s,last_runner_contact_at=%s WHERE id=%s",
+            (long_ago, long_ago, e["id"]),
+        )
+    sent.clear()
+    reconcile()
+    reconcile()
+    assert sent == [(owner, running, "lost_worker")]
+    with db_cursor() as (_, cur):
+        cur.execute(
+            "UPDATE workflow_executions SET state='recovery_needed' WHERE id=%s",
+            (e["id"],),
+        )
+    sent.clear()
+    reconcile()
+    reconcile()
+    assert sent == [(owner, running, "recovery_needed")]
+
+
 def test_task_is_woken_again_each_time_it_can_start_again(setup_workflow, monkeypatch):
     cid, actor, worker, other, hooks, execute = setup_workflow
     sent = []

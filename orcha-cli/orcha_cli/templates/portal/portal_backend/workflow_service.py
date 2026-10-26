@@ -1147,6 +1147,7 @@ class WorkflowService:
                     else "task_ready"
                 )
                 self.notice(s["workflow"], kind, tid, task["work_revision"])
+        self.attention(s)
         self.forget_ready(s)
         if s["completion"]["can_finish"]:
             self.notice(
@@ -1156,10 +1157,50 @@ class WorkflowService:
                 s["workflow"]["revision"],
             )
 
-    def notice(self, w, kind, subject, revision):
+    def attention(self, s):
+        """Owner attention beyond limit reached (plan 14.7): a turn needing
+        recovery, a worker silent long enough to release, and a ready task
+        with nobody assigned. One notice per task version and reason."""
+        w = s["workflow"]
+        now = sql.utcnow()
+        for e in s["executions"]:
+            task = s["tasks"].get(e["task_id"])
+            if not task or e["work_revision"] != task["work_revision"]:
+                continue
+            if e["state"] == "recovery_needed":
+                reason = "recovery_needed"
+            elif e["state"] in LIVE_EXECUTIONS and (
+                release_deadline(e) and now >= release_deadline(e)
+            ):
+                reason = "lost_worker"
+            else:
+                continue
+            self.notice(
+                w, "workflow_attention", e["task_id"], task["work_revision"], reason
+            )
+        if w["status"] != "active" or not w["launch_enabled"]:
+            return
+        for tid, task in s["tasks"].items():
+            if (
+                task["status"] == "ready"
+                and s["eligibility"][tid]["source_kind"] == "worker"
+                and not self.one(
+                    "SELECT 1 AS n FROM agent_tasks WHERE task_id=%s AND assignment_status<>'done'",
+                    (tid,),
+                )
+            ):
+                self.notice(
+                    w,
+                    "workflow_attention",
+                    tid,
+                    task["work_revision"],
+                    "choose_assignee",
+                )
+
+    def notice(self, w, kind, subject, revision, reason=None):
         self.cur.execute(
             "INSERT INTO workflow_notification_receipts(workflow_id,notice_kind,subject_key,subject_revision) VALUES (%s,%s,%s,%s) ON CONFLICT DO NOTHING",
-            (w["id"], kind, subject, revision),
+            (w["id"], kind, f"{subject}:{reason}" if reason else subject, revision),
         )
         if self.cur.rowcount:
             targets = [w["owner_human_id"]]
@@ -1192,6 +1233,7 @@ class WorkflowService:
                         "workflow_id": w["id"],
                         "task_id": subject if subject != "workflow" else None,
                         "revision": revision,
+                        **({"reason": reason} if reason else {}),
                     },
                 )
 
@@ -2789,7 +2831,11 @@ class WorkflowService:
                 )
                 self.audit(w, p, "workflow_limit_reached", {"loop_key": b["loop_key"]})
                 self.notice(
-                    w, "workflow_attention", review["id"], review["work_revision"]
+                    w,
+                    "workflow_attention",
+                    review["id"],
+                    review["work_revision"],
+                    "limit_reached",
                 )
                 limit_hit = True
             else:
