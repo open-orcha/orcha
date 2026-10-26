@@ -19,7 +19,7 @@ from portal_backend import database, sql  # noqa: E402
 REPO = pathlib.Path(__file__).resolve().parent.parent
 INIT_SQL = REPO / "orcha-cli" / "orcha_cli" / "templates" / "migrations" / "001_init.sql"
 
-_PROBE_TABLES = ("schema_migrations", "r1_probe", "r1_after")
+_PROBE_TABLES = ("r1_probe", "r1_after")
 
 
 def _sql(q):
@@ -33,7 +33,7 @@ def _exists(table):
 
 
 @pytest.fixture(autouse=True)
-def _clean_runner_tables():
+def _clean_runner_tables(isolated_schema_migrations):
     for t in _PROBE_TABLES:
         _sql(f"DROP TABLE IF EXISTS {t}")
     yield

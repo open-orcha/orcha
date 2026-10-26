@@ -12,10 +12,8 @@ def _sql(q, params=()):
 
 
 @pytest.fixture(autouse=True)
-def _no_schema_migrations():
-    _sql("DROP TABLE IF EXISTS schema_migrations")
+def _no_schema_migrations(isolated_schema_migrations):
     yield
-    _sql("DROP TABLE IF EXISTS schema_migrations")
 
 
 @pytest.mark.asyncio

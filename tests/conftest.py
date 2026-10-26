@@ -23,6 +23,7 @@ import sqlite3
 import sys
 import tempfile
 import time
+from contextlib import contextmanager
 
 import pytest
 import pytest_asyncio
@@ -112,7 +113,7 @@ sys.path.insert(0, str(PORTAL_DIR))
 # Also expose the CLI package so tests can `from orcha_cli import notifier` even when
 # collected standalone (orcha-cli isn't installed in every env — e.g. a targeted run).
 sys.path.insert(0, str(REPO / "orcha-cli"))
-from portal_backend import database  # noqa: E402  (must follow the env + path setup above)
+from portal_backend import database, sql  # noqa: E402  (must follow the env + path setup above)
 
 if BACKEND == "sqlite":
     database.run_migrations()  # the real runner, on the shipped SQLite baseline
@@ -306,6 +307,49 @@ class Db:
 @pytest.fixture
 def db():
     return Db()
+
+
+@contextmanager
+def schema_migrations_hidden():
+    """Temporarily hide the migration ledger, then restore it exactly.
+
+    Migration and admin-route tests need to exercise a never-migrated database, but the
+    session database already has the full schema.  Leaving the ledger dropped makes a
+    later subprocess startup try to apply every migration to that existing schema.
+    """
+
+    def execute(statement, params=()):
+        with database.db_cursor() as (_conn, cur):
+            cur.execute(statement, params)
+            return cur.fetchall() if cur.description else []
+
+    exists_query = f"SELECT {sql.table_exists('schema_migrations')} AS present"
+    existed = bool(execute(exists_query)[0]["present"])
+    rows = execute(
+        "SELECT version, applied_at FROM schema_migrations ORDER BY version"
+    ) if existed else []
+    execute("DROP TABLE IF EXISTS schema_migrations")
+    try:
+        yield
+    finally:
+        execute("DROP TABLE IF EXISTS schema_migrations")
+        if existed:
+            execute(
+                "CREATE TABLE schema_migrations ("
+                "version TEXT PRIMARY KEY, "
+                "applied_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP)"
+            )
+            for row in rows:
+                execute(
+                    "INSERT INTO schema_migrations(version, applied_at) VALUES (%s, %s)",
+                    (row["version"], row["applied_at"]),
+                )
+
+
+@pytest.fixture
+def isolated_schema_migrations():
+    with schema_migrations_hidden():
+        yield
 
 
 @pytest_asyncio.fixture
