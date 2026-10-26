@@ -321,7 +321,11 @@ for path, operation, body_model in [
     _task_action("/api/tasks/{tid}/" + path, operation, body_model)
 
 
-@app.put("/api/tasks/{tid}/dependencies", response_model=model.WorkflowDetail)
+@app.put(
+    "/api/tasks/{tid}/dependencies",
+    response_model=model.WorkflowDetail,
+    openapi_extra={"x-workflow-operation": "dependencies"},
+)
 def edit_workflow_dependencies(tid: str, body: model.DependencyEdit, request: Request):
     service.require_capability()
     with db_cursor() as (_, cur):
@@ -343,7 +347,9 @@ def edit_workflow_dependencies(tid: str, body: model.DependencyEdit, request: Re
 
 
 @app.post(
-    "/api/workflows/{wid}/objectives/{oid}/accept", response_model=model.WorkflowDetail
+    "/api/workflows/{wid}/objectives/{oid}/accept",
+    response_model=model.WorkflowDetail,
+    openapi_extra={"x-workflow-operation": "accept_objective"},
 )
 def accept_workflow_objective(
     wid: str, oid: str, body: model.AcceptBasis, request: Request
@@ -365,6 +371,7 @@ def accept_workflow_objective(
 @app.post(
     "/api/tasks/{tid}/external-result/{eid}/withdraw",
     response_model=model.WorkflowDetail,
+    openapi_extra={"x-workflow-operation": "withdraw_evidence"},
 )
 def withdraw_outside_result(
     tid: str, eid: str, body: model.TaskMutation, request: Request
@@ -391,6 +398,7 @@ def withdraw_outside_result(
 @app.post(
     "/api/workflows/{wid}/review-loops/{tid}/resolve",
     response_model=model.WorkflowDetail,
+    openapi_extra={"x-workflow-operation": "resolve_loop"},
 )
 def resolve_workflow_review(wid: str, tid: str, body: model.Mutation, request: Request):
     service.require_capability()

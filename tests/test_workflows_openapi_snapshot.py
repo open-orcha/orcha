@@ -77,3 +77,26 @@ def test_snapshot_covers_task_level_recovery_routes():
     for path in ("stop", "retry", "reissue-stop", "release-lost-worker"):
         assert "post" in paths["/api/tasks/{tid}/" + path]
     assert "put" in paths["/api/tasks/{tid}/dependencies"]
+
+
+def test_every_offered_action_names_its_route():
+    """available_actions bind to routes by x-workflow-operation, mechanically.
+
+    accept/reject go through the legacy verify adapters; submit_outside_result is
+    the external_result operation.
+    """
+    operations = {
+        op.get("x-workflow-operation")
+        for ops in workflows_contract()["paths"].values()
+        for op in ops.values()
+    }
+    offered = {
+        "start", "pause", "resume", "cancel", "finish", "add_tasks", "import",
+        "patch", "accept_goal", "review_round", "transfer_owner", "move",
+        "accept_objective", "edit_objective", "prepare", "hold", "release",
+        "retry", "stop", "release_lost_worker", "reissue_stop",
+        "withdraw_evidence", "add_evidence", "dependencies", "withdraw",
+        "resolve_loop",
+    }  # fmt: skip
+    assert offered - operations == set()
+    assert "external_result" in operations
