@@ -758,6 +758,46 @@ def test_task_notices_go_to_the_verifier_where_set(setup_workflow, monkeypatch):
         ]
 
 
+def test_task_is_woken_again_each_time_it_can_start_again(setup_workflow, monkeypatch):
+    cid, actor, worker, other, hooks, execute = setup_workflow
+    sent = []
+    monkeypatch.setattr(
+        ws,
+        "publish_event",
+        lambda cur, c, aid, kind, data: sent.append((kind, data.get("task_id"))),
+    )
+    w = prepare_and_start(setup_workflow, create(setup_workflow))
+    first, second = (t["id"] for t in w["tasks"])
+
+    def woken(tid):
+        return sum(1 for kind, t in sent if kind == "task_ready" and str(t) == str(tid))
+
+    # One task at a time: only the first candidate is offered.
+    assert (woken(first), woken(second)) == (1, 0)
+    w = execute("hold", {}, w["id"], first)
+    assert (woken(first), woken(second)) == (1, 1)
+    revisions = {t["id"]: t["work_revision"] for t in w["tasks"]}
+    w = execute(
+        "release",
+        {"task_ids": [first], "task_revisions": revisions, "holds": ["human"]},
+        w["id"],
+    )
+    # Released at the same work revision, the first task is offered again (its
+    # worker is woken a second time) and the second waits for its turn.
+    assert next(t for t in w["tasks"] if t["id"] == first)["can_start"]
+    assert (woken(first), woken(second)) == (2, 1)
+    # While it stays startable, further changes do not wake it again.
+    execute("patch", {"title": "Release v2"}, w["id"])
+    assert (woken(first), woken(second)) == (2, 1)
+    e, ref = submit_result(setup_workflow, w, first)
+    execute("accept", {"evidence": ref}, w["id"], first)
+    with db_cursor() as (_, cur):
+        ws.WorkflowService(cur, hooks).release_confirmed(
+            e["id"], e["generation"], "exited"
+        )
+    assert woken(second) == 2
+
+
 def test_withdraw_cannot_remove_last_or_accepted_task(setup_workflow):
     w = create(setup_workflow, count=1)
     _, tasks, _ = actions_for(setup_workflow, w["id"], setup_workflow[1])

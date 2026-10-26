@@ -979,6 +979,7 @@ class WorkflowService:
                     else "task_ready"
                 )
                 self.notice(s["workflow"], kind, tid, task["work_revision"])
+        self.forget_ready(s)
         if s["completion"]["can_finish"]:
             self.notice(
                 s["workflow"],
@@ -1024,6 +1025,17 @@ class WorkflowService:
                         "task_id": subject if subject != "workflow" else None,
                         "revision": revision,
                     },
+                )
+
+    def forget_ready(self, s):
+        """A worker wake lasts only while its task can start: once the task loses
+        the turn (or is held, or waits again) the next time it can start wakes
+        its worker again, even at the same work revision."""
+        for tid, row in s["eligibility"].items():
+            if not row["can_start"]:
+                self.cur.execute(
+                    "DELETE FROM workflow_notification_receipts WHERE workflow_id=%s AND notice_kind='task_ready' AND subject_key=%s",
+                    (s["workflow"]["id"], str(tid)),
                 )
 
     def receipt(self, cid, actor, operation, key):
@@ -1879,6 +1891,7 @@ class WorkflowService:
             self.notice(
                 w, "workflow_task_awaiting_acceptance", tid, task["work_revision"]
             )
+        self.forget_ready(self.snapshot(w["id"]))
         return self.one("SELECT * FROM workflow_executions WHERE id=%s", (eid,))
 
     def submit_for_review(self, tid, execution_id, generation, reference):
