@@ -1105,6 +1105,17 @@ def test_actions_respect_pause_agents_objectives_and_disabled_capability(
     w = prepare_and_start(setup_workflow, w)
     wf, _, _ = actions_for(setup_workflow, w["id"], agent)
     assert wf["add_tasks"]["enabled"] and wf["review_round"]["enabled"]
+    outsider = uid()
+    with db_cursor() as (_, cur):
+        cur.execute(
+            "INSERT INTO agents(id,container_id,alias,role,kind,member_role) VALUES (%s,%s,'Outsider','test','ai','member')",
+            (outsider, cid),
+        )
+    wf, _, _ = actions_for(
+        setup_workflow, w["id"], ws.WorkflowActor(outsider, True, True)
+    )
+    for name in ("add_tasks", "review_round"):
+        assert wf[name]["reason"] == "workflow_participation_required", name
     w = execute("pause", {}, w["id"])
     wf, tasks, objectives = actions_for(setup_workflow, w["id"], setup_workflow[1])
     assert wf["resume"]["enabled"] and wf["patch"]["enabled"]

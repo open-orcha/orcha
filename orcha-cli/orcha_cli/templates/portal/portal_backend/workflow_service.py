@@ -408,10 +408,6 @@ class WorkflowService:
                     else "workflow_participation_required"
                 ),
             ),
-            "workflow_owner_or_agent": (
-                is_owner or bool(person and person["kind"] == "ai"),
-                "workflow_owner_required",
-            ),
             "task_approval": (bool(person), "completion_not_authorized"),
         }
         statuses = {
@@ -809,7 +805,7 @@ class WorkflowService:
             action("accept_goal", "workflow_owner", "open"),
             action(
                 "review_round",
-                "workflow_owner_or_agent",
+                "workflow_owner_or_participant",
                 "active",
                 first((agent and not w["launch_enabled"], "workflow_not_started")),
             ),
