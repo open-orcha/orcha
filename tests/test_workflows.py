@@ -308,6 +308,59 @@ def test_import_requires_both_directions_and_preserves_manual_hold(setup_workflo
     )
 
 
+def test_import_names_blocked_tasks_and_audits_original_states(setup_workflow):
+    cid, actor, worker, _, hooks, execute = setup_workflow
+    held, blocked = uid(), uid()
+    with db_cursor() as (_, cur):
+        for tid, state in [(held, "not_ready"), (blocked, "blocked")]:
+            cur.execute(
+                "INSERT INTO tasks(id,container_id,title,definition_of_done,status) VALUES (%s,%s,%s,'A result',%s)",
+                (tid, cid, state, state),
+            )
+    w = create(setup_workflow, count=1)
+    with db_cursor(readonly=True) as (_, cur):
+        preview = ws.WorkflowService(cur, hooks).preview_import(cid, [held, blocked])
+    w = execute(
+        "import",
+        {"task_ids": [held, blocked], "preview_digest": preview["preview_digest"]},
+        w["id"],
+    )
+    with db_cursor(readonly=True) as (_, cur):
+        cur.execute(
+            "SELECT id,human_hold_reason FROM tasks WHERE id IN (%s,%s)",
+            (held, blocked),
+        )
+        reasons = {str(r["id"]): r["human_hold_reason"] for r in cur.fetchall()}
+        cur.execute(
+            "SELECT detail FROM workflow_history WHERE workflow_id=%s AND event='workflow_tasks_imported'",
+            (w["id"],),
+        )
+        detail = cur.fetchone()["detail"]
+    assert reasons == {
+        str(held): "On hold before it joined this workflow",
+        str(blocked): "Blocked before it joined this workflow",
+    }
+    detail = json.loads(detail) if isinstance(detail, str) else detail
+    assert detail["original_states"] == {str(held): "not_ready", str(blocked): "blocked"}
+
+    tid = next(t["id"] for t in w["tasks"] if t["id"] not in (held, blocked))
+    w = execute("prepare", {}, w["id"], tid)
+    revision = next(t["work_revision"] for t in w["tasks"] if t["id"] == tid)
+    w = execute(
+        "start", {"task_ids": [tid], "task_revisions": {tid: revision}}, w["id"]
+    )
+    submit_result(setup_workflow, w, tid)
+    execute("reject", {}, w["id"], tid)
+    with db_cursor(readonly=True) as (_, cur):
+        cur.execute(
+            "SELECT detail FROM workflow_history WHERE task_id=%s AND event='workflow_task_rejected'",
+            (tid,),
+        )
+        detail = cur.fetchone()["detail"]
+    detail = json.loads(detail) if isinstance(detail, str) else detail
+    assert detail["work_revision"] >= 1
+
+
 def test_serial_turn_waits_for_both_acceptance_and_worker_exit(setup_workflow):
     w = prepare_and_start(setup_workflow, create(setup_workflow))
     a, b = w["tasks"]
