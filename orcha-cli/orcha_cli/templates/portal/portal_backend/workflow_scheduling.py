@@ -219,7 +219,27 @@ def workflow_eligibility(
     return result
 
 
-def task_display(task, execution=None, evidence=None, *, now=None):
+def task_display(
+    task,
+    execution=None,
+    evidence=None,
+    *,
+    now=None,
+    names=None,
+    launch_enabled=True,
+    waiting_on=(),
+    evidence_reason=None,
+    lost_release=False,
+    workflow_open=True,
+):
+    """One label for every surface (plan §14.1 map, §16.3, §17.3).
+
+    ``names`` maps agent id to display name; ``waiting_on`` lists the
+    (title, status) of prerequisites not yet accepted; ``lost_release`` is
+    true when any attempt of this task was released without stop
+    confirmation, which keeps the inspector warning permanently.
+    """
+    names = names or {}
     now = _time(now) or datetime.now(timezone.utc)
     gate_labels = {
         "changes_requested": "Changes requested · owner decides",
@@ -233,27 +253,40 @@ def task_display(task, execution=None, evidence=None, *, now=None):
         {
             "completed": "Accepted",
             "cancelled": "Cancelled",
-            "pending": "Waiting for prerequisites",
+            "pending": (
+                "Waiting for "
+                + ", ".join(title for title, _ in waiting_on)
+                + (
+                    " to succeed"
+                    if any(status == "cancelled" for _, status in waiting_on)
+                    else ""
+                )
+                if waiting_on
+                else "Waiting for prerequisites"
+            ),
             "ready": "Waiting for its turn",
             "in_progress": "Running",
             "needs_verification": "Awaiting review",
         }.get(task["status"], "Draft"),
     )
     if task.get("withdrawn_at"):
-        label = "Withdrawn from scope"
+        label = "Withdrawn by " + names.get(task.get("withdrawn_by"), "the owner")
+        if task.get("withdrawn_reason"):
+            label += ": " + task["withdrawn_reason"]
     elif not gate and task["status"] == "not_ready":
-        label = (
-            "Draft"
-            if task.get("preparation_state") == "draft"
-            else "Prepared · awaiting release"
-        )
+        if task.get("preparation_state") == "draft":
+            label = "Draft"
+        elif task.get("start_hold") and not launch_enabled:
+            label = "Prepared · waiting for Start"
+        else:
+            label = "Prepared · awaiting release"
         if task.get("human_hold_by"):
-            label += " · on hold"
+            label += " · on hold by " + names.get(task["human_hold_by"], "the owner")
     if evidence:
         label = (
             "Outside result awaiting review"
             if evidence["state"] == "admitted"
-            else "Outside result waiting for its turn"
+            else "Outside result waiting - " + (evidence_reason or "its turn")
         )
     deadline = release_deadline(execution) if execution else None
     available = bool(deadline and now >= deadline)
@@ -275,13 +308,23 @@ def task_display(task, execution=None, evidence=None, *, now=None):
             label = "Recovery needed"
         elif state == "reserved":
             label = "Starting"
-        elif state == "released_lost":
-            warning = STOP_WARNING
+    # §17.3: the inspector warning is permanent once any attempt was released
+    # lost; the list mark lasts until a new attempt, withdrawal, or the
+    # workflow is finished or cancelled.
+    if lost_release or (execution and execution["state"] == "released_lost"):
+        warning = STOP_WARNING
+    list_warning = bool(
+        execution
+        and execution["state"] == "released_lost"
+        and not task.get("withdrawn_at")
+        and workflow_open
+    )
     return {
         "label": label,
         "release_available": available,
         "release_available_at": deadline,
         "warning": warning,
+        "list_warning": list_warning,
     }
 
 

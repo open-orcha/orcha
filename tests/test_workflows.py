@@ -668,6 +668,62 @@ def test_start_hold_is_released_only_by_start(setup_workflow):
     assert err.value.detail["code"] == "workflow_not_started"
 
 
+def test_labels_follow_the_plan_label_map_with_names(setup_workflow):
+    execute = setup_workflow[-1]
+    w = create(setup_workflow, count=3, dependencies={1: ["t0"]})
+    for t in w["tasks"]:
+        w = execute("prepare", {}, w["id"], t["id"])
+
+    def labels(view):
+        return {t["title"]: t["display_state"]["label"] for t in view["tasks"]}
+
+    assert set(labels(w).values()) == {"Prepared · waiting for Start"}
+    by_title = {t["title"]: t for t in w["tasks"]}
+    w = execute("hold", {}, w["id"], by_title["Task 2"]["id"])
+    assert labels(w)["Task 2"] == "Prepared · waiting for Start · on hold by Owner"
+    w = execute(
+        "start",
+        {
+            "task_ids": [by_title["Task 1"]["id"]],
+            "task_revisions": {
+                t["id"]: t["work_revision"]
+                for t in w["tasks"]
+                if t["title"] == "Task 1"
+            },
+        },
+        w["id"],
+    )
+    got = labels(w)
+    # Unselected tasks wait for release once the workflow has started; a task
+    # whose prerequisite is not accepted names it.
+    assert got["Task 0"] == "Prepared · awaiting release"
+    assert got["Task 1"] == "Waiting for Task 0"
+    assert got["Task 2"] == "Prepared · awaiting release · on hold by Owner"
+    w = execute(
+        "withdraw", {"reason": "Not needed"}, w["id"], by_title["Task 2"]["id"]
+    )
+    row = next(t for t in w["tasks"] if t["title"] == "Task 2")
+    assert row["display_state"]["label"] == "Withdrawn by Owner: Not needed"
+    assert row["withdrawn_by"] == str(setup_workflow[1].id)
+    assert row["withdrawn_reason"] == "Not needed"
+
+
+def test_lost_release_warning_is_permanent_and_list_mark_clears():
+    lost = {"state": "released_lost", "first_stop_at": None}
+    newer = {"state": "running", "first_stop_at": None}
+    task = {"id": "t", "status": "not_ready", "awaiting_owner_decision": "stopped_by_owner"}
+    shown = task_display(task, lost)
+    assert shown["label"] == "Stopped by owner · owner decides"
+    assert shown["warning"] and shown["list_warning"]
+    # A new attempt clears the list mark; the inspector warning stays.
+    shown = task_display(dict(task, status="in_progress"), newer, lost_release=True)
+    assert shown["warning"] and not shown["list_warning"]
+    # Withdrawal, or a finished or cancelled workflow, clears the list mark too.
+    assert not task_display(dict(task, withdrawn_at="x"), lost)["list_warning"]
+    shown = task_display(task, lost, workflow_open=False)
+    assert shown["warning"] and not shown["list_warning"]
+
+
 def test_withdraw_cannot_remove_last_or_accepted_task(setup_workflow):
     w = create(setup_workflow, count=1)
     _, tasks, _ = actions_for(setup_workflow, w["id"], setup_workflow[1])

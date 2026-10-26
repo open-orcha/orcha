@@ -2470,6 +2470,11 @@
               }
             ],
             "title": "Warning"
+          },
+          "list_warning": {
+            "type": "boolean",
+            "title": "List Warning",
+            "default": false
           }
         },
         "type": "object",
@@ -4357,6 +4362,28 @@
               }
             ],
             "title": "Withdrawn At"
+          },
+          "withdrawn_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Withdrawn By"
+          },
+          "withdrawn_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Withdrawn Reason"
           },
           "priority": {
             "type": "integer",

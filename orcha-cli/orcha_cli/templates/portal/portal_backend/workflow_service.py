@@ -505,6 +505,13 @@ class WorkflowService:
         def never_started(tid):
             return not s["tasks"][tid]["started_at"] and not executions_by_task[tid]
 
+        names = {
+            str(a["id"]): a["alias"]
+            for a in self.rows(
+                "SELECT id,alias FROM agents WHERE container_id=%s",
+                (w["container_id"],),
+            )
+        }
         for tid, task in s["tasks"].items():
             executions = executions_by_task[tid]
             live = next((e for e in executions if e["state"] in LIVE_EXECUTIONS), None)
@@ -518,8 +525,23 @@ class WorkflowService:
                     (tid,),
                 )
             ]
+            blockers = s["eligibility"][tid].get("blockers") or []
             row["display_state"] = task_display(
-                task, last, s["outside_evidence"].get(tid)
+                task,
+                last,
+                s["outside_evidence"].get(tid),
+                names=names,
+                launch_enabled=w["launch_enabled"],
+                waiting_on=[
+                    (s["tasks"][pid]["title"], s["tasks"][pid]["status"])
+                    for pid in s["dependencies"][tid]
+                    if s["tasks"][pid]["status"] != "completed"
+                ],
+                evidence_reason=(
+                    blockers[0]["message"].rstrip(".") if blockers else None
+                ),
+                lost_release=any(e["state"] == "released_lost" for e in executions),
+                workflow_open=w["status"] in {"active", "paused"},
             )
             outside = s["outside_evidence"].get(tid)
             row["outside_result_id"] = outside["id"] if outside else None

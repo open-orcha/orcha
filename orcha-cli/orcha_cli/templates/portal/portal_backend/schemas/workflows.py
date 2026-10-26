@@ -202,6 +202,7 @@ class DisplayState(BaseModel):
     release_available: bool = False
     release_available_at: datetime | None = None
     warning: str | None = None
+    list_warning: bool = False
 
 
 class WorkflowTask(BaseModel):
@@ -219,6 +220,8 @@ class WorkflowTask(BaseModel):
     human_hold_reason: str | None
     awaiting_owner_decision: str | None
     withdrawn_at: datetime | None
+    withdrawn_by: str | None = None
+    withdrawn_reason: str | None = None
     priority: int
     assignee_ids: list[str]
     depends_on: list[str]
