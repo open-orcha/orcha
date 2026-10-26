@@ -10,6 +10,8 @@ import { useWorkflowForm } from "./workflowFormState";
 import { dependencyReason, type DraftTask } from "./workflowDraft";
 import { WorkflowEvidencePanel } from "./WorkflowEvidence";
 import { impactMatches, readWorkflowImpact, WorkflowImpactView } from "./WorkflowImpact";
+import { WorkflowTaskDecision } from "./WorkflowTaskDecision";
+import { WorkflowTaskAcceptanceRecord } from "./WorkflowTaskAcceptanceRecord";
 
 const taskActions = {
   prepare: { label: "Prepare task", path: "prepare", operation: "prepare" },
@@ -112,11 +114,13 @@ export function WorkflowTaskActions({ detail, task, scope, verified, stale, agen
       <p>{task.display_state.label}</p><ul>{task.blockers.map((b, i) => <li key={i}>{b.message}</li>)}</ul>
       {task.display_state.warning && <p className="wf-warning">{task.display_state.warning}</p>}
       {task.display_state.release_available_at && <p>If the worker stays silent, Release lost worker becomes available at <time dateTime={task.display_state.release_available_at}>{new Date(task.display_state.release_available_at).toLocaleString()}</time>. Refresh to check availability.</p>}
-      <WorkflowEvidencePanel detail={detail} taskId={task.id} />
+      {task.acceptance && <WorkflowTaskAcceptanceRecord task={task} />}
+      {task.status === "needs_verification" ? <WorkflowTaskDecision detail={detail} task={task} scope={scope} verified={verified} stale={stale} onSaved={(result) => { onSaved(result); setOpen(false); }} />
+        : <WorkflowEvidencePanel detail={detail} taskId={task.id} />}
       <div className="wf-actions">{(Object.keys(taskActions) as Action[]).map((key) => <Button key={key} title={taskReason(detail, task, key, verified) ?? undefined}
         disabled={busy || unresolved || stale || !!taskReason(detail, task, key, verified)} onClick={() => void review(key)}>{label(key)}</Button>)}</div>
       <p>Task autonomy is ON or OFF. OFF requires plan and finished-work approval; ON lets the agent approve its own plan, start and complete this task. Dependencies, holds and workflow controls still apply. Direct requests are always allowed.</p>
-      <p>Task autonomy {task.autonomy === "on" ? "ON" : "OFF"}. Changing autonomy and accepting results remain unavailable until their verified service connections are ready.</p>
+      <p>Task autonomy {task.autonomy === "on" ? "ON" : "OFF"}. Only the human project owner can change it from the task page; changes apply to future actions.</p>
       {error && <p role="alert">{error}</p>}
       {busy && <p role="status">Checking the current task…</p>}
       {action && !preview && !busy && <Button onClick={() => void review(action)}>Refresh task review</Button>}

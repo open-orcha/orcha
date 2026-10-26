@@ -114,9 +114,9 @@ describe("SettingsPage V2 sections (open Orcha, no extension sections)", () => {
     // (worded like the header chip: execChipState; the config line under it)
     expect(document.querySelector("#setNotifierState")).toHaveTextContent("Paused");
     expect(screen.getByText(/Off — no agent wakes/)).toBeInTheDocument();
-    expect(screen.getByText("Plan-only")).toBeInTheDocument();
+    expect(screen.queryByText("Plan-only")).toBeNull();
     // the independence explanation moved into the group's "?" tooltip (D12)
-    expect(screen.getByRole("button", { name: "About Notifier and autonomy" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "About Notifier" })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("tab", { name: "Devices & pairing" }));
     expect(await screen.findByText("Phone pairing")).toBeInTheDocument();

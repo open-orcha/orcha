@@ -66,24 +66,17 @@ describe("Shell — Notifier / Autonomy split (GH #148/#149)", () => {
   beforeEach(() => { localStorage.clear(); });
   afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
-  it("renders two separate control groups, not one fused 4-rung radiogroup", async () => {
-    stubFetch();
-    mount();
-    await openExec();
-    expect(document.getElementById("autTop")).toBeTruthy();
-    // no single radiogroup carries both a Paused/Running rung and a level rung
-    expect(document.querySelector('[role="radiogroup"][aria-label="Container autonomy"]')).toBeNull();
+  it("renders the wake switch without a project autonomy control", async () => {
+    stubFetch(); mount(); await openExec();
     expect(document.getElementById("notifTop")!.getAttribute("role")).toBe("group");
-    expect(document.getElementById("autTop")!.getAttribute("role")).toBe("radiogroup");
+    expect(document.querySelector('[role="radiogroup"]')).toBeNull();
+    expect(document.getElementById("autTop")).toBeNull();
+    expect(screen.getByText(/Autonomy is set on each task/)).toBeInTheDocument();
   });
 
-  it("labels the two groups Wakes and Autonomy", async () => {
-    stubFetch();
-    mount();
-    await openExec();
-    const labels = Array.from(document.querySelectorAll(".aut-lab")).map((n) => n.textContent);
-    expect(labels).toContain("Wakes");
-    expect(labels).toContain("Autonomy");
+  it("labels the remaining execution control Wakes", async () => {
+    stubFetch(); mount(); await openExec();
+    expect(Array.from(document.querySelectorAll(".aut-lab")).map(n => n.textContent)).toEqual(["Wakes"]);
   });
 
   it("Notifier click posts to /wakes only, leaving autonomy_level untouched in the body", async () => {
@@ -102,31 +95,19 @@ describe("Shell — Notifier / Autonomy split (GH #148/#149)", () => {
     expect(calls.some((c) => c.url === "/api/containers/c1/autonomy")).toBe(false);
   });
 
-  it("Autonomy rung click posts to /autonomy only, leaving wakes_enabled untouched in the body", async () => {
-    const calls = stubFetch({ wakes_enabled: true, autonomy_level: "plan" });
-    mount();
-    await openExec();
-    const prSeg = Array.from(document.getElementById("autTop")!.querySelectorAll(".seg"))
-      .find((s) => s.textContent?.includes("Build to PR"))!;
-    fireEvent.click(prSeg);
-    fireEvent.click(screen.getByRole("button", { name: /Set Build to PR/i }));
-    await waitFor(() => {
-      const a = calls.find((c) => c.url === "/api/containers/c1/autonomy");
-      expect(a).toBeTruthy();
-      expect(a!.method).toBe("POST");
-      expect(a!.body).toEqual({ level: "pr", actor_agent_id: "h1" });
-    });
-    expect(calls.some((c) => c.url === "/api/containers/c1/wakes")).toBe(false);
+  it("legacy autonomy values never expose a project write", async () => {
+    const calls = stubFetch({ autonomy_level: "full" }); mount(); await openExec();
+    expect(screen.queryByRole("radio", { name: "Full" })).toBeNull();
+    expect(document.getElementById("autTop")).toBeNull();
+    expect(calls.filter(c => c.method !== "GET")).toEqual([]);
   });
 
-  it("Autonomy control stays rendered (dimmed) while the notifier is paused, not merged into it", async () => {
-    stubFetch({ wakes_enabled: false, autonomy_level: "plan" });
-    mount();
-    await openExec();
+  it("paused wakes still use task authority and never expose project presets", async () => {
+    stubFetch({ wakes_enabled: false, autonomy_level: "plan" }); mount(); await openExec();
     expect(document.getElementById("notifTop")!.textContent).toContain("Off");
-    // autonomy levels are still present/selectable, just visually de-emphasized
-    expect(document.getElementById("autTop")!.className).toContain("dimmed");
-    expect(document.getElementById("autTop")!.textContent).toContain("Plan-only");
+    expect(document.getElementById("autTop")).toBeNull();
+    fireEvent.click(screen.getByRole("switch"));
+    expect(await screen.findByText("Eligible tasks resume waking with their own OFF/ON settings.")).toBeVisible();
   });
 });
 
@@ -134,10 +115,11 @@ describe("V2 header — Execution controls summary + persistent paused indicator
   beforeEach(() => { localStorage.clear(); });
   afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
-  it("the chip shows one state word, the level in its tooltip; the explainer is an info tooltip", async () => {
+  it("the chip shows observed wake state and explains task authority", async () => {
     stubFetch({ wakes_enabled: true, autonomy_level: "pr" });
     mount();
-    await waitFor(() => expect(document.getElementById("execBtn")?.getAttribute("title")).toContain("Autonomy: Build to PR"));
+    await waitFor(() => expect(document.getElementById("execBtn")?.getAttribute("title")).toMatch(/^Execution —/));
+    expect(document.getElementById("execBtn")!.getAttribute("title")).not.toContain("Autonomy:");
     expect(document.getElementById("execBtn")!.textContent).not.toContain("Build to PR");
     fireEvent.click(document.getElementById("execBtn")!);
     const dlg = await screen.findByRole("dialog", { name: "Execution controls" });
@@ -189,21 +171,11 @@ describe("Execution truthfulness — chip (observed) vs switch (config) never co
     expect(chip.textContent).not.toMatch(/\bRunning\b/);
   });
 
-  it("a legacy level is one muted line in the popover and never in the chip text", async () => {
-    stubFetch({ wakes_enabled: true, autonomy_level: "supervised" });
-    mount();
-    await openExec();
-    expect(document.getElementById("execBtn")!.textContent).not.toContain("Custom");
-    expect(document.getElementById("execBtn")!.getAttribute("title")).toContain("set on server (supervised)");
-    expect(document.querySelector(".v2-exec-custom")).toBeNull();
-    expect(document.querySelector(".v2-exec-lvl-d")!.textContent).toBe("Level set on server: supervised");
-    // review M4: a SELECTED, non-clickable "Custom" segment, so the control never looks broken
-    const custom = document.querySelector<HTMLElement>("#autTop .seg.custom")!;
-    expect(custom.textContent).toBe("Custom");
-    expect(custom.getAttribute("aria-checked")).toBe("true");
-    expect(custom.getAttribute("aria-disabled")).toBe("true");
-    expect(custom.tagName).not.toBe("BUTTON");
-    expect(Array.from(document.querySelectorAll("#autTop button[role=radio]")).every((b) => b.getAttribute("aria-checked") === "false")).toBe(true);
+  it("a legacy level is never presented as current execution authority", async () => {
+    stubFetch({ autonomy_level: "supervised" }); mount(); await openExec();
+    expect(screen.getByRole("dialog", { name: "Execution controls" }).textContent).not.toContain("supervised");
+    expect(document.getElementById("execBtn")!.getAttribute("title")).not.toContain("supervised");
+    expect(document.getElementById("autTop")).toBeNull();
   });
 
   it("a known level renders no Custom segment", async () => {

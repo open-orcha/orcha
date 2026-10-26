@@ -8,7 +8,7 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ToastProvider } from "../components/ui";
 import { SnapshotProvider } from "../state/SnapshotProvider";
-import { Shell, autonomyLabel, ncFallbackLabel, staleMessage } from "./Shell";
+import { Shell, ncFallbackLabel, staleMessage } from "./Shell";
 import { centerCurrentTab, isProjectSectionPage, tabCountText } from "./ProjectTabs";
 import { payloadSummary, projectStatusLabel } from "./search/builtin";
 
@@ -124,17 +124,14 @@ describe("project tab bar (D1)", () => {
 });
 
 describe("execution controls", () => {
-  it("names an unknown / legacy level (tooltip + one muted popover line), never in the chip", async () => {
-    stubFetch("supervised");
-    mount("tasks", "Tasks");
-    await waitFor(() => expect(document.getElementById("execBtn")?.getAttribute("title")).toContain("Autonomy: set on server (supervised)"));
-    expect(document.getElementById("execBtn")!.textContent).not.toContain("Custom");
+  it("ignores historical project authority even when its value is unknown", async () => {
+    stubFetch("supervised"); mount("tasks", "Tasks");
+    await waitFor(() => expect(document.getElementById("execBtn")).toBeTruthy());
     fireEvent.click(document.getElementById("execBtn")!);
     const dlg = await screen.findByRole("dialog", { name: "Execution controls" });
-    expect(dlg.textContent).toContain("Level set on server: supervised");
-    expect(dlg.querySelector(".v2-exec-note, .v2-exec-custom")).toBeNull(); // explainer is an ⓘ tooltip (+ SR text)
-    expect(autonomyLabel("pr")).toEqual({ label: "Build to PR", known: true });
-    expect(autonomyLabel("")).toEqual({ label: "Custom (unset)", known: false });
+    expect(dlg.textContent).not.toContain("supervised");
+    expect(dlg.querySelector("#autTop")).toBeNull();
+    expect(dlg.querySelector(".v2-exec-info")?.getAttribute("title")).toContain("Autonomy is set on each task");
   });
 
   it("the notifier is a switch with its consequence as a description", async () => {

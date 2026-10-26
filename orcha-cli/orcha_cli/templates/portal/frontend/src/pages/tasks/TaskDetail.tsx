@@ -73,6 +73,7 @@ import { WorkflowTaskReturn } from "../workflows/WorkflowTaskReturn";
 import { WorkerDetailsNotice } from "../workflows/WorkflowReadViews";
 import { WorkflowTaskInspector, WorkflowTaskStatus, useTaskWorkflow, workflowMemberHref } from "../workflows/WorkflowTaskContext";
 import { WorkflowTaskEntry } from "../workflows/WorkflowTaskEntry";
+import { TaskAuthority, useWorkflowPlanApproval } from "./TaskAuthority";
 import { pausedById, useContainerBudgets, type AgentBudgetStatus } from "../agents/budget/budgetModel";
 import { BudgetPausedChip } from "../agents/budget/AgentBudgetSection";
 import { logRowText } from "../agents/runlog";
@@ -122,20 +123,6 @@ export async function post(url: string, body?: unknown): Promise<{ ok: boolean; 
 async function patchReq(url: string, body?: unknown): Promise<{ ok: boolean; status: number; d: any }> {
   const r = await fetch(url, {
     method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body ?? {}),
-  });
-  let d: any = {};
-  try {
-    d = await r.json();
-  } catch {
-    /* empty/non-JSON body */
-  }
-  return { ok: r.ok, status: r.status, d };
-}
-async function putReq(url: string, body?: unknown): Promise<{ ok: boolean; status: number; d: any }> {
-  const r = await fetch(url, {
-    method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body ?? {}),
   });
@@ -779,6 +766,7 @@ export function GateSurface({
 }) {
   const { snap, refresh } = useSnapshot();
   const { blockLegacy } = useTaskWorkflow(t.id);
+  const workflowPlan = useWorkflowPlanApproval(t.id);
   // PS-29: the connection-aware actor (null while offline / read-only)
   const actor = useActor();
   const toast = useToast();
@@ -794,10 +782,10 @@ export function GateSurface({
   const noHuman = useNoHumanReason();
   // Keep local approval drafts mounted while membership refreshes. Workflow
   // decisions require the new approval contract and never use legacy verify.
-  if (blockLegacy) return null;
+  if (blockLegacy && !(workflowPlan && pendingPlan(t))) return null;
 
   // mig 057: an AI manager sent the finished work back — a person may still accept it
-  if (t.status === "in_progress" && t.manager_review?.status === "sent_back" && !acted) {
+  if (!blockLegacy && t.status === "in_progress" && t.manager_review?.status === "sent_back" && !acted) {
     return (
       <ManagerSentBackNote
         t={t}
@@ -846,7 +834,7 @@ export function GateSurface({
     );
   }
   if (acted) return null; // optimistic: just acted this session, snapshot catching up
-  const isPlan = pendingPlan(t);
+  const isPlan = pendingPlan(t) && t.autonomy !== "on";
   const isVerify = t.status === "needs_verification";
   if (!isPlan && !isVerify) return null;
   const pm = isPlan ? planMessageOf(t) : null;
@@ -3097,56 +3085,6 @@ function TaskAutofix({ t }: { t: Task }) {
   return <AutofixSection taskId={t.id} status={t.status} actorId={actor ? String(actor.id) : null} noActorReason={noHuman} />;
 }
 
-function TaskAutonomyControl({ t }: { t: Task }) {
-  const actor = useActor();
-  const { refresh } = useSnapshot();
-  const toast = useToast();
-  const [mode, setMode] = useState<"off" | "on">(t.autonomy === "on" ? "on" : "off");
-  const [busy, setBusy] = useState(false);
-  useEffect(() => setMode(t.autonomy === "on" ? "on" : "off"), [t.id, t.autonomy]);
-  const editable = !!actor && isActingOwner(actor) && !t.is_root && !["completed", "cancelled"].includes(t.status);
-  const next = mode === "on" ? "off" : "on";
-  const change = async () => {
-    if (!actor || !editable || busy) return;
-    setBusy(true);
-    let r: { ok: boolean; status: number; d: any };
-    try {
-      r = await putReq("/api/tasks/" + encodeURIComponent(t.id) + "/autonomy", {
-        autonomy: next,
-        actor_agent_id: actor.id,
-      });
-    } catch {
-      r = { ok: false, status: 0, d: { detail: "network error" } };
-    }
-    setBusy(false);
-    if (!r.ok) {
-      toast("Autonomy unchanged — " + (detailText(r.d) || "the change could not be saved"), "danger");
-      return;
-    }
-    setMode(r.d.autonomy === "on" ? "on" : "off");
-    toast("Task autonomy " + String(r.d.autonomy || next).toUpperCase(), "ok");
-    void refresh();
-  };
-  return (
-    <PropertySection title="Task authority">
-      <Property label="Autonomy">
-        <div className="td-autonomy" data-task-autonomy={mode}>
-          <Button
-            size="sm"
-            variant={mode === "on" ? "primary" : "secondary"}
-            disabled={!editable || busy}
-            busy={busy}
-            title={editable ? `Switch future approvals ${next.toUpperCase()}` : "Only the project owner can change autonomy on active tasks"}
-            onClick={() => void change()}
-          >
-            {mode.toUpperCase()}
-          </Button>
-          <span className="v2-muted">{mode === "on" ? "Agent may approve its own plan and work." : "A person approves the plan and finished work."}</span>
-        </div>
-      </Property>
-    </PropertySection>
-  );
-}
 
 function TaskDetail({
   t,
@@ -3179,7 +3117,8 @@ function TaskDetail({
   }, [cur]);
   const pre = "task-" + t.id;
   const pm = planMessageOf(t);
-  const gated = !blockLegacy && (t.status === "needs_verification" || pendingPlan(t)) && !acted;
+  const workflowPlan = useWorkflowPlanApproval(t.id);
+  const gated = ((!blockLegacy && t.status === "needs_verification") || ((!blockLegacy || workflowPlan) && pendingPlan(t) && t.autonomy !== "on")) && !acted;
   const all = (t.assignees || []).length ? t.assignees : t.assignee ? [t.assignee] : [];
   // KG-6b: a budget-paused assignee explains a stalled task right on the meta line
   const budgets = useContainerBudgets(snap?.container?.id ?? null);
@@ -3412,7 +3351,7 @@ function TaskDetail({
           </PropertySection>
           ) : null}
           <RecurringProperty t={t} />
-          <TaskAutonomyControl key={"autonomy-" + t.id} t={t} />
+          <TaskAuthority task={t} />
           <Relationships t={t} />
           <ProtocolPanel key={"proto-" + t.id} t={t} />
           <CloseCard key={"close-" + t.id} t={t} onActed={onActed} openRef={cancelRef} />

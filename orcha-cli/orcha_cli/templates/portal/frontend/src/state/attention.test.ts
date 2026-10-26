@@ -91,7 +91,7 @@ describe("selectAttention", () => {
     expect(keys(a)).toContain("verify:tv");
   });
 
-  it("task autonomy ON removes plan approval but keeps explicit human verification", () => {
+  it("task autonomy ON skips plan approval but preserves every pending human verification", () => {
     const s = snap("full");
     s.tasks.forEach((task) => { if (["tp", "tv", "tv2"].includes(task.id)) task.autonomy = "on"; });
     const a = selectAttention(s, "h1");
@@ -99,6 +99,8 @@ describe("selectAttention", () => {
     expect(keys(a)).toContain("verify:tv");
     expect(keys(a)).toContain("verify:tv2");
     expect(a.count).toBe(4);
+    s.tasks.find((task) => task.id === "tv")!.status = "completed";
+    expect(keys(selectAttention(s, "h1"))).not.toContain("verify:tv");
   });
 
   it("escalated requests count even when targeted at an agent (GAP-04)", () => {

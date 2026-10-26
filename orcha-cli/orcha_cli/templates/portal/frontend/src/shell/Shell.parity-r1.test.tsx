@@ -96,10 +96,7 @@ describe("execution controls honour the manage_autonomy grant (e2e-permissions-6
       expect(sw.getAttribute("aria-disabled")).toBe("true");
       expect(sw.getAttribute("title")).toBe(EXEC_GRANT_REASON);
     });
-    const full = Array.from(document.querySelectorAll('#autTop [role="radio"]')).find((b) => b.textContent === "Full") as HTMLElement;
-    expect(full.getAttribute("aria-disabled")).toBe("true");
-    fireEvent.click(full);
-    expect(screen.queryByText("Set autonomy to Full?")).toBeNull();
+    expect(document.getElementById("autTop")).toBeNull();
     fireEvent.click(document.querySelector('#notifTop [role="switch"]')!);
     expect(screen.queryByText("Pause all agent wakes?")).toBeNull();
   });

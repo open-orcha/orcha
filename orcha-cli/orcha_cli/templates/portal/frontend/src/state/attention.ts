@@ -4,9 +4,8 @@
  * An attention item is one ENTITY awaiting a human decision the backend lets a
  * human make:
  *   plan    — task in_progress, no plan_decision, agent plan message present,
- *             and that task's autonomy is OFF;
- *   verify  — every task needs_verification. An ON worker result self-accepts
- *             before this state; outside results still require a person;
+ *             and task autonomy is OFF (planAwaitsHuman);
+ *   verify  — task needs_verification (including ON outside results);
  *   request — request open to a human (target null or a human) OR escalated.
  * One entity counts once. The badge number counts items NOT assigned to someone
  * else (a reviewer / target human who is not the acting human). Notifications,

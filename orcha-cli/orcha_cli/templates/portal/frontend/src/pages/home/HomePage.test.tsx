@@ -85,12 +85,11 @@ describe("HomePage action queue (#367 autonomy gating)", () => {
     await waitFor(() => expect(screen.getByText("Verify task")).toBeInTheDocument());
   });
 
-  it("hides the verify card at autonomy 'full'", async () => {
+  it("legacy Full never hides an OFF task result approval", async () => {
     stubFetch("full");
     mount();
-    expect(await screen.findByText("Nothing needs you right now.")).toBeInTheDocument();
-    expect(screen.queryByText("Verify task")).not.toBeInTheDocument();
-    expect(document.querySelector("#needs .v2-group-count")).toHaveTextContent("0");
+    expect(await screen.findByText("Verify task")).toBeInTheDocument();
+    expect(document.querySelector("#needs .v2-group-count")).toHaveTextContent("1");
   });
 });
 

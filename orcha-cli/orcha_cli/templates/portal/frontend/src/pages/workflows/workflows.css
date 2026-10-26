@@ -54,3 +54,7 @@
 .wf-task-label { display: block; font-weight: 400; font-size: .85em; color: var(--v2-text-2); white-space: normal; }
 .tl-row.is-workflow-row .tl-chips { max-width: 40%; white-space: normal; }
 .tl-row.is-workflow-row .tl-chips .v2-chip { white-space: normal; height: auto; overflow-wrap: anywhere; }
+.wf-fingerprint { overflow-wrap: anywhere; font-size: var(--text-sm, 13px); }
+.td-task-authority { min-width: 0; }
+.td-task-authority p { margin: 8px 0; }
+@media (max-width: 720px) { .td-task-authority button { min-height: 44px; white-space: normal; } }

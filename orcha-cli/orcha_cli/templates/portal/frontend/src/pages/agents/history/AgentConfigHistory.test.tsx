@@ -175,7 +175,7 @@ describe("AgentConfigHistory", () => {
     expect(btn).toHaveAccessibleDescription("Viewers have read-only access");
   });
 
-  it("a restore touching autonomy needs manage_autonomy (a manage_agents-only member is refused)", async () => {
+  it("historical agent autonomy cannot be restored into current task authority", async () => {
     auth.identity = { agent_id: "h1", member_role: "member", grants: ["manage_agents"] };
     detailOver[3] = { restore_preview: [{ field: "autonomy_override", current: null, target: "full", grant: "manage_autonomy" }] };
     mount();
@@ -183,7 +183,7 @@ describe("AgentConfigHistory", () => {
     fireEvent.click(within(list).getAllByRole("button")[1]);
     const btn = await screen.findByRole("button", { name: "Restore this version" });
     expect(btn).toBeDisabled();
-    expect(btn).toHaveAccessibleDescription(/manage_autonomy/);
+    expect(btn).toHaveAccessibleDescription(/history only/);
   });
 
   it("says when the live config already matches, and when a restore is blocked", async () => {

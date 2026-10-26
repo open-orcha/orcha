@@ -7,10 +7,13 @@ import { exampleTask, exampleWorkflow, jsonResponse, workflowSpec, writeCapabili
 import type { WorkflowDetail, WorkflowTaskEvidence } from "../workflows/workflowContract.generated";
 import { TasksPage } from "./TasksPage";
 import { NeedsPage, _resetNeedsHistory } from "../needs/NeedsPage";
+import { extensions, type Identity } from "../../extensions";
 
 let workflow: WorkflowDetail;
 let taskStatus: string;
 let legacyAutonomy: string;
+let planBody: string | null;
+let taskAutonomy: "on" | "off";
 let readsFail = false;
 let writes: string[];
 const evidence: WorkflowTaskEvidence = {
@@ -21,7 +24,7 @@ const evidence: WorkflowTaskEvidence = {
 };
 beforeEach(() => {
   _resetNeedsHistory();
-  taskStatus = "not_ready"; legacyAutonomy = "full"; readsFail = false; writes = [];
+  taskStatus = "not_ready"; legacyAutonomy = "full"; readsFail = false; writes = []; planBody = null; taskAutonomy = "off";
   workflow = exampleWorkflow({ evidence_capability: { available: true, reason: null }, tasks: [exampleTask({ current_evidence_set_id: "saved", evidence_state: "saved" })] });
   window.scrollTo = vi.fn();
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -34,18 +37,43 @@ beforeEach(() => {
     if (url === "/api/containers") return jsonResponse([{ id: "project", name: "Orcha", status: "active" }]);
     if (url.startsWith("/api/containers/project")) return jsonResponse({
       container: { id: "project", name: "Orcha", status: "active", autonomy_level: legacyAutonomy },
-      agents: [{ id: "kedar", alias: "Kedar", kind: "human", status: "idle" }, { id: "andrew", alias: "Andrew", kind: "ai", status: "working", autonomy_override: "full" }],
-      tasks: [{ id: "build", title: "Build Android", status: taskStatus, priority: 100, assignees: ["Andrew"], created_by_agent_id: "kedar", created_at: "2026-10-25T10:00:00Z", definition_of_done: "Pairing checks pass", result: "Build checks passed", message_summary: { count: 0, last: null } }], requests: [],
+      agents: [{ id: "kedar", alias: "Kedar", kind: "human", status: "idle", member_role: "member" }, { id: "andrew", alias: "Andrew", kind: "ai", status: "working", autonomy_override: "full" }],
+      tasks: [{ id: "build", title: "Build Android", status: taskStatus, autonomy: taskAutonomy, autonomy_revision: 1, priority: 100, assignees: ["Andrew"], created_by_agent_id: "kedar", created_at: "2026-10-25T10:00:00Z", definition_of_done: "Pairing checks pass", result: "Build checks passed", message_summary: { count: 0, last: null }, plan_message: planBody ? { body: planBody, author_alias: "Andrew", at: "2026-10-25T10:00:00Z" } : null }], requests: [],
     });
     if (url.endsWith("/messages")) return jsonResponse({ messages: [] });
     if (url.endsWith("/runs")) return jsonResponse([{ run_id: "run", status: "running", agent: "Andrew", started_at: "2026-10-25T10:00:00Z" }]);
     return jsonResponse({});
   }));
 });
-afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); localStorage.clear(); sessionStorage.clear(); });
+afterEach(() => { cleanup(); delete extensions.identity; delete extensions.identityTrusted; vi.unstubAllGlobals(); vi.restoreAllMocks(); localStorage.clear(); sessionStorage.clear(); });
 function page(entry = "/tasks?cid=project&task=build&full=1") {
   return render(<ToastProvider><SnapshotProvider><MemoryRouter initialEntries={[entry]}>{entry.startsWith("/needs") ? <NeedsPage /> : <TasksPage />}</MemoryRouter></SnapshotProvider></ToastProvider>);
 }
+it("lets a verified human member approve an OFF task plan without workflow-owner powers or legacy result verification", async () => {
+  extensions.identity = async () => ({ agent_id: "kedar", member_role: "member", alias: "Kedar" }) as Identity;
+  extensions.identityTrusted = () => true;
+  taskStatus = "in_progress"; planBody = "Andrew will check pairing before starting the build.";
+  workflow.capability = { workflow_read: true, workflow_human_write: false, reason: "workflow_owner_required" };
+  workflow.tasks[0] = { ...workflow.tasks[0], autonomy: "off", autonomy_revision: 1, status: "in_progress" };
+  page(); const plan = await screen.findByRole("region", { name: "Plan approval" });
+  expect(within(plan).getByText(planBody)).toBeVisible();
+  fireEvent.click(within(plan).getByRole("button", { name: "Approve plan" }));
+  fireEvent.click(within(await screen.findByRole("dialog", { name: "Approve this plan?" })).getByRole("button", { name: "Approve plan" }));
+  await waitFor(() => expect(writes).toEqual(["/api/decisions"]));
+  const call = vi.mocked(fetch).mock.calls.find(([url, init]) => url === "/api/decisions" && init?.method === "POST")!;
+  expect(JSON.parse(String(call[1]?.body))).toMatchObject({ subject_type: "plan_approval", subject_id: "build", actor_agent_id: "kedar", target_agent_id: "andrew" });
+  expect(screen.queryByRole("region", { name: "Verification" })).toBeNull();
+  expect(screen.getByRole("button", { name: "Change to ON" })).toBeDisabled();
+});
+it.each(["on", "local", "unsupported"])("does not offer a workflow plan decision for %s authority", async (kind) => {
+  if (kind !== "local") extensions.identity = async () => ({ agent_id: "kedar", member_role: "member" }) as Identity;
+  extensions.identityTrusted = () => kind !== "local";
+  taskStatus = "in_progress"; planBody = "Andrew plans the build."; taskAutonomy = kind === "on" ? "on" : "off";
+  workflow.tasks[0] = { ...workflow.tasks[0], autonomy: taskAutonomy, autonomy_revision: 1, status: "in_progress" };
+  workflow.capability = kind === "unsupported" ? { workflow_read: true, workflow_human_write: false, reason: "integration_required" } : writeCapability;
+  page(); await screen.findByRole("link", { name: "Mobile release" });
+  expect(screen.queryByRole("region", { name: "Plan approval" })).toBeNull(); expect(writes).toEqual([]);
+});
 it("shows server status and task OFF while replacing standalone hold, assign and cancellation controls", async () => {
   page(); const context = await screen.findByRole("region", { name: "Task workflow" });
   await within(context).findByRole("link", { name: "Mobile release" });
@@ -62,14 +90,18 @@ it("shows server status and task OFF while replacing standalone hold, assign and
   expect(within(menu).getByText("Open workflow task controls")).toBeVisible();
   expect(writes).toEqual([]);
 });
-it("opens saved evidence before diagnostics and keeps acceptance in workflow controls", async () => {
+it("opens saved evidence before diagnostics and keeps legacy result acceptance unavailable", async () => {
+  extensions.identity = async () => ({ agent_id: "kedar", member_role: "member" }) as Identity;
+  extensions.identityTrusted = () => true;
+  workflow.tasks[0].autonomy_revision = 1;
   taskStatus = "needs_verification";
   page(); const link = await screen.findByRole("link", { name: "Result summary — version 2" });
   expect(link).toHaveAttribute("href", "/api/tasks/build/deliverables/result/versions/2/raw");
   expect(link.compareDocumentPosition(screen.getByRole("tablist", { name: "Task sections" })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   expect(screen.queryByRole("region", { name: "Verification" })).toBeNull();
   expect(screen.queryByRole("button", { name: /^Accept/ })).toBeNull();
-  expect(screen.getByText(/No result acceptance has been recorded/)).toBeVisible();
+  expect(screen.getByText(/Review finished results in the workflow task controls/)).toBeVisible();
+  expect(screen.getByText("Definition of done")).toBeVisible();
   expect(writes).toEqual([]);
 });
 it("uses the same evidence-first workflow guard on Needs you without exposing legacy acceptance", async () => {

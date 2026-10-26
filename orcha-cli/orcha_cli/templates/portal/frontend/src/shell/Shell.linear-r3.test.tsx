@@ -174,15 +174,13 @@ describe("Execution chip + popover", () => {
     expect(btn.getAttribute("aria-label")).toMatch(/^Execution — /);
   });
 
-  it("autonomy segments have no leading dot (the selected fill marks the level)", async () => {
+  it("only the wake switch remains in execution controls", async () => {
     mountShell();
     const btn = await waitFor(() => { const b = document.getElementById("execBtn"); expect(b).toBeTruthy(); return b!; });
     fireEvent.click(btn);
-    await waitFor(() => expect(document.getElementById("autTop")).toBeTruthy());
-    const radios = Array.from(document.querySelectorAll('#autTop button[role="radio"]'));
-    expect(radios).toHaveLength(3);
-    for (const r of radios) expect(r.querySelector(".d")).toBeNull();
-    expect(radios.map((r) => r.textContent)).toEqual(["Plan-only", "Build to PR", "Full"]);
+    await screen.findByRole("switch");
+    expect(document.getElementById("autTop")).toBeNull();
+    expect(screen.queryByRole("radio", { name: "Plan-only" })).toBeNull();
   });
 });
 

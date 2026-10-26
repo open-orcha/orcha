@@ -200,6 +200,7 @@ export function AgentConfigHistory({ agent, className }: AgentConfigHistoryProps
   // uses) + every grant the preview's fields need
   const deniedFor = (d: RevisionDetail): string | null => {
     if (!authority.human || identity?.member_role === "viewer") return noHuman;
+    if (d.restore_preview.some((p) => p.field === "autonomy_override")) return "Previous autonomy settings are history only. Change OFF/ON on the task itself.";
     const grants = Array.from(new Set(d.restore_preview.map((p) => p.grant)));
     for (const g of grants) {
       if (!identity || identity.member_role === "owner" || (identity.grants || []).includes(g)) continue;
@@ -209,7 +210,7 @@ export function AgentConfigHistory({ agent, className }: AgentConfigHistoryProps
   };
 
   const doRestore = () => {
-    if (!confirm) return;
+    if (!confirm || busy || deniedFor(confirm)) return;
     const h = authority.human;
     setBusy(true);
     restoreRevision(aid, confirm.revision_no, h ? String(h.id) : null, reason)

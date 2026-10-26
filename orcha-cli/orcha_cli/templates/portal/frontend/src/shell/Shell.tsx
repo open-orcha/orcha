@@ -11,8 +11,7 @@
  * (Project / Section / Object) · one primary action slot · compact secondary
  * slot · connection indicator (live / polling / reconnecting / offline + last
  * update) · persistent Paused indicator · "Execution controls" popover holding
- * the TWO independent controls — Notifier (wakes) and Autonomy (level), each
- * with its existing confirm copy (GH #148/#149) · notifications bell.
+ * the notifier wake control · notifications bell. Task authority lives on each task.
  * The theme toggle lives in Settings › Interface and the ⌘K palette.
  */
 import { UpdateNotice } from "./UpdateNotice";
@@ -56,49 +55,7 @@ export { initTheme } from "./theme";
 /** The stored preference ("auto" | "light" | "dark"), default applied. */
 export { readThemePref as legacyThemePreference } from "./theme";
 
-/* ---- GH #148/#149: two orthogonal topbar controls ------------------------
- * NOT one fused 4-rung slider. NOTIFIER is the LIVE binary kill-switch
- * (containers.wakes_enabled via POST /api/containers/{cid}/wakes) — Paused
- * (red) vs Running (green), "does anything wake at all?". AUTONOMY is the
- * 3-level engine gearbox (containers.autonomy_level via POST
- * /api/containers/{cid}/autonomy, level ∈ plan|pr|full) — "how far may an
- * agent go once it acts?". They are orthogonal: pausing the notifier does
- * NOT change the level, so Autonomy keeps rendering (dimmed, still editable)
- * while paused, and setting the level never touches wakes_enabled. Labels,
- * tooltips, endpoints and payloads mirror the vanilla split
- * (app-autonomy.js / app-shell.js). */
-const AUT_LEVELS = [
-  { level: "plan", tone: "warn", label: "Plan-only",
-    meaning: "Agents wake & propose, but every plan stops at the approval gate — you approve before any execution.",
-    impact: "Agents propose plans, but you approve every plan before any execution." },
-  { level: "pr", tone: "info", label: "Build to PR",
-    meaning: "Agents execute approved plans up to an open PR; you still merge.",
-    impact: "Agents execute approved plans up to an open PR. You still merge." },
-  { level: "full", tone: "accent", label: "Full",
-    meaning: "Agents may carry approved work to its configured terminal state without further gates.",
-    impact: "Agents may carry approved work to completion without further gates." },
-] as const;
-
-/**
- * The confirm copy for switching to `level` (pure, tested). Autonomy never
- * touches wakes, so the copy must not promise agents "resume": while wakes are
- * OFF it says the level only applies once wakes are turned back on.
- */
-export function autonomyImpact(level: string, wakesPaused: boolean): string {
-  const rg = AUT_LEVELS.find((x) => x.level === level);
-  if (!rg) return "";
-  return wakesPaused
-    ? rg.impact + " Wakes are off, so this applies once wakes are turned back on — changing autonomy does not resume them."
-    : rg.impact;
-}
-
-/** Label for any stored level — unknown / legacy values are named explicitly. */
-export function autonomyLabel(level: string): { label: string; known: boolean } {
-  const rg = AUT_LEVELS.find((x) => x.level === level);
-  if (rg) return { label: rg.label, known: true };
-  return { label: `Custom (${level || "unset"})`, known: false };
-}
-
+/* Wake controls remain independent from task OFF/ON authority. */
 /** Compact age for a millisecond span: "45s" / "12m" / "3h" / "2d". */
 function spanText(ms: number): string {
   const a = Math.max(0, ms / 1000);
@@ -152,7 +109,7 @@ interface PendingAut { title: string; desc: string; primary: string; danger?: bo
  * with a trusted identity only an owner or a `manage_autonomy` holder may act
  * (a viewer never); with trust off (no identity) the backend does not gate, so
  * neither does the affordance. The server stays the enforcer either way. */
-export const EXEC_GRANT_REASON = "Changing wakes or autonomy needs the owner role or the manage_autonomy permission";
+export const EXEC_GRANT_REASON = "Changing wakes needs the owner role or the manage_autonomy permission";
 export function execControlDenial(identity: Identity | null | undefined): string | null {
   if (!identity) return null;
   if (identity.member_role === "viewer") return "Your role is viewer (read-only)";
@@ -186,7 +143,7 @@ function useShellAuthority() {
   return correctAuthorityReason(useActingAuthority(), snapshotErrorKind(error));
 }
 
-function useAutonomyActions() {
+function useWakeActions() {
   const { snap, refresh, identity, error } = useSnapshot();
   const toast = useToast();
   const authority = useShellAuthority();
@@ -226,7 +183,7 @@ function useAutonomyActions() {
  * (red) or Running (green). Running→Paused is destructive (halts all
  * wakes): danger confirm. Paused→Running is safe: light confirm. */
 function NotifierSwitch() {
-  const { snap, who, reason, setWakes } = useAutonomyActions();
+  const { snap, who, reason, setWakes } = useWakeActions();
   const toast = useToast();
   const [pending, setPending] = useState<PendingAut | null>(null);
   const paused = !!(snap?.container && (snap.container as { wakes_enabled?: boolean }).wakes_enabled === false);
@@ -236,7 +193,7 @@ function NotifierSwitch() {
   const click = () => {
     if (!canAct) { toast(denied, "warn"); return; }
     setPending(paused
-      ? { title: "Resume agent wakes?", desc: "Agents resume waking at the current autonomy level.", primary: "Resume", run: () => void setWakes(true) }
+      ? { title: "Resume agent wakes?", desc: "Eligible tasks resume waking with their own OFF/ON settings.", primary: "Resume", run: () => void setWakes(true) }
       : { title: "Pause all agent wakes?", desc: "Agents stop waking immediately. In-flight work finishes; nothing new starts. Humans & live terminals still work.", primary: "Pause all wakes", danger: true, run: () => void setWakes(false) });
   };
 
@@ -283,7 +240,7 @@ function NotifierSwitch() {
   );
 }
 
-function AutonomyControls() {
+function WakeControls() {
   return (
     <div className="ctl-wrap" id="ctlWrap">
       <NotifierSwitch />
@@ -725,7 +682,7 @@ function ExecutionControls() {
           <span className="v2-sr">{note}</span>
         </div>
         {offline ? <p className="v2-exec-offline" role="note">Offline — changes are disabled until Embodent reconnects.</p> : null}
-        <AutonomyControls />
+        <WakeControls />
       </Popover>
     </>
   );
