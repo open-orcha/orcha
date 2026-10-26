@@ -1,10 +1,11 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, expect, it, vi } from "vitest";
-import { WorkflowActivity } from "./WorkflowHistory";
+import { WorkflowActivity, WorkflowReviewHistory } from "./WorkflowHistory";
 import { WorkflowResolveReview } from "./WorkflowReviewEditor";
 import { WorkflowChange } from "./WorkflowChange";
 import { exampleTask, exampleWorkflow, jsonResponse, writeCapability } from "./workflowTestFixtures";
+import type { ReviewHistory } from "./workflowContract.generated";
 const scope = () => ({ origin: "https://orcha.example", project: "project", identity: crypto.randomUUID() });
 const activity = { id: "notice", task_id: "build", actor_alias: "Kedar", actor_kind: "human", event: "workflow_lost_worker_released", revision: 7,
   detail: { warning: "Released without stop confirmation: the worker may still be running outside Orcha." }, created_at: "2026-10-25T10:00:00Z" };
@@ -63,4 +64,27 @@ it("rechecks permission before recording owner resolution and preserves the reas
   expect(screen.queryByRole("button", { name: "Confirm owner resolution" })).toBeNull();
   expect(screen.getByLabelText("Reason for resolving")).toHaveValue("The documented exception covers this finding");
   expect(fetch).toHaveBeenCalledOnce();
+});
+
+const round: ReviewHistory = { id: "round", loop_key: "loop", round_number: 1, review_task_id: "review", correction_task_id: null,
+  reviewed_task_id: "build", reviewed_work_revision: 2, outcome: "changes_requested",
+  reviewed_artifact: { evidence_set_id: "original-evidence", items: [{ item_id: "original-item", deliverable_id: "original-file", deliverable_version: 4, sha256: "b".repeat(64) }] } };
+
+it("opens the recorded reviewed-task file version even after the task has newer work", () => {
+  render(<MemoryRouter initialEntries={["/workflows/release?cid=project&tab=review"]}><WorkflowReviewHistory detail={exampleWorkflow({
+    tasks: [exampleTask({ work_revision: 8, current_evidence_set_id: "new-evidence" }), exampleTask({ id: "review", title: "Review build" })], review_rounds: [round],
+  })} /></MemoryRouter>);
+  expect(screen.getByRole("link", { name: "Reviewed file 1 — version 4" })).toHaveAttribute("href", "/api/tasks/build/deliverables/original-file/versions/4/raw");
+  expect(screen.getByText(/work revision 2/)).toBeVisible();
+  const reviewed = new URL(screen.getByRole("link", { name: "Build Android" }).getAttribute("href")!, "https://orcha.example");
+  expect(reviewed.searchParams.get("workflowReturn")).toBe("/workflows/release?cid=project&tab=review");
+});
+
+it.each([
+  { ...round, outcome: null, reviewed_task_id: null, reviewed_work_revision: null },
+  { ...round, reviewed_task_id: undefined, reviewed_work_revision: undefined },
+])("never invents an evidence link for a pending round or an older response without the reviewed-task reference", (value) => {
+  render(<MemoryRouter><WorkflowReviewHistory detail={exampleWorkflow({ review_rounds: [value] })} /></MemoryRouter>);
+  expect(screen.queryByRole("link", { name: /Reviewed file/ })).toBeNull();
+  expect(screen.getByText(value.outcome ? /exact reviewed-task reference is unavailable/ : /after this review outcome is recorded/)).toBeVisible();
 });

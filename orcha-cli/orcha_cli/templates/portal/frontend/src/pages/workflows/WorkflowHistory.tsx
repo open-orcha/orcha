@@ -59,7 +59,13 @@ export function WorkflowReviewHistory({ detail, renderActions }: { detail: Workf
       : <ol>{detail.review_rounds.map((round) => <li key={round.id}><h4>Round {round.round_number} — {round.outcome?.replaceAll("_", " ") ?? "Awaiting review"}</h4>
         <WorkflowTaskLink cid={detail.container_id} taskId={round.review_task_id}>{detail.tasks.find((t) => t.id === round.review_task_id)?.title ?? "Open review task"}</WorkflowTaskLink>
         {round.correction_task_id && <> · <WorkflowTaskLink cid={detail.container_id} taskId={round.correction_task_id}>{detail.tasks.find((t) => t.id === round.correction_task_id)?.title ?? "Open correction task"}</WorkflowTaskLink></>}
-        <p>Reviewed saved evidence: {round.reviewed_artifact.items.length} exact file versions.</p>
+        {round.outcome && round.reviewed_task_id && round.reviewed_work_revision != null ? <>
+          <p>Reviewed <WorkflowTaskLink cid={detail.container_id} taskId={round.reviewed_task_id}>{detail.tasks.find((t) => t.id === round.reviewed_task_id)?.title ?? "the recorded task"}</WorkflowTaskLink> · work revision {round.reviewed_work_revision}.</p>
+          <p>Reviewed saved evidence: {round.reviewed_artifact.items.length} exact file versions.</p>
+          <ul>{round.reviewed_artifact.items.map((item, index) => <li key={item.item_id}>
+            <a href={`/api/tasks/${encodeURIComponent(round.reviewed_task_id!)}/deliverables/${encodeURIComponent(item.deliverable_id)}/versions/${item.deliverable_version}/raw`}>Reviewed file {index + 1} — version {item.deliverable_version}</a>
+          </li>)}</ul>
+        </> : <p>{round.outcome ? "The exact reviewed-task reference is unavailable on this server version." : "Saved evidence will appear after this review outcome is recorded."}</p>}
         {round.resolved_by_owner && <p>Resolved by owner decision: {round.resolved_reason}</p>}
         {!round.resolved_by_owner && round.outcome !== "accepted" && renderActions?.(round.review_task_id)}
       </li>)}</ol>}

@@ -1,5 +1,5 @@
 // Generated from FastAPI OpenAPI slices. DO NOT EDIT.
-// Workflow source SHA-256: e64a738d52d8e087655f62c86678ff416256b11d7ad2797a7f2aca9fad9056f8
+// Workflow source SHA-256: 9ec06a7f1db24b8223b04da8a9f82ab56ee937abd27490f5add7bd7917eb753f
 // Evidence GET source SHA-256: a3a98a4093221faf85216c9e00bfa7d9ed5384c9c435b1f23dd5333f0bf45413
 // Regenerate with tools/generate-workflow-contract.mjs and both source files.
 
@@ -260,6 +260,8 @@ export type ReviewHistory = {
   "correction_task_id"?: string | null;
   "outcome"?: string | null;
   "reviewed_artifact": EvidenceReference;
+  "reviewed_task_id"?: string | null;
+  "reviewed_work_revision"?: number | null;
   "resolved_by_owner"?: string | null;
   "resolved_reason"?: string | null;
 };
@@ -1716,6 +1718,26 @@ export const workflowSchemas = {
       },
       "reviewed_artifact": {
         "$ref": "#/components/schemas/EvidenceReference"
+      },
+      "reviewed_task_id": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "reviewed_work_revision": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ]
       },
       "resolved_by_owner": {
         "anyOf": [
