@@ -45,6 +45,7 @@ import { Property, PropertyRail, PropertySection } from "../../components/primit
 import { Composer } from "../../components/primitives";
 import { markAttentionDecided, unmarkAttentionDecided } from "../../state/attention";
 import { RESOLVE_UNDO_MS, scheduleResolve, undoResolve, useResolving } from "./resolveUndo";
+import { PauseNoticeResume } from "./PauseNoticeResume";
 import { Shell } from "../../shell/Shell";
 import { CircleIconButton, FilterPills, PageHeader, Pager, scrollMainTo } from "../../shell/PageChrome";
 import { useInboxKeys } from "../needs/useInboxKeys";
@@ -699,11 +700,12 @@ export function RequestDetail({
     setSending(true);
     setAnsErr(null);
     try {
-      await sendJSON("POST", "/api/requests/" + encodeURIComponent(req.id) + "/respond", {
+      const res = await sendJSON<{ automatic_work?: { message: string } }>("POST", "/api/requests/" + encodeURIComponent(req.id) + "/respond", {
         responder_agent_id: h.id,
         response: v,
       });
-      toast("Answer sent to " + req.from, "ok");
+      // an answer never resumes a failure pause; the server says so rather than implying a wake
+      toast(res?.automatic_work ? res.automatic_work.message : "Answer sent to " + req.from, res?.automatic_work ? "warn" : "ok");
       markAnswerPending(req.id, v);
       setAnsDraft("");
       setAnswering(false);
@@ -844,11 +846,12 @@ export function RequestDetail({
     const h = requireHuman();
     if (!h) return;
     try {
-      const res = await sendJSON<{ nudged: boolean }>("POST", "/api/requests/" + encodeURIComponent(req.id) + "/nudge", {
+      const res = await sendJSON<{ nudged: boolean; automatic_work?: { message: string } }>("POST", "/api/requests/" + encodeURIComponent(req.id) + "/nudge", {
         actor_agent_id: h.id,
       });
       // never changes request state — nudged:false is a clean no-op (no agent to wake).
-      toast(res.nudged ? "Nudge sent" : "Nothing to wake — no agent owns the next action", res.nudged ? "ok" : "warn");
+      if (res.automatic_work) toast(res.automatic_work.message, "warn");
+      else toast(res.nudged ? "Nudge sent" : "Nothing to wake — no agent owns the next action", res.nudged ? "ok" : "warn");
     } catch (e) {
       // 409 = not actionable in this state; sendJSON's Error.message already carries the
       // server's ": <detail>" suffix, so surface it verbatim instead of a generic failMsg.
@@ -1191,6 +1194,8 @@ export function RequestDetail({
             </section>
           )
         ) : null}
+
+        <PauseNoticeResume cid={snap?.container?.id} requestId={r.id} humanId={h?.id ?? null} onResumed={() => { toast("Automatic work resumed", "ok"); void refresh(); }} />
 
         {hasChain && (
           <section className="rq-sec" aria-label="Request chain">

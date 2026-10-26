@@ -17,7 +17,7 @@ from portal_backend.guards import require_agent, require_container, require_kind
 from portal_backend.identity_routes import enforce_grant, require_member_read, trusted_actor
 from portal_backend.schemas.agent_state import WakeBackoffRelease
 from portal_backend.request_lookup import require_request
-from portal_backend.run_failure_backoff import FAILURE_KEY, FAILURE_LIMIT, resume_from_notice
+from portal_backend.run_failure_backoff import FAILURE_KEY, FAILURE_LIMIT, active_notice_ids, resume_from_notice
 
 
 @app.get("/api/containers/{cid}/wake-backoff")
@@ -44,6 +44,8 @@ def list_wake_backoff(cid: str, request: Request):
             (cid,),
         )
         rows = cur.fetchall()
+        notices = active_notice_ids(cur, cid) if any(
+            r["wake_key"] == FAILURE_KEY and r["strikes"] >= FAILURE_LIMIT for r in rows) else {}
     return {
         "container_id": cid,
         "backoffs": [
@@ -60,6 +62,8 @@ def list_wake_backoff(cid: str, request: Request):
                 "first_strike_at": row["first_strike_at"].isoformat() if row["first_strike_at"] else None,
                 "last_strike_at": row["last_strike_at"].isoformat() if row["last_strike_at"] else None,
                 "notified": row["notified_at"] is not None,
+                # The notice whose Resume automatic work action clears this pause.
+                "notice_request_id": notices.get(str(row["agent_id"])) if row["wake_key"] == FAILURE_KEY else None,
             }
             for row in rows
         ],

@@ -143,3 +143,14 @@ async def test_notice_sent_before_this_repair_resolves_from_the_audit_record(
                ("Builder's automatic work is paused. Open Activity and choose Resume automatic work.", rid))
     assert (await resume(client, rid, human)).json()["resumed"] is True
     assert (await candidate(client, cid, aid))["should_wake"]
+
+
+async def test_pause_listing_points_at_the_notice_that_can_resume_it(
+    client, container, make_agent, make_task, db,
+):
+    cid, human, aid, tid = await setup(client, container, make_agent, make_task)
+    rid = await fail_three_times(client, db, aid, tid)
+    listing = (await client.get(f"/api/containers/{cid}/wake-backoff")).json()["backoffs"]
+    assert [(r["agent_id"], r["paused"], r["notice_request_id"]) for r in listing] == [(aid, True, rid)]
+    assert (await resume(client, rid, human)).json()["resumed"] is True
+    assert (await client.get(f"/api/containers/{cid}/wake-backoff")).json()["backoffs"] == []

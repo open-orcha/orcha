@@ -122,6 +122,7 @@ export const detailCss = `
   .rq-actions .rq-lead-slot { margin-right: auto; }
   .rq-idle { display: flex; align-items: center; gap: var(--v2-space-3); flex-wrap: wrap; font-size: var(--v2-fs-body); color: var(--v2-text-2); }
   .rq-idle .rq-push { margin-left: auto; }
+  .rq-pause { display: flex; align-items: center; gap: var(--v2-space-3); flex-wrap: wrap; margin: var(--v2-space-2) 0; font-size: var(--v2-fs-body); color: var(--v2-warn); }
   .rq-card.is-inline { display: flex; align-items: center; flex-wrap: wrap; gap: var(--v2-space-2) var(--v2-space-3); padding: 10px 12px 10px var(--v2-space-4); }
   .rq-card.is-inline .rq-card-h { margin: 0; flex: none; }
   .rq-card.is-inline .rq-help { margin-left: 0; }

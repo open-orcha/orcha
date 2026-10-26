@@ -209,3 +209,19 @@ def resume_from_notice(cur, rid, actor_id):
                   "wake_backoff_released",
                   {"wake_key": FAILURE_KEY, "strikes_at_release": deleted["strikes"], "request_id": rid})
     return {**notice, "state": "resumed" if deleted else notice["state"], "resumed": deleted is not None}
+
+
+def active_notice_ids(cur, cid):
+    """agent_id -> the pause notice that can resume that agent's current pause."""
+    cur.execute(
+        "SELECT entity_id, detail FROM events WHERE container_id=%s AND entity_type='request' "
+        "AND event_type='created' AND actor_type='system' ORDER BY created_at DESC", (cid,),
+    )
+    found = {}
+    for row in cur.fetchall():
+        if _detail(row["detail"]).get("reason") != "run_failure_breaker":
+            continue
+        notice = failure_pause_notice(cur, str(row["entity_id"]))
+        if notice and notice["state"] == "paused":
+            found.setdefault(notice["agent_id"], str(row["entity_id"]))
+    return found
