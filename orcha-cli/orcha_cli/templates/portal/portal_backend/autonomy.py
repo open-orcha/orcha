@@ -1,19 +1,14 @@
-"""The single source of truth for an agent's EFFECTIVE autonomy level.
+"""Resolve retired project/agent autonomy values for compatibility displays only.
 
-#298 gave a container ONE engine-enforced autonomy level (containers.autonomy_level, mig 021)
-driving the ONE hard gate — task completion. PER-AGENT OVERRIDES (mig 043) let a trusted agent
-be handed a different level WITHOUT moving the whole container, and a container-wide `enforced`
-switch lets an operator ignore every override at once. Both are expressed by the ONE rule below,
-which EVERY consumer of the autonomy level MUST route through so the gate can never diverge from
-what the portal shows:
+Task ``autonomy`` is the only approval authority. Nothing in this module may gate plan approval,
+work admission, completion, workflow acceptance, Git actions, or worker scheduling. The legacy
+columns remain readable during the migration window so older snapshots and history views do not
+break. Their historical projection was:
 
     effective = container.autonomy_level              if container.autonomy_enforced
               else (agent.autonomy_override or container.autonomy_level)
 
-Safety framing (unchanged by this file): the effective level can only ever be one of the SAME
-three enum values the container level already allows; an override can never widen a container past
-what its own slider could grant everyone, and the needs_verification floor + human merge authority
-are untouched. NULL override = inherit.
+NULL override means inherit. This result is informational and grants no permission.
 """
 
 from __future__ import annotations
@@ -28,14 +23,14 @@ def effective_autonomy(
     autonomy_enforced: bool,
     agent_override: Optional[str],
 ) -> str:
-    """Resolve the autonomy level that GOVERNS one agent.
+    """Resolve one legacy display value; never use it as authority.
 
-    * container_level    — containers.autonomy_level ('plan'|'pr'|'full'), the #298 slider.
+    * container_level    — retained containers.autonomy_level history.
     * autonomy_enforced  — containers.autonomy_enforced; when true, overrides are IGNORED.
     * agent_override     — agents.autonomy_override (None = inherit the container level).
 
-    Returns the effective enum value. Enforced wins (container level for everyone); otherwise a
-    non-NULL override wins over the container level; otherwise the container level (inherit).
+    Enforced wins for historical display; otherwise a non-NULL override wins over the retained
+    container value. The return value grants no current permission.
     """
     if autonomy_enforced:
         return container_level
@@ -48,7 +43,7 @@ def effective_autonomy_for(
     container_row: Mapping[str, Any],
     agent_row: Optional[Mapping[str, Any]],
 ) -> str:
-    """Row-oriented convenience wrapper over ``effective_autonomy``.
+    """Row-oriented compatibility wrapper over ``effective_autonomy``.
 
     ``container_row`` must expose ``autonomy_level`` and ``autonomy_enforced``; ``agent_row`` (may
     be None for a container-only context) may expose ``autonomy_override``. Missing keys degrade to

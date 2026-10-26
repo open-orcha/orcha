@@ -1,5 +1,9 @@
 # Orcha Portal — Complete UI Inventory & Redesign Prompt
 
+> **Historical UI brief.** Its Plan-only/Build-to-PR/Full controls are no longer current product
+> behavior. Current authority is task-level `off`/`on`; see
+> `docs/architecture/task-autonomy-migration.md` and `docs/orcha-project-preferences.md`.
+
 > **Purpose of this document:** This is a self-contained brief for a design agent. It inventories
 > **every screen** in the Orcha orchestration portal, then specifies each screen's layout, every
 > feature, every UI state, and every interaction in enough detail that you can redraw the entire

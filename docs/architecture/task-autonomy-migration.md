@@ -25,9 +25,15 @@ current portal, desktop, iOS and Android controls do not offer those writes.
 
 ## Upgrade behavior
 
-Run the normal database backup and migration process before starting the updated
-service. PostgreSQL and SQLite migrations provide the same defaults, checks,
-history capture and approval tables. After upgrade:
+Run the normal backup and migration process before starting the updated service.
+For native projects, current `orcha backup` writes a verified database, attachment
+snapshot and hash manifest as one named set; `orcha restore` preserves the replaced
+database and attachment tree, then audits every current or accepted evidence file.
+A legacy database-only restore remains supported but records missing evidence as
+`missing_after_restore` and leaves acceptance blocked. PostgreSQL and SQLite
+migrations provide the same defaults, named checks, history capture and approval
+tables. Populated-upgrade tests preserve unfinished work, completed/accepted work,
+legacy authority history and exact evidence on both engines. After upgrade:
 
 1. Existing unfinished tasks require human plan and result approval until their
    project owner explicitly switches that task ON.
@@ -37,6 +43,9 @@ history capture and approval tables. After upgrade:
    records retain the authority that was valid when they were made.
 4. A mixed-version client may still display old values, but attempts to change
    them fail closed. Upgrade clients to restore write availability.
+5. `orcha up` and `orcha upgrade` replace only the retired autonomy section in an
+   older generated project rulebook. Merge targets and operator house rules are
+   preserved, so existing agents no longer receive unsafe Full-autonomy guidance.
 
 Do not remove the legacy columns or history table in the same release. Their later
 removal requires a separately reviewed migration after supported clients no longer

@@ -95,4 +95,10 @@ def task_approvals(tid: str, request: Request):
                 ORDER BY r.approved_at,r.id""",
             (tid,),
         )
-        return {"task_id": tid, "approvals": cur.fetchall()}
+        approvals = cur.fetchall()
+        for approval in approvals:
+            # psycopg returns native UUID objects while SQLite returns text.  Keep
+            # the public contract identical on both engines.
+            approval["id"] = str(approval["id"])
+            approval["actor_id"] = str(approval["actor_id"])
+        return {"task_id": tid, "approvals": approvals}

@@ -1,5 +1,7 @@
 """Storage failure leaves a terminal run with explicit, unacceptably missing evidence."""
 
+import hashlib
+import json
 from pathlib import Path
 
 from fastapi import HTTPException
@@ -8,6 +10,31 @@ import pytest
 from portal_backend import workflow_evidence_storage as storage
 from portal_backend import workflow_evidence_service as evidence
 from test_workflow_evidence_service import attempt, submit, finish, validate
+
+
+def test_restore_audit_distinguishes_missing_after_restore_and_yields_to_repair(
+    monkeypatch, tmp_path,
+):
+    root = tmp_path / "attachments"
+    monkeypatch.setattr(storage.store, "attachments_dir", lambda: root)
+    task_id = "11111111-1111-4111-8111-111111111111"
+    deliverable_id = "22222222-2222-4222-8222-222222222222"
+    data = b"exact restored evidence"
+    digest = hashlib.sha256(data).hexdigest()
+    relative = f"deliverables/{task_id}/{deliverable_id}/v1.txt"
+    audit = root / ".restore-audits" / "current.json"
+    audit.parent.mkdir(parents=True)
+    audit.write_text(json.dumps({"items": [{
+        "path": relative, "sha256": digest, "storage_state": "missing_after_restore",
+    }]}))
+
+    args = dict(task_id=task_id, deliverable_id=deliverable_id,
+                stored_name="v1.txt", sha256=digest)
+    assert storage.evidence_file_state(**args) == "missing_after_restore"
+    restored = root / relative
+    restored.parent.mkdir(parents=True)
+    restored.write_bytes(data)
+    assert storage.evidence_file_state(**args) == "readable"
 
 
 @pytest.mark.parametrize("failure", ["mkdir", "write", "sync", "hash_read", "hash_changed", "publish_setup"])

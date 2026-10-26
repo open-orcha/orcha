@@ -1,7 +1,7 @@
 -- Task-only autonomy. Existing and new tasks start OFF; legacy project/agent
 -- settings are retained as immutable migration history but no longer grant authority.
 ALTER TABLE tasks ADD COLUMN autonomy TEXT NOT NULL DEFAULT 'off'
-    CHECK (autonomy IN ('off','on'));
+    CONSTRAINT tasks_autonomy_check CHECK (autonomy IN ('off','on'));
 ALTER TABLE tasks ADD COLUMN autonomy_revision INTEGER NOT NULL DEFAULT 1;
 ALTER TABLE tasks ADD COLUMN autonomy_changed_at TIMESTAMPTZ;
 ALTER TABLE tasks ADD COLUMN autonomy_changed_by UUID REFERENCES agents(id);
@@ -40,20 +40,20 @@ CREATE TABLE task_approval_records (
     id UUID PRIMARY KEY NOT NULL,
     container_id UUID NOT NULL REFERENCES containers(id) ON DELETE CASCADE,
     task_id UUID NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
-    phase TEXT NOT NULL CHECK (phase IN ('plan','completion')),
+    phase TEXT NOT NULL CONSTRAINT task_approval_phase_check CHECK (phase IN ('plan','completion')),
     work_revision INTEGER NOT NULL,
     requirements_sha256 TEXT NOT NULL,
     submission_sha256 TEXT NOT NULL,
     actor_id UUID NOT NULL REFERENCES agents(id),
-    actor_kind TEXT NOT NULL CHECK (actor_kind IN ('human','ai')),
-    autonomy_at_approval TEXT NOT NULL CHECK (
+    actor_kind TEXT NOT NULL CONSTRAINT task_approval_actor_check CHECK (actor_kind IN ('human','ai')),
+    autonomy_at_approval TEXT NOT NULL CONSTRAINT task_approval_autonomy_check CHECK (
         autonomy_at_approval IN ('off','on')
         AND (actor_kind = 'human' OR autonomy_at_approval = 'on')
     ),
     autonomy_revision INTEGER NOT NULL,
     permission_source TEXT NOT NULL,
     approved_at TIMESTAMPTZ NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f','now') || '000+00:00'),
-    CHECK (work_revision > 0 AND autonomy_revision > 0),
+    CONSTRAINT task_approval_revision_check CHECK (work_revision > 0 AND autonomy_revision > 0),
     UNIQUE (task_id, phase, work_revision, submission_sha256)
 );
 CREATE INDEX idx_task_approval_records_task

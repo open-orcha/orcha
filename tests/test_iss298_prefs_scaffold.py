@@ -1,11 +1,8 @@
 """#298 — the project-preferences file is a PACKAGED TEMPLATE asset, scaffolded by the CLI.
 
-Kedar's scope addendum: ship `orcha_cli/templates/project-preferences.md` (headers + fillable
-blocks) so EVERY project gets docs/orcha-project-preferences.md at `orcha init` regardless of
-install method (pypi/homebrew/source) — never hand-seeded by an agent. `orcha up`/`orcha upgrade`
-backfill it for existing projects. The autonomy LEVEL is never written into the file (the DB column
-containers.autonomy_level is the sole engine-enforced source of truth); the file holds only the
-loose zone + merge-target.
+Ship `orcha_cli/templates/project-preferences.md` so every project gets the canonical agent
+rulebook. `orcha up`/`orcha upgrade` backfill missing files and replace only the unsafe retired
+project-autonomy section in older generated copies, preserving project-specific rules.
 
 Host-CLI unit tests only — no docker, no live API. Every docker/daemon/bridge side effect that
 cmd_init / cmd_up / cmd_upgrade trigger is stubbed, so we assert purely on the materialized file.
@@ -13,7 +10,6 @@ cmd_init / cmd_up / cmd_upgrade trigger is stubbed, so we assert purely on the m
 import argparse
 import json
 import pathlib
-import re
 
 from orcha_cli import __main__ as cli  # noqa: E402  (conftest puts orcha-cli on sys.path)
 from orcha_cli import terminal_bridge as tb
@@ -59,31 +55,21 @@ def _make_existing_project(tmp_path: pathlib.Path) -> None:
 
 # --------------------------------------------------------------------------- the packaged asset
 
-def test_template_asset_ships_and_omits_the_db_level():
-    """The packaged template must exist (so it's in the wheel/sdist) AND must NOT mirror the
-    autonomy level value — the DB is the sole source of truth (Kedar's CORRECTION)."""
+def test_template_asset_ships_task_only_autonomy_rules():
+    """The packaged rulebook must describe only task ON/OFF authority."""
     text = (cli.PKG_TEMPLATES / "project-preferences.md").read_text()
-    assert text.strip()                                   # non-empty asset shipped
-    # The read-semantics + merge-target zone are present …
-    assert "min(DB ceiling, prefs" in text
+    assert text.strip()
+    assert "Task autonomy is the only approval authority" in text
+    assert "exactly two states" in text
+    assert "new tasks default to `off`" in text
+    assert "Only the human project owner may change" in text
+    assert "human-only\nworkflow Finish action" in text
+    assert "task autonomy never grants merge" in text.lower() or \
+        "Never merge merely because task autonomy" in text
     assert "Merge target branch" in text
-    # … but the file never claims to STORE/serve the level: the level lives in the DB, read via API.
-    assert "sole source of truth" in text
-    assert "never read\n   it from here" in text or "never read it from here" in text.replace("\n   ", " ")
-    # ABSENCE TOOTH (Gate 2nd-pass, req 2f1e3efd; broadened per Helm rework c2c6eec5): the
-    # disclaimer prose above is necessary but not SUFFICIENT — the file must also never ASSIGN a
-    # level value to autonomy. Injecting e.g. `autonomy_level = full` (or the sneakier `autonomy:
-    # full` / `level = 2`) would turn the file into a second, drifting source of truth alongside the
-    # DB. The tooth bans an assignment LITERAL: `autonomy_level` / `autonomy` / `level` immediately
-    # followed (modulo quotes/whitespace) by `=`/`:` then a level value (the plan|pr|full enum, plus
-    # near-miss tokens merge|none|0-3 a drift might use). It does NOT flag legit prose that merely
-    # NAMES the column — "`autonomy_level` (DB, engine-enforced) = the CEILING" (the `=` is separated
-    # from the name by other text), "What each level grants", "the DB level" — because none of those
-    # put `[:=]`+value directly after the token. (Verified: zero matches on the clean template.)
-    assert not re.search(
-        r"\b(?:autonomy_level|autonomy|level)\b[\s\"'`]*[:=][\s\"'`]*(?:plan|pr|merge|full|none|[0-3])\b",
-        text, re.IGNORECASE,
-    ), "prefs template must NOT assign a level value to autonomy — the DB is the sole source of truth"
+    assert "POST /api/containers/{cid}/autonomy" not in text
+    assert "auto-completes" not in text
+    assert "Build-to-PR" not in text
 
 
 # --------------------------------------------------------------------------- init
@@ -140,6 +126,38 @@ def test_backfill_is_idempotent_never_clobbers_edits(tmp_path, monkeypatch):
     cli.cmd_up(argparse.Namespace(project=None))
 
     assert prefs.read_text() == "# edited by the operator — do not clobber\n"
+
+
+def test_upgrade_replaces_only_legacy_autonomy_section(tmp_path, monkeypatch):
+    _stub_externals(monkeypatch)
+    _make_existing_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    prefs = tmp_path / PREFS_REL
+    prefs.parent.mkdir(parents=True, exist_ok=True)
+    prefs.write_text("""# Orcha project preferences
+
+## How autonomy is decided — read this first
+
+Full may auto-complete and merge through POST /api/containers/{cid}/autonomy.
+
+## Merge target branch
+
+```
+release-candidate
+```
+
+## House rules
+
+Keep this operator rule exactly.
+""")
+
+    cli.cmd_upgrade(argparse.Namespace(no_bridge=True))
+
+    migrated = prefs.read_text()
+    assert "Task autonomy is the only approval authority" in migrated
+    assert "POST /api/containers/{cid}/autonomy" not in migrated
+    assert "release-candidate" in migrated
+    assert "Keep this operator rule exactly." in migrated
 
 
 def test_install_helper_returns_path_only_on_write(tmp_path):

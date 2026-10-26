@@ -1,5 +1,9 @@
 # React portal adoption — premium-delta audit
 
+> **Historical audit.** References below to project-wide or per-agent autonomy document the old
+> portal and are not operating instructions. Current authority is task-level `off`/`on`; see
+> `docs/architecture/task-autonomy-migration.md` and `docs/orcha-project-preferences.md`.
+
 > ## Remediation status & priority order (2026-08-05, post-deploy)
 >
 > **Fixed & deployed (PR #113 + upstream):** the unstyled-open-class bug family

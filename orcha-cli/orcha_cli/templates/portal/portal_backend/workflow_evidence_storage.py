@@ -9,6 +9,7 @@ after a database rollback. Unreferenced files can be collected separately.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import pathlib
 import uuid
@@ -123,6 +124,24 @@ def evidence_file_state(
     try:
         path = store.resolve_version_file(task_id, deliverable_id, stored_name)
         if path is None:
+            audit = store.attachments_dir() / ".restore-audits" / "current.json"
+            try:
+                document = json.loads(audit.read_text())
+            except (OSError, ValueError, TypeError):
+                return "missing"
+            if not isinstance(document, dict) or not isinstance(document.get("items"), list):
+                return "missing"
+            expected = (
+                pathlib.PurePosixPath("deliverables") / str(task_id)
+                / str(deliverable_id) / stored_name
+            ).as_posix()
+            for item in document.get("items", []):
+                if isinstance(item, dict) and (
+                    item.get("path") == expected
+                    and item.get("sha256") == sha256
+                    and item.get("storage_state") == "missing_after_restore"
+                ):
+                    return "missing_after_restore"
             return "missing"
         return "readable" if store.sha256_file(path) == sha256 else "corrupt"
     except OSError:

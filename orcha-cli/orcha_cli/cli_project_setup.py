@@ -128,12 +128,33 @@ def install_skill_templates(
 
 
 def install_project_preferences(project_root: pathlib.Path, templates) -> Optional[pathlib.Path]:
-    """Backfill packaged project preferences without replacing local edits."""
+    """Backfill preferences or replace only the retired autonomy instructions.
+
+    Project-specific merge targets and house rules remain byte-for-byte intact.  The
+    one managed migration is safety-critical: an existing canonical file must not keep
+    telling agents that retired project-wide Full autonomy can approve or merge work.
+    """
     prefs_path = project_root / "docs" / "orcha-project-preferences.md"
+    template = (templates / "project-preferences.md").read_text()
     if prefs_path.exists():
-        return None
+        current = prefs_path.read_text()
+        legacy_heading = "## How autonomy is decided — read this first"
+        current_heading = "## Task autonomy — read this first"
+        if legacy_heading not in current:
+            return None
+
+        def section(text: str, heading: str) -> tuple[int, int]:
+            start = text.index(heading)
+            following = text.find("\n## ", start + len(heading))
+            return start, len(text) if following < 0 else following + 1
+
+        old_start, old_end = section(current, legacy_heading)
+        new_start, new_end = section(template, current_heading)
+        migrated = current[:old_start] + template[new_start:new_end] + current[old_end:]
+        prefs_path.write_text(migrated)
+        return prefs_path
     prefs_path.parent.mkdir(parents=True, exist_ok=True)
-    prefs_path.write_text((templates / "project-preferences.md").read_text())
+    prefs_path.write_text(template)
     return prefs_path
 
 

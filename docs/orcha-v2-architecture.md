@@ -1,5 +1,9 @@
 # Orcha V2 — architecture and shared contracts
 
+> **Historical design record.** The project-wide Plan/PR/Full and per-agent autonomy rules in
+> this document are retired. Current authority is task-level `off`/`on`; see
+> `docs/architecture/task-autonomy-migration.md` and `docs/orcha-project-preferences.md`.
+
 Owner: **Agent A** (coordinator). Status: **v1 contract, 2026-09-28**. Spec:
 `docs/orcha-linear-redesign-implementation-prompt.md` (the brief). Parity rows referenced as
 `R-xx`, `S-xx`, … live in `docs/orcha-v2-feature-parity.md`. Tokens:

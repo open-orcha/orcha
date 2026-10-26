@@ -128,36 +128,39 @@ relying on a test, revert the production change and confirm the test fails; then
 
 ---
 
-## 7. The verification gate (never self-certify)
+## 7. Task verification gates
 
 This is structural, not a convention you can opt out of:
 
-- An agent can only call `POST /api/tasks/{tid}/done`, which moves a task to
-  **`needs_verification`** (`main.py:3168`) — never to `completed`.
+- With task autonomy `off`, `POST /api/tasks/{tid}/done` moves work to
+  **`needs_verification`** for a person to accept.
+- With task autonomy `on`, the assigned agent may approve and complete only its own exact current
+  work revision after the task and workflow guards pass. The immutable approval records the task
+  requirements, submission, autonomy revision, actor and time.
 - Only a **human** can `POST /api/tasks/{tid}/verify` — the route calls
-  `_require_kind(..., ("human",))` (`main.py` verify handler) before approving.
+  the human identity guard before approving autonomy-off work.
+- Only the verified human workflow owner can use workflow Finish, regardless of task autonomy.
 
-So an agent cannot self-certify its own work into `completed`. Stop at `needs_verification`
-and let a human verify.
-
-**#298 exception — the autonomy slider.** The above is the behavior at autonomy levels `plan`
-(default) and `pr`. A human can move a container to `full` via `POST /api/containers/{cid}/autonomy`
-(human-gated); at `full`, `/done` AUTO-COMPLETES the task (no `needs_verification`) via the SAME
-`_complete_and_unblock` path `/verify` uses. The completion gate is the ONE engine-enforced part
-of the slider; the `gh pr create` / `gh pr merge` rules are loosely-hardened agent behaviors keyed
-off `autonomy_level` (see `docs/orcha-project-preferences.md`). So "an agent cannot self-certify"
-holds at `plan`/`pr` — at `full` the human has explicitly delegated completion via the slider.
+**Task-autonomy rule.** Project-wide Plan-only, Build-to-PR and Full authority are retired. Every
+new task starts `off`. Only the human project owner may switch an individual task `on`, which lets
+its assigned agent approve that task's exact plan and exact finished-work revision. The switch does
+not authorize a pull-request merge and never bypasses workflow admission, dependencies, holds,
+stop/cancellation rules, evidence review, or the human-only workflow Finish action. Existing
+project and per-agent values are compatibility history only.
 
 ## 8. Back up and restore a native project's database (GH #258 S7)
 
-A native project (no Docker) keeps everything in one SQLite file, `.orcha/orcha.db`.
+A native project (no Docker) keeps structured data in `.orcha/orcha.db` and file evidence in
+`.claude/.orcha-attachments`.
 
-- `orcha backup` copies it to `.orcha/backups/orcha-<UTC time>.db` while Orcha keeps
-  running (SQLite `VACUUM INTO`: one consistent snapshot, integrity-checked) and keeps
-  the newest 10 (`--keep N`). `--out PATH` writes a single copy anywhere instead.
+- `orcha backup` creates a verified database-and-attachments set while Orcha keeps running:
+  `.db`, `.db.attachments`, and `.db.manifest.json`. SQLite uses `VACUUM INTO`; immutable evidence
+  files and their hashes are captured before the database handle is published. The newest 10 sets
+  are kept (`--keep N`); `--out PATH` writes one set anywhere instead.
 - `orcha restore <file>` needs Orcha stopped (`orcha down`), checks the backup, keeps
-  the database it replaces as `.orcha/orcha.db.before-restore-<UTC time>`, then puts
-  the backup in place; `orcha up` starts Orcha on it.
+  the database and attachments it replaces as `*.before-restore-<UTC time>`, restores the pair,
+  and audits every current or accepted evidence hash. A legacy database-only restore is allowed,
+  but missing files are durably reported as `missing_after_restore` and acceptance remains blocked.
 - Both take `--json` (one JSON object) for the desktop app.
 
 Docker projects keep using `pg_dump`/`pg_restore` until they move with

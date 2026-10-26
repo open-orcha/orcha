@@ -4,14 +4,14 @@ CREATE TABLE workflow_evidence_import_source (
     id UUID PRIMARY KEY NOT NULL,
     evidence_set_id UUID NOT NULL REFERENCES workflow_evidence_sets(id),
     task_id UUID NOT NULL,
-    kind TEXT NOT NULL CONSTRAINT workflow_evidence_kind_check
-        CHECK (kind IN ('result_summary', 'file_changes', 'log_excerpt',
+    kind TEXT NOT NULL CONSTRAINT workflow_evidence_kind_check CHECK (
+        kind IN ('result_summary', 'file_changes', 'log_excerpt',
                         'owner_result', 'outside_result', 'import_result')),
-    source TEXT NOT NULL CONSTRAINT workflow_evidence_source_check
-        CHECK (source IN ('worker', 'owner', 'outside', 'import',
+    source TEXT NOT NULL CONSTRAINT workflow_evidence_source_check CHECK (
+        source IN ('worker', 'owner', 'outside', 'import',
                           'cancelled_attempt', 'released_attempt')),
-    snapshot_phase TEXT NOT NULL CONSTRAINT workflow_evidence_snapshot_phase_check
-        CHECK (snapshot_phase IN ('submission', 'terminal')),
+    snapshot_phase TEXT NOT NULL CONSTRAINT workflow_evidence_snapshot_phase_check CHECK (
+        snapshot_phase IN ('submission', 'terminal')),
     deliverable_id UUID NOT NULL,
     deliverable_version INTEGER NOT NULL,
     sha256 TEXT NOT NULL,
@@ -20,7 +20,8 @@ CREATE TABLE workflow_evidence_import_source (
     captured_at TIMESTAMPTZ NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f','now') || '000+00:00'),
     captured_by UUID REFERENCES agents(id),
     captured_by_alias TEXT,
-    captured_by_kind TEXT CHECK (captured_by_kind IS NULL OR captured_by_kind IN ('human', 'ai')),
+    captured_by_kind TEXT CONSTRAINT workflow_evidence_captured_by_kind_check CHECK (
+        captured_by_kind IS NULL OR captured_by_kind IN ('human', 'ai')),
     FOREIGN KEY (deliverable_id, deliverable_version)
         REFERENCES task_deliverable_versions(deliverable_id, version),
     FOREIGN KEY (deliverable_id, task_id) REFERENCES task_deliverables(id, task_id),
