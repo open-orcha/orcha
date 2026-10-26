@@ -488,6 +488,27 @@ def test_plain_retry_restores_only_the_latest_assignee(setup_workflow):
         assert [str(r["agent_id"]) for r in cur.fetchall()] == [str(second)]
 
 
+def test_start_hold_is_released_only_by_start(setup_workflow):
+    _, _, _, _, _, execute = setup_workflow
+    w = create(setup_workflow, count=2)
+    a, b = (t["id"] for t in w["tasks"])
+    for tid in (a, b):
+        w = execute("prepare", {}, w["id"], tid)
+    _, tasks, _ = actions_for(setup_workflow, w["id"], setup_workflow[1])
+    assert tasks[b]["release"]["reason"] == "workflow_not_started"
+    with db_cursor(readonly=True) as (_, cur):
+        revision = ws.WorkflowService(cur, setup_workflow[4]).task(w["id"], b)[
+            "work_revision"
+        ]
+    with pytest.raises(HTTPException) as err:
+        execute(
+            "release",
+            {"task_ids": [b], "holds": ["start"], "task_revisions": {b: revision}},
+            w["id"],
+        )
+    assert err.value.detail["code"] == "workflow_not_started"
+
+
 def test_withdraw_cannot_remove_last_or_accepted_task(setup_workflow):
     w = create(setup_workflow, count=1)
     _, tasks, _ = actions_for(setup_workflow, w["id"], setup_workflow[1])
@@ -1097,7 +1118,8 @@ def test_actions_split_workflow_owner_from_project_owner_safety_hold(setup_workf
     assert tasks[a]["release"]["enabled"] and tasks[a]["release"]["holds"] == ["human"]
     assert tasks[a]["hold"]["enabled"]  # re-saving one's own hold reason
     _, by_workflow_owner, _ = actions_for(setup_workflow, w["id"], workflow_owner)
-    assert by_workflow_owner[a]["release"]["holds"] == ["start", "human"]
+    # Before Start only Start lifts start holds (§14.1), so only the safety hold is offered.
+    assert by_workflow_owner[a]["release"]["holds"] == ["human"]
 
     revision = next(t["work_revision"] for t in w["tasks"] if t["id"] == a)
     release = {"task_ids": [a], "task_revisions": {a: revision}}
