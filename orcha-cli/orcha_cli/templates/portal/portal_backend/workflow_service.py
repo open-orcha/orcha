@@ -102,6 +102,13 @@ class WorkflowHooks:
             "approval_integration_required", "Task approval is not integrated yet."
         )
 
+    def completion_permission(self, cur, task, actor):
+        """Read-only twin of authorize_completion for available_actions.
+
+        Must apply the same task permission and autonomy rule, without evidence.
+        """
+        return {"allowed": False, "reason": "approval_integration_required"}
+
     def request_stop(self, cur, execution, actor, origin, reason):
         conflict("stop_integration_required", "Worker stopping is not integrated yet.")
 
@@ -356,13 +363,26 @@ class WorkflowService:
     def detail(self, wid, actor=None):
         s = self.snapshot(wid)
         w = s["workflow"]
-        can_write = False
+        tasks = []
+        person = None
         if actor and WORKFLOWS_INTEGRATED:
             try:
-                p = self.actor(actor, w["container_id"])
-                can_write = p["kind"] == "human" and p["id"] == w["owner_human_id"]
+                person = self.actor(actor, w["container_id"])
             except HTTPException:
                 pass
+        me = person["id"] if person else None
+        human = bool(person and person["kind"] == "human")
+        is_owner = human and me == w["owner_human_id"]
+        project_owner = human and person.get("member_role") == "owner"
+        participant = bool(
+            person
+            and person["kind"] == "ai"
+            and self.one(
+                "SELECT 1 AS present FROM agent_tasks a JOIN tasks t ON t.id=a.task_id WHERE t.workflow_id=%s AND a.agent_id=%s",
+                (wid, me),
+            )
+        )
+        can_write = is_owner
         reason = (
             None
             if can_write
@@ -372,9 +392,96 @@ class WorkflowService:
                 else "workflow_owner_required"
             )
         )
-        tasks = []
+        # Who may act, mirroring owner()/actor() and each op_* guard exactly.
+        allowed = {
+            "workflow_owner": (is_owner, "workflow_owner_required"),
+            "workflow_or_project_owner": (
+                is_owner or project_owner,
+                "workflow_owner_required",
+            ),
+            "verified_human": (human, "human_reviewer_required"),
+            "workflow_owner_or_participant": (
+                is_owner or participant,
+                (
+                    "workflow_owner_required"
+                    if human
+                    else "workflow_participation_required"
+                ),
+            ),
+            "workflow_owner_or_agent": (
+                is_owner or bool(person and person["kind"] == "ai"),
+                "workflow_owner_required",
+            ),
+            "task_approval": (bool(person), "completion_not_authorized"),
+        }
+        statuses = {
+            "active": {"active"},  # self.active(w)
+            "open": {"active", "paused"},  # self.active(w, allow_paused=True)
+        }
+
+        def lifecycle(kind):
+            if kind in statuses:
+                if w["status"] not in statuses[kind]:
+                    return "workflow_not_active"
+                if w["container_status"] != "active":
+                    return "project_not_active"
+            elif kind == "not_completed" and w["status"] == "completed":
+                return "workflow_completed"
+            elif kind == "not_terminal" and w["status"] in {"completed", "cancelled"}:
+                return "workflow_terminal"
+            return None
+
+        def action(name, permission, kind, blocked=None, task=None, **extra):
+            ok, denial = allowed[permission]
+            why = (
+                "integration_required"
+                if not WORKFLOWS_INTEGRATED
+                else (
+                    "verified_member_required"
+                    if not person
+                    else (None if ok else denial)
+                )
+            )
+            why = why or lifecycle(kind) or blocked
+            if not why and permission == "task_approval":
+                # The integrated approval rule decides; absence is denial.
+                verdict = self.hooks.completion_permission(self.cur, task, person)
+                why = None if verdict["allowed"] else verdict["reason"]
+            return dict(
+                action=name,
+                enabled=why is None,
+                reason=why,
+                permission=permission,
+                **extra,
+            )
+
+        def first(*checks):
+            return next((code for failed, code in checks if failed), None)
+
+        ever_accepted = {
+            r["task_id"]
+            for r in self.rows(
+                "SELECT task_id FROM workflow_task_acceptances WHERE workflow_id=%s",
+                (wid,),
+            )
+        }
+        outside_history = {
+            r["task_id"]
+            for r in self.rows(
+                "SELECT task_id FROM task_outside_evidence WHERE workflow_id=%s",
+                (wid,),
+            )
+        }
+        remaining = sum(1 for t in s["tasks"].values() if not t.get("withdrawn_at"))
+        executions_by_task = {tid: [] for tid in s["tasks"]}
+        for e in s["executions"]:
+            executions_by_task.setdefault(e["task_id"], []).append(e)
+
+        def never_started(tid):
+            return not s["tasks"][tid]["started_at"] and not executions_by_task[tid]
+
         for tid, task in s["tasks"].items():
-            executions = [e for e in s["executions"] if e["task_id"] == tid]
+            executions = executions_by_task[tid]
             live = next((e for e in executions if e["state"] in LIVE_EXECUTIONS), None)
             last = live or (executions[-1] if executions else None)
             row = dict(task, **s["eligibility"][tid])
@@ -396,49 +503,243 @@ class WorkflowService:
                 last["current_evidence_set_id"] if last else None
             )
             row["evidence_state"] = last["evidence_state"] if last else None
-            states = {
-                "prepare": not live
-                and not task["started_at"]
-                and not task.get("withdrawn_at"),
-                "hold": not live
-                and task["status"] in {"not_ready", "pending", "ready"},
-                "retry": not live
-                and bool(
-                    task.get("awaiting_owner_decision") or task["status"] == "cancelled"
+            terminal = task["status"] in {"completed", "cancelled"}
+            started = not never_started(tid)
+            current = next(
+                (
+                    e
+                    for e in reversed(executions)
+                    if e["work_revision"] == task["work_revision"]
                 ),
-                "stop": bool(
-                    live
-                    and live["source_kind"] == "worker"
-                    and live["state"] != "stopping"
-                ),
-                "release_lost_worker": row["display_state"]["release_available"],
-                "reissue_stop": bool(live and live["state"] == "stopping"),
-                "submit_outside_result": not live
-                and task["status"] not in {"completed", "cancelled"}
-                and bool(task["definition_of_done"].strip())
-                and not outside,
-                "accept": task["status"] == "needs_verification",
-                "reject": task["status"] == "needs_verification",
-            }
+                None,
+            )
+            run_live = False
+            if current and current["run_id"]:
+                run = self.one(
+                    "SELECT ended_at FROM worker_runs WHERE run_id=%s",
+                    (current["run_id"],),
+                )
+                run_live = not run or not run["ended_at"]
+            releasable = []
+            if task["start_hold"] and is_owner:
+                releasable.append("start")
+            if task["human_hold_by"] and (is_owner or me == task["human_hold_by"]):
+                releasable.append("human")
+            review = next(
+                (r for r in s["review_rounds"] if r["review_task_id"] == tid), None
+            )
             row["available_actions"] = [
-                {
-                    "action": a,
-                    "enabled": can_write
-                    and allowed
-                    and (
-                        w["status"] not in {"completed", "cancelled"}
-                        or (
-                            w["status"] == "cancelled"
-                            and a in {"release_lost_worker", "reissue_stop"}
+                action(
+                    "prepare",
+                    "workflow_owner",
+                    "active",
+                    first(
+                        (started, "task_already_started"), (terminal, "task_terminal")
+                    ),
+                ),
+                action(
+                    "hold",
+                    "workflow_or_project_owner",
+                    "open",
+                    first(
+                        (bool(live), "reservation_live"),
+                        (
+                            task["status"] not in {"not_ready", "pending", "ready"},
+                            "task_not_waiting",
+                        ),
+                        (
+                            bool(task["human_hold_by"] and task["human_hold_by"] != me),
+                            "hold_exists",
+                        ),
+                    ),
+                ),
+                action(
+                    "release",
+                    "workflow_or_project_owner",
+                    "active",
+                    first(
+                        (
+                            task["preparation_state"] != "prepared" or terminal,
+                            "task_not_prepared",
+                        ),
+                        (bool(live), "reservation_live"),
+                        (
+                            not (task["start_hold"] or task["human_hold_by"]),
+                            "no_hold",
+                        ),
+                        (not releasable, "hold_owner_required"),
+                    ),
+                    holds=releasable,
+                ),
+                action(
+                    "retry",
+                    "workflow_owner",
+                    "open",
+                    first(
+                        (bool(live), "reservation_live"),
+                        (bool(task.get("withdrawn_at")), "task_withdrawn"),
+                        (
+                            task["status"] == "completed"
+                            and not all(
+                                never_started(child)
+                                for child in descendants(tid, s["dependencies"])
+                            ),
+                            "task_already_started",
+                        ),
+                        (
+                            task["status"] != "completed"
+                            and not task["awaiting_owner_decision"]
+                            and task["status"] != "cancelled",
+                            "owner_decision_required",
+                        ),
+                        (bool(outside), "owner_evidence_pending"),
+                    ),
+                ),
+                action(
+                    "stop",
+                    "workflow_owner",
+                    "open",
+                    first(
+                        (
+                            not live or live["source_kind"] != "worker",
+                            "no_running_worker",
+                        ),
+                        (
+                            bool(live and live["state"] == "stopping"),
+                            "stop_already_requested",
+                        ),
+                    ),
+                ),
+                action(
+                    "release_lost_worker",
+                    "workflow_owner",
+                    "not_completed",
+                    first(
+                        (not live, "already_released"),
+                        (
+                            not row["display_state"]["release_available"],
+                            "release_not_yet_available",
+                        ),
+                    ),
+                ),
+                action(
+                    "reissue_stop",
+                    "workflow_owner",
+                    "not_completed",
+                    first(
+                        (not live or live["state"] != "stopping", "stop_not_pending")
+                    ),
+                ),
+                action(
+                    "submit_outside_result",
+                    "workflow_owner",
+                    "open",
+                    first(
+                        (bool(live), "reservation_live"),
+                        (
+                            terminal or not task["definition_of_done"].strip(),
+                            "outside_result_not_allowed",
+                        ),
+                        (bool(outside), "owner_evidence_pending"),
+                    ),
+                ),
+                action(
+                    "withdraw_evidence",
+                    "workflow_owner",
+                    "open",
+                    first(
+                        (not outside, "evidence_not_pending"),
+                        (
+                            bool(live and live["source_kind"] != "evidence_review"),
+                            "reservation_live",
+                        ),
+                    ),
+                ),
+                action(
+                    "add_evidence",
+                    "workflow_owner",
+                    "open",
+                    first(
+                        (terminal or bool(task.get("withdrawn_at")), "task_terminal"),
+                        (
+                            not current
+                            or current["evidence_state"] != "missing"
+                            or not current["current_evidence_set_id"],
+                            "missing_evidence_required",
+                        ),
+                        (run_live, "worker_live"),
+                    ),
+                ),
+                action(
+                    "dependencies",
+                    "workflow_owner",
+                    "active",
+                    first((started, "task_already_started")),
+                ),
+                action(
+                    "withdraw",
+                    "workflow_owner",
+                    "open",
+                    first(
+                        (bool(live), "reservation_live"),
+                        (
+                            bool(task.get("withdrawn_at")) or tid in ever_accepted,
+                            "withdrawal_not_allowed",
+                        ),
+                        (
+                            any(
+                                tid in s["dependencies"][other]
+                                for other, t in s["tasks"].items()
+                                if not t.get("withdrawn_at")
+                            ),
+                            "task_has_dependents",
+                        ),
+                        (remaining <= 1, "last_required_task"),
+                    ),
+                ),
+                action(
+                    "move",
+                    "workflow_owner",
+                    "active",
+                    first(
+                        (started, "task_already_started"),
+                        (terminal or tid in outside_history, "task_history_present"),
+                    ),
+                ),
+                action(
+                    "accept",
+                    "task_approval",
+                    "open",
+                    first(
+                        (task["status"] != "needs_verification", "not_awaiting_review"),
+                        (
+                            not live
+                            or live["work_revision"] != task["work_revision"]
+                            or not live["current_evidence_set_id"],
+                            "evidence_version_stale",
+                        ),
+                    ),
+                    task=task,
+                ),
+                action(
+                    "reject",
+                    "verified_human",
+                    "open",
+                    first(
+                        (task["status"] != "needs_verification", "not_awaiting_review")
+                    ),
+                ),
+                action(
+                    "resolve_loop",
+                    "workflow_owner",
+                    "open",
+                    first(
+                        (
+                            not review or review["outcome"] == "accepted",
+                            "review_loop_unavailable",
                         )
                     ),
-                    "reason": (
-                        reason
-                        if not can_write
-                        else None if allowed else "state_blocks_action"
-                    ),
-                }
-                for a, allowed in states.items()
+                ),
             ]
             tasks.append(row)
         guard = self.one(
@@ -446,27 +747,80 @@ class WorkflowService:
             (w["container_id"],),
         )
         w["graph_revision"] = guard["revision"] if guard else 1
-        states = {
-            "start": w["status"] == "active"
-            and not w["launch_enabled"]
-            and (
-                any(
-                    t["preparation_state"] == "prepared"
-                    and t["status"] not in {"completed", "cancelled"}
-                    for t in s["tasks"].values()
-                )
-                or (
-                    bool(s["tasks"])
-                    and all(accepted(t, s["acceptances"]) for t in s["tasks"].values())
-                )
+        project = self.one(
+            "SELECT max_tasks FROM containers WHERE id=%s", (w["container_id"],)
+        )
+        project_count = self.one(
+            "SELECT count(*) AS n FROM tasks WHERE container_id=%s",
+            (w["container_id"],),
+        )["n"]
+        full = (
+            len(s["tasks"]) >= w["task_limit"] or project_count >= project["max_tasks"]
+        )
+        startable = any(
+            t["preparation_state"] == "prepared"
+            and t["status"] not in {"completed", "cancelled"}
+            for t in s["tasks"].values()
+        ) or (
+            bool(s["tasks"])
+            and all(accepted(t, s["acceptances"]) for t in s["tasks"].values())
+        )
+        agent = bool(person and person["kind"] == "ai")
+        workflow_actions = [
+            action(
+                "start",
+                "workflow_owner",
+                "active",
+                first(
+                    (w["launch_enabled"], "already_started"),
+                    (not startable, "prepared_selection_required"),
+                ),
             ),
-            "pause": w["status"] == "active" and w["launch_enabled"],
-            "resume": w["status"] == "paused",
-            "cancel": w["status"] in {"active", "paused"},
-            "finish": s["completion"]["can_finish"],
-            "add_tasks": w["status"] == "active",
-            "import": w["status"] == "active",
-        }
+            action(
+                "pause",
+                "workflow_owner",
+                "active",
+                first((not w["launch_enabled"], "workflow_not_started")),
+            ),
+            action(
+                "resume",
+                "workflow_owner",
+                "open",
+                first((w["status"] != "paused", "workflow_not_paused")),
+            ),
+            action("cancel", "workflow_owner", "open"),
+            action(
+                "finish",
+                "workflow_owner",
+                "active",
+                first((not s["completion"]["can_finish"], "workflow_incomplete")),
+            ),
+            action(
+                "add_tasks",
+                "workflow_owner_or_participant",
+                "active",
+                first(
+                    (agent and not w["launch_enabled"], "workflow_not_started"),
+                    (full, "task_limit"),
+                ),
+            ),
+            action("import", "workflow_owner", "active", first((full, "task_limit"))),
+            action("patch", "workflow_owner", "open"),
+            action("accept_goal", "workflow_owner", "open"),
+            action(
+                "review_round",
+                "workflow_owner_or_agent",
+                "active",
+                first((agent and not w["launch_enabled"], "workflow_not_started")),
+            ),
+            action("transfer_owner", "workflow_or_project_owner", "not_terminal"),
+            action("move", "workflow_owner", "active"),
+        ]
+        for o in s["objectives"]:
+            o["available_actions"] = [
+                action("accept_objective", "workflow_owner", "open"),
+                action("edit_objective", "workflow_owner", "open"),
+            ]
         activity = self.rows(
             "SELECT * FROM workflow_history WHERE workflow_id=%s ORDER BY created_at DESC,id DESC LIMIT 101",
             (wid,),
@@ -477,18 +831,7 @@ class WorkflowService:
                 "workflow_human_write": can_write,
                 "reason": reason,
             },
-            available_actions=[
-                {
-                    "action": a,
-                    "enabled": can_write and allowed,
-                    "reason": (
-                        reason
-                        if not can_write
-                        else None if allowed else "state_blocks_action"
-                    ),
-                }
-                for a, allowed in states.items()
-            ],
+            available_actions=workflow_actions,
             progress=s["progress"],
             completion=s["completion"],
             tasks=tasks,
