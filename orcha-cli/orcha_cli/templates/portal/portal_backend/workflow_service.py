@@ -1264,7 +1264,7 @@ class WorkflowService:
             (task["id"],),
         )
         self.cur.execute(
-            "INSERT INTO agent_tasks(agent_id,task_id,assignment_status) VALUES (%s,%s,'assigned') ON CONFLICT (agent_id,task_id) DO UPDATE SET assignment_status='assigned'",
+            "INSERT INTO agent_tasks(agent_id,task_id,assignment_status) VALUES (%s,%s,'assigned') ON CONFLICT (agent_id,task_id) DO UPDATE SET assignment_status='assigned',assigned_at=excluded.assigned_at",
             (aid, task["id"]),
         )
 
@@ -2160,10 +2160,16 @@ class WorkflowService:
         if b.get("assignee_id"):
             self.assign(t, b["assignee_id"])
         else:
-            self.cur.execute(
-                "UPDATE agent_tasks SET assignment_status='assigned' WHERE task_id=%s",
+            # Restore only the latest assignee; agents replaced earlier stay done.
+            latest = self.one(
+                "SELECT agent_id FROM agent_tasks WHERE task_id=%s ORDER BY assigned_at DESC, agent_id DESC LIMIT 1",
                 (tid,),
             )
+            if latest:
+                self.cur.execute(
+                    "UPDATE agent_tasks SET assignment_status='assigned' WHERE task_id=%s AND agent_id=%s",
+                    (tid, latest["agent_id"]),
+                )
         self.cur.execute(
             "UPDATE tasks SET status='not_ready',work_revision=work_revision+1,awaiting_owner_decision=NULL,owner_decision_at=NULL,completed_at=NULL WHERE id=%s",
             (tid,),
