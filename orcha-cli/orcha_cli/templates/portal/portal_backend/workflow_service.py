@@ -1724,11 +1724,26 @@ class WorkflowService:
                 "The task cannot take a turn yet.",
                 blockers=choice["blockers"],
             )
+        assigned = p["kind"] == "ai" and self.one(
+            "SELECT 1 AS n FROM agent_tasks WHERE task_id=%s AND agent_id=%s AND assignment_status<>'done'",
+            (tid, p["id"]),
+        )
+        is_owner = p["kind"] == "human" and p["id"] == w["owner_human_id"]
+        # A worker claim and an outside-result admission compete for one turn;
+        # the claimant whose path is not the current one lost (plan 16.1).
+        lost = None
+        if choice["source_kind"] == "worker" and is_owner:
+            lost = ("evidence_not_pending", "No outside result is waiting for review.")
+        elif choice["source_kind"] == "evidence_review" and assigned:
+            lost = ("owner_evidence_pending", "An outside result is waiting for review.")
+        if lost:
+            conflict(
+                "not_eligible",
+                "The task cannot take a turn yet.",
+                blockers=[{"code": lost[0], "message": lost[1], "task_id": tid}],
+            )
         if choice["source_kind"] == "worker":
-            if p["kind"] != "ai" or not self.one(
-                "SELECT 1 AS n FROM agent_tasks WHERE task_id=%s AND agent_id=%s AND assignment_status<>'done'",
-                (tid, p["id"]),
-            ):
+            if not assigned:
                 conflict(
                     "assignee_required",
                     "Only the authenticated assigned worker can take this turn.",

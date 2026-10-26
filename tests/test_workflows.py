@@ -450,6 +450,36 @@ def test_outside_result_for_an_older_task_version_is_not_admitted(setup_workflow
     assert e["source_kind"] == "evidence_review"
 
 
+def test_losing_claimant_is_told_not_eligible_and_others_are_refused(setup_workflow):
+    _, actor, worker, other, hooks, execute = setup_workflow
+    w = prepare_and_start(
+        setup_workflow, create(setup_workflow, mode="parallel", count=2)
+    )
+    plain, outside = (t["id"] for t in w["tasks"])
+    execute(
+        "external_result", {"evidence": {"narrative": "Done elsewhere"}}, w["id"], outside
+    )
+
+    def claim(tid, acting, run_id=None):
+        with pytest.raises(HTTPException) as err:
+            with db_cursor() as (_, cur):
+                ws.WorkflowService(cur, hooks).reserve_turn(tid, acting, run_id=run_id)
+        return err.value
+
+    agent = ws.WorkflowActor(worker, True, True)
+    # The worker loses to the waiting outside result; the owner to the worker.
+    lost = claim(outside, agent, run_id=uid())
+    assert lost.status_code == 409 and lost.detail["code"] == "not_eligible"
+    assert [b["code"] for b in lost.detail["blockers"]] == ["owner_evidence_pending"]
+    lost = claim(plain, actor)
+    assert lost.status_code == 409 and lost.detail["code"] == "not_eligible"
+    assert [b["code"] for b in lost.detail["blockers"]] == ["evidence_not_pending"]
+    # Someone who is neither the assignee nor the owner is still refused.
+    member = ws.WorkflowActor(other, True)
+    assert claim(plain, member, run_id=uid()).detail["code"] == "assignee_required"
+    assert claim(outside, member).detail["code"] == "workflow_owner_required"
+
+
 def test_outside_result_submitter_or_owner_may_withdraw_it(setup_workflow):
     _, first_owner, worker, other, hooks, execute = setup_workflow
     w = prepare_and_start(setup_workflow, create(setup_workflow, count=1))
