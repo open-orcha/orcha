@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import { WorkflowTaskActions } from "./WorkflowTaskActions";
-import { exampleTask, exampleWorkflow, jsonResponse, writeCapability } from "./workflowTestFixtures";
+import { exampleTask, exampleWorkflow, exampleImpact, jsonResponse, writeCapability } from "./workflowTestFixtures";
 const scope = () => ({ origin: "https://orcha.example", project: "project", identity: crypto.randomUUID() });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 function taskCase(action: string, enabled = true) {
@@ -24,7 +24,7 @@ it("prepares current task criteria and assignment without releasing holds or sta
   expect(calls.some(([url, options]) => options.method === "POST" && (url.endsWith("/start") || url.endsWith("/release")))).toBe(false);
 });
 it("uses the generated stop route with exact revisions and never claims shutdown from a request", async () => {
-  const { detail, task } = taskCase("stop"); const fetch = vi.fn(async () => jsonResponse(detail)); const onSaved = vi.fn(); vi.stubGlobal("fetch", fetch);
+  const { detail, task } = taskCase("stop"); const fetch = vi.fn(async (url: string) => jsonResponse(url.includes("release-check") ? exampleImpact(detail, url) : detail)); const onSaved = vi.fn(); vi.stubGlobal("fetch", fetch);
   render(<WorkflowTaskActions detail={detail} task={task} scope={scope()} verified stale={false} agents={[]} onSaved={onSaved} />);
   fireEvent.click(screen.getByRole("button", { name: "Manage Build Android" }));
   fireEvent.click(screen.getByRole("button", { name: "Stop this task" }));
@@ -38,7 +38,7 @@ it("uses the generated stop route with exact revisions and never claims shutdown
 });
 it("releases only explicitly selected holds and leaves unrelated holds to the server", async () => {
   const { detail, task } = taskCase("release"); task.available_actions[0].holds = ["start", "human"]; task.human_hold_by = "kedar"; task.human_hold_reason = "Review scope";
-  const fetch = vi.fn(async () => jsonResponse(detail)); const onSaved = vi.fn(); vi.stubGlobal("fetch", fetch);
+  const fetch = vi.fn(async (url: string) => jsonResponse(url.includes("release-check") ? exampleImpact(detail, url) : detail)); const onSaved = vi.fn(); vi.stubGlobal("fetch", fetch);
   render(<WorkflowTaskActions detail={detail} task={task} scope={scope()} verified stale={false} agents={[]} onSaved={onSaved} />);
   fireEvent.click(screen.getByRole("button", { name: "Manage Build Android" })); fireEvent.click(screen.getByRole("button", { name: "Release holds" }));
   fireEvent.change(await screen.findByLabelText("Reason"), { target: { value: "Ready for the next step" } });
@@ -83,12 +83,16 @@ it("offers only the holds the server says this reader may release", async () => 
   const { task, detail } = taskCase("release"); task.human_hold_by = "owner"; task.available_actions[0].holds = ["human"];
   detail.capability = { workflow_read: true, workflow_human_write: false, reason: "workflow_owner_required" };
   const posts: Record<string, unknown>[] = [];
-  vi.stubGlobal("fetch", vi.fn(async (_url: string, init?: RequestInit) => { if (init?.method === "POST") posts.push(JSON.parse(String(init.body))); return jsonResponse(detail); }));
+  vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => { if (init?.method === "POST") posts.push(JSON.parse(String(init.body))); return jsonResponse(url.includes("release-check") ? exampleImpact(detail, url) : detail); }));
   render(<WorkflowTaskActions detail={detail} task={task} scope={scope()} verified stale={false} agents={[]} onSaved={vi.fn()} />);
   fireEvent.click(screen.getByRole("button", { name: "Manage Build Android" })); fireEvent.click(screen.getByRole("button", { name: "Release holds" }));
   fireEvent.change(await screen.findByLabelText("Reason"), { target: { value: "My hold is resolved" } });
   expect(screen.getByRole("checkbox", { name: /Release start hold/ })).toBeDisabled();
-  fireEvent.click(screen.getByRole("checkbox", { name: /Release human hold/ })); fireEvent.click(screen.getAllByRole("button", { name: "Release holds" }).at(-1)!);
+  fireEvent.click(screen.getByRole("checkbox", { name: /Release human hold/ }));
+  expect(screen.getAllByRole("button", { name: "Release holds" }).at(-1)).toBeDisabled();
+  fireEvent.click(screen.getByRole("button", { name: "Check selected holds" }));
+  await waitFor(() => expect(screen.getAllByRole("button", { name: "Release holds" }).at(-1)).toBeEnabled());
+  fireEvent.click(screen.getAllByRole("button", { name: "Release holds" }).at(-1)!);
   await waitFor(() => expect(posts).toHaveLength(1)); expect(posts[0].holds).toEqual(["human"]);
 });
 it("calls withdrawn outside evidence Let worker start without automatically retrying", async () => {

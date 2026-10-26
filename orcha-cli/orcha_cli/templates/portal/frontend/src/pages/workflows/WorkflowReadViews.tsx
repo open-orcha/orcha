@@ -16,6 +16,7 @@ export interface WorkflowTaskView {
   dependents: { id: string; title: string }[];
   unconfirmedStopWarning: boolean;
   warning?: string | null;
+  withdrawal?: { by: string; reason: string } | null;
   releaseAvailableAt: string | null;
   autonomy: boolean | null;
 }
@@ -67,12 +68,13 @@ export function WorkflowTaskList({ cid, tasks, total, renderActions }: { cid: st
     <ul className="wf-task-list">{tasks.map((task) => <li key={task.id} id={`workflow-task-${task.id}`} tabIndex={-1}>
       <WorkflowTaskLink cid={cid} taskId={task.id}>{task.title}</WorkflowTaskLink>
       <p>{task.displayLabel} · {task.assignee || "Unassigned"}</p>
+      {task.withdrawal && <p>Withdrawn by {task.withdrawal.by}: {task.withdrawal.reason}</p>}
       <p>Task autonomy {task.autonomy === null ? "unavailable" : task.autonomy ? "ON" : "OFF"}</p>
       {task.reasons.length > 0 && <ul>{task.reasons.map((reason, i) => <li key={i}>{reason}</li>)}</ul>}
       <p>Depends on: {task.prerequisites.length === 0 ? "None" : task.prerequisites.map((t, i) => <span key={t.id}>{i > 0 && ", "}<WorkflowTaskLink cid={cid} taskId={t.id}>{t.title}</WorkflowTaskLink></span>)}</p>
       <p>Needed by: {task.dependents.length === 0 ? "None" : task.dependents.map((t, i) => <span key={t.id}>{i > 0 && ", "}<WorkflowTaskLink cid={cid} taskId={t.id}>{t.title}</WorkflowTaskLink></span>)}</p>
       {task.releaseAvailableAt && <p>If the worker stays silent, Release lost worker becomes available at <time dateTime={task.releaseAvailableAt}>{formatServerTime(task.releaseAvailableAt)}</time>. Refresh to check availability.</p>}
-      {(task.warning || task.unconfirmedStopWarning) && <p className="wf-warning">{task.warning || "Released without stop confirmation: the worker may still be running outside Orcha."}</p>}
+      {task.unconfirmedStopWarning && <p className="wf-warning">{task.warning || "Released without stop confirmation: the worker may still be running outside Orcha."}</p>}
       {renderActions?.(task.id)}
     </li>)}</ul>
   </div>;
@@ -132,6 +134,7 @@ export function WorkflowDependencies({ cid, tasks, total }: { cid: string; tasks
     <label>Find a workflow task<input type="search" value={search} onChange={(e) => setSearch(e.target.value)} /></label>
     <label>Selected task<select value={selection} onChange={(e) => setSelection(e.target.value)}><option value="">No selection</option>{matches.map((task) => <option key={task.id} value={task.id}>{task.title}</option>)}</select></label>
     {selected && <div className="wf-notice"><h3>{selected.title}</h3><p>{selected.displayLabel} · {selected.assignee || "Unassigned"}</p>
+      {selected.unconfirmedStopWarning && <p>{selected.warning || "Released without stop confirmation: the worker may still be running outside Orcha."}</p>}
       {selected.reasons.map((reason, i) => <p key={i}>{reason}</p>)}<WorkflowTaskLink cid={cid} taskId={selected.id}>Open selected task</WorkflowTaskLink>
       <Button onClick={() => setSelection("")}>Reset selection</Button></div>}
     <p>Arrows point from a prerequisite to the task that needs its acceptance. They do not show workers running or promise simultaneous starts.</p>
@@ -147,9 +150,9 @@ export function WorkflowDependencies({ cid, tasks, total }: { cid: string; tasks
             return <path key={`${task.id}-${p.id}`} d={`M 460 ${j * 92 + 36} C 560 ${j * 92 + 36}, 560 ${i * 92 + 36}, 460 ${i * 92 + 36}`} fill="none" stroke="currentColor" markerEnd={`url(#${marker})`} />;
           }))}
           {shown.map((task, i) => <g key={task.id} transform={`translate(12 ${i * 92 + 4})`} role="button" tabIndex={0}
-            aria-label={`Select ${task.title}: ${task.displayLabel}`} aria-pressed={selection === task.id}
+            aria-label={`Select ${task.title}: ${task.displayLabel}${task.unconfirmedStopWarning ? ` · ${task.warning || "Released without stop confirmation: the worker may still be running outside Orcha."}` : ""}`} aria-pressed={selection === task.id}
             onClick={() => setSelection(task.id)} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setSelection(task.id); } }}>
-            <rect width="448" height="70" rx="6" /><text x="12" y="24">{task.title.length > 50 ? `${task.title.slice(0, 47)}…` : task.title}</text><text x="12" y="49">{task.displayLabel.slice(0, 60)}</text></g>)}
+            <rect width="448" height="70" rx="6" /><text x="12" y="24">{task.title.length > 50 ? `${task.title.slice(0, 47)}…` : task.title}</text>{task.unconfirmedStopWarning && <text x="420" y="24" aria-hidden="true">⚠</text>}<text x="12" y="49">{task.displayLabel.slice(0, 60)}</text></g>)}
         </svg>
       </div>
     </>}

@@ -48,6 +48,7 @@ it("preserves authoritative stop labels, external relationships and warnings in 
   expect(screen.getByText(/1 task in the graph of 8/)).toBeVisible();
   expect(screen.getByRole("link", { name: "Review release" })).toBeVisible();
   expect(screen.getByText(/Released without stop confirmation:/)).toBeVisible();
+  expect(screen.getByRole("button", { name: /Select Build Android:.*Released without stop confirmation/ })).toBeVisible();
   expect(screen.queryByRole("button", { name: "Release lost worker" })).toBeNull(); // elapsed local time cannot enable recovery
   expect(screen.getByText("Stopping — accepted · Andrew")).toBeVisible();
 });

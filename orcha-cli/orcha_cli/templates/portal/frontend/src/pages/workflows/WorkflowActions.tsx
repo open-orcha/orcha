@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Button } from "../../components/primitives/Button";
 import { Dialog } from "../../components/primitives/Dialog";
 import { actionReason, workflowPaths, workflowRequest } from "./workflowApi";
-import type { WorkflowDetail } from "./workflowContract.generated";
+import type { Impact, WorkflowDetail } from "./workflowContract.generated";
 import type { DraftScope } from "./workflowDraft";
 import { sendWorkflowOperation, useWorkflowOperation } from "./workflowOperations";
 import { WorkflowOperationNotice } from "./WorkflowOperationNotice";
@@ -10,6 +10,7 @@ import { WorkflowTaskLink } from "./WorkflowTaskReturn";
 import { WorkflowEvidencePanel } from "./WorkflowEvidence";
 import { WorkflowAcceptance } from "./WorkflowAcceptance";
 import { useWorkflowForm } from "./workflowFormState";
+import { impactMatches, readWorkflowImpact, WorkflowImpactView } from "./WorkflowImpact";
 
 type Action = "start" | "pause" | "resume" | "cancel" | "finish";
 const labels: Record<Action, string> = { start: "Review start", pause: "Pause new starts", resume: "Resume workflow", cancel: "Cancel workflow", finish: "Finish checklist" };
@@ -22,6 +23,7 @@ export function WorkflowActions({ detail, scope, verified, stale, onSaved }: {
   useEffect(() => { active.current = true; return () => { active.current = false; }; }, []);
   const [action, setAction] = useState<Action | null>(null);
   const [preview, setPreview] = useState<WorkflowDetail | null>(null);
+  const [impact, setImpact] = useState<Impact | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [selected, setSelected] = useWorkflowForm<string[]>(scope, `start:${detail.id}`, []);
@@ -34,22 +36,27 @@ export function WorkflowActions({ detail, scope, verified, stale, onSaved }: {
   const startEligible = (task: WorkflowDetail["tasks"][number]) => task.preparation_state === "prepared" && task.start_hold && !task.withdrawn_at && !["completed", "cancelled"].includes(task.status);
 
   async function review(next: Action) {
-    setAction(next); setPreview(null); setError("");
+    setAction(next); setPreview(null); setImpact(null); setError("");
     setBusy(true);
     try {
-      const url = workflowPaths.detail(detail.id) + (next === "start" ? "/start-check" : next === "cancel" ? "/cancellation-check" : "");
-      const current = await workflowRequest("WorkflowDetail", url);
+      const current = next === "start" || next === "cancel"
+        ? await readWorkflowImpact(detail, next === "start" ? "start" : "cancellation", next === "start" ? selected : [])
+        : await fresh();
       if (current.container_id !== scope.project || current.id !== detail.id) throw new Error("The workflow changed. Return to the list and open it again.");
       if (next === "finish") current.completion = await workflowRequest("CompletionCheck", workflowPaths.detail(detail.id) + "/completion-check");
       setPreview(current);
+      if ("impact" in current) setImpact(current.impact as Impact);
     } catch (e) { setError(e instanceof Error ? e.message : "Could not check this action."); }
     finally { setBusy(false); }
   }
   const blocked = preview && action ? actionReason(preview, action, verified) : "Checking this action…";
   const allAccepted = preview && preview.progress.total > 0 && preview.progress.total === preview.progress.accepted;
+  const checkedSelection = impactMatches(impact, selected, ["start"]);
   const confirmBlocked = busy || unresolved || stale || !!blocked || !preview || !action
     || (action === "start" && !selected.length && !allAccepted)
     || (action === "start" && selected.some((id) => !preview?.tasks.some((t) => t.id === id && startEligible(t))))
+    || (action === "start" && (!checkedSelection || impact?.tasks?.some((t) => t.selected && (t.resulting_status === "refused" || t.refusal))))
+    || (action === "cancel" && impact?.kind !== "cancellation")
     || (action === "finish" && (preview?.evidence_capability?.available !== true || preview?.completion.can_finish !== true))
     || (action === "cancel" && !reason.trim());
 
@@ -57,7 +64,7 @@ export function WorkflowActions({ detail, scope, verified, stale, onSaved }: {
     if (confirmBlocked || !action || !preview) return;
     const request = { operation: action, url: workflowPaths.detail(detail.id) + `/${action}`, expectedWorkflowId: detail.id,
       body: { expected_revision: preview.revision, reason: reason.trim(), ...(action === "start" ? {
-        task_ids: selected, task_revisions: Object.fromEntries(preview.tasks.filter((t) => selected.includes(t.id)).map((t) => [t.id, t.work_revision])), holds: ["start"],
+        task_ids: selected, task_revisions: Object.fromEntries(selected.map((id) => [id, impact!.task_revisions[id]])), holds: ["start"],
       } : {}) } };
     const result = await sendWorkflowOperation(scope, slot, request);
     if (active.current && result.state === "saved" && result.result) { onSaved(result.result); setAction(null); }
@@ -91,12 +98,15 @@ export function WorkflowActions({ detail, scope, verified, stale, onSaved }: {
               onChange={(e) => setSelected((ids) => e.target.checked ? [...ids, t.id] : ids.filter((id) => id !== t.id))} />
             <span>{t.title} — {t.display_state.label}{t.blockers.map((b) => <small key={b.code}>{b.message}</small>)}</span>
           </label>)}</fieldset>
+          {!checkedSelection && <p>Your task choices need a fresh check before Start.</p>}
+          <Button disabled={busy || unresolved || stale || (!selected.length && !allAccepted)} onClick={() => void review("start")}>Check selected tasks</Button>
+          {checkedSelection && impact && <WorkflowImpactView impact={impact} detail={preview} />}
         </>}
         {action === "pause" && <p>Running work may finish. New tasks will not start until you resume the workflow.</p>}
         {action === "resume" && <p>Eligible tasks may start after resuming. Dependencies, holds and task autonomy still apply.</p>}
         {action === "cancel" && <>
           <p>Cancel unfinished work in this workflow. Accepted results, saved evidence and the record of what happened are kept. Workers may take time to stop; cancellation does not confirm shutdown.</p>
-          <ul>{preview.tasks.map((t) => <li key={t.id}>{t.title}: {t.display_state.label}</li>)}</ul>
+          {impact && <WorkflowImpactView impact={impact} detail={preview} />}
           <label>Reason for cancelling<textarea maxLength={4000} value={reason} onChange={(e) => setReason(e.target.value)} /></label>
         </>}
         {action === "finish" && <>

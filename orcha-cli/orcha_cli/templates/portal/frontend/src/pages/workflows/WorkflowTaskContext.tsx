@@ -99,12 +99,14 @@ export function WorkflowTaskStatus({ taskId, fallback, showLabel = false, classN
 }) {
   const { member, stale } = useTaskWorkflow(taskId);
   if (!member) return <StatusIcon status={fallback} showLabel={showLabel} className={className} size={size} />;
-  const label = `${member.task.display_state.label}${stale ? " (last loaded)" : ""}`;
+  const listWarning = member.task.display_state.list_warning === true;
+  const warningText = member.task.display_state.warning || "Released without stop confirmation: the worker may still be running outside Orcha.";
+  const label = `${member.task.display_state.label}${stale ? " (last loaded)" : ""}${listWarning ? ` · ${warningText}` : ""}`;
   if (!showLabel) return <span className={className} role="img" aria-label={label} title={label}>
     <StatusIcon status="unknown" size={size} />
   </span>;
   return <span className={`wf-task-state ${className ?? ""}`} title={member.task.display_state.label}>
-    {member.task.display_state.label}{stale && " (last loaded)"}{member.task.display_state.warning && <span aria-label={member.task.display_state.warning}> · Warning</span>}
+    {member.task.display_state.label}{stale && " (last loaded)"}{listWarning && <span aria-label={warningText}> · Warning</span>}
   </span>;
 }
 
@@ -113,7 +115,7 @@ export function WorkflowTaskStatus({ taskId, fallback, showLabel = false, classN
  * assignee/current owner; those projections still need the integration API. */
 export function WorkflowTaskInspector({ taskId }: { taskId: string }) {
   const { index, member, stale } = useTaskWorkflow(taskId);
-  const { identity, identityTrusted, identityPending } = useSnapshot();
+  const { snap, identity, identityTrusted, identityPending } = useSnapshot();
   if (!index || index.state === "unsupported") return null;
   const verified = identityTrusted && !identityPending && !!identity?.agent_id;
   return <section aria-label="Task workflow" className="wf-task-context">
@@ -123,6 +125,7 @@ export function WorkflowTaskInspector({ taskId }: { taskId: string }) {
       <h2>Workflow: <Link to={workflowMemberHref(member.detail, taskId)}>{member.detail.title}</Link></h2>
       {stale && <p role="status">Showing last loaded workflow information. Refresh before continuing.</p>}
       <p>{member.task.display_state.label}</p>
+      {member.task.withdrawn_at && <p>Withdrawn by {snap?.agents.find((agent) => agent.id === member.task.withdrawn_by)?.alias ?? "Name unavailable"}: {member.task.withdrawn_reason ?? "Reason unavailable"}</p>}
       <p>Task autonomy {member.task.autonomy === "on" ? "ON" : "OFF"}. Only the human project owner can change it. Changes affect future actions.</p>
       <p>{member.task.autonomy === "on" ? "The agent may approve its plan and finished work." : "The plan and finished work need approval."} Holds, prerequisites, stop instructions and the human Finish action still apply.</p>
       <p>Task autonomy changes and plan or result approval are unavailable until the task approval connection is ready.</p>

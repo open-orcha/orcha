@@ -140,7 +140,12 @@ describe("SPEC-4 protocol panel (protoEmpty truth table, behaviorally)", () => {
   it("Edit -> Save PATCHes /api/tasks/{tid}/protocol with the acting human + all four keys ('' clears)", async () => {
     renderPage("/tasks?task=p2");
     await waitFor(() => expect(document.querySelector("#proto-p2")).toBeTruthy());
-    fireEvent.click(document.querySelector('#proto-p2 [data-pact="edit"]')!);
+    // Identity and workflow membership settle separately from the task panel.
+    const edit = await waitFor(() => {
+      const button = document.querySelector('#proto-p2 [data-pact="edit"]');
+      expect(button).toBeTruthy(); return button!;
+    });
+    fireEvent.click(edit);
     // autonomy is FREE TEXT (SPEC-1 enum deferred)
     fireEvent.change(document.querySelector('[data-pfield="autonomy"]')!, { target: { value: "ship without asking" } });
     fireEvent.click(document.querySelector('#proto-p2 [data-pact="save"]')!);

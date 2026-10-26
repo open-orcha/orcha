@@ -91,6 +91,9 @@ const json = (data: unknown, status = 200) =>
   ({ ok: status < 300, status, json: async () => data, text: async () => JSON.stringify(data), clone() { return this; } }) as unknown as Response;
 
 function route(url: string, method: string): Response {
+  // This fixture represents standalone tasks on a server without Workflows.
+  // A failed discovery request deliberately keeps task actions unavailable.
+  if (url === "/openapi.json") return json({ paths: {} });
   if (url === "/api/containers") return json([{ id: "c1", status: "active" }]);
   if (url.endsWith("/project-profile")) return json({ container_id: "c1", mode: MODE, dod_presets: [], template_key: null, template_name: null, last_applied_at: null });
   if (url.endsWith("/evidence-summaries")) return json({ summaries: { [TID]: SUMMARY } });

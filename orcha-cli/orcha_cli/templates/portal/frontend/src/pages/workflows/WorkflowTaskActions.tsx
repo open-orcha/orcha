@@ -2,13 +2,14 @@ import { useEffect, useRef, useState } from "react";
 import { Button } from "../../components/primitives/Button";
 import { Dialog } from "../../components/primitives/Dialog";
 import { availableActionReason, workflowPaths, workflowRequest } from "./workflowApi";
-import { workflowRoutes, type WorkflowDetail, type WorkflowTask } from "./workflowContract.generated";
+import { workflowRoutes, type Impact, type WorkflowDetail, type WorkflowTask } from "./workflowContract.generated";
 import type { DraftScope } from "./workflowDraft";
 import { sendWorkflowOperation, useWorkflowOperation } from "./workflowOperations";
 import { WorkflowOperationNotice } from "./WorkflowOperationNotice";
 import { useWorkflowForm } from "./workflowFormState";
 import { dependencyReason, type DraftTask } from "./workflowDraft";
 import { WorkflowEvidencePanel } from "./WorkflowEvidence";
+import { impactMatches, readWorkflowImpact, WorkflowImpactView } from "./WorkflowImpact";
 
 const taskActions = {
   prepare: { label: "Prepare task", path: "prepare", operation: "prepare" },
@@ -44,6 +45,7 @@ export function WorkflowTaskActions({ detail, task, scope, verified, stale, agen
   const [open, setOpen] = useState(false);
   const [action, setAction] = useState<Action | null>(null);
   const [preview, setPreview] = useState<WorkflowDetail | null>(null);
+  const [impact, setImpact] = useState<Impact | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [reason, setReason] = useWorkflowForm(scope, `task:${task.id}:reason`, "");
@@ -64,22 +66,26 @@ export function WorkflowTaskActions({ detail, task, scope, verified, stale, agen
   const allowedHolds = currentTask?.available_actions.find((a) => a.action === "release" && a.enabled)?.holds ?? [];
   const label = (key: Action) => key === "retry" && task.awaiting_owner_decision === "evidence_withdrawn" ? "Let worker start" : taskActions[key].label;
   async function review(next: Action) {
-    setAction(next); setPreview(null); setBusy(true); setError(""); setRiskAccepted(false);
+    setAction(next); setPreview(null); setImpact(null); setBusy(true); setError(""); setRiskAccepted(false);
     try {
-      const current = await workflowRequest("WorkflowDetail", workflowPaths.detail(detail.id) + (next === "release" ? "/release-check" : ""));
+      const current = next === "release" ? await readWorkflowImpact(detail, "release", [task.id], holds.length ? holds : ["start"])
+        : await workflowRequest("WorkflowDetail", workflowPaths.detail(detail.id));
       if (current.id !== detail.id || current.container_id !== scope.project) throw new Error("The workflow changed. Open the task again from its project.");
       const currentTask = current.tasks.find((t) => t.id === task.id);
       if (!currentTask) throw new Error("This task is no longer in this workflow.");
       setPreview(current);
+      if ("impact" in current) setImpact(current.impact as Impact);
     } catch (e) { setError(e instanceof Error ? e.message : "The task could not be checked."); }
     finally { setBusy(false); }
   }
   const blocked = !action || !preview || !currentTask ? "Review the current task before confirming."
     : taskReason(preview, currentTask, action, verified);
+  const checkedHolds = impactMatches(impact, [task.id], holds);
   const disabled = busy || unresolved || stale || !!blocked || !action
     || (action === "prepare" ? !criteria.trim() || !assignee : !reason.trim())
     || (action === "release_lost_worker" && (!riskAccepted || currentTask?.display_state.release_available !== true))
     || (action === "release" && (!holds.length || holds.some((hold) => !allowedHolds.includes(hold))))
+    || (action === "release" && (!checkedHolds || impact?.tasks?.some((t) => t.selected && (t.resulting_status === "refused" || t.refusal))))
     || (action === "withdraw_evidence" && !currentTask?.outside_result_id)
     || (action === "submit_outside_result" && (!resultText.trim() || !evidenceText.trim() || resultText.trim().length + evidenceText.trim().length > 3950))
     || (action === "add_evidence" && (!evidenceText.trim() || currentTask?.evidence_state !== "missing"));
@@ -91,7 +97,7 @@ export function WorkflowTaskActions({ detail, task, scope, verified, stale, agen
       body: { expected_revision: preview.revision, ...(action !== "release" ? { expected_work_revision: currentTask.work_revision } : {}), reason: reason.trim(),
         ...(action === "prepare" ? { definition_of_done: criteria.trim(), assignee_id: assignee } : {}),
         ...(action === "retry" ? { assignee_id: assignee || null } : {}),
-        ...(action === "release" ? { task_ids: [task.id], task_revisions: { [task.id]: currentTask.work_revision }, holds } : {}),
+        ...(action === "release" ? { task_ids: [task.id], task_revisions: { [task.id]: impact!.task_revisions[task.id] }, holds } : {}),
         ...(action === "dependencies" ? { depends_on: dependencies } : {}),
         ...(action === "submit_outside_result" ? { produced_by: producedBy.trim() || null, evidence: { narrative: `Result:\n${resultText.trim()}\n\nEvidence:\n${evidenceText.trim()}`, task_revisions: { [task.id]: currentTask.work_revision }, evidence_sets: [] } } : {}),
         ...(action === "add_evidence" ? { evidence: { narrative: evidenceText.trim(), task_revisions: { [task.id]: currentTask.work_revision }, evidence_sets: [] } } : {}),
@@ -125,7 +131,10 @@ export function WorkflowTaskActions({ detail, task, scope, verified, stale, agen
         {action === "release" && <><p>Only the selected holds are removed. All other holds, owner decisions and prerequisites remain; releasing a hold does not promise the task will run.</p>
           {(["start", "human"] as const).map((hold) => <label className="wf-choice" key={hold}><input type="checkbox" checked={holds.includes(hold)}
             disabled={!allowedHolds.includes(hold) && !holds.includes(hold)}
-            onChange={(e) => setHolds(e.target.checked ? [...holds, hold] : holds.filter((h) => h !== hold))} />{hold === "start" ? "Release start hold" : `Release human hold: ${currentTask.human_hold_reason ?? "No human hold"}`}{!allowedHolds.includes(hold) && <small>This hold is not available for you to release.</small>}</label>)}</>}
+            onChange={(e) => setHolds(e.target.checked ? [...holds, hold] : holds.filter((h) => h !== hold))} />{hold === "start" ? "Release start hold" : `Release human hold: ${currentTask.human_hold_reason ?? "No human hold"}`}{!allowedHolds.includes(hold) && <small>This hold is not available for you to release.</small>}</label>)}
+          {!checkedHolds && <p>Your hold choices need a fresh check before release.</p>}
+          <Button disabled={busy || unresolved || stale || !holds.length || holds.some((hold) => !allowedHolds.includes(hold))} onClick={() => void review("release")}>Check selected holds</Button>
+          {checkedHolds && impact && <WorkflowImpactView impact={impact} detail={preview!} />}</>}
         {action === "dependencies" && <><p>Saving may make this task eligible. It does not accept or withdraw an old prerequisite. Goal acceptance will need review again.</p>
           <fieldset><legend>Prerequisites — {dependencies.length} of 3</legend>{preview!.tasks.filter((t) => t.id !== task.id).map((candidate) => {
             const graph: DraftTask[] = preview!.tasks.map((t) => ({ key: t.id, title: t.title, dependsOn: t.depends_on, doneWhen: t.definition_of_done, description: "", assignee: "", autonomy: false }));

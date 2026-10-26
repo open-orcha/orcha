@@ -1,8 +1,8 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { WorkflowTaskInspector, WorkflowTaskProvider, useTaskWorkflow } from "./WorkflowTaskContext";
-import { exampleWorkflow, jsonResponse, workflowSpec, writeCapability } from "./workflowTestFixtures";
+import { WorkflowTaskInspector, WorkflowTaskProvider, WorkflowTaskStatus, useTaskWorkflow } from "./WorkflowTaskContext";
+import { exampleTask, exampleWorkflow, jsonResponse, workflowSpec, writeCapability } from "./workflowTestFixtures";
 
 let identity = "kedar";
 vi.mock("../../state/SnapshotProvider", () => ({ useSnapshot: () => ({ cid: "project", identity: { agent_id: identity }, identityTrusted: true, identityPending: false }) }));
@@ -18,6 +18,20 @@ function mockReads(read: (url: string) => Response | Promise<Response>) {
     : url.endsWith("/capability") ? jsonResponse(writeCapability) : read(url));
   vi.stubGlobal("fetch", fetch); return fetch;
 }
+it("clears the server's list warning while preserving permanent inspector history and recorded withdrawal", async () => {
+  const warning = "Released without stop confirmation: the worker may still be running outside Orcha.";
+  const task = exampleTask({ display_state: { label: "Worker released · owner decides", warning, list_warning: true } });
+  mockReads(() => jsonResponse({ capability: writeCapability, workflows: [exampleWorkflow({ tasks: [task] })] }));
+  render(<MemoryRouter><WorkflowTaskProvider><WorkflowTaskStatus taskId="build" fallback="not_ready" showLabel /><Probe /></WorkflowTaskProvider></MemoryRouter>);
+  expect(await screen.findByLabelText(warning)).toHaveTextContent("Warning");
+  task.display_state.list_warning = false;
+  task.withdrawn_at = "2026-10-26T02:00:00Z"; task.withdrawn_by = "former-owner"; task.withdrawn_reason = "The alternative solution is accepted";
+  fireEvent.click(screen.getByRole("button", { name: "Check again" }));
+  await waitFor(() => expect(screen.queryByLabelText(warning)).toBeNull());
+  expect(screen.getByText(warning)).toBeVisible();
+  expect(screen.getByText("Withdrawn by Name unavailable: The alternative solution is accepted")).toBeVisible();
+  expect(screen.queryByText("former-owner")).toBeNull();
+});
 it("checks later workflow pages before releasing legacy actions and preserves drafts", async () => {
   let resolve!: (response: Response) => void;
   const fetch = mockReads((url) => url.includes("cursor=") ? new Promise<Response>((done) => { resolve = done; })

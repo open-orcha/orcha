@@ -1,4 +1,4 @@
-import type { WorkflowDetail, WorkflowTask } from "./workflowContract.generated";
+import type { Impact, WorkflowDetail, WorkflowImpact, WorkflowTask } from "./workflowContract.generated";
 export const readCapability = { workflow_read: true, workflow_human_write: false, reason: "integration_required" };
 export const writeCapability = { workflow_read: true, workflow_human_write: true, reason: null };
 export const workflowSpec = { paths: { "/api/containers/{cid}/workflows": { get: {} } } };
@@ -17,3 +17,15 @@ export function exampleWorkflow(patch: Partial<WorkflowDetail> = {}): WorkflowDe
     objectives: [{ id: "pairing", title: "Reliable pairing", criteria: "The pairing checks pass", revision: 1, accepted_revision: null }], ...patch };
 }
 export const jsonResponse = (body: unknown, status = 200) => ({ ok: status >= 200 && status < 300, status, json: async () => body }) as Response;
+
+export function exampleImpact(detail: WorkflowDetail, url: string, patch: Partial<Impact> = {}): WorkflowImpact {
+  const query = new URL(url, "https://orcha.example");
+  const kind = query.pathname.endsWith("/cancellation-check") ? "cancellation" : query.pathname.endsWith("/release-check") ? "release" : "start";
+  const selected = query.searchParams.has("task_ids") ? query.searchParams.getAll("task_ids") : kind === "start" ? detail.tasks.map((t) => t.id) : [];
+  return { ...detail, impact: { kind, revision: detail.revision, graph_revision: detail.graph_revision, scope_revision: detail.scope_revision,
+    task_revisions: Object.fromEntries(detail.tasks.map((t) => [t.id, t.work_revision])),
+    holds: kind === "cancellation" ? [] : query.searchParams.has("holds") ? query.searchParams.getAll("holds") as ("start" | "human")[] : ["start"],
+    tasks: detail.tasks.map((t) => ({ task_id: t.id, title: t.title, work_revision: t.work_revision, selected: selected.includes(t.id),
+      current_status: t.status, resulting_status: "ready", can_start: false, blockers: [{ code: "workflow_turn", message: "Another task is using the workflow turn" }] })),
+    counts_by_state: { not_ready: detail.tasks.length }, accepted_retained: [], workers_to_stop: [], ...patch } };
+}

@@ -12,6 +12,55 @@ const impact = (ids: string[]): Preview => ({ graph_revision: 2, preview_digest:
   blockers: ids.includes("data") ? [] : [{ code: "closure", message: "QA checklist also requires Prepare test data." }], task_impacts: choices.map((t) => ({ ...t, workflow_id: null, eligible: true, requires_acceptance: false, result_digest: null,
     definition_of_done: "Checks pass", preparation_state: "prepared", start_hold: true, human_hold_reason: null, assignee_ids: [], depends_on: t.id === "qa" ? ["data"] : [] })) });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+it("imports with start choices OFF by default and sends only explicitly releasable selections", async () => {
+  const current = detail(); current.launch_enabled = true;
+  const p = impact(["qa", "data"]); p.task_impacts![0].releasable = true; p.task_impacts![1].releasable = false;
+  const writes: Record<string, unknown>[] = [];
+  vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+    if (url.endsWith("import-preview")) return jsonResponse(p);
+    if (url.endsWith("/import")) writes.push(JSON.parse(String(init?.body)));
+    return jsonResponse(current);
+  }));
+  render(<MemoryRouter><WorkflowImport detail={current} scope={scope()} verified stale={false} tasks={choices} onSaved={vi.fn()} /></MemoryRouter>);
+  fireEvent.click(screen.getByRole("button", { name: "Add existing tasks" }));
+  for (const title of [/QA checklist/, /Prepare test data/]) fireEvent.click(screen.getByRole("checkbox", { name: title }));
+  fireEvent.click(screen.getByRole("button", { name: "Review selected tasks" }));
+  const start = await screen.findByRole("checkbox", { name: "Start this task when it is ready: QA checklist" });
+  expect(start).not.toBeChecked();
+  expect(screen.getByRole("checkbox", { name: /Start this task when it is ready: Prepare test data/ })).toBeDisabled();
+  expect(screen.getByText(/No work starts from this save/)).toBeVisible();
+  fireEvent.click(start);
+  expect(screen.getByText(/Selected tasks may start when ready/)).toBeVisible();
+  fireEvent.click(screen.getByRole("button", { name: "Confirm addition" }));
+  await waitFor(() => expect(writes).toHaveLength(1));
+  expect(writes[0].release_task_ids).toEqual(["qa"]);
+});
+
+it("keeps an unavailable import start choice after refusal and requires explicit removal", async () => {
+  const current = detail(); current.launch_enabled = true;
+  const p = impact(["qa", "data"]); p.task_impacts![0].releasable = true;
+  let writes = 0;
+  vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+    if (url.endsWith("import-preview")) return jsonResponse(p);
+    if (url.endsWith("/import")) { writes++; return jsonResponse({ detail: { code: "release_not_allowed", message: "QA checklist can no longer start from import" } }, 409); }
+    return jsonResponse(current);
+  }));
+  render(<MemoryRouter><WorkflowImport detail={current} scope={scope()} verified stale={false} tasks={choices} onSaved={vi.fn()} /></MemoryRouter>);
+  fireEvent.click(screen.getByRole("button", { name: "Add existing tasks" }));
+  for (const title of [/QA checklist/, /Prepare test data/]) fireEvent.click(screen.getByRole("checkbox", { name: title }));
+  fireEvent.click(screen.getByRole("button", { name: "Review selected tasks" }));
+  fireEvent.click(await screen.findByRole("checkbox", { name: "Start this task when it is ready: QA checklist" }));
+  fireEvent.click(screen.getByRole("button", { name: "Confirm addition" }));
+  await screen.findByText("QA checklist can no longer start from import");
+  p.task_impacts![0].releasable = false;
+  fireEvent.click(screen.getByRole("button", { name: "Review selected tasks" }));
+  expect(await screen.findByRole("checkbox", { name: /Start this task when it is ready: QA checklist/ })).toBeChecked();
+  expect(screen.getByRole("button", { name: "Confirm addition" })).toBeDisabled();
+  fireEvent.click(screen.getByRole("button", { name: "Remove unavailable start choices" }));
+  expect(screen.getByRole("button", { name: "Confirm addition" })).toBeEnabled();
+  expect(writes).toBe(1);
+});
+
 it("requires explicit closure selection and a second preview before importing atomically", async () => {
   const saved = vi.fn(); const writes: Record<string, unknown>[] = [];
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
