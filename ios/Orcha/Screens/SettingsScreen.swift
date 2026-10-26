@@ -165,7 +165,7 @@ struct SettingsScreen: View {
         LSection("Execution") {
             rowsCard {
                 Button { showExecution = true } label: {
-                    LRow(title: "Notifier & autonomy", subtitle: "Pause agent wakes, choose how far agents go") {
+                    LRow(title: "Agent wakes", subtitle: "Pause or resume new agent work") {
                         rowIcon("bolt.horizontal", tint: executionTint)
                     } trailing: {
                         HStack(spacing: 6) {
@@ -215,7 +215,7 @@ struct SettingsScreen: View {
     private var executionValue: String {
         guard let c = model.snapshot?.container else { return "" }
         if (c.wakesEnabled ?? true) == false { return "Paused" }
-        return MobileUx.autonomyLabel(c.autonomyLevel ?? "plan")
+        return "Running"
     }
 
     private var executionTint: Color {

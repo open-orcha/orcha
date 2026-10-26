@@ -1,10 +1,6 @@
 import SwiftUI
 
-/// GH #148 — the Notifier (`wakes_enabled`) and Autonomy (`autonomy_level`) controls, split
-/// into two independent surfaces per Dana's design spec
-/// (docs/design/autonomy-notifier-split-gh148/spec.md). Mental model: Notifier = the power
-/// switch, Autonomy = the gearbox — flipping one never re-shifts the other. No backend change:
-/// both endpoints already exist and are human-only.
+/// Project-wide execution switch. Approval authority lives on each task.
 struct ContainerControlsSheet: View {
     @Environment(AppModel.self) private var model
     @Environment(\.palette) private var p
@@ -14,13 +10,10 @@ struct ContainerControlsSheet: View {
     /// control's own binding re-renders before the user confirms (same "flip, confirm, or
     /// bounce back" shape as a native destructive Settings switch).
     @State private var pendingWakes: Bool?
-    @State private var pendingLevel: String?
 
     private var container: ContainerDto? { model.snapshot?.container }
     /// Spec §6.3 — pre-SPEC-1 snapshots may omit this; treat unknown as Running.
     private var wakesEnabled: Bool { container?.wakesEnabled ?? true }
-    /// Spec §6.3 — treat unknown autonomy_level as plan.
-    private var autonomyLevel: String { container?.autonomyLevel ?? "plan" }
     /// Spec §6.2 — a DIFFERENT, higher state than the notifier: the laptop-level container
     /// lifecycle (`/orcha-pause`), not the in-container wake switch.
     private var laptopPaused: Bool { (container?.status ?? "active") != "active" }
@@ -38,8 +31,8 @@ struct ContainerControlsSheet: View {
                             Banner(kind: .info, text: "This Embodent is paused or stopped on the laptop — controls are disabled until it resumes.")
                         }
                         if lacksGrant {
-                            Banner(kind: .info, text: model.access.manageDenialReason(Grant.manageAutonomy, action: "Changing the notifier or autonomy")
-                                ?? "These controls need the owner role or the 'manage autonomy' permission.")
+                            Banner(kind: .info, text: model.access.manageDenialReason(Grant.manageAutonomy, action: "Changing agent wakes")
+                                ?? "This control needs the owner role or the 'manage autonomy' permission.")
                         }
                         notifierSection
                         dangerZone
@@ -131,33 +124,6 @@ struct ContainerControlsSheet: View {
         .lAnimation(value: title)
     }
 
-    // MARK: Autonomy — the gearbox
-
-    private var levelSelection: Binding<String> {
-        Binding(
-            get: { autonomyLevel },
-            set: { newValue in if newValue != autonomyLevel { pendingLevel = newValue } }
-        )
-    }
-
-    private var autonomySection: some View {
-        LSection("Autonomy") {
-            LCard {
-                VStack(alignment: .leading, spacing: LSpace.m) {
-                    LSegmented([("plan", "Plan-only"), ("pr", "Build to PR"), ("full", "Full")], selection: levelSelection)
-                        .disabled(readOnly || model.actionInFlight)
-                        .opacity(wakesEnabled ? 1 : 0.6)
-                        .accessibilityLabel("Autonomy")
-                    Text(autonomyFooter)
-                        .ltype(.meta)
-                        .foregroundStyle(p.muted)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .contentTransition(.opacity)
-                }
-            }
-        }
-    }
-
     // MARK: Danger zone — calm, hairline danger border, one explicit action
 
     @ViewBuilder
@@ -190,9 +156,4 @@ struct ContainerControlsSheet: View {
         }
     }
 
-    private var autonomyFooter: String {
-        guard !laptopPaused else { return " " }
-        if !wakesEnabled { return "Applies when running." }
-        return MobileUx.autonomyBlurb(autonomyLevel)
-    }
 }

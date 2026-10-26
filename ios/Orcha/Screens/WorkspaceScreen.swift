@@ -166,8 +166,7 @@ struct WorkspaceScreen: View {
                     ProjectSwitcherMenu(dotColor: titleDotColor, dotState: titleDotState)
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    // GH #148 — the execution chip opens the Notifier/Autonomy sheet;
-                    // it reads the notifier's power switch, independent of connectivity.
+                    // The execution chip opens the project-wide wake switch.
                     ExecutionChip(running: isRunning) {
                         model.showContainerControls = true
                     }
@@ -304,7 +303,7 @@ private struct ProjectSwitcherMenu: View {
     }
 }
 
-/// Compact execution capsule (Running / Paused) — opens the Autonomy & Notifier sheet.
+/// Compact execution capsule (Running / Paused) — opens execution controls.
 private struct ExecutionChip: View {
     @Environment(\.palette) private var p
     let running: Bool
@@ -333,7 +332,7 @@ private struct ExecutionChip: View {
         }
         .buttonStyle(.plain)
         .animation(.lQuick, value: running)
-        .accessibilityLabel("Autonomy & Notifier")
+        .accessibilityLabel("Execution controls")
         .accessibilityValue(running ? "Running" : "Paused")
         .accessibilityShowsLargeContentViewer()
     }

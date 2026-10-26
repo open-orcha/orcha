@@ -149,7 +149,7 @@ final class AppModel {
     var runLogStreaming = false      // Issue 3 — waiting on the live run stream
     var threadHasMore = false        // Issue 4 — an older task-thread page is available
     var threadLoadingEarlier = false
-    var showContainerControls = false  // GH #148 — Notifier + Autonomy sheet
+    var showContainerControls = false  // project-wide agent wake controls
 
     var humanId: String? { selectedContainer?.humanAgentId }
 
