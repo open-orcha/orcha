@@ -15,10 +15,12 @@ export interface WorkflowDraft {
   goal: string;
   mode: "serial" | "parallel";
   tasks: DraftTask[];
+  objectives: { key: string; title: string; criteria: string }[];
+  existingTaskIds?: string[];
 }
 
 export function emptyDraft(): WorkflowDraft {
-  return { name: "", goal: "", mode: "serial", tasks: [] };
+  return { name: "", goal: "", mode: "serial", tasks: [], objectives: [] };
 }
 
 export function newDraftTask(): DraftTask {
@@ -53,6 +55,9 @@ export function draftProblems(draft: WorkflowDraft): DraftProblem[] {
   const result: DraftProblem[] = [];
   if (!draft.name.trim()) result.push({ key: "name", message: "Name this workflow." });
   if (!draft.goal.trim()) result.push({ key: "goal", message: "Describe the goal of this workflow." });
+  for (const objective of draft.objectives) {
+    if (!objective.title.trim() || !objective.criteria.trim()) result.push({ key: objective.key, message: "Give each objective a title and completion criteria, or remove it." });
+  }
   for (const task of draft.tasks) {
     const name = draftTaskName(task, draft.tasks);
     if (!task.title.trim()) result.push({ key: task.key, message: `Name task ${draft.tasks.indexOf(task) + 1}.` });
@@ -62,8 +67,8 @@ export function draftProblems(draft: WorkflowDraft): DraftProblem[] {
     const withoutEdges = { ...task, dependsOn: [] };
     for (const key of task.dependsOn) {
       const candidate = draft.tasks.find((t) => t.key === key);
-      if (!candidate) result.push({ key: task.key, message: `${name} refers to a task that is no longer in this draft.` });
-      else {
+      if (!candidate && !draft.existingTaskIds?.includes(key)) result.push({ key: task.key, message: `${name} refers to a task that is no longer in this draft.` });
+      else if (candidate) {
         const reason = dependencyReason(draft.tasks, withoutEdges, candidate);
         if (reason) result.push({ key: task.key, message: `${name}: ${reason}` });
       }

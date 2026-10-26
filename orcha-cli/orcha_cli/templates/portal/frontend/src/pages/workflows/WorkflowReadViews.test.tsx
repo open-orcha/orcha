@@ -51,3 +51,18 @@ it("preserves authoritative stop labels, external relationships and warnings in 
   expect(screen.queryByRole("button", { name: "Release lost worker" })).toBeNull(); // elapsed local time cannot enable recovery
   expect(screen.getByText("Stopping — accepted · Andrew")).toBeVisible();
 });
+
+it("lets keyboard users inspect graph nodes and preserves complete relationships in its list", () => {
+  const tasks: WorkflowTaskView[] = [
+    { id: "design", title: "Design", assignee: "Dana", displayLabel: "Accepted", reasons: [], prerequisites: [], dependents: [{ id: "build", title: "Build" }], unconfirmedStopWarning: false, releaseAvailableAt: null, autonomy: false },
+    { id: "build", title: "Build", assignee: "Andrew", displayLabel: "Waiting for its turn", reasons: ["Another task has the turn"], prerequisites: [{ id: "design", title: "Design" }], dependents: [], unconfirmedStopWarning: false, releaseAvailableAt: null, autonomy: false },
+  ];
+  render(<MemoryRouter><WorkflowDependencies cid="project" tasks={tasks} total={2} /></MemoryRouter>);
+  fireEvent.click(screen.getByRole("button", { name: "Graph and list" }));
+  fireEvent.keyDown(screen.getByRole("button", { name: "Select Build: Waiting for its turn" }), { key: "Enter" });
+  expect(screen.getByRole("link", { name: "Open selected task" })).toHaveAttribute("href", "/tasks?task=build&cid=project");
+  expect(screen.getByText(/Showing the selected task and its direct prerequisites/)).toBeVisible();
+  fireEvent.click(screen.getByRole("button", { name: "Fit graph" })); fireEvent.click(screen.getByRole("button", { name: "Reset selection" }));
+  expect(screen.queryByRole("link", { name: "Open selected task" })).toBeNull();
+  expect(screen.getByText("2 of 2 tasks shown")).toBeVisible();
+});

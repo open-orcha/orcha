@@ -72,6 +72,8 @@ import { modeWords, useProjectMode } from "../../lib/projectMode";
 import { AutofixSection, EvidencePack } from "./evidence";
 import { DeliverablesEvidence, DeliverablesSection } from "./deliverables";
 import { GoalChain } from "./goal";
+import { WorkflowTaskReturn } from "../workflows/WorkflowTaskReturn";
+import { WorkflowTaskEntry } from "../workflows/WorkflowTaskEntry";
 import { pausedById, useContainerBudgets, type AgentBudgetStatus } from "../agents/budget/budgetModel";
 import { BudgetPausedChip } from "../agents/budget/AgentBudgetSection";
 import { logRowText } from "../agents/runlog";
@@ -3157,6 +3159,8 @@ function TaskDetail({
       {/* full: title · description · gate (Linear issue).
           inspector / narrow: title · ONE meta line · gate · description (3 lines) */}
       <div className="td-main">
+        <WorkflowTaskReturn taskId={t.id} />
+        <WorkflowTaskEntry taskId={t.id} />
         <GoalChain taskId={t.id} />
         <h1 className="td-title v2-t-display" title={full ? undefined : t.title}>
           {t.title}

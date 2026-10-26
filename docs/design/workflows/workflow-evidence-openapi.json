@@ -1,0 +1,1388 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Orcha API",
+    "version": "0.6.0"
+  },
+  "paths": {
+    "/api/workflows/{wid}/tasks/{tid}/evidence": {
+      "post": {
+        "summary": "Add Workflow Evidence",
+        "operationId": "add_workflow_evidence_api_workflows__wid__tasks__tid__evidence_post",
+        "parameters": [
+          {
+            "name": "wid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Wid"
+            }
+          },
+          {
+            "name": "tid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddEvidence"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowDetail"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "x-workflow-operation": "add_evidence"
+      },
+      "get": {
+        "summary": "Get Workflow Task Evidence",
+        "operationId": "get_workflow_task_evidence_api_workflows__wid__tasks__tid__evidence_get",
+        "parameters": [
+          {
+            "name": "wid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Wid"
+            }
+          },
+          {
+            "name": "tid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tid"
+            }
+          },
+          {
+            "name": "before_revision",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Before Revision"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 20,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowTaskEvidence"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "WorkflowDetail": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "container_id": {
+            "type": "string",
+            "title": "Container Id"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "goal": {
+            "type": "string",
+            "title": "Goal"
+          },
+          "owner_human_id": {
+            "type": "string",
+            "title": "Owner Human Id"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "paused",
+              "completed",
+              "cancelled"
+            ],
+            "title": "Status"
+          },
+          "execution_mode": {
+            "type": "string",
+            "enum": [
+              "serial",
+              "parallel"
+            ],
+            "title": "Execution Mode"
+          },
+          "launch_enabled": {
+            "type": "boolean",
+            "title": "Launch Enabled"
+          },
+          "revision": {
+            "type": "integer",
+            "title": "Revision"
+          },
+          "graph_revision": {
+            "type": "integer",
+            "title": "Graph Revision"
+          },
+          "scope_revision": {
+            "type": "integer",
+            "title": "Scope Revision"
+          },
+          "goal_revision": {
+            "type": "integer",
+            "title": "Goal Revision"
+          },
+          "goal_accepted_revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Goal Accepted Revision"
+          },
+          "task_limit": {
+            "type": "integer",
+            "title": "Task Limit"
+          },
+          "round_limit": {
+            "type": "integer",
+            "title": "Round Limit"
+          },
+          "limit_reached": {
+            "type": "boolean",
+            "title": "Limit Reached"
+          },
+          "capability": {
+            "$ref": "#/components/schemas/Capability"
+          },
+          "available_actions": {
+            "items": {
+              "$ref": "#/components/schemas/AvailableAction"
+            },
+            "type": "array",
+            "title": "Available Actions"
+          },
+          "progress": {
+            "$ref": "#/components/schemas/Progress"
+          },
+          "completion": {
+            "$ref": "#/components/schemas/CompletionCheck"
+          },
+          "tasks": {
+            "items": {
+              "$ref": "#/components/schemas/WorkflowTask"
+            },
+            "type": "array",
+            "title": "Tasks"
+          },
+          "objectives": {
+            "items": {
+              "$ref": "#/components/schemas/Objective"
+            },
+            "type": "array",
+            "title": "Objectives"
+          },
+          "review_rounds": {
+            "items": {
+              "$ref": "#/components/schemas/ReviewHistory"
+            },
+            "type": "array",
+            "title": "Review Rounds"
+          },
+          "activity": {
+            "items": {
+              "$ref": "#/components/schemas/Activity"
+            },
+            "type": "array",
+            "title": "Activity"
+          },
+          "activity_truncated": {
+            "type": "boolean",
+            "title": "Activity Truncated",
+            "default": false
+          },
+          "evidence_capability": {
+            "$ref": "#/components/schemas/IntegrationCapability"
+          },
+          "created_task_ids": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Created Task Ids"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "container_id",
+          "title",
+          "goal",
+          "owner_human_id",
+          "status",
+          "execution_mode",
+          "launch_enabled",
+          "revision",
+          "graph_revision",
+          "scope_revision",
+          "goal_revision",
+          "goal_accepted_revision",
+          "task_limit",
+          "round_limit",
+          "limit_reached",
+          "capability",
+          "available_actions",
+          "progress",
+          "completion",
+          "tasks",
+          "objectives"
+        ],
+        "title": "WorkflowDetail"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "WorkflowTaskEvidence": {
+        "properties": {
+          "task_id": {
+            "type": "string",
+            "title": "Task Id"
+          },
+          "workflow_id": {
+            "type": "string",
+            "title": "Workflow Id"
+          },
+          "current_evidence_set_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Evidence Set Id"
+          },
+          "sets": {
+            "items": {
+              "$ref": "#/components/schemas/SavedEvidenceSet"
+            },
+            "type": "array",
+            "title": "Sets"
+          },
+          "next_before_revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Before Revision"
+          }
+        },
+        "type": "object",
+        "required": [
+          "task_id",
+          "workflow_id",
+          "current_evidence_set_id",
+          "sets"
+        ],
+        "title": "WorkflowTaskEvidence"
+      },
+      "AddEvidence": {
+        "properties": {
+          "expected_revision": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Expected Revision"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Idempotency Key"
+          },
+          "reason": {
+            "type": "string",
+            "maxLength": 4000,
+            "title": "Reason",
+            "default": ""
+          },
+          "expected_work_revision": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Expected Work Revision"
+          },
+          "evidence": {
+            "$ref": "#/components/schemas/EvidenceBasis"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "expected_revision",
+          "idempotency_key",
+          "expected_work_revision",
+          "evidence"
+        ],
+        "title": "AddEvidence"
+      },
+      "AvailableAction": {
+        "properties": {
+          "action": {
+            "type": "string",
+            "title": "Action"
+          },
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "type": "object",
+        "required": [
+          "action",
+          "enabled"
+        ],
+        "title": "AvailableAction"
+      },
+      "ReviewHistory": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "loop_key": {
+            "type": "string",
+            "title": "Loop Key"
+          },
+          "round_number": {
+            "type": "integer",
+            "title": "Round Number"
+          },
+          "review_task_id": {
+            "type": "string",
+            "title": "Review Task Id"
+          },
+          "correction_task_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Correction Task Id"
+          },
+          "outcome": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outcome"
+          },
+          "reviewed_artifact": {
+            "$ref": "#/components/schemas/EvidenceReference"
+          },
+          "resolved_by_owner": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolved By Owner"
+          },
+          "resolved_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolved Reason"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "loop_key",
+          "round_number",
+          "review_task_id",
+          "reviewed_artifact"
+        ],
+        "title": "ReviewHistory"
+      },
+      "CompletionCheck": {
+        "properties": {
+          "can_finish": {
+            "type": "boolean",
+            "title": "Can Finish"
+          },
+          "blockers": {
+            "items": {
+              "$ref": "#/components/schemas/Blocker"
+            },
+            "type": "array",
+            "title": "Blockers"
+          }
+        },
+        "type": "object",
+        "required": [
+          "can_finish",
+          "blockers"
+        ],
+        "title": "CompletionCheck"
+      },
+      "Objective": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "criteria": {
+            "type": "string",
+            "title": "Criteria"
+          },
+          "revision": {
+            "type": "integer",
+            "title": "Revision"
+          },
+          "accepted_revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accepted Revision"
+          },
+          "evidence": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EvidenceBasis"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "title",
+          "criteria",
+          "revision",
+          "accepted_revision"
+        ],
+        "title": "Objective"
+      },
+      "Activity": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "task_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Task Id"
+          },
+          "actor_alias": {
+            "type": "string",
+            "title": "Actor Alias"
+          },
+          "actor_kind": {
+            "type": "string",
+            "title": "Actor Kind"
+          },
+          "event": {
+            "type": "string",
+            "title": "Event"
+          },
+          "revision": {
+            "type": "integer",
+            "title": "Revision"
+          },
+          "detail": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Detail"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "actor_alias",
+          "actor_kind",
+          "event",
+          "revision",
+          "detail",
+          "created_at"
+        ],
+        "title": "Activity"
+      },
+      "SavedEvidenceSet": {
+        "properties": {
+          "evidence_set_id": {
+            "type": "string",
+            "title": "Evidence Set Id"
+          },
+          "task_id": {
+            "type": "string",
+            "title": "Task Id"
+          },
+          "workflow_id": {
+            "type": "string",
+            "title": "Workflow Id"
+          },
+          "workflow_execution_id": {
+            "type": "string",
+            "title": "Workflow Execution Id"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          },
+          "work_revision": {
+            "type": "integer",
+            "title": "Work Revision"
+          },
+          "result_revision": {
+            "type": "integer",
+            "title": "Result Revision"
+          },
+          "source_sequence": {
+            "type": "integer",
+            "title": "Source Sequence"
+          },
+          "generation": {
+            "type": "integer",
+            "title": "Generation"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "saved",
+              "missing",
+              "superseded"
+            ],
+            "title": "State"
+          },
+          "purpose": {
+            "type": "string",
+            "enum": [
+              "acceptance",
+              "attempt_record"
+            ],
+            "title": "Purpose"
+          },
+          "missing_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Missing Reason"
+          },
+          "terminal_cause": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Terminal Cause"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "frozen_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Frozen At"
+          },
+          "source_revision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Revision"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/SavedEvidenceItem"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "evidence_set_id",
+          "task_id",
+          "workflow_id",
+          "workflow_execution_id",
+          "run_id",
+          "work_revision",
+          "result_revision",
+          "source_sequence",
+          "generation",
+          "state",
+          "purpose",
+          "missing_reason",
+          "terminal_cause",
+          "created_at",
+          "frozen_at",
+          "source_revision",
+          "items"
+        ],
+        "title": "SavedEvidenceSet"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      },
+      "Capability": {
+        "properties": {
+          "workflow_read": {
+            "type": "boolean",
+            "title": "Workflow Read",
+            "default": true
+          },
+          "workflow_human_write": {
+            "type": "boolean",
+            "title": "Workflow Human Write",
+            "default": false
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason",
+            "default": "integration_required"
+          }
+        },
+        "type": "object",
+        "title": "Capability"
+      },
+      "IntegrationCapability": {
+        "properties": {
+          "available": {
+            "type": "boolean",
+            "title": "Available",
+            "default": false
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason",
+            "default": "integration_required"
+          }
+        },
+        "type": "object",
+        "title": "IntegrationCapability"
+      },
+      "Progress": {
+        "properties": {
+          "accepted": {
+            "type": "integer",
+            "title": "Accepted"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "percent": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Percent"
+          },
+          "withdrawn": {
+            "type": "integer",
+            "title": "Withdrawn"
+          },
+          "objectives_accepted": {
+            "type": "integer",
+            "title": "Objectives Accepted"
+          },
+          "objectives_total": {
+            "type": "integer",
+            "title": "Objectives Total"
+          }
+        },
+        "type": "object",
+        "required": [
+          "accepted",
+          "total",
+          "percent",
+          "withdrawn",
+          "objectives_accepted",
+          "objectives_total"
+        ],
+        "title": "Progress"
+      },
+      "EvidenceBasis": {
+        "properties": {
+          "narrative": {
+            "type": "string",
+            "maxLength": 4000,
+            "minLength": 1,
+            "title": "Narrative"
+          },
+          "task_revisions": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Task Revisions"
+          },
+          "evidence_sets": {
+            "items": {
+              "$ref": "#/components/schemas/EvidenceReference"
+            },
+            "type": "array",
+            "title": "Evidence Sets"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "narrative"
+        ],
+        "title": "EvidenceBasis"
+      },
+      "WorkflowTask": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "definition_of_done": {
+            "type": "string",
+            "title": "Definition Of Done"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "work_revision": {
+            "type": "integer",
+            "title": "Work Revision"
+          },
+          "autonomy": {
+            "type": "string",
+            "enum": [
+              "off",
+              "on"
+            ],
+            "title": "Autonomy",
+            "default": "off"
+          },
+          "autonomy_revision": {
+            "type": "integer",
+            "title": "Autonomy Revision",
+            "default": 1
+          },
+          "preparation_state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Preparation State"
+          },
+          "start_hold": {
+            "type": "boolean",
+            "title": "Start Hold"
+          },
+          "human_hold_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Human Hold By"
+          },
+          "human_hold_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Human Hold Reason"
+          },
+          "awaiting_owner_decision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Awaiting Owner Decision"
+          },
+          "withdrawn_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Withdrawn At"
+          },
+          "priority": {
+            "type": "integer",
+            "title": "Priority"
+          },
+          "assignee_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Assignee Ids"
+          },
+          "depends_on": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Depends On"
+          },
+          "can_start": {
+            "type": "boolean",
+            "title": "Can Start"
+          },
+          "blockers": {
+            "items": {
+              "$ref": "#/components/schemas/Blocker"
+            },
+            "type": "array",
+            "title": "Blockers"
+          },
+          "display_state": {
+            "$ref": "#/components/schemas/DisplayState"
+          },
+          "available_actions": {
+            "items": {
+              "$ref": "#/components/schemas/AvailableAction"
+            },
+            "type": "array",
+            "title": "Available Actions"
+          },
+          "outside_result_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outside Result Id"
+          },
+          "outside_result_state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outside Result State"
+          },
+          "current_evidence_set_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Evidence Set Id"
+          },
+          "evidence_state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evidence State"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "title",
+          "definition_of_done",
+          "status",
+          "work_revision",
+          "preparation_state",
+          "start_hold",
+          "human_hold_by",
+          "human_hold_reason",
+          "awaiting_owner_decision",
+          "withdrawn_at",
+          "priority",
+          "assignee_ids",
+          "depends_on",
+          "can_start",
+          "blockers",
+          "display_state",
+          "available_actions"
+        ],
+        "title": "WorkflowTask"
+      },
+      "Blocker": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          },
+          "task_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Task Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "code",
+          "message"
+        ],
+        "title": "Blocker"
+      },
+      "EvidenceReference": {
+        "properties": {
+          "evidence_set_id": {
+            "type": "string",
+            "title": "Evidence Set Id"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/EvidenceItem"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Items"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "evidence_set_id",
+          "items"
+        ],
+        "title": "EvidenceReference"
+      },
+      "SavedEvidenceItem": {
+        "properties": {
+          "item_id": {
+            "type": "string",
+            "title": "Item Id"
+          },
+          "deliverable_id": {
+            "type": "string",
+            "title": "Deliverable Id"
+          },
+          "deliverable_version": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Deliverable Version"
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Sha256"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "result_summary",
+              "file_changes",
+              "log_excerpt",
+              "owner_result",
+              "outside_result"
+            ],
+            "title": "Kind"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "worker",
+              "owner",
+              "outside",
+              "cancelled_attempt",
+              "released_attempt"
+            ],
+            "title": "Source"
+          },
+          "snapshot_phase": {
+            "type": "string",
+            "enum": [
+              "submission",
+              "terminal"
+            ],
+            "title": "Snapshot Phase"
+          },
+          "complete": {
+            "type": "boolean",
+            "title": "Complete"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "storage_state": {
+            "type": "string",
+            "enum": [
+              "readable",
+              "missing",
+              "corrupt",
+              "missing_after_restore"
+            ],
+            "title": "Storage State"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "item_id",
+          "deliverable_id",
+          "deliverable_version",
+          "sha256",
+          "kind",
+          "source",
+          "snapshot_phase",
+          "complete",
+          "note",
+          "storage_state"
+        ],
+        "title": "SavedEvidenceItem"
+      },
+      "DisplayState": {
+        "properties": {
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "release_available": {
+            "type": "boolean",
+            "title": "Release Available",
+            "default": false
+          },
+          "release_available_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Release Available At"
+          },
+          "warning": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Warning"
+          }
+        },
+        "type": "object",
+        "required": [
+          "label"
+        ],
+        "title": "DisplayState"
+      },
+      "EvidenceItem": {
+        "properties": {
+          "item_id": {
+            "type": "string",
+            "title": "Item Id"
+          },
+          "deliverable_id": {
+            "type": "string",
+            "title": "Deliverable Id"
+          },
+          "deliverable_version": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Deliverable Version"
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Sha256"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "item_id",
+          "deliverable_id",
+          "deliverable_version",
+          "sha256"
+        ],
+        "title": "EvidenceItem"
+      }
+    }
+  }
+}

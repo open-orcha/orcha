@@ -1,0 +1,122 @@
+import { useEffect, useRef, useState } from "react";
+import { Button } from "../../components/primitives/Button";
+import { Dialog } from "../../components/primitives/Dialog";
+import { actionReason, workflowPaths, workflowRequest } from "./workflowApi";
+import type { WorkflowDetail } from "./workflowContract.generated";
+import type { DraftScope } from "./workflowDraft";
+import { sendWorkflowOperation, useWorkflowOperation } from "./workflowOperations";
+import { WorkflowOperationNotice } from "./WorkflowOperationNotice";
+import { WorkflowTaskLink } from "./WorkflowTaskReturn";
+import { WorkflowEvidencePanel } from "./WorkflowEvidence";
+import { WorkflowAcceptance } from "./WorkflowAcceptance";
+import { useWorkflowForm } from "./workflowFormState";
+
+type Action = "start" | "pause" | "resume" | "cancel" | "finish";
+const labels: Record<Action, string> = { start: "Review start", pause: "Pause new starts", resume: "Resume workflow", cancel: "Cancel workflow", finish: "Finish checklist" };
+const confirmation: Record<Action, string> = { start: "Start selected tasks", pause: "Pause new starts", resume: "Resume workflow", cancel: "Cancel workflow", finish: "Finish workflow" };
+
+export function WorkflowActions({ detail, scope, verified, stale, onSaved }: {
+  detail: WorkflowDetail; scope: DraftScope; verified: boolean; stale: boolean; onSaved: (detail: WorkflowDetail) => void;
+}) {
+  const active = useRef(true);
+  useEffect(() => { active.current = true; return () => { active.current = false; }; }, []);
+  const [action, setAction] = useState<Action | null>(null);
+  const [preview, setPreview] = useState<WorkflowDetail | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [selected, setSelected] = useWorkflowForm<string[]>(scope, `start:${detail.id}`, []);
+  const [reason, setReason] = useWorkflowForm(scope, `action-reason:${detail.id}`, "");
+  const [evidenceTask, setEvidenceTask] = useState("");
+  const slot = `workflow:${detail.id}`;
+  const operation = useWorkflowOperation(scope, slot);
+  const unresolved = operation?.state === "sending" || operation?.state === "uncertain";
+  const fresh = async () => workflowRequest("WorkflowDetail", workflowPaths.detail(detail.id));
+  const startEligible = (task: WorkflowDetail["tasks"][number]) => task.preparation_state === "prepared" && task.start_hold && !task.withdrawn_at && !["completed", "cancelled"].includes(task.status);
+
+  async function review(next: Action) {
+    setAction(next); setPreview(null); setError("");
+    setBusy(true);
+    try {
+      const url = workflowPaths.detail(detail.id) + (next === "start" ? "/start-check" : next === "cancel" ? "/cancellation-check" : "");
+      const current = await workflowRequest("WorkflowDetail", url);
+      if (current.container_id !== scope.project || current.id !== detail.id) throw new Error("The workflow changed. Return to the list and open it again.");
+      if (next === "finish") current.completion = await workflowRequest("CompletionCheck", workflowPaths.detail(detail.id) + "/completion-check");
+      setPreview(current);
+    } catch (e) { setError(e instanceof Error ? e.message : "Could not check this action."); }
+    finally { setBusy(false); }
+  }
+  const blocked = preview && action ? actionReason(preview, action, verified) : "Checking this action…";
+  const allAccepted = preview && preview.progress.total > 0 && preview.progress.total === preview.progress.accepted;
+  const confirmBlocked = busy || unresolved || stale || !!blocked || !preview || !action
+    || (action === "start" && !selected.length && !allAccepted)
+    || (action === "start" && selected.some((id) => !preview?.tasks.some((t) => t.id === id && startEligible(t))))
+    || (action === "finish" && (preview?.evidence_capability?.available !== true || preview?.completion.can_finish !== true))
+    || (action === "cancel" && !reason.trim());
+
+  async function confirm() {
+    if (confirmBlocked || !action || !preview) return;
+    const request = { operation: action, url: workflowPaths.detail(detail.id) + `/${action}`, expectedWorkflowId: detail.id,
+      body: { expected_revision: preview.revision, reason: reason.trim(), ...(action === "start" ? {
+        task_ids: selected, task_revisions: Object.fromEntries(preview.tasks.filter((t) => selected.includes(t.id)).map((t) => [t.id, t.work_revision])), holds: ["start"],
+      } : {}) } };
+    const result = await sendWorkflowOperation(scope, slot, request);
+    if (active.current && result.state === "saved" && result.result) { onSaved(result.result); setAction(null); }
+    // Refusal consumes the preview, requiring a fresh check and new confirmation.
+    else if (result.state === "refused") setPreview(null);
+  }
+  return <>
+    <div className="wf-actions" aria-label="Workflow actions">{(Object.keys(labels) as Action[]).map((a) => {
+      const reason = actionReason(detail, a, verified);
+      // The checklist stays discoverable for readers, even with unmet requirements.
+      return <Button key={a} disabled={busy || (a !== "finish" && (stale || unresolved || !!reason))}
+        title={a === "finish" ? "Review requirements before finishing" : reason ?? undefined} onClick={() => void review(a)}>{labels[a]}</Button>;
+    })}</div>
+    <WorkflowOperationNotice scope={scope} slot={slot} onSaved={(result) => { onSaved(result); setAction(null); }}
+      canRetry={async () => { const current = await fresh(); return current.container_id === scope.project && current.id === detail.id && !actionReason(current, operation?.operation ?? "", verified); }} />
+    {action && <Dialog title={labels[action]} onClose={() => { if (!busy && operation?.state !== "sending") setAction(null); }} className="wf-page" size="lg"
+      footer={<><Button onClick={() => setAction(null)} disabled={busy || operation?.state === "sending"}>{action === "start" ? "Keep preparing" : "Close"}</Button>
+        <Button variant={action === "cancel" ? "danger" : "primary"} disabled={confirmBlocked} onClick={() => void confirm()}>{confirmation[action]}</Button></>}>
+      {busy && <p role="status">Checking the current workflow…</p>}
+      {error && <p role="alert">{error}</p>}
+      {!preview && !busy && <Button onClick={() => void review(action)}>Refresh review</Button>}
+      {preview && <>
+        <h3>{preview.title}</h3>
+        {blocked && <p className="wf-notice">{blocked}</p>}
+        {action === "start" && <>
+          <p>Only selected prepared tasks are released. Tasks with prerequisites wait for acceptance and their own turn. Human holds stay in place.</p>
+          {selected.some((id) => !preview.tasks.some((t) => t.id === id && startEligible(t))) && <p>Some selected tasks changed and can no longer be released. Your choices are kept. <Button onClick={() => setSelected((ids) => ids.filter((id) => preview.tasks.some((t) => t.id === id && startEligible(t))))}>Remove unavailable selections</Button></p>}
+          {allAccepted && <p>All required tasks are already accepted. No tasks will run; continue to goal review after Start.</p>}
+          <fieldset><legend>Tasks to release</legend>{preview.tasks.map((t) => <label className="wf-choice" key={t.id}>
+            <input type="checkbox" checked={selected.includes(t.id)} disabled={!startEligible(t) && !selected.includes(t.id)}
+              onChange={(e) => setSelected((ids) => e.target.checked ? [...ids, t.id] : ids.filter((id) => id !== t.id))} />
+            <span>{t.title} — {t.display_state.label}{t.blockers.map((b) => <small key={b.code}>{b.message}</small>)}</span>
+          </label>)}</fieldset>
+        </>}
+        {action === "pause" && <p>Running work may finish. New tasks will not start until you resume the workflow.</p>}
+        {action === "resume" && <p>Eligible tasks may start after resuming. Dependencies, holds and task autonomy still apply.</p>}
+        {action === "cancel" && <>
+          <p>Cancel unfinished work in this workflow. Accepted results, saved evidence and the record of what happened are kept. Workers may take time to stop; cancellation does not confirm shutdown.</p>
+          <ul>{preview.tasks.map((t) => <li key={t.id}>{t.title}: {t.display_state.label}</li>)}</ul>
+          <label>Reason for cancelling<textarea maxLength={4000} value={reason} onChange={(e) => setReason(e.target.value)} /></label>
+        </>}
+        {action === "finish" && <>
+          <p>{preview.progress.accepted} of {preview.progress.total} tasks accepted. {preview.progress.objectives_accepted} of {preview.progress.objectives_total} objectives accepted.</p>
+          <p>Goal: {preview.goal}</p><p>{preview.goal_accepted_revision === preview.goal_revision ? "Current goal accepted." : "The current goal still needs acceptance with saved evidence."}</p>
+          <ul>{preview.objectives.map((o) => <li key={o.id}>{o.title} — {o.criteria} — {o.accepted_revision === o.revision ? "Accepted" : "Needs acceptance"}</li>)}</ul>
+          <ul>{preview.completion.blockers.map((b, i) => <li key={i}>{b.message}{b.task_id && <> <WorkflowTaskLink cid={scope.project} taskId={b.task_id}>Open task</WorkflowTaskLink></>}</li>)}</ul>
+          <h3>Saved evidence</h3>
+          <label>Inspect a task’s saved evidence<select value={evidenceTask} onChange={(e) => setEvidenceTask(e.target.value)}><option value="">Choose a task</option>{preview.tasks.map((t) => <option key={t.id} value={t.id}>{t.title}</option>)}</select></label>
+          {evidenceTask && <WorkflowEvidencePanel key={evidenceTask} detail={preview} taskId={evidenceTask} />}
+          {preview.evidence_capability?.available !== true && <p>Saved evidence review is unavailable on this connection, so finishing remains unavailable.</p>}
+          <p>Objective and goal acceptance are separate recorded steps before Finish.</p>
+          {preview.objectives.filter((o) => o.accepted_revision !== o.revision).map((objective) => <details key={objective.id}><summary>Review {objective.title}</summary>
+            <WorkflowAcceptance detail={preview} scope={scope} verified={verified} stale={stale} objectiveId={objective.id} onSaved={(result) => { onSaved(result); setPreview(null); }} /></details>)}
+          {preview.goal_accepted_revision !== preview.goal_revision && <details><summary>Review current goal</summary>
+            <WorkflowAcceptance detail={preview} scope={scope} verified={verified} stale={stale} onSaved={(result) => { onSaved(result); setPreview(null); }} /></details>}
+          {preview.completion.can_finish && <p>All {preview.progress.total} required tasks and {preview.progress.objectives_total} objectives are accepted. Confirm Finish to make this workflow read-only.</p>}
+          <p>Finishing makes this workflow read-only. Your project stays open. Only its verified human owner can finish it; task autonomy never finishes a workflow.</p>
+        </>}
+      </>}
+    </Dialog>}
+  </>;
+}
