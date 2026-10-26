@@ -9,7 +9,7 @@ from portal_backend.database import db_cursor
 from portal_backend.guards import require_container, valid_uuid
 from portal_backend.identity_routes import require_machine_lane_member
 from portal_backend.stranded_runs import reconcile_stranded_runs
-from portal_backend.workflow_evidence_service import terminalize_workflow_run_with_evidence
+from portal_backend.workflow_evidence_service import terminalize_worker_run
 
 ORPHAN_LEASE_SECS = 1260.0
 
@@ -70,10 +70,11 @@ def _reap_lane(
             "AND lane=%s ORDER BY run_id", (sql.list_param(reaped_ids), run_lane),
         )
         for run in cur.fetchall():
-            terminalize_workflow_run_with_evidence(
-                cur, run["run_id"], "orphaned", cause="orphan_lease",
+            transition = terminalize_worker_run(
+                cur, run["run_id"], "orphaned", cause="orphan_lease", expected_status="running",
             )
-            runs_by_agent.setdefault(str(run["agent_id"]), []).append(str(run["run_id"]))
+            if transition.changed:
+                runs_by_agent.setdefault(str(run["agent_id"]), []).append(str(run["run_id"]))
     reconciled = [run_id for run_ids in runs_by_agent.values() for run_id in run_ids]
     if reconciled:
         cur.execute(

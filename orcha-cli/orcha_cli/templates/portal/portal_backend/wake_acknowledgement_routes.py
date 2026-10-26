@@ -11,7 +11,7 @@ from portal_backend.event_acknowledgement import (
 )
 from portal_backend.guards import require_agent, valid_uuid
 from portal_backend.schemas.wakes import EventsAckHandled, WakeAck
-from portal_backend.workflow_evidence_service import terminalize_workflow_run_with_evidence
+from portal_backend.workflow_evidence_service import terminalize_worker_run
 
 
 def _acknowledge_lane(cur, aid, body, lane):
@@ -137,10 +137,11 @@ def wake_ack(aid: str, body: WakeAck):
             )
             reconciled = []
             for run in cur.fetchall():
-                terminalize_workflow_run_with_evidence(
-                    cur, run["run_id"], "orphaned", cause="lease_release",
+                transition = terminalize_worker_run(
+                    cur, run["run_id"], "orphaned", cause="lease_release", expected_status="running",
                 )
-                reconciled.append(str(run["run_id"]))
+                if transition.changed:
+                    reconciled.append(str(run["run_id"]))
             if reconciled:
                 cur.execute(
                     f"""UPDATE embodiment_tokens SET revoked_at=now()

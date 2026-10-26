@@ -27,7 +27,7 @@ uses), their embodiment tokens are revoked, and an audit event is logged.
 """
 
 from portal_backend import sql
-from portal_backend.workflow_evidence_service import terminalize_workflow_run_with_evidence
+from portal_backend.workflow_evidence_service import terminalize_worker_run
 from portal_backend.agent_status import log_event
 
 # Same threshold and reasoning as the heartbeat reaper (ISS-60B): longer than the
@@ -102,15 +102,12 @@ def reconcile_stranded_runs(cur, cid: str, orphan_secs: float, lane: str) -> lis
     stranded = cur.fetchall()
     orphaned = set()
     for row in sorted(stranded, key=lambda item: str(item["run_id"])):
-        # Recheck after another terminal path may have won the race. The shared
-        # service takes the workflow locks before touching the run itself.
-        cur.execute("SELECT status FROM worker_runs WHERE run_id=%s", (row["run_id"],))
-        if cur.fetchone()["status"] != "running":
-            continue
-        terminalize_workflow_run_with_evidence(
-            cur, row["run_id"], "orphaned", cause="stranded_run",
+        # Check the expected state under the shared graph-to-run lock order.
+        transition = terminalize_worker_run(
+            cur, row["run_id"], "orphaned", cause="stranded_run", expected_status="running",
         )
-        orphaned.add(str(row["run_id"]))
+        if transition.changed:
+            orphaned.add(str(row["run_id"]))
     rows = [row for row in stranded if str(row["run_id"]) in orphaned]
     run_ids = [str(row["run_id"]) for row in rows]
     if run_ids:

@@ -40,18 +40,21 @@ def stage_evidence(data: bytes) -> StagedEvidence:
     """Write a bounded, hashed snapshot to the existing attachment staging area."""
     if len(data) > store.max_deliverable_bytes():
         raise EvidenceStorageError("evidence_file_too_large")
-    path = store.new_staging_path()
     try:
+        path = store.new_staging_path()
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(fd, "wb") as output:
             output.write(data)
             output.flush()
             os.fsync(output.fileno())
         _sync_directory(path.parent)
+        digest = store.sha256_file(path)
+        if digest != hashlib.sha256(data).hexdigest():
+            raise EvidenceStorageError("evidence_stage_changed")
     except OSError as exc:
         # The caller records the error before making its run prune-eligible.
         raise EvidenceStorageError("evidence_stage_failed") from exc
-    return StagedEvidence(path, hashlib.sha256(data).hexdigest(), len(data))
+    return StagedEvidence(path, digest, len(data))
 
 
 def _valid_id(value: str) -> str:
@@ -76,10 +79,10 @@ def publish_evidence(
     if type(version) is not int or not 1 <= version <= store.MAX_VERSIONS_PER_DELIVERABLE:
         raise EvidenceStorageError("evidence_version_limit")
     logical_path = store.normalize_path(logical_path)
-    stage_root = store.staging_dir().resolve()
-    if staged.path.is_symlink() or staged.path.parent.resolve() != stage_root:
-        raise EvidenceStorageError("invalid_evidence_stage")
     try:
+        stage_root = store.staging_dir().resolve()
+        if staged.path.is_symlink() or staged.path.parent.resolve() != stage_root:
+            raise EvidenceStorageError("invalid_evidence_stage")
         if not staged.path.is_file():
             raise EvidenceStorageError("evidence_stage_missing")
         if (
