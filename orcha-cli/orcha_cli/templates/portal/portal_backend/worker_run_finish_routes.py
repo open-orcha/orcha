@@ -23,7 +23,7 @@ from portal_backend.worker_run_support import (
     is_non_task_work,
 )
 
-from portal_backend.workflow_evidence_service import terminalize_workflow_run_with_evidence
+from portal_backend.workflow_evidence_service import terminalize_worker_run
 
 
 def _require_run_machine_lane(cur, request: Request, agent_id) -> None:
@@ -93,8 +93,13 @@ def finish_worker_run(run_id: str, body: WorkerRunFinish, request: Request):
         if total_cost_usd is None:
             total_cost_usd = _codex_cost_estimate(cur, existing, body)
         if late_task_id:
-            cur.execute("UPDATE worker_runs SET task_id=%s WHERE run_id=%s AND task_id IS NULL",
-                        (late_task_id, run_id))
+            # Workflow runs require an admitted execution; legacy task inference
+            # must not acquire a run lock before the workflow graph locks.
+            cur.execute("SELECT workflow_id FROM tasks WHERE id=%s", (late_task_id,))
+            task = cur.fetchone()
+            if task and not task["workflow_id"]:
+                cur.execute("UPDATE worker_runs SET task_id=%s WHERE run_id=%s AND task_id IS NULL",
+                            (late_task_id, run_id))
         updates = {"exit_code": body.exit_code, "output": body.output}
         for key, value in {
             "diff": body.diff, "kill_reason": body.kill_reason,
@@ -105,13 +110,12 @@ def finish_worker_run(run_id: str, body: WorkerRunFinish, request: Request):
         }.items():
             if value is not None:
                 updates[key] = value
-        row = terminalize_workflow_run_with_evidence(
+        transition = terminalize_worker_run(
             cur, run_id, body.status, cause="finish", updates=updates,
         )
-        existing["task_id"] = existing["task_id"] or late_task_id
-        cur.execute("SELECT workflow_id FROM tasks WHERE id=%s", (existing["task_id"],))
-        task = cur.fetchone()
-        if existing["status"] in ("running", "orphaned") and not (task and task["workflow_id"]):
+        row, existing = transition.run, transition.before
+        if (transition.changed and existing["status"] in ("running", "orphaned")
+                and not transition.workflow_linked):
             record_run_outcome(cur, existing, body)
             requeue_interrupted_run(cur, existing, body)
         # Live chat: a container-wide (never agent-targeted — it must not wake anyone)

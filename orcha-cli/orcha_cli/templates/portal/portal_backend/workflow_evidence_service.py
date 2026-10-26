@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import dataclass
 from uuid import uuid4
 
 from fastapi import HTTPException
@@ -409,12 +410,33 @@ def _freeze_evidence(cur, run, task, execution, cause):
     return evidence_set
 
 
+@dataclass(frozen=True)
+class RunTerminalization:
+    """The before/after facts from the shared lock, owned by this transaction."""
+
+    before: dict
+    run: dict
+    changed: bool
+    workflow_linked: bool
+
+
 def terminalize_workflow_run_with_evidence(cur, run_id, terminal_status, *, cause, updates=None):
+    """Keep the row-returning contract used by workflow stop and release callers."""
+    return terminalize_worker_run(
+        cur, run_id, terminal_status, cause=cause, updates=updates,
+    ).run
+
+
+def terminalize_worker_run(cur, run_id, terminal_status, *, cause, updates=None,
+                           expected_status=None):
     """Save or mark evidence missing BEFORE ended_at and pruning, atomically in SQL.
 
     A diagnostic timeout fences an old credential; it is never proof the process
     stopped. The caller alone decides whether confirmed shutdown releases capacity.
-    Non-workflow runs retain their existing finish/update behavior.
+    Non-workflow runs retain their existing finish/update behavior. Cleanup callers
+    supply expected_status="running"; a competing finish then makes them a no-op.
+    Accounting and audit callers must use the returned locked facts, never a prior
+    SELECT. A no-op neither revokes credentials nor prunes diagnostics.
     """
     if terminal_status not in _TERMINAL or not cause:
         raise ValueError("A known terminal status and cause are required")
@@ -422,10 +444,13 @@ def terminalize_workflow_run_with_evidence(cur, run_id, terminal_status, *, caus
     if set(updates) - _RUN_UPDATES:
         raise ValueError("Unsupported worker terminal field")
     run, task, execution = _lock_context(cur, run_id)
-    workflow_linked = task and task.get("workflow_id")
+    before = dict(run)
+    workflow_linked = bool(task and task.get("workflow_id"))
+    if expected_status is not None and run["status"] != expected_status:
+        return RunTerminalization(before, run, False, workflow_linked)
     if workflow_linked and run["ended_at"]:
         # Exact evidence and its first terminal receipt cannot change on a late retry.
-        return run
+        return RunTerminalization(before, run, False, workflow_linked)
     if updates:
         columns = ",".join(f"{key}=%s" for key in updates)
         cur.execute(f"UPDATE worker_runs SET {columns} WHERE run_id=%s RETURNING *",
@@ -446,4 +471,4 @@ def terminalize_workflow_run_with_evidence(cur, run_id, terminal_status, *, caus
     result = cur.fetchone()
     revoke_tokens_for_runs(cur, [run_id])
     prune_old_run_detail(cur, run["agent_id"])
-    return result
+    return RunTerminalization(before, result, True, workflow_linked)

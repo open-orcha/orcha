@@ -289,7 +289,7 @@ def test_terminal_writers_have_one_shared_evidence_boundary():
              "orphan_lease_routes.py", "stranded_runs.py"]
     for name in paths:
         source = (root / name).read_text()
-        assert "terminalize_workflow_run_with_evidence(" in source
+        assert "terminalize_worker_run(" in source
         assert "ended_at=" not in source and "ended_at =" not in source
 
 
