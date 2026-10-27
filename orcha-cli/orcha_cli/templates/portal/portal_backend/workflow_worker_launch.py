@@ -13,6 +13,7 @@ from datetime import timedelta
 from uuid import uuid4
 
 from portal_backend import sql
+from portal_backend.event_acknowledgement import _ack_events_handled
 from portal_backend.workflow_graph import conflict
 from portal_backend.workflow_scheduling import _time
 
@@ -155,6 +156,10 @@ def activate(cur, execution, *, aid, run_id, permit, process_key, pid, now=None)
                    VALUES (%s,%s,'work','headless',%s,%s)""", (token, aid, run_id, pid))
     cur.execute("UPDATE worker_runs SET status='running',pid=%s WHERE run_id=%s", (pid, run_id))
     cur.execute("UPDATE workflow_executions SET state='running',last_runner_contact_at=%s WHERE id=%s", (now, execution["id"]))
+    # Activation is this task's claim, the same seam as /next: consume the assignee's
+    # "task ready" and assignment wakes, or they re-wake the agent with no task after exit.
+    for event_name in ("task_assigned", "task_ready"):
+        _ack_events_handled(cur, aid, event_name, "task_id", str(execution["task_id"]))
     return {"run_token": token, "run_id": str(run_id), "task_id": str(execution["task_id"]), "generation": execution["generation"]}
 
 
@@ -198,14 +203,23 @@ def continue_turn(cur, execution, runner, *, operation_key, payload, now=None):
                    WHERE at.task_id=%s AND at.agent_id=%s AND at.assignment_status IN ('assigned','accepted','working')
                      AND a.terminated_at IS NULL AND a.kind='ai'""", (execution["task_id"], runner["agent_id"]))
     assignment = cur.fetchone()
-    if (not execution.get("worker_stopped_at") or stop or execution.get("first_stop_at") or not assignment
-            or project["status"] != "active"
-            or execution["state"] not in {"running", "recovery_needed"}
-            or str(execution["claimant_id"]) != str(runner["agent_id"])
-            or workflow["status"] not in {"active", "paused"} or not workflow["launch_enabled"]
-            or task["status"] != "in_progress" or task["awaiting_owner_decision"]
-            or task["work_revision"] != execution["work_revision"]):
-        conflict("continuation_not_allowed", "This task turn cannot continue with another worker.")
+    # First failing gate wins, so the refusal names the real reason (shown on the task).
+    gates = (
+        (stop or execution.get("first_stop_at"), "A stop was requested for this task."),
+        (execution["state"] not in {"running", "recovery_needed"}, "The task's turn has already ended."),
+        (str(execution["claimant_id"]) != str(runner["agent_id"]), "This turn belongs to another agent."),
+        (not assignment, "The agent is no longer assigned to this task."),
+        (project["status"] != "active", "The project is not active."),
+        (workflow["status"] not in {"active", "paused"}, "The workflow is not active."),
+        (not workflow["launch_enabled"], "Waiting for the owner to Start the workflow."),
+        (task["status"] != "in_progress", "This task is no longer in progress."),
+        (task["awaiting_owner_decision"], "This task is waiting for the owner to decide."),
+        (task["work_revision"] != execution["work_revision"], "The task was changed after this turn started."),
+        (not execution.get("worker_stopped_at"), "The previous worker has not stopped yet."),
+    )
+    refused = next((message for failed, message in gates if failed), None)
+    if refused:
+        conflict("continuation_not_allowed", "This task turn cannot continue with another worker: " + refused)
     cur.execute("UPDATE workflow_launch_permits SET revoked_at=COALESCE(revoked_at,%s) WHERE execution_id=%s AND generation=%s", (now or sql.utcnow(), execution["id"], execution["generation"]))
     cur.execute("""UPDATE workflow_executions SET state='reserved',generation=generation+1,run_id=NULL,
                    worker_stopped_at=NULL,last_runner_contact_at=NULL,generation_revoked_at=NULL,

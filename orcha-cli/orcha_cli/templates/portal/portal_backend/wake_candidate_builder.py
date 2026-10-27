@@ -176,6 +176,20 @@ def build_wake_candidate(
                 "workflow_revision": launch_task["workflow_revision"],
                 "workflow_work_revision": launch_task["work_revision"],
             }
+            # A worker that exited mid-turn keeps the turn (confirm_stopped). A new event
+            # for that task continues the SAME turn; a fresh reserve would be refused
+            # because the turn is still live. The continue route re-checks every gate.
+            cur.execute(
+                """SELECT run_id FROM workflow_executions
+                   WHERE task_id=%s AND claimant_id=%s AND run_id IS NOT NULL
+                     AND state IN ('running','recovery_needed')
+                     AND worker_stopped_at IS NOT NULL AND first_stop_at IS NULL
+                   ORDER BY generation DESC LIMIT 1""",
+                (launch_task_id, aid),
+            )
+            stopped_turn = cur.fetchone()
+            if stopped_turn:
+                workflow_launch["workflow_continue_run_id"] = str(stopped_turn["run_id"])
     return {
         **workflow_launch,
         "agent_id": aid,
