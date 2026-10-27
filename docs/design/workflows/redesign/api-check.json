@@ -1,0 +1,72 @@
+{
+  "checked_date": "2026-10-27",
+  "contract": "Live localhost:8004/openapi.json (local PR 340 service)",
+  "contract_sha256": "6380b15ade9c0db68ace70d380a8afa67b2de5cd18d9290a536881dbe587ce28",
+  "design_baseline": "PR 340 branch at 16e5d3b9",
+  "graph_authoring": {
+    "add_tasks": {
+      "method": "POST",
+      "path": "/api/workflows/{wid}/tasks",
+      "schema": "TaskBatch",
+      "required": [
+        "expected_revision",
+        "idempotency_key",
+        "tasks"
+      ]
+    },
+    "edit_dependencies": {
+      "method": "PUT",
+      "path": "/api/tasks/{tid}/dependencies",
+      "schema": "DependencyEdit",
+      "required": [
+        "expected_revision",
+        "idempotency_key",
+        "expected_work_revision",
+        "depends_on"
+      ]
+    }
+  },
+  "request_scope_gap": {
+    "write_origin_field_present": true,
+    "request_list_query_parameters": [
+      "cid",
+      "limit",
+      "offset",
+      "agent",
+      "direction",
+      "status",
+      "sort",
+      "dir"
+    ],
+    "origin_field_present_on_live_list_row": false,
+    "origin_field_present_on_live_single_read": false,
+    "task_link_meaning": "Task spawned from request, not originating task",
+    "required_addition": "Document and expose origin link plus a bounded workflow-scoped read"
+  },
+  "deactivation_gap": {
+    "workflow_status_values": [
+      "active",
+      "paused",
+      "completed",
+      "cancelled"
+    ],
+    "patch_fields": [
+      "expected_revision",
+      "idempotency_key",
+      "reason",
+      "title",
+      "goal",
+      "execution_mode",
+      "task_limit",
+      "round_limit"
+    ],
+    "deactivation_or_restore_routes": [],
+    "required_addition": "Separate reversible visibility, checked mutations, read projection and receipt support"
+  },
+  "limitations": [
+    "Read-only contract inspection; no workflow or task lifecycle mutations were made.",
+    "Conceptual API additions require implementation and independent code-fit review."
+  ],
+  "latest_pr_head_checked": "b5535d32e1749076d6e64c31b7c07e48e42360b4",
+  "baseline_delta": "Two wake-handling commits; no changes in frontend, schemas, request list or single-read route files."
+}

@@ -19,13 +19,16 @@ for (const theme of themes) {
   const frames = await page.$$eval(".frame", (els) => els.map((e) => ({ id: e.id, w: Number(e.dataset.viewport || 1440) })));
   for (const f of frames) {
     if (only && !only.has(f.id)) continue;
-    if (f.w !== 1440) { await page.setViewport({ width: f.w, height: 900, deviceScaleFactor: 1 }); await page.goto(`${url}?theme=${theme}&frame=${f.id}`, { waitUntil: "networkidle0" }); await page.evaluate(() => document.fonts.ready); }
+    // Render every frame in solo mode: gallery padding otherwise trims 48 px.
+    await page.setViewport({ width: f.w, height: 900, deviceScaleFactor: 1 });
+    await page.goto(`${url}?theme=${theme}&frame=${f.id}`, { waitUntil: "networkidle0" });
+    await page.evaluate(() => document.fonts.ready);
     const el = await page.$("#" + f.id);
     await el.evaluate((e) => e.scrollIntoView({ block: "start" }));
     await new Promise((r) => setTimeout(r, 150));
     await el.screenshot({ path: path.join(here, "renders", `${f.id}-${theme}.png`) });
     console.log("rendered", f.id, theme, f.w);
-    if (f.w !== 1440) { await page.setViewport({ width: 1440, height: 900, deviceScaleFactor: 1 }); await page.goto(`${url}?theme=${theme}`, { waitUntil: "networkidle0" }); }
+
   }
   await page.close();
 }

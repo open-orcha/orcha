@@ -1,12 +1,15 @@
 # Workflows UI redesign — portal and Embodent desktop
 
-**Design spec for the Workflow pages shipped by PR #340** (branch `orcha/task-CodeCleanupAgent-2799ac2b-37e`, head `16e5d3b9`). Dana, 2026-10-27. Reviewed for code fit by Code Reviewer (workflow task 2); built by CodeCleanupAgent and ReleaseEngineer (workflow task 4). Mobile is parked in #348.
+**Design spec for the Workflow pages shipped by PR #340** (branch `orcha/task-CodeCleanupAgent-2799ac2b-37e`, baseline `16e5d3b9`). Dana, 2026-10-27; requested by Kedar. Code-fit review is pending with Code Reviewer (workflow task 2); implementation belongs to CodeCleanupAgent and ReleaseEngineer (workflow task 4). Mobile is parked in #348.
+
+**Revision 2:** the workflow objectives also require graph authoring, human decisions inside the workflow, and deactivation. Sections 4.12–4.15 cover these explicitly. Graph authoring uses current routes; request-to-workflow linkage and deactivation require the two API additions in §7.1. These additions are designed proposals, not existing functionality. The original “no new API asks” claim is superseded.
 
 | File | What it is |
 |---|---|
-| `redesign.html` | The mockups, 16 frames, built on the portal's real `v2-tokens.css`, `v2-primitives.css` and `v2-shell.css` (linked relatively) plus the live shell chrome captured from `localhost:8004`. Open in a browser; `?theme=light`, `?frame=f03`, `?notes=off`. |
+| `redesign.html` | The static mockup gallery, 20 frames, built on the portal's real `v2-tokens.css`, `v2-primitives.css` and `v2-shell.css` (linked relatively) plus the live shell chrome captured from `localhost:8004`. Open in a browser; `?theme=light`, `?frame=f03`, `?notes=off`. Controls illustrate states; this is not a working app. |
 | `renders/f*-dark.png`, `renders/f*-light.png` | One PNG per frame per theme, 1440 × 900 (f11 = 1024, f12 = 390). |
 | `renders/today-*.png` | The current pages on the PR branch, for contrast. |
+| `api-check.json` | Read-only contract check and the two verified API gaps; no request content or credentials. |
 | `render.mjs` | Re-renders every frame (`npm i puppeteer-core`, then `node render.mjs`). |
 
 The numbered dots in the renders are the callouts in §4.
@@ -28,7 +31,7 @@ The Workflows pages are the only part of the portal that skip the V2 design syst
 ![today list](renders/today-list.png)
 ![today detail](renders/today-detail.png)
 
-Everything behind the pages is sound: server-derived labels, blockers, `available_actions` with reasons, impact previews, receipt-first recovery, immutable evidence. **This redesign changes presentation and information architecture only.** Every current control keeps a home (§6).
+Preserve server-derived labels, blockers, `available_actions` with reasons, impact previews, receipt-first recovery and immutable evidence. The existing screens change presentation and information architecture; the objective-driven additions in §4.12–4.15 extend the experience. Every current control keeps a home (§6), and unsupported additions stay behind explicit capability gates (§7.1).
 
 ## 2. Principles
 
@@ -181,9 +184,9 @@ Opens from "Review result…" in the inspector (and from the row menu) for a tas
 
 ![create](renders/f07-dark.png)
 
-Stays a full page (`.wf-create`, 760 px), draft kept in session storage per project and person as today.
+Stays a full page (`.wf-create`, 760 px). The existing draft is held in an in-memory map scoped by origin, project and person (`workflowDraft.ts`); it survives page navigation in the same app instance, not a browser reload. Do not promise persistent browser storage.
 
-1. Stepper line (Goal · Tasks · Review and save) and the "Draft kept in this browser · nothing starts until you review Start" note (replaces the top notice paragraph). While an original save is being checked the whole form is disabled with "Checking the original save…".
+1. Stepper line (Goal · Tasks · Review and save) and “Draft kept while this app stays open. Nothing starts until you review Start.” While an original save is being checked the whole form is disabled with “Checking the original save…”.
 2. **Goal card**: name · owner · goal · How work runs as a `Segmented` control with the explanation as a muted line.
 3. **Objectives** (0–50) as cards with Title / Done when and Remove; **Tasks** (1–200) as cards: status glyph "Draft · Autonomy OFF" chip, summary, Done when, assignee `MenuButton` (avatars), the autonomy explanation as a muted line, **Depends on** as a chip picker ("Add prerequisite" opens a menu of the other draft and selected existing tasks; disabled entries carry `dependencyReason`: 3-max, cycle, self), Instructions behind a disclosure, Remove (disabled with "Change dependents first" when other tasks depend on it). "Add existing tasks…" opens §4.7b and selected existing tasks appear as chips under Tasks.
 4. **Review and save**: "Review draft" → the draft problems list or the checked summary card (blockers, import impact, finished-result reviews when existing tasks are included); "Save workflow" primary, enabled only after a clean review; "Discard draft…" ghost with the existing ConfirmDialog; after saving, the "Workflow saved · Open saved workflow" line.
@@ -202,8 +205,8 @@ Stays a full page (`.wf-create`, 760 px), draft kept in session storage per proj
 ![dependencies](renders/f08-dark.png)
 
 1. Tab actions: List / Graph and list `Segmented`, "Find a workflow task" search, zoom in / out / fit as icon buttons (reset = fit at 1×).
-2. Selecting a node or a row opens the task inspector, replacing the "Selected task" select and the selection notice; "Reset selection" is the inspector's close.
-3. **Graph**: nodes are task rows (glyph · title · state · assignee), the selected node ringed, neighbours at full opacity, others dimmed; solid arrows = `depends_on` (prerequisite → dependent); the explanatory sentences become the muted caption. Still an explanatory diagram: no drag editing, keyboard users use the list.
+2. Selecting a node or a row opens the task inspector; while the graph and inspector share the pane, fold the property rail behind Details to preserve graph width. This replaces the "Selected task" select and the selection notice; "Reset selection" is the inspector's close.
+3. **Graph**: nodes are task rows (glyph · title · state · assignee), the selected node ringed, neighbours at full opacity, others dimmed; solid arrows = `depends_on` (prerequisite → dependent). Never draw an edge for turn order: a serial workflow does not create dependencies. The base graph remains readable without editing. “Add task” and node actions open the graph-authoring flows in §4.12; all operations have keyboard-accessible buttons and list equivalents.
 4. **List**: the same rows as the Tasks tab with "Depends on · Needed by" as the sub-line.
 5. **Edit dependencies** lives in the inspector as a section (choices with reasons, 3-max counter, Review change / Save dependencies).
 
@@ -235,6 +238,61 @@ Only the workflow-related parts of `TaskDetail` change:
 - 720–1200 px: the rail folds into a "Details" icon toggle in the header (opens the same rail as a popover); list and inspector share the pane (inspector ≥ 380 px).
 - < 720 px: the Shell's drawer rules apply; rows are full width at 44 px; goal and age columns drop; opening a task replaces the list with the inspector and a Back control; dialogs become full-height sheets (the Dialog primitive's existing behaviour).
 
+### 4.12 Create tasks and dependencies from the graph — frames 13 and 13b
+
+![add a task from the graph](renders/f13-dark.png)
+![edit a dependency from the graph](renders/f13b-dark.png)
+
+This is another view of the same task draft, not a second task model. Graph authoring is part of the workflow objective; it supersedes the earlier read-only-graph limitation.
+
+1. **Entry:** When an editor is open, its confirm button is the primary action; move the workflow header primary behind More until the editor closes. Dependencies → Graph and list → Add task. A selected node also offers “Add task after this” and “Edit prerequisites”. The new-workflow page offers Cards / Graph within the Tasks section; switching preserves fields, draft keys and selection. Goal and final Review and save stay on the page. On narrow screens, the task form replaces the graph with Back to graph; never require dragging or precise edge selection.
+2. **Add after a node:** show a dotted-outline node labelled “New task · Not saved” and an inspector with Task name (200 characters), Done when (4000), Instructions (4000), assignee or Choose later, and prerequisite chips (maximum three). The selected node is prefilled as a prerequisite; the label reads “Starts after [task] is accepted”. Users can remove it. Draft lines are explicitly labelled “Not saved”; only saved dependencies use solid arrows. Moving a node changes its local layout only and never creates a dependency.
+3. **Review addition:** fresh workflow detail + the existing `WorkflowAddTasks` / `WorkflowChange` validation. Review summarizes the named task, assignee, prerequisites, Draft state, autonomy OFF and start hold; adding scope can invalidate goal acceptance. Confirm uses `POST /api/workflows/{wid}/tasks` with `TaskBatch`, `client_key`, existing task IDs or batch draft keys in `depends_on`, current revision and one idempotency key. Replace the draft node with the returned `created_task_ids` mapping; preserve focus on it. Do not manufacture separate task-create, assign or readiness calls.
+4. **Existing edge:** select the dependent node → Edit prerequisites. Checking a prerequisite previews a labelled dotted arrow and the sentence “[Dependent] will wait for [Prerequisite] to be accepted.” Removing a selected chip previews removal, not task deletion. Review change → Save dependencies sends the full replacement `depends_on` array through `PUT /api/tasks/{tid}/dependencies`, with both current workflow and work revisions, reason and idempotency key. Edge selection offers the same editor; no immediate destructive edge click.
+5. **Validation and states:** prohibit self-links, duplicates, more than three prerequisites, unknown/withdrawn tasks and cycles. Reuse `dependencyReason` for local drafts; the saved graph and server `available_actions` remain authoritative. If an action is unavailable (including a live worker), show its reason and keep the graph readable. An edit invalidates the checked preview. On conflict, retain the draft, refresh and require another review. While saving/uncertain, freeze the affected editor and use the receipt recovery in §4.4; a lost response never creates a second node. Cancel draft removes only the unsaved node; keep/discard confirmation applies when text was entered. Empty graph offers Add first task. Loading uses skeleton nodes; stale/offline shows the last graph with writes disabled and Retry.
+6. **Semantics:** arrows describe acceptance prerequisites, not who reviews whom, run order or ownership. A reviewer returning findings to a design task is a collaboration exchange, not a dependency cycle. Display runtime blockers separately. Graph selection, task-list selection and the inspector name the same saved task. No graph-specific backend or persisted node-coordinate API is required.
+
+### 4.13 Human input in the workflow — frame 14
+
+![workflow decisions](renders/f14-dark.png)
+
+Add a compact **Needs your input** strip below the goal on every detail tab, above the main content. While answering or deciding, the form owns the primary button; the usual workflow primary stays in More. It shows the number of known decisions for the acting person, plus “View”. Opening it replaces the tab content with a temporary decision list and inspector; Back to tasks/graph restores the previous tab and selection. It is not a fifth permanent navigation tab. “Assigned to someone else” stays separately viewable with the person's name, so a colleague's pending decision never looks lost.
+
+1. **Rows:** type (Plan approval / Finished work / Question), readable task or question title, requesting agent, intended person and age. Select a row to read the complete material before acting. Keep request payload and answer text; never render `agent_payload`, opaque IDs or hidden instructions. The form for a question lives inside the workflow, beside its task context. The mock question is an illustrative scenario, not a real pending request.
+2. **Plans:** use the existing `selectAttention` / `planAwaitsHuman` logic and task snapshot data; autonomy ON does not require a human plan approval. Show full plan, task's Done when and autonomy meaning. Approve plan / Request changes uses `POST /api/decisions` with `subject_type: plan_approval`, task as subject, current human and intended agent; rejection requires a reason. This does not accept finished work or finish the workflow. Respect any newer plan or scope change discovered before submission.
+3. **Finished work:** a workflow task in `needs_verification` opens the existing wide result-review dialog (§4.5), preserving evidence and supplier attribution. Use workflow `accept` / `reject`; never the legacy task `verify` endpoint for a workflow member. Do not suppress pending finished-work review merely because task autonomy is ON. Owner-only objective/goal decisions remain in the Finish checklist and contribute a named checklist link, not an invented task approval.
+4. **Questions:** show the human-facing question, requester and task link, then a labelled answer box (4000 characters). Send answer uses `POST /api/requests/{rid}/respond` with the current human as responder. Only the actual target can answer; owner status alone does not override this. Other viewers see “Waiting for [person]”. On success, show the saved answer and “Answered · awaiting follow-up” rather than claiming the agent is already running. If `automatic_work.message` says work cannot resume, retain that explanation. Nudge is available only for an agent who owes the next action; Close keeps the existing permission and required-reason rules. Reuse `RequestsPage` actions and confirmation/Undo behavior, including special request types that open their established review surface.
+5. **Thread:** the task inspector has Discussion next to its details. It reads `GET /api/tasks/{tid}/messages?limit=…`, loads earlier using both returned cursor values, and posts through the same route with `author_agent_id` set to the current human. Keep drafts on error; disable duplicate sends; re-read after uncertain delivery before asking the person to resend. A free-text thread message is not an approval or a reliable “needs input” signal. Link to the full task page for its other features.
+6. **Completeness:** no zero count while loading. A partially loaded snapshot says “At least N need input” and offers Load more; a failed request fetch says “Some questions could not be checked” with Retry. Preserve drafts when identity/connection changes, but never send one under another person or project; require the person to re-open their scoped draft. Keep the decision visible on error or an unconfirmed response. After success, refresh both the workflow and shared attention state; move focus to the next item or “No input needed right now”. Respect existing read-only membership, assigned reviewer and task-autonomy checks.
+7. **API boundary:** current task plan/result views can be composed now. Reliably selecting this workflow's requests cannot: neither the current paginated request read nor the single-request read exposes `originating_task_id`. The `task_link` field is the task spawned by a request, not its origin. Do not infer scope from an agent's current task or keywords. Until the additive link contract in §7.1 exists, show plan/result items plus “Workflow questions are not available on this server” and a link to project Requests; never show “No input needed” as an exhaustive claim. Frame 14 shows the proposed linked-question experience after that addition.
+
+### 4.14 Deactivate without losing work — frame 15 (requires API addition)
+
+![deactivate a workflow](renders/f15-dark.png)
+
+Use **Hide workflow…** in the overflow menu. “Hide” is the human-facing label for the objective's reversible deactivation; do not label it Delete if no data is deleted. Workflows remain reusable records and existing task work is retained.
+
+1. **Review:** open a standard dialog with the workflow name, task count and effects: “Removes this workflow from the usual list. Its tasks and messages stay. Workflow details disappear from ordinary task views. You can restore it from Hidden workflows.” The name, task impacts and eligibility must come from a fresh server check. Keep visible history/evidence intact.
+2. **Lifecycle:** proposed initial eligibility is completed or cancelled, with no live workers, reservations or uncertain operations. For active/paused work show the precise blocker plus “Review cancellation…” using the current cancellation flow; hiding must not silently stop work or evade Finish. After cancellation and worker shutdown, re-check before allowing Hide. A person may cancel out at either step without losing text.
+3. **Confirm:** Keep visible / Hide workflow. On success, return to the workflow list with “Workflow hidden” and Restore. Restore is a real server mutation, preserves completed/cancelled status, and never starts a worker. A persistent “Hidden workflows” entry in the list filter makes restoration possible after the toast expires. The hidden list has name, previous status, hidden-by/time and Restore; it has its own loading/error/empty states.
+4. **Task views:** remove workflow chips, return crumb and property rail section for deactivated membership. Keep task title, messages, result, evidence and task status. Deactivation does not detach tasks, rewrite dependencies, or make completed work editable. Existing backend membership guards still apply; if a user asks for an action requiring the hidden workflow, provide an explanatory link to its read-only hidden detail. Do not offer a legacy action that bypasses workflow rules. A direct workflow link opens a read-only “This workflow is hidden” page with Restore for authorized humans.
+5. **Failures and permissions:** only the owner/project-authorized human proposed by the new contract can hide or restore. Stale data disables writes. The checked dialog invalidates on new work/revision. Sending/uncertain uses the workflow receipt pattern, with the same operation key for retry; do not offer Undo until hide is confirmed. A failed restore keeps the workflow in Hidden and explains why. Loss of permission keeps content readable where allowed and removes the write controls.
+6. **Unsupported server:** current OpenAPI has no deactivate, restore, hidden-list option or deactivated membership field. Frame 15 is an explicitly labelled proposal. In the current-server variant, Hide is disabled with “Hiding workflows is not available on this server.” Do not substitute Cancel, remove it only in local storage, or disguise cancellation as deactivation.
+
+### 4.15 Task and workflow relationship: decision and objective coverage
+
+Keep a task as one durable record across project Tasks, workflow list/graph and Discussion. The workflow groups execution and acceptance; it does not own a separate copy of a task. New tasks enter through the atomic workflow task batch; existing tasks enter through the existing connected-group import. Move or remove keeps the current connected-group review and implications. Withdrawal is a scope decision, not deletion. A link uses the current workflow return target so Back restores selection. Deactivation hides presentation only and keeps historical membership as specified above.
+
+| Workflow objective | Design evidence | Contract status |
+|---|---|---|
+| Create tasks/dependencies as graph nodes; show graph | §4.8, §4.12, frames 08, 13 and 13b | Current `TaskBatch` and `DependencyEdit`; new frontend composition |
+| Clean modern UI | Existing V2 palette/type/spacing and components; §2–§6, dark/light renders | Existing tokens/primitives, no theme fork |
+| Review task-to-workflow relationship | §4.10, §4.15; shared task identity, import/move/withdraw, membership and return behavior | Current membership; hidden presentation needs new field |
+| Keep human decisions visible inside the workflow | §4.5–§4.6 and §4.13, frame 14 | Plan/result routes exist; request linkage is an API ask |
+| Retain or deactivate workflows; hide task workflow details | §4.14, frame 15 | Deactivation API ask; explicitly unsupported today |
+
+This table replaces any inference that the original retention matrix alone proves objective coverage. Code Reviewer must review both the existing-code fit and the proposed API boundaries before issuing CLEAN.
+
 ## 5. Component mapping
 
 | Today (`pages/workflows`) | Redesign |
@@ -260,6 +318,7 @@ Only the workflow-related parts of `TaskDetail` change:
 | `WorkflowTaskInspector` paragraphs on the task page | `PropertySection` "Workflow" |
 | `TaskAuthority` text + "Change to" button | `role="switch"` + confirmation card |
 | `<p role="status">` / `<p role="alert">` states | `Skeleton`, `EmptyState`, Shell stale bar, dialog banners |
+| Objective additions | Reuse `WorkflowAddTasks`, dependency editor, task Discussion, `selectAttention`, Requests actions; new composition for graph authoring and workflow input list. Deactivation is capability-gated pending §7.1. |
 | `workflows.css` (960 px column) | the page CSS in `redesign.html` `<style>` (tokens only, flush panel layout) |
 
 ## 6. Functionality retention matrix
@@ -306,7 +365,18 @@ Every control on the PR #340 pages and where it lives in the redesign. "Same" = 
 
 Every screen renders data and actions already in the live `/openapi.json` (port 8004, PR #340). Routes used, by screen: list `GET /api/containers/{cid}/workflows[/capability]`; detail `GET /api/workflows/{wid}`; checks `GET …/start-check`, `release-check`, `cancellation-check`, `completion-check`; actions `POST …/start|pause|resume|cancel|finish|import|import-preview|move|transfer-owner|review-rounds|review-loops/{tid}/resolve|goal/accept|objectives/{oid}/accept|tasks`, `PATCH …` and `…/objectives/{oid}`, `POST …/release`; tasks `POST /api/tasks/{tid}/prepare|hold|stop|reissue-stop|retry|release-lost-worker|withdraw-from-scope|external-result[/{eid}/withdraw]|accept|reject`, `PUT /api/tasks/{tid}/dependencies`, `PUT /api/tasks/{tid}/autonomy`, `GET /api/tasks/{tid}/approvals`; evidence `GET/POST /api/workflows/{wid}/tasks/{tid}/evidence`; search `GET /api/containers/{cid}/workflow-task-search`; receipts `GET /api/containers/{cid}/workflow-operations/{key}`; activity `GET /api/workflows/{wid}/activity`; create `POST /api/containers/{cid}/workflows/preview` then `POST …/workflows`. The `X-Orcha-Local-Actor` header and `expected_revision` / `expected_work_revision` / idempotency-key semantics are unchanged.
 
-**No new API asks.** Two nice-to-haves that are *not* required: per-status counts for the filter pills come from the loaded pages (as the Tasks page does); a server-side search would replace the client-side "Filter workflows" when it exists.
+The retained screens above use current routes. **Two required API additions are documented in §7.1** for the full workflow objectives. Two optional improvements remain: per-status counts currently come from loaded pages; server-side text search could replace the current loaded-page filter.
+
+### 7.1 Required API asks (proposals, not callable routes)
+
+Checked against live `/openapi.json` and matching source on 2026-10-27. These are design requirements for the implementation task, not claims that PR #340 already supports them.
+
+| Need | Evidence of the gap | Minimum proposed contract and acceptance |
+|---|---|---|
+| Requests scoped to their workflow | `RequestCreate.originating_task_id` is accepted on write, but `container_request_list_routes.py` does not select it and `GET /api/requests/{rid}` returns only identity, parties, type and status. Live reads confirmed this. `RequestRow` is additive; it does not document an origin link. | Expose nullable `originating_task_id` on documented request read rows, distinguish it from `spawned_task_id` / `task_link`, and expose a documented workflow-scoped request query or equivalent bounded attention feed with pagination and total/completeness. Resolve membership on the server, enforce current project access, and never silently assign unlinked requests. Include open/answered lifecycle and routing data needed by existing request actions. Unlinked requests remain visible in project Requests; show a link to that queue. Update generated OpenAPI and frontend types. |
+| Reversible workflow deactivation | `WorkflowDetail.status` is only active/paused/completed/cancelled. `WorkflowPatch` has no visibility field. No hide/deactivate/restore route, hidden filter or inactive membership read is present. | Add a separate visibility/deactivation field, actor/time metadata, available-actions reasons, a fresh impact/eligibility check, revision-bound idempotent hide and restore mutations with receipt recovery, hidden list pagination/filtering, and a task membership indicator for presentation. Proposed semantics are §4.14: no live work, no deletion/detachment, preserved status/evidence/history, restore never executes. Add the new operations to generated OpenAPI, receipt adapters and authorization rules before enabling the UI. Exact route names are an implementation decision, not assumed by these mockups. |
+
+For the existing-contract portion, request responses/nudges/closures and plan approvals keep their current schemas. Graph authoring maps directly to `TaskBatch` → `NewTask` and `DependencyEdit`; a plan review, graph layout or draft-node selection never sends a mutation by itself. The current request endpoint supports pagination but **does not accept `workflow_id`**; implementation must not append an unsupported filter and trust the result.
 
 ## 8. States, keyboard, accessibility
 
@@ -327,7 +397,8 @@ Every screen renders data and actions already in the live `/openapi.json` (port 
 5. **Evidence / acceptance / impact**: restyle `WorkflowEvidencePanel`, `WorkflowTaskAcceptanceRecord`, `WorkflowImpactView`, `WorkflowOperationNotice` into the card and banner shapes; no data or guard changes.
 6. **Create page**: restyle `WorkflowDraftEditor` sections as cards; `Segmented` for mode; chip picker for dependencies (same `dependencyReason`); `WorkflowImportChoices` moves into the dialog.
 7. **Task page**: `WorkflowTaskInspector` → `PropertySection`; `TaskAuthority` → switch + confirmation card; `WorkflowTaskEntry` → task ⋯ menu item.
-8. **Tests**: the existing `*.test.tsx` suites cover behaviour, not markup; expect selector updates only. Keep `designSystem.test.tsx` / `a11yCss.test.ts` green (no hard-coded hex, no colour-only status).
+8. **Validation for implementation**: retained behavior must pass the existing workflow and task suites. The added interactions also need meaningful checks: graph add/edit with a cycle/conflict/lost response, shared draft between Cards and Graph, decision routing under changed identity, partial request results and unsupported linkage, and hide/restore without lost task history or accidental work starts. Do not assume selector-only changes. Keep design-system and accessibility checks green; inspect light/dark and narrow layouts.
+9. **Objective additions**: build graph composition from §4.12; add the input strip and Discussion (§4.13) using shared attention/request components. Implement the explicit API additions (§7.1) before enabling linked requests or deactivation; do not ship a local-only hide approximation.
 
 ## 10. Decisions taken (approved plan, 2026-10-27)
 
@@ -335,3 +406,9 @@ Every screen renders data and actions already in the live `/openapi.json` (port 
 - Create workflow stays a full page with sections, not a dialog.
 - Design assets live on a design branch off PR #340 and are embedded in the issue; no PR.
 - Result review opens as a wide dialog (two columns) rather than inside the 460 px inspector, so evidence and decision are visible together.
+
+## 11. Review status and revision notes
+
+PR #340 was rechecked at `b5535d32`: the two commits after the design baseline change wake handling, not the frontend or the request/schema files used here.
+
+Code-fit review is pending. No CLEAN verdict or human acceptance is claimed. Revision 2 adds the missing objective coverage, separates current routes from new API asks, removes the fictitious turn-order graph edge, and corrects the in-memory draft description. Task 1 remains open until Code Reviewer returns CLEAN on its thread. No production app code is changed by this design branch.
