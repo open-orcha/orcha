@@ -131,46 +131,74 @@ def ready_task_ids(cur, aid: str, cid: str):
     return [str(row["id"]) for row in cur.fetchall()]
 
 
-def startable_task_ids(cur, task_ids):
-    """Drop ready Workflow tasks the Workflow would refuse to start right now.
+class WorkflowParking:
+    """Decide which Workflow tasks are "parked": waiting for their turn, so no wake can use them.
 
-    A Workflow task waiting on a prerequisite or another task's turn is 'ready' but
-    its reserve is refused, and a refused reserve ends the whole wake. Left in the
-    list it would become the launch task and swallow the agent's other work (a
-    review request, an answer) until the Workflow moved on. Uses the same
-    eligibility the reserve route checks, so nothing it would admit is dropped.
+    A Workflow task whose reserve would be refused (prerequisite, serial turn, hold, a
+    worker still running) is parked. A refused reserve ends the whole wake, so a parked
+    task must never be the wake's task, and its messages wait until it can start. A task
+    whose stopped worker can continue its live turn is not parked: the continue route
+    re-checks every gate. Uses the same eligibility the reserve route checks, so nothing
+    the reserve would admit is parked. Snapshots are cached per Workflow for one scan.
     """
-    if not task_ids:
-        return task_ids
-    cur.execute(
-        "SELECT id, workflow_id FROM tasks WHERE id IN ("
-        + ",".join(["%s"] * len(task_ids))
-        + ")",
-        tuple(task_ids),
-    )
-    workflow_of = {str(r["id"]): r["workflow_id"] for r in cur.fetchall()}
-    if not any(workflow_of.values()):
-        return task_ids
-    from portal_backend.workflow_integration import IntegratedWorkflowHooks
-    from portal_backend.workflow_service import WorkflowService
 
-    service = WorkflowService(cur, IntegratedWorkflowHooks())
-    eligibility = {}
-    for wid in {w for w in workflow_of.values() if w}:
-        try:
-            for tid, choice in service.snapshot(str(wid))["eligibility"].items():
-                eligibility[str(tid)] = choice
-        except Exception:
-            pass  # unreadable Workflow: keep its tasks; the reserve decides
-    kept = []
-    for tid in task_ids:
-        choice = eligibility.get(tid)
-        if workflow_of.get(tid) and choice is not None and not (
-            choice["can_start"] and choice["source_kind"] == "worker"
-        ):
-            continue
-        kept.append(tid)
-    return kept
+    def __init__(self, cur, aid: str):
+        self.cur = cur
+        self.aid = aid
+        self._eligibility = {}
+        self._parked = {}
+
+    def _choice(self, wid: str, tid: str):
+        if wid not in self._eligibility:
+            from portal_backend.workflow_integration import IntegratedWorkflowHooks
+            from portal_backend.workflow_service import WorkflowService
+
+            try:
+                snapshot = WorkflowService(self.cur, IntegratedWorkflowHooks()).snapshot(wid)
+                self._eligibility[wid] = {
+                    str(t): c for t, c in snapshot["eligibility"].items()
+                }
+            except Exception:
+                self._eligibility[wid] = {}  # unreadable Workflow: the reserve decides
+        return self._eligibility[wid].get(tid)
+
+    def parked(self, task_id) -> bool:
+        if not task_id:
+            return False
+        tid = str(task_id)
+        if tid not in self._parked:
+            self._parked[tid] = self._compute(tid)
+        return self._parked[tid]
+
+    def _compute(self, tid: str) -> bool:
+        self.cur.execute("SELECT workflow_id, status FROM tasks WHERE id=%s", (tid,))
+        task = self.cur.fetchone()
+        # Completed/cancelled tasks keep their existing drain rules; only live work parks.
+        if not task or not task["workflow_id"] or task["status"] in ("completed", "cancelled"):
+            return False
+        choice = self._choice(str(task["workflow_id"]), tid)
+        if choice is None or (choice["can_start"] and choice["source_kind"] == "worker"):
+            return False
+        return continuable_run_id(self.cur, tid, self.aid) is None
+
+
+def continuable_run_id(cur, task_id, aid: str):
+    """Return the run of this agent's live turn on the task whose worker has stopped.
+
+    A worker that exited mid-turn keeps the turn (confirm-stopped). A new event for that
+    task continues the SAME turn; a fresh reserve would be refused because the turn is
+    still live. The continue route re-checks every gate.
+    """
+    cur.execute(
+        """SELECT run_id FROM workflow_executions
+           WHERE task_id=%s AND claimant_id=%s AND run_id IS NOT NULL
+             AND state IN ('running','recovery_needed')
+             AND worker_stopped_at IS NOT NULL AND first_stop_at IS NULL
+           ORDER BY generation DESC LIMIT 1""",
+        (str(task_id), aid),
+    )
+    row = cur.fetchone()
+    return str(row["run_id"]) if row else None
 
 
 def has_pending_task_request(cur, aid: str) -> bool:

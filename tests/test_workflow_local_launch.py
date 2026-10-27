@@ -803,9 +803,16 @@ async def test_a_worker_that_may_still_be_running_is_never_confirmed_or_relaunch
     assert await sweep(project) == 0
     await reject_plan(project, project.tasks["a"])
     candidate = await ann_candidate(project, client)
-    assert "workflow_continue_run_id" not in candidate
-    refused = await notifier_launch(client, candidate, monkeypatch)
-    assert refused.status_code == 409 and "reservation_live" in refused.text
+    # The decision waits for the live turn: no launch of the task, and it is not consumed.
+    assert "workflow_continue_run_id" not in candidate and "workflow_id" not in candidate
+    assert not candidate["should_wake"], candidate["reason"]
+    with db_cursor() as (_, cur):
+        cur.execute("SELECT id FROM agent_events WHERE event_key=%s AND event_name='decision_made'",
+                    (project.ann,))
+        decision = {r["id"] for r in cur.fetchall()}
+    assert decision and not decision & set(candidate["handled_event_ids"])
+    refused = await project.reserve(project.ann, "a", expect=409)
+    assert "reservation_live" in json.dumps(refused)
 
 
 from datetime import timedelta
@@ -950,7 +957,7 @@ async def test_a_message_on_a_workflow_task_waiting_its_turn_does_not_capture_th
     """Live Code Reviewer case after the fix above: old "could not start" notes and nudges
     on its waiting Workflow task were directed messages, so the wake still bound to that
     task, the reserve was refused and every wake was dropped. The wake now binds to the
-    agent's other work and clears the waiting task's rows so they cannot re-wake forever."""
+    agent's other work; the waiting task's rows stay pending for its own turn."""
     project = Project(client)
     await project.start("serial", [("a", project.ann, []), ("c", project.bob, [])])
     await project.reserve(project.ann, "a")  # a holds the only serial turn
@@ -974,6 +981,77 @@ async def test_a_message_on_a_workflow_task_waiting_its_turn_does_not_capture_th
         cur.execute("""SELECT e.id FROM agent_events e WHERE e.event_key=%s
                        AND e.event_name='task_message'""", (project.bob,))
         waiting_rows = {r["id"] for r in cur.fetchall()}
-    assert waiting_rows and waiting_rows <= set(bob["delivery_handled_event_ids"])
+    assert waiting_rows
+    assert not waiting_rows & set(bob["delivery_handled_event_ids"])
+    assert not waiting_rows & set(bob["handled_event_ids"])
     assert blockers(await project.reserve(project.bob, "c", expect=409)) & {"workflow_turn", "reservation_live"}
 
+
+
+async def _bob_candidate(client, project):
+    scan = await client.get(f"/api/containers/{project.cid}/wake-scan", params={"cooldown": 0, "min_idle": 0})
+    assert scan.status_code == 200, scan.text
+    return next(c for c in scan.json()["candidates"] if c["agent_id"] == project.bob)
+
+
+async def test_a_message_on_a_waiting_workflow_task_is_held_and_delivered_when_its_turn_comes(client):
+    """Review of 16e5d3b9: an owner instruction on a Workflow task waiting for its turn was
+    acknowledged and lost. It must neither wake the agent now nor be dropped: it is
+    delivered with the task once the task can start."""
+    project = Project(client)
+    await project.start("serial", [("a", project.ann, []), ("b", project.bob, [])])
+    launch = await project.reserve(project.ann, "a")
+    waiting = project.tasks["b"]
+    instruction = "Use the approved staging repository; do not publish to production."
+    await project.call("POST", f"/api/tasks/{waiting}/messages",
+                       {"author_agent_id": project.owner, "body": instruction}, 201)
+    first = await _bob_candidate(client, project)
+    assert not first["should_wake"], first["reason"]
+    assert first["auto_start_task_ids"] == [] and first["context_task_id"] is None
+    assert not any(instruction in m for m in first["prompt_messages"])
+    await client.post(f"/api/agents/{project.bob}/events/ack-handled",
+                      json={"event_ids": first["delivery_handled_event_ids"]})
+    await client.post(f"/api/agents/{project.bob}/events/ack-handled",
+                      json={"event_ids": first["handled_event_ids"]})
+    assert not (await _bob_candidate(client, project))["should_wake"]
+    # The predecessor finishes (isolated fixture), so b's turn comes.
+    with db_cursor() as (_, cur):
+        cur.execute("UPDATE workflow_executions SET state='released',worker_stopped_at=now(),released_at=now() "
+                    "WHERE run_id=%s", (launch["run_id"],))
+        cur.execute("UPDATE worker_runs SET status='exited',ended_at=now() WHERE run_id=%s", (launch["run_id"],))
+        cur.execute("UPDATE tasks SET status='completed' WHERE id=%s", (project.tasks["a"],))
+    second = await _bob_candidate(client, project)
+    assert second["should_wake"] and waiting in second["auto_start_task_ids"]
+    assert second["context_task_id"] == waiting
+    assert any(instruction in m for m in second["prompt_messages"]), second["prompt_messages"]
+
+
+@pytest.mark.parametrize("gate", ["prerequisite", "hold"])
+async def test_a_message_on_a_blocked_workflow_task_does_not_capture_the_agents_other_work(client, gate):
+    """Review of 16e5d3b9: only ready tasks were parked, so a message on a Workflow task
+    still pending a prerequisite or held by a human still captured an unrelated wake and
+    its refused reserve dropped it. Every Workflow task that cannot start is parked."""
+    project = Project(client)
+    await project.start("serial", [("a", project.ann, []),
+                                   ("b", project.bob, ["a"] if gate == "prerequisite" else [])])
+    await project.reserve(project.ann, "a")
+    waiting = project.tasks["b"]
+    if gate == "hold":
+        detail = await project.detail(project.wid)
+        row = next(t for t in detail["tasks"] if t["id"] == waiting)
+        await project.call("POST", f"/api/tasks/{waiting}/hold",
+                           project.mutation(detail, expected_work_revision=row["work_revision"]))
+    await project.call("POST", f"/api/tasks/{waiting}/messages",
+                       {"author_agent_id": project.owner, "body": "Keep this for when your turn starts."}, 201)
+    asked = await client.post(f"/api/containers/{project.cid}/requests", json={
+        "requester_agent_id": project.ann, "payload": "Please review my change.", "type": "task",
+        "target_alias": "Bob", "expires_minutes": 60,
+        "task": {"title": "Review", "definition_of_done": "reviewed", "priority": 10}})
+    assert asked.status_code == 201, asked.text
+    bob = await _bob_candidate(client, project)
+    assert bob["should_wake"], bob["reason"]
+    assert "workflow_id" not in bob and bob["context_task_id"] != waiting
+    assert bob["wake_task_id"] != waiting
+    # The gate itself is untouched: the blocked task is still refused.
+    refused = await project.reserve(project.bob, "b", expect=409)
+    assert refused["detail"]["code"] == "not_eligible", refused

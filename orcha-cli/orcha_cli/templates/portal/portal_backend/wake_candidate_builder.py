@@ -14,16 +14,18 @@ from portal_backend.self_wake_selection import select_due_self_wake
 from portal_backend.wake_context import (
     filter_context_content,
     handled_event_id_sets as collect_handled_event_id_sets,
+    parked_pending_events,
     resolve_context_task_id,
 )
 from portal_backend.wake_decision import decide_wake, triage_eligible
 from portal_backend.wake_scan_queries import (
+    WorkflowParking,
+    continuable_run_id,
     has_pending_task_request,
     newest_answer_task_id,
     pending_event_summary,
     ready_task_ids,
     request_answer,
-    startable_task_ids,
 )
 
 
@@ -49,23 +51,48 @@ def build_wake_candidate(
     pending, max_ts, latest, latest_payload = pending_event_summary(
         cur, aid, delivered_ts, _WORK_NON_WAKING_EVENTS
     )
+    # A Workflow task waiting for its turn (prerequisite, serial turn, hold, a worker
+    # still running) cannot launch, and a refused launch ends the whole wake. It must
+    # never be the wake's task. Its messages and decisions stay pending, unacknowledged,
+    # and are delivered when its turn comes; until then they do not wake the agent.
+    parking = WorkflowParking(cur, aid)
     ready = ready_task_ids(cur, aid, container_id)
-    auto_tasks = startable_task_ids(cur, ready)
-    # A ready Workflow task that must wait for its turn cannot launch, and a refused
-    # launch ends the whole wake. Its messages (old "could not start" notes, nudges)
-    # must not pick it as the wake's task; they are cleared with this wake and the
-    # agent reads the thread when the task's turn comes.
+    auto_tasks = [tid for tid in ready if not parking.parked(tid)]
     parked = set(ready) - set(auto_tasks)
+    parked_rows = False
+    if pending:
+        _, parked_tasks, pending, newest = parked_pending_events(
+            cur,
+            aid,
+            delivered_ts,
+            non_waking_events=_WORK_NON_WAKING_EVENTS,
+            drain_class=_drain_class,
+            task_bound_bucket=_DRAIN_TASK_BOUND,
+            directive_bucket=_DRAIN_DIRECTIVE,
+            is_parked=parking.parked,
+        )
+        if parked_tasks:
+            parked |= parked_tasks
+            parked_rows = True
+            latest, latest_payload = newest or (None, None)
     if pending:
         directed, wake_task_id, ack_through_ts = collect_directed_messages(
             cur, aid, delivered_ts, max_ts
         )
+        directed = [
+            m for m in directed if not (m["task_id"] and str(m["task_id"]) in parked)
+        ]
         notifications, notifications_truncated = notification_manifest(
             cur, aid, delivered_ts
         )
+        notifications = [
+            n
+            for n in notifications
+            if not (n.get("drain_task_id") and str(n["drain_task_id"]) in parked)
+        ]
         if wake_task_id is None:
             wake_task_id = newest_answer_task_id(cur, aid, delivered_ts)
-        if wake_task_id is not None and str(wake_task_id) in parked:
+        if wake_task_id is not None and parking.parked(wake_task_id):
             wake_task_id = None
     else:
         directed, wake_task_id, ack_through_ts = [], None, max_ts
@@ -85,6 +112,8 @@ def build_wake_candidate(
             valid_uuid=valid_uuid,
         )
     )
+    if wake_task_id is not None and parking.parked(wake_task_id):
+        wake_task_id = None
     initial_task_id = auto_tasks[0] if auto_tasks else wake_task_id
     context_task_id = resolve_context_task_id(
         cur,
@@ -118,7 +147,6 @@ def build_wake_candidate(
         run_ackable_buckets=_DRAIN_RUN_ACKABLE,
         task_bound_bucket=_DRAIN_TASK_BOUND,
         directive_bucket=_DRAIN_DIRECTIVE,
-        parked_task_ids=parked,
     )
 
     auto_interval = agent["auto_wake_interval_secs"]
@@ -148,7 +176,9 @@ def build_wake_candidate(
         embodiment_silent_seconds=agent.get("embodiment_silent_seconds"),
     )
     triage_hint = None
-    if triage_eligible(
+    # A triage close advances the delivery cursor past every row it saw, which would skip
+    # a parked task's held rows; with any held, the wake takes the full path instead.
+    if not parked_rows and triage_eligible(
         should_wake=should_wake,
         pending_task_request=pending_task_request,
         self_wake_due=self_wake_due,
@@ -187,20 +217,9 @@ def build_wake_candidate(
                 "workflow_revision": launch_task["workflow_revision"],
                 "workflow_work_revision": launch_task["work_revision"],
             }
-            # A worker that exited mid-turn keeps the turn (confirm_stopped). A new event
-            # for that task continues the SAME turn; a fresh reserve would be refused
-            # because the turn is still live. The continue route re-checks every gate.
-            cur.execute(
-                """SELECT run_id FROM workflow_executions
-                   WHERE task_id=%s AND claimant_id=%s AND run_id IS NOT NULL
-                     AND state IN ('running','recovery_needed')
-                     AND worker_stopped_at IS NOT NULL AND first_stop_at IS NULL
-                   ORDER BY generation DESC LIMIT 1""",
-                (launch_task_id, aid),
-            )
-            stopped_turn = cur.fetchone()
-            if stopped_turn:
-                workflow_launch["workflow_continue_run_id"] = str(stopped_turn["run_id"])
+            continue_run_id = continuable_run_id(cur, launch_task_id, aid)
+            if continue_run_id:
+                workflow_launch["workflow_continue_run_id"] = continue_run_id
     return {
         **workflow_launch,
         "agent_id": aid,

@@ -168,11 +168,13 @@ task and swallow the agent's other work, such as a review request or an answer. 
 is not an extra gate: it reads the eligibility the reserve route enforces, and the
 reserve still re-checks everything at launch.
 
-Messages on such a waiting task (a nudge, an old "could not start" note) do not make
-it the wake's task either (`wake_context.resolve_context_task_id`, `parked_task_ids`).
-They are cleared with the agent's next wake instead of being left pending, because no
-wake can bind to that task until its turn comes and they would otherwise re-wake the
-agent forever. The agent reads that task's thread when its turn starts.
+Messages and decisions on a Workflow task that cannot start (waiting for a prerequisite
+or its turn, held by a human, or with a worker that may still be running) do not make it
+the wake's task either (`wake_scan_queries.WorkflowParking`,
+`wake_context.parked_pending_events`). They are not acknowledged: they stay pending and
+are delivered with the task when it can start or its stopped turn can continue. Until
+then they do not count as pending work, so they neither wake the agent on their own nor
+capture a wake meant for its other work.
 
 ## Verification
 
