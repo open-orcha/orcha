@@ -945,3 +945,35 @@ async def test_a_workflow_task_waiting_its_turn_does_not_swallow_the_agents_othe
     # The waiting task itself is still refused if anything does try to start it.
     assert blockers(await project.reserve(project.bob, "c", expect=409)) & {"workflow_turn", "reservation_live"}
 
+
+async def test_a_message_on_a_workflow_task_waiting_its_turn_does_not_capture_the_wake(client, monkeypatch):
+    """Live Code Reviewer case after the fix above: old "could not start" notes and nudges
+    on its waiting Workflow task were directed messages, so the wake still bound to that
+    task, the reserve was refused and every wake was dropped. The wake now binds to the
+    agent's other work and clears the waiting task's rows so they cannot re-wake forever."""
+    project = Project(client)
+    await project.start("serial", [("a", project.ann, []), ("c", project.bob, [])])
+    await project.reserve(project.ann, "a")  # a holds the only serial turn
+    waiting = project.tasks["c"]
+    await project.call("POST", f"/api/tasks/{waiting}/messages",
+                       {"author_agent_id": project.owner, "body": "Any news on this one?"}, 201)
+    asked = await client.post(f"/api/containers/{project.cid}/requests", json={
+        "requester_agent_id": project.ann, "payload": "Please review my change.", "type": "task",
+        "target_alias": "Bob", "expires_minutes": 60,
+        "task": {"title": "Review", "definition_of_done": "reviewed", "priority": 10}})
+    assert asked.status_code == 201, asked.text
+    await project.call("POST", f"/api/tasks/{waiting}/messages",
+                       {"author_agent_id": project.owner, "body": "Still waiting?"}, 201)
+    scan = await client.get(f"/api/containers/{project.cid}/wake-scan", params={"cooldown": 0, "min_idle": 0})
+    bob = next(c for c in scan.json()["candidates"] if c["agent_id"] == project.bob)
+    assert bob["should_wake"], bob["reason"]
+    assert "workflow_id" not in bob and bob["context_task_id"] != waiting
+    assert bob["wake_task_id"] != waiting
+    assert not any(waiting in m for m in bob["prompt_messages"])
+    with db_cursor() as (_, cur):
+        cur.execute("""SELECT e.id FROM agent_events e WHERE e.event_key=%s
+                       AND e.event_name='task_message'""", (project.bob,))
+        waiting_rows = {r["id"] for r in cur.fetchall()}
+    assert waiting_rows and waiting_rows <= set(bob["delivery_handled_event_ids"])
+    assert blockers(await project.reserve(project.bob, "c", expect=409)) & {"workflow_turn", "reservation_live"}
+

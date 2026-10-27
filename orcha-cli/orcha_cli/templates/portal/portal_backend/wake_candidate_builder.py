@@ -49,6 +49,13 @@ def build_wake_candidate(
     pending, max_ts, latest, latest_payload = pending_event_summary(
         cur, aid, delivered_ts, _WORK_NON_WAKING_EVENTS
     )
+    ready = ready_task_ids(cur, aid, container_id)
+    auto_tasks = startable_task_ids(cur, ready)
+    # A ready Workflow task that must wait for its turn cannot launch, and a refused
+    # launch ends the whole wake. Its messages (old "could not start" notes, nudges)
+    # must not pick it as the wake's task; they are cleared with this wake and the
+    # agent reads the thread when the task's turn comes.
+    parked = set(ready) - set(auto_tasks)
     if pending:
         directed, wake_task_id, ack_through_ts = collect_directed_messages(
             cur, aid, delivered_ts, max_ts
@@ -58,6 +65,8 @@ def build_wake_candidate(
         )
         if wake_task_id is None:
             wake_task_id = newest_answer_task_id(cur, aid, delivered_ts)
+        if wake_task_id is not None and str(wake_task_id) in parked:
+            wake_task_id = None
     else:
         directed, wake_task_id, ack_through_ts = [], None, max_ts
         notifications, notifications_truncated = [], False
@@ -65,7 +74,6 @@ def build_wake_candidate(
     actionable_answer_ts = (
         earliest_actionable_answer_ts(cur, aid, delivered_ts) if pending else None
     )
-    auto_tasks = startable_task_ids(cur, ready_task_ids(cur, aid, container_id))
     pending_task_request = has_pending_task_request(cur, aid)
     self_wake_due, self_wake_context, self_wake_task_id, wake_task_id = (
         select_due_self_wake(
@@ -90,6 +98,7 @@ def build_wake_candidate(
         drain_task_status=_drain_task_status,
         task_bound_bucket=_DRAIN_TASK_BOUND,
         directive_bucket=_DRAIN_DIRECTIVE,
+        parked_task_ids=parked,
     )
     prompt_messages, notifications = filter_context_content(
         directed,
@@ -109,6 +118,7 @@ def build_wake_candidate(
         run_ackable_buckets=_DRAIN_RUN_ACKABLE,
         task_bound_bucket=_DRAIN_TASK_BOUND,
         directive_bucket=_DRAIN_DIRECTIVE,
+        parked_task_ids=parked,
     )
 
     auto_interval = agent["auto_wake_interval_secs"]

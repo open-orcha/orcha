@@ -19,8 +19,13 @@ def resolve_context_task_id(
     drain_task_status: Callable[[Any, str], str | None],
     task_bound_bucket: str,
     directive_bucket: str,
+    parked_task_ids: Collection[str] = (),
 ):
-    """Resolve the live task that owns this wake, newest directive last."""
+    """Resolve the live task that owns this wake, newest directive last.
+
+    A parked task (a Workflow task waiting for its turn) never owns a wake: it
+    cannot launch, so binding to it would drop the wake.
+    """
     if initial_task_id is not None or not pending:
         return initial_task_id
     cur.execute(
@@ -45,6 +50,7 @@ def resolve_context_task_id(
         if (
             classification["bucket"] in (task_bound_bucket, directive_bucket)
             and task_id
+            and str(task_id) not in parked_task_ids
             and drain_task_status(cur, task_id) not in (None, "completed", "cancelled")
         ):
             return str(task_id)
@@ -89,6 +95,7 @@ def handled_event_id_sets(
     run_ackable_buckets: Collection[str],
     task_bound_bucket: str,
     directive_bucket: str,
+    parked_task_ids: Collection[str] = (),
 ):
     """Return completion-safe and delivery-safe event ids for this run.
 
@@ -126,9 +133,12 @@ def handled_event_id_sets(
             and context_task_id
             and str(task_id) == str(context_task_id)
         )
+        parked = bool(task_id and str(task_id) in parked_task_ids)
         if bucket in run_ackable_buckets or (
-            bucket == task_bound_bucket and same_task
-        ):
+            bucket in (task_bound_bucket, directive_bucket) and parked
+        ) or (bucket == task_bound_bucket and same_task):
+            # A parked task's rows are cleared here, not left pending: no wake can
+            # bind to that task until its turn comes, so they would re-wake forever.
             handled.append(row["id"])
             delivery_handled.append(row["id"])
         elif bucket == directive_bucket and same_task:

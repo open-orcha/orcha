@@ -168,6 +168,12 @@ task and swallow the agent's other work, such as a review request or an answer. 
 is not an extra gate: it reads the eligibility the reserve route enforces, and the
 reserve still re-checks everything at launch.
 
+Messages on such a waiting task (a nudge, an old "could not start" note) do not make
+it the wake's task either (`wake_context.resolve_context_task_id`, `parked_task_ids`).
+They are cleared with the agent's next wake instead of being left pending, because no
+wake can bind to that task until its turn comes and they would otherwise re-wake the
+agent forever. The agent reads that task's thread when its turn starts.
+
 ## Verification
 
 `tests/test_workflow_workers.py` covers the real database and API handshake,
