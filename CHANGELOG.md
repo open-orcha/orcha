@@ -12,8 +12,16 @@ missing.
 
 ### Fixed
 - Failed automatic runs now wait 30 then 60 seconds before retrying, pause after three failures, and raise one Needs you request with the cause. Activity shows the actual provider error and lets a human resume after fixing it. Unfinished task runs lost in a notifier restart are requeued once; stopped, completed, and reassigned work is left alone. Desktop version: 1.2.1.
+- Desktop: the menu-bar popover no longer stays an empty dark panel after its
+  renderer process dies; the next click opens a fresh one (GH #347).
 
 ### Added
+- Desktop: a local memory log at
+  `~/Library/Application Support/Orcha/logs/memory.jsonl`. A minute after
+  launch and then every 10 minutes it records the resident memory of each app
+  process (main, the manager window, the tray popover, each portal, GPU), so
+  slow growth shows up as a curve. At most about 2 MB on disk; nothing is sent
+  anywhere (GH #347).
 - **Bring agent changes into main / update a worktree from main** (GH #288).
   A human-triggered action per task worktree — in Settings › Agent worktrees,
   Code Space › Changes, the per-agent menu and `orcha worktrees bring-in |

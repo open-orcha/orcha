@@ -49,10 +49,17 @@ export function createTray(opts: {
       return
     }
     if (!popover || popover.isDestroyed()) {
-      popover = opts.createPopover()
-      popover.on('blur', () => {
-        if (popover && !popover.isDestroyed()) popover.hide()
+      const win = opts.createPopover()
+      win.on('blur', () => {
+        if (!win.isDestroyed()) win.hide()
       })
+      // The popover lives for the whole app run. If its renderer dies (a crash, or killed
+      // under memory pressure) the window would open as an empty dark panel until a relaunch
+      // (GH #347): drop it, and the next click builds a fresh one.
+      win.webContents.on('render-process-gone', () => {
+        if (!win.isDestroyed()) win.destroy()
+      })
+      popover = win
     }
     const b = tray.getBounds()
     const { width } = popover.getBounds()

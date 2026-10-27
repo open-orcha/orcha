@@ -22,6 +22,9 @@ vi.mock('electron', () => {
       h.trayOpts.handlers[ev] = fn
     }
     popUpContextMenu(): void {}
+    getBounds(): { x: number; y: number; width: number; height: number } {
+      return { x: 100, y: 0, width: 24, height: 24 }
+    }
     isDestroyed(): boolean {
       return false
     }
@@ -42,7 +45,27 @@ vi.mock('electron', () => {
   }
 })
 
+import type { BrowserWindow } from 'electron'
 import { createTray, TRAY_IMAGE } from './tray'
+
+/** A popover window double: records its own and its webContents' event handlers. */
+function fakePopover() {
+  let destroyed = false
+  const on: Record<string, () => void> = {}
+  const contentsOn: Record<string, () => void> = {}
+  return {
+    on: (ev: string, fn: () => void) => void (on[ev] = fn),
+    webContents: { on: (ev: string, fn: () => void) => void (contentsOn[ev] = fn) },
+    contentsOn,
+    isDestroyed: () => destroyed,
+    destroy: vi.fn(() => void (destroyed = true)),
+    isVisible: () => false,
+    getBounds: () => ({ x: 0, y: 0, width: 360, height: 480 }),
+    setPosition: vi.fn(),
+    show: vi.fn(),
+    hide: vi.fn()
+  }
+}
 
 describe('tray (Embodent mark template image)', () => {
   beforeEach(() => {
@@ -90,5 +113,25 @@ describe('trayTitle (decisions + usage)', () => {
     const labels = h.menuTemplates.at(-1)!.map((i) => i.label)
     expect(labels).toContain('Claude — 5h 10% · wk 77%')
     expect(labels).toContain('Usage details & history…')
+  })
+})
+
+describe('tray popover', () => {
+  it('builds a fresh popover after its renderer dies instead of reopening a blank one (GH #347)', () => {
+    const wins = [fakePopover(), fakePopover()]
+    let made = 0
+    const createPopover = vi.fn(() => wins[made++] as unknown as BrowserWindow)
+    createTray({ onOpenManager: vi.fn(), createPopover, onTestNotification: vi.fn() })
+    h.trayOpts.handlers['click']()
+    h.trayOpts.handlers['click']()
+    // a live popover is reused for the whole run
+    expect(createPopover).toHaveBeenCalledTimes(1)
+    expect(wins[0].show).toHaveBeenCalledTimes(2)
+
+    wins[0].contentsOn['render-process-gone']()
+    expect(wins[0].destroy).toHaveBeenCalled()
+    h.trayOpts.handlers['click']()
+    expect(createPopover).toHaveBeenCalledTimes(2)
+    expect(wins[1].show).toHaveBeenCalledTimes(1)
   })
 })

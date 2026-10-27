@@ -5,7 +5,7 @@ import { MIC_CHANNELS, MIC_SETTINGS_URL } from '../shared/mic'
 import { classifyVerdiktLink, launchMacApp, openVerdiktLink } from './verdiktLinks'
 import path from 'node:path'
 import os from 'node:os'
-import { accessSync, chmodSync, constants as fsConstants, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { accessSync, chmodSync, constants as fsConstants, cpSync, existsSync, mkdirSync, promises as fsp, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { randomBytes } from 'node:crypto'
 import { execFile, execFileSync, spawn } from 'node:child_process'
 import { parseDeepLink } from './deepLink'
@@ -22,6 +22,7 @@ import { createPlanUsageDisplaySync, DISPLAY_POLL_MS, type PlanUsageDisplaySync 
 import { createScanClient, readClaudeCredentials, readUsagePrefsFile, writeUsagePrefsFile } from './usage/usageHost'
 import { formatResetIn, peakWindow, trayUsageTitle, USAGE_CHANNELS, type UsageSnapshot } from '../shared/usage'
 import { buildStatus, writeStatusFile } from './statusFile'
+import { startMemoryLog } from './memoryLog'
 import { dockerExec, killPendingProbes } from './dockerExec'
 import { dockerPublishedPorts, pickFreePort } from './portPicker'
 import { preflight } from './preflight'
@@ -369,6 +370,8 @@ let planDisplay: PlanUsageDisplaySync | null = null
 let planDisplayTimer: ReturnType<typeof setInterval> | null = null
 let appStats: AppStatsLedger | null = null
 let scanClient: ReturnType<typeof createScanClient> | null = null
+/** Stops the per-process memory log (main/memoryLog.ts, GH #347). */
+let stopMemoryLog: (() => void) | null = null
 /** Tray popover windows (they get usage updates too). */
 const popoverWindows = new Set<BrowserWindow>()
 
@@ -949,6 +952,17 @@ function createPopoverWindow(): BrowserWindow {
   popoverWindows.add(win)
   win.on('closed', () => popoverWindows.delete(win))
   return win
+}
+
+/** Which window each renderer process draws, so the memory log can name them. */
+function rendererRoles(): Array<{ pid: number; role: string }> {
+  const out: Array<{ pid: number; role: string }> = []
+  if (managerWindow && !managerWindow.isDestroyed()) out.push({ pid: managerWindow.webContents.getOSProcessId(), role: 'manager' })
+  for (const w of popoverWindows) if (!w.isDestroyed()) out.push({ pid: w.webContents.getOSProcessId(), role: 'tray' })
+  for (const [project, view] of portalViews) {
+    if (!view.webContents.isDestroyed()) out.push({ pid: view.webContents.getOSProcessId(), role: `portal:${project}` })
+  }
+  return out
 }
 
 /** Push a usage snapshot to the manager, the tray popovers and the menu-bar title. */
@@ -2062,6 +2076,16 @@ app.whenReady().then(() => {
   // One window. The renderer decides whether to show onboarding (zero stacks) or
   // the manager from its own listStacks() — no second window, no force-open here.
   createManagerWindow()
+  stopMemoryLog = startMemoryLog({
+    dir: path.join(userDataDir, 'logs'),
+    fs: fsp,
+    metrics: () => app.getAppMetrics(),
+    windows: rendererRoles,
+    now: () => new Date(),
+    setTimer: (fn, ms) => setTimeout(fn, ms),
+    clearTimer: (h) => clearTimeout(h as ReturnType<typeof setTimeout>),
+    warn: (msg) => console.warn(`[orcha-desktop] ${msg}`)
+  })
   app.on('activate', () => {
     showManagerWindow()
   })
@@ -2091,6 +2115,7 @@ app.on('before-quit', () => {
   void planDisplay?.flush()
   appStats?.flush()
   scanClient?.stop()
+  stopMemoryLog?.()
   tray?.destroy()
 })
 
