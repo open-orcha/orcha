@@ -307,13 +307,60 @@ def test_a_refused_launch_tells_the_task_thread_once_with_the_reason_and_fix(mon
     assert nw.reserve_candidate("http://x", candidate) is None
     assert nw.announce_refusal("http://x", candidate, lambda url, body: posts.append((url, body)), quiet=True)
     (url, body), = posts
-    assert url == "http://x/api/tasks/task-1/messages" and body["author_agent_id"] == aid
+    assert url == "http://x/api/tasks/task-1/messages"
+    assert "author_agent_id" not in body  # a system note, never the assignee's own post
     assert "could not start this task automatically" in body["body"]
     assert "Only an active AI teammate can start Workflow work" in body["body"]
     assert "Assign the task to an active AI agent" in body["body"]
     nw.reserve_candidate("http://x", candidate)  # still refused a moment later
     assert not nw.announce_refusal("http://x", candidate, lambda url, body: posts.append(1), quiet=True)
     assert len(posts) == 1
+
+
+def test_the_wake_loop_acks_and_announces_a_refusal_once_per_interval(monkeypatch):
+    """spawn() itself must call announce_refusal: the unit tests above call it directly."""
+    from orcha_cli import notifier, notifier_wake_worker
+    posts = []
+
+    def record(url, body):
+        posts.append((url, body))
+        return {"claimed": True}
+    monkeypatch.setattr(notifier, "_post_json", record)
+    monkeypatch.setattr(nw, "runner_post", refusal_error(
+        "runner_agent_invalid", "Only an active AI teammate can start Workflow work."))
+    candidate = {"agent_id": uid(), "alias": "Ann", "context_task_id": "task-spawn", "workflow_id": "wf",
+                 "workflow_revision": 1, "workflow_work_revision": 1}
+
+    def wake():
+        return notifier_wake_worker.spawn("http://x", candidate, prompt="work", event="ready", dry_run=False,
+                                          quiet=True, lease_ttl=60, live_workers={}, services=notifier)
+
+    assert wake() is None and wake() is None  # nothing launched, and nothing spawned
+    acks = [b for u, b in posts if u.endswith("/wake-ack")]
+    notes = [b for u, b in posts if u == "http://x/api/tasks/task-spawn/messages"]
+    assert [a["kind"] for a in acks] == ["workflow_admission_refused"] * 2  # cooldown on every refusal
+    assert len(notes) == 1 and "author_agent_id" not in notes[0]  # one visible note, 30 minutes apart
+    assert "Only an active AI teammate can start Workflow work" in notes[0]["body"]
+
+
+@pytest.mark.asyncio
+async def test_the_refusal_note_never_becomes_the_tasks_plan(client):
+    """Posted as the assignee, the note is its earliest message and so its plan; with no
+    author the assignee's real plan is still the plan and task autonomy still approves it."""
+    project = Project(client)
+    await project.start("serial", [("a", project.ann, [])])
+    tid = project.tasks["a"]
+    candidate = {"agent_id": project.ann, "alias": "Ann", "context_task_id": tid}
+    posts = []
+    nw._REFUSALS[project.ann] = ("Only an active AI teammate can start Workflow work", "Assign the task to an active AI agent.")
+    assert nw.announce_refusal("http://x", candidate, lambda url, body: posts.append(body), quiet=True)
+    (note,) = posts
+    assert (await client.post(f"/api/tasks/{tid}/messages", json=note)).status_code == 201
+    with db_cursor() as (_, cur):
+        cur.execute("UPDATE tasks SET status='in_progress', autonomy='on' WHERE id=%s", (tid,))
+    plan = await client.post(f"/api/tasks/{tid}/messages",
+                             json={"author_agent_id": project.ann, "body": "Plan: do the work."})
+    assert plan.status_code == 201 and plan.json()["plan_auto_approved"] is True
 
 
 def test_abort_and_confirm_exit_also_send_no_credential(monkeypatch):

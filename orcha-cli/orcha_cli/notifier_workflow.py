@@ -57,8 +57,9 @@ def announce_refusal(api_base, candidate, post_json, *, quiet=False):
     if not task_id or (last is not None and time.monotonic() - last < NOTICE_INTERVAL_SECS):
         return False
     _NOTICE_TS[(aid, task_id)] = time.monotonic()
+    # No author: a system note. Posted as the assignee it would be the task's earliest
+    # assignee message, i.e. its plan, and the real plan would then wait for approval.
     post_json(f"{api_base}/api/tasks/{task_id}/messages", {
-        "author_agent_id": aid,
         "body": f"Orcha could not start this task automatically: {reason}. {fix}",
     })
     return True

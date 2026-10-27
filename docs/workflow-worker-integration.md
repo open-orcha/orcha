@@ -52,7 +52,9 @@ minted the credentials). The notifier therefore needs no
 `ORCHA_WORKFLOW_RUNNER_CREDENTIALS`, and the variable is still stripped from child
 environments. When a launch is refused the notifier logs the server's plain-English
 reason and posts it, with the fix, to the task thread (at most once per 30 minutes)
-instead of only cooling the agent down.
+instead of only cooling the agent down. The note has no author (a system note): posted
+as the assignee it would be the task's earliest assignee message, so it would become the
+task's plan and block the real plan's approval.
 
 The bootstrap receives its permit over stdin and executes no model CLI or task
 command until activation succeeds. Activation binds the process nonce and PID;
@@ -104,8 +106,9 @@ workflow continuation. The safe continuation API exists for their future adapter
 Before enabling the combined feature, integration must finish and test:
 
 - Combined approval/evidence/runtime hooks and every legacy mutation/terminal writer.
-- Trusted runner credential provisioning, restart adoption and durable metadata
-  attachment to preallocated runs (checkout/log/runtime metadata).
+- Restart adoption and durable metadata attachment to preallocated runs
+  (checkout/log/runtime metadata). Runner credential provisioning is no longer a gate:
+  there is no launcher credential on a local install.
 - Runner authentication for legacy daemon finish/line telemetry, durable stop
   delivery retries and reconciliation after an API/notifier restart.
 - Standalone-launch versus workflow-import races under the common graph guard;
