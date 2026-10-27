@@ -1,5 +1,7 @@
 """Task-only ON/OFF autonomy across owner controls, plans and completion."""
 
+import pytest
+
 
 async def _claim(client, agent_id, work_headers):
     response = await client.post(
@@ -190,3 +192,85 @@ async def test_human_verification_preserves_legacy_task_without_saved_result(
     assert record["autonomy_at_approval"] == "off"
     assert record["permission_source"] == "human_verification"
     assert len(record["submission_sha256"]) == 64
+
+
+async def test_ordinary_opening_post_is_not_a_self_approved_plan(
+    client, container, make_agent, make_task, db, work_headers
+):
+    owner = await make_agent("Owner", kind="human")
+    worker = await make_agent("Worker")
+    task = await make_task("Merge website", "Merged", assignee_alias="Worker")
+    tid = task["id"]
+    assert (await _set(client, tid, owner["agent_id"], "on")).status_code == 200
+    await _claim(client, worker["agent_id"], work_headers)
+    for note in ("Nothing to merge yet.", "Planning to inspect this.", "Update: ready.\nPlan: this is not the opening line."):
+        response = await client.post(f"/api/tasks/{tid}/messages", json={"author_agent_id": worker["agent_id"], "body": note})
+        assert response.status_code == 201, response.text
+        assert response.json()["plan_auto_approved"] is False
+    assert not db.execute("SELECT * FROM task_approval_records WHERE task_id=%s", (tid,))
+    assert not db.execute("SELECT * FROM decisions WHERE subject_id=%s", (tid,))
+    snapshot = (await client.get(f"/api/containers/{container['id']}")).json()
+    row = next(t for t in snapshot["tasks"] if t["id"] == tid)
+    assert row["plan_message"] is None
+    assert row["plan_decision"] is None
+    messages = (await client.get(f"/api/tasks/{tid}/messages")).json()["messages"]
+    assert len(messages) == 3
+    assert messages[0]["body"] == "Nothing to merge yet."
+
+    plan = "Plan: check the website change and merge the approved version."
+    response = await client.post(f"/api/tasks/{tid}/messages", json={"author_agent_id": worker["agent_id"], "body": plan})
+    assert response.json()["plan_auto_approved"] is True
+    row = next(t for t in (await client.get(f"/api/containers/{container['id']}")).json()["tasks"] if t["id"] == tid)
+    assert row["plan_message"]["body"] == plan
+    response = await client.post(f"/api/tasks/{tid}/messages", json={"author_agent_id": worker["agent_id"], "body": "Merged; the site redeploys."})
+    assert response.json()["plan_auto_approved"] is False
+    assert len(db.execute("SELECT * FROM task_approval_records WHERE task_id=%s", (tid,))) == 1
+
+
+async def test_autonomy_off_keeps_human_plan_selection(client, container, make_agent, make_task, work_headers):
+    worker = await make_agent("Worker")
+    task = await make_task("Human approval", "Reviewed", assignee_alias="Worker")
+    await _claim(client, worker["agent_id"], work_headers)
+    body = "I will inspect the change and ask for approval."
+    posted = await client.post(f"/api/tasks/{task['id']}/messages", json={"author_agent_id": worker["agent_id"], "body": body})
+    assert posted.json()["plan_auto_approved"] is False
+    row = next(t for t in (await client.get(f"/api/containers/{container['id']}")).json()["tasks"] if t["id"] == task["id"])
+    assert row["plan_message"]["body"] == body
+    assert row["plan_decision"] is None
+
+
+@pytest.mark.parametrize("body,is_plan", [
+    ("Plan", True), ("PLAN\nInspect the change", True), ("  \tPlan — inspect it", True),
+    ("Plan for approval", True), ("Plan1 update", False), ("Plan_update", False),
+    ("Planning the work", False), ("\nPlan: later line", False),
+])
+async def test_autonomy_on_plan_word_boundary(client, make_agent, make_task, work_headers, body, is_plan):
+    owner = await make_agent("Owner", kind="human")
+    worker = await make_agent("Worker")
+    task = await make_task("Plan detection", "Checked", assignee_alias="Worker")
+    await _set(client, task["id"], owner["agent_id"], "on")
+    await _claim(client, worker["agent_id"], work_headers)
+    response = await client.post(f"/api/tasks/{task['id']}/messages", json={"author_agent_id": worker["agent_id"], "body": body})
+    assert response.status_code == 201, response.text
+    assert response.json()["plan_auto_approved"] is is_plan
+
+
+async def test_autonomy_on_note_after_rejection_does_not_replace_plan(client, container, make_agent, make_task, db, work_headers):
+    owner = await make_agent("Owner", kind="human")
+    worker = await make_agent("Worker")
+    task = await make_task("Revise plan", "Checked", assignee_alias="Worker")
+    tid = task["id"]
+    await _set(client, tid, owner["agent_id"], "on")
+    await _claim(client, worker["agent_id"], work_headers)
+    await client.post(f"/api/tasks/{tid}/messages", json={"author_agent_id": worker["agent_id"], "body": "Plan: original approach"})
+    rejection = await client.post("/api/decisions", json={"actor_agent_id": owner["agent_id"], "target_agent_id": worker["agent_id"], "subject_type": "plan_approval", "subject_id": tid, "decision": "reject", "reason": "Use a smaller change"})
+    assert rejection.status_code == 201, rejection.text
+    note = await client.post(f"/api/tasks/{tid}/messages", json={"author_agent_id": worker["agent_id"], "body": "I am investigating the feedback."})
+    assert note.json()["plan_auto_approved"] is False
+    row = next(t for t in (await client.get(f"/api/containers/{container['id']}")).json()["tasks"] if t["id"] == tid)
+    assert row["plan_decision"]["decision"] == "reject"
+    assert row["plan_message"]["body"] == "Plan: original approach"
+    revised = await client.post(f"/api/tasks/{tid}/messages", json={"author_agent_id": worker["agent_id"], "body": "Plan: smaller change"})
+    assert revised.json()["plan_auto_approved"] is True
+    row = next(t for t in (await client.get(f"/api/containers/{container['id']}")).json()["tasks"] if t["id"] == tid)
+    assert row["plan_message"]["body"] == "Plan: smaller change"

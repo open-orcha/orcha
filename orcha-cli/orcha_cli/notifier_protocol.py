@@ -77,6 +77,9 @@ def _render_task_body(protocol: Optional[dict]) -> Optional[str]:
     why = _render_goal_chain(p.get("goal_chain"))
     if why:
         lines.append(why)
+    workflow = _render_workflow(p.get("workflow"))
+    if workflow:
+        lines.append(workflow)
     # Title alone (no description/DoD) adds nothing over what the worker already knows — skip.
     return "\n".join(lines) if len(lines) > 2 else None
 
@@ -133,3 +136,28 @@ def _render_resume_context(protocol: Optional[dict]) -> Optional[str]:
     return ("## Resuming — you scheduled this wake:\n"
             f"You were waiting on: {context}\n"
             "Check that first. If it is still not ready, schedule another self-wake and exit.")
+
+
+def _render_workflow(workflow) -> Optional[str]:
+    """The server scopes this list to the task, not the waking agent."""
+    if not workflow:
+        return None
+    tasks = workflow["tasks"]
+    lines = ["## Your workflow (read fresh; this is your task's own workflow):",
+             f"- Workflow: {workflow['title']} (id {workflow['id']})",
+             f"- Goal: {workflow['goal']}",
+             f"- You are on step {workflow['step_number']} of {len(tasks)}.",
+             "References to Step N mean the numbered list below. Do not infer steps from "
+             "other workflows, recent task lists, or memory. Statuses are context, not "
+             "permission to bypass dependencies, approval, or stop rules."]
+    for number, task in enumerate(tasks, 1):
+        owners = ", ".join(task["assignees"]) or "unassigned"
+        lines.append(f"{number}. {task['title']} [{task['status']}] — {owners} (task {task['id']})")
+        result = task.get("result")
+        if result:
+            if isinstance(result, dict):
+                result = result.get("result", result)
+            if not isinstance(result, str):
+                result = json.dumps(result, ensure_ascii=False)
+            lines.append(f"   Result: {_clip(result, 1500)}")
+    return "\n".join(lines)

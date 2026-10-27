@@ -28,7 +28,7 @@ from __future__ import annotations
 from typing import Any, Dict, Iterable, List, Mapping, Optional
 
 from portal_backend import sql
-from portal_backend.task_list_query import PLAN_CUTOFF_SQL, PLAN_GATE_OPEN_SQL, PLAN_ROUND_ORDER_SQL, plan_author_sql
+from portal_backend.task_list_query import PLAN_CUTOFF_SQL, PLAN_GATE_OPEN_SQL, PLAN_ROUND_ORDER_SQL, plan_candidate_sql
 
 # The acting-human resolution result for one container.
 READ_ONLY = "read_only"
@@ -97,7 +97,7 @@ def needs_you_by_container(
                   (SELECT ma.alias FROM (SELECT """ + PLAN_CUTOFF_SQL + """ AS c) pc
                     CROSS JOIN task_messages m JOIN agents ma ON ma.id = m.author_id
                     WHERE m.task_id = t.id AND ma.kind <> 'human'
-                      AND """ + plan_author_sql('m') + """
+                      AND """ + plan_candidate_sql('m') + """
                       AND m.created_at > pc.c
                     ORDER BY """ + PLAN_ROUND_ORDER_SQL + """ LIMIT 1) AS plan_author,
                   (SELECT a.alias FROM agent_tasks at JOIN agents a ON a.id = at.agent_id

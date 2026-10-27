@@ -9,7 +9,7 @@ from portal_backend.events import publish_event
 from portal_backend.guards import require_kind, require_task, valid_uuid
 from portal_backend.identity_routes import trusted_actor
 from portal_backend.schemas.agent_state import DecisionCreate
-from portal_backend.task_list_query import PLAN_CUTOFF_SQL, PLAN_ROUND_ORDER_SQL, plan_author_sql
+from portal_backend.task_list_query import PLAN_CUTOFF_SQL, PLAN_ROUND_ORDER_SQL, plan_candidate_sql
 from portal_backend.task_autonomy_service import record_approval
 from portal_backend.task_approval_policy import ApprovalPhase
 
@@ -59,7 +59,7 @@ def create_decision(body: DecisionCreate, request: Request):
                     CROSS JOIN (SELECT {PLAN_CUTOFF_SQL} AS c FROM tasks t WHERE t.id=%s) pc
                     JOIN task_messages m ON m.task_id=t.id
                     JOIN agents ma ON ma.id=m.author_id
-                    WHERE t.id=%s AND ma.kind <> 'human' AND {plan_author_sql('m')}
+                    WHERE t.id=%s AND ma.kind <> 'human' AND {plan_candidate_sql('m')}
                       AND m.created_at > pc.c
                     ORDER BY {PLAN_ROUND_ORDER_SQL} LIMIT 1""",
                 (body.subject_id, body.subject_id),

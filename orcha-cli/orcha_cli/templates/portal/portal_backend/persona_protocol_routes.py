@@ -5,6 +5,7 @@ from fastapi import HTTPException, Request
 from portal_backend.application import app
 from portal_backend.database import db_cursor
 from portal_backend.goal_ancestry import goal_chain_for_prompt
+from portal_backend.workflow_prompt import workflow_for_prompt
 from portal_backend.guards import (
     agent_participates_in_task,
     require_agent,
@@ -100,6 +101,9 @@ def get_agent_protocol(aid: str, request: Request, task_id: str | None = None):
     owner human, so attribution is never silently dropped. `requested_by` is null only when the
     container has no live human at all.
 
+    Workflow tasks also carry `workflow`: id, title, goal, step_number and tasks
+    (id, title, status, assignees, result), scoped only to the resolved task's workflow_id.
+
     Returns {task_id, title, description, definition_of_done, protocol, requested_by} for the
     resolved task, or {task_id: null, protocol: null} when none resolves — so a cold/idle wake
     carries neither a body nor a protocol section."""
@@ -118,7 +122,7 @@ def get_agent_protocol(aid: str, request: Request, task_id: str | None = None):
         ):
             cur.execute(
                 "SELECT id, title, description, definition_of_done, protocol, "
-                "created_by_agent_id "
+                "created_by_agent_id, workflow_id, container_id "
                 "FROM tasks WHERE id=%s AND is_root=false",
                 (task_id,),
             )
@@ -126,7 +130,7 @@ def get_agent_protocol(aid: str, request: Request, task_id: str | None = None):
         if row is None:
             cur.execute(
                 """SELECT t.id, t.title, t.description, t.definition_of_done, t.protocol,
-                          t.created_by_agent_id
+                          t.created_by_agent_id, t.workflow_id, t.container_id
                    FROM tasks t
                    JOIN agent_tasks at ON at.task_id = t.id
                    WHERE at.agent_id=%s AND at.assignment_status IN ('assigned','accepted','working')
@@ -174,6 +178,7 @@ def get_agent_protocol(aid: str, request: Request, task_id: str | None = None):
                 resume_context = self_wake["context"]
         # Goal ancestry: the WHY (objective -> parent(s) -> this task) rides the wake context.
         goal = goal_chain_for_prompt(cur, str(row["id"])) if row is not None else None
+        workflow = workflow_for_prompt(cur, row) if row is not None else None
     if not row:
         return {"task_id": None, "protocol": None}
     result = {
@@ -186,6 +191,8 @@ def get_agent_protocol(aid: str, request: Request, task_id: str | None = None):
     }
     if resume_context:
         result["resume_context"] = resume_context
+    if workflow:
+        result["workflow"] = workflow
     if goal:
         result["goal_chain"] = goal
     return result

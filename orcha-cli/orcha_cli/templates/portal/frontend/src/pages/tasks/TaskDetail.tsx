@@ -1631,7 +1631,12 @@ function ThreadCard({
     const mk = parseThreadMarker(m.body);
     return !!mk && mk.kind === "decision" && mk.subject === "plan_approval";
   });
-  const pmAbove = planAbove ? planMessageOf(t) : null;
+  const displayedPlan = planAbove ? planMessageOf(t) : null;
+  // Self-approved plans fold above Activity. Keep their original post readable
+  // here, including legacy ordinary updates incorrectly treated as plans.
+  const selfApproved = !!displayedPlan && t.plan_decision?.decision === "approve"
+    && t.plan_decision.actor === displayedPlan.from;
+  const pmAbove = selfApproved ? null : displayedPlan;
   const isPlanMsg = (m: ThreadMsg) => !!pmAbove && !m.is_human && m.from === pmAbove.from && m.body === pmAbove.body;
   const msgItem = (m: ThreadMsg, i: number): ActItem => {
     const key = m.id || "m" + (startIdx + i);

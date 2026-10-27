@@ -16,11 +16,26 @@ def plan_author_sql(message: str) -> str:
     )
 
 
+def plan_candidate_sql(message: str) -> str:
+    """Autonomy ON requires the first word to be Plan; OFF keeps human selection.
+
+    Use portable substring comparisons so both databases apply the same ASCII
+    word boundary as the frontend. Leading spaces/tabs are harmless; later lines
+    and words such as Planning are ordinary updates.
+    """
+    body = f"lower(ltrim({message}.body, ' \t'))"
+    next_char = f"substr({body},5,1)"
+    explicit = (f"(substr({body},1,4)='plan' AND "
+                f"{next_char} NOT BETWEEN 'a' AND 'z' AND "
+                f"{next_char} NOT BETWEEN '0' AND '9' AND {next_char}<>'_')")
+    return f"({plan_author_sql(message)} AND (t.autonomy<>'on' OR {explicit}))"
+
+
 # An agent-authored post on task `t` made after decision `d` (the revised plan).
 _REVISED_AFTER_D = (
     "(d.decision = 'reject' AND EXISTS (SELECT 1 FROM task_messages rm "
     "JOIN agents ra2 ON ra2.id = rm.author_id WHERE rm.task_id = t.id "
-    f"AND ra2.kind <> 'human' AND {plan_author_sql('rm')} "
+    f"AND ra2.kind <> 'human' AND {plan_candidate_sql('rm')} "
     "AND rm.created_at > d.created_at))"
 )
 
@@ -32,7 +47,7 @@ PLAN_CUTOFF_SQL = (
     "WHERE pd.subject_type = 'plan_approval' AND pd.subject_id = CAST(t.id AS TEXT) "
     "AND pd.decision = 'reject' AND EXISTS (SELECT 1 FROM task_messages pm "
     "JOIN agents pa ON pa.id = pm.author_id WHERE pm.task_id = t.id "
-    f"AND pa.kind <> 'human' AND {plan_author_sql('pm')} "
+    f"AND pa.kind <> 'human' AND {plan_candidate_sql('pm')} "
     f"AND pm.created_at > pd.created_at)), {sql.ts_neg_infinity()})"
 )
 
@@ -53,7 +68,7 @@ PLAN_GATE_OPEN_SQL = (
     "AND gd.subject_id = CAST(t.id AS TEXT) ORDER BY gd.created_at DESC LIMIT 1) lg "
     "WHERE lg.decision = 'reject' AND EXISTS (SELECT 1 FROM task_messages gm "
     "JOIN agents ga ON ga.id = gm.author_id WHERE gm.task_id = t.id "
-    f"AND ga.kind <> 'human' AND {plan_author_sql('gm')} "
+    f"AND ga.kind <> 'human' AND {plan_candidate_sql('gm')} "
     "AND gm.created_at > lg.created_at)))"
 )
 
@@ -142,7 +157,7 @@ def _task_list_sql(where: str, order: str) -> str:
                          FROM (SELECT {PLAN_CUTOFF_SQL} AS c) pc
                          CROSS JOIN task_messages m LEFT JOIN agents ma ON ma.id = m.author_id
                         WHERE m.task_id = t.id AND m.author_id IS NOT NULL AND ma.kind <> 'human'
-                          AND {plan_author_sql('m')}
+                          AND {plan_candidate_sql('m')}
                           AND m.created_at > pc.c
                         ORDER BY {PLAN_ROUND_ORDER_SQL} LIMIT 1) AS plan_message,
                       -- GH #144: the per-task runs summary counts/reads FEED membership

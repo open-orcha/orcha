@@ -781,7 +781,7 @@ export function planMessageOf(t: Task): { body: string; from: string | null; at?
     return t.plan_message ? { body: t.plan_message.body, from: t.plan_message.author_alias || null, at: t.plan_message.at, is_human: false } : null;
   }
   const owners = t.assignees?.length ? t.assignees : t.assignee ? [t.assignee] : [];
-  const m = (t.thread || []).filter((x) => !x.is_human && x.from && (!owners.length || owners.includes(x.from)));
+  const m = (t.thread || []).filter((x) => !x.is_human && x.from && (!owners.length || owners.includes(x.from)) && (t.autonomy !== "on" || /^[ \t]*plan\b/i.test(x.body)));
   return m.length ? { body: m[0].body, from: m[0].from, at: m[0].at, is_human: false } : null;
 }
 export function pendingPlan(t: Task): boolean {

@@ -112,6 +112,16 @@ describe("acting-as is data-driven (D0 — never a hardcoded name)", () => {
 });
 
 describe("planMessageOf / pendingPlan (B10 — the agent's OPENING plan)", () => {
+  it("autonomy ON ignores ordinary updates before an explicitly named plan in the thread fallback", () => {
+    const notes = ["Nothing to merge yet.", "Planning a change", "Update\nPlan: later line"];
+    const t = { autonomy: "on", assignees: ["Worker"], thread: notes.map(body => ({
+      from: "Worker", body, is_human: false,
+    })) } as unknown as Task;
+    expect(planMessageOf(t)).toBeNull();
+    t.thread.push({ id: "plan", at: "2026-10-27T16:00:00Z", attachments: [], from: "Worker", body: "Plan: inspect and merge", is_human: false });
+    expect(planMessageOf(t)?.body).toBe("Plan: inspect and merge");
+  });
+
   it("uses the assigned child's plan after a coordinator's opening brief", () => {
     const t = { assignees: ["Child"], thread: [
       { from: "Coordinator", body: "Opening brief", is_human: false },

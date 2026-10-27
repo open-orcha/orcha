@@ -404,6 +404,24 @@ describe("plan message in Activity", () => {
   });
 });
 
+describe("a self-approved opening post stays readable", () => {
+  it("task autonomy ON: the agent's first reply is still shown in Activity, not hidden behind 'shown above'", async () => {
+    const tasks = SNAP.tasks as Record<string, unknown>[];
+    const reply = "Nothing to merge yet. Leaving this open.";
+    tasks[1] = {
+      ...tasks[1],
+      autonomy: "on",
+      plan_message: { body: reply, author_alias: "forge", at: "2026-08-02T01:30:00Z" },
+      plan_decision: { decision: "approve", actor: "forge", reason: "Task autonomy was ON for this exact plan version.", at: "2026-08-02T01:30:01Z" },
+      message_summary: { count: 1, last: null },
+    };
+    MSGS = [{ message_id: "p1", author_id: "a1", author_alias: "forge", is_human: false, body: reply, created_at: "2026-08-02T01:30:00Z" }];
+    renderPage("/tasks?task=t2bbbbbb");
+    await waitFor(() => expect(pane().querySelector(".td-tl")).toBeTruthy());
+    await waitFor(() => expect(pane().querySelector(".td-tl")!.textContent).toContain("Nothing to merge yet"));
+  });
+});
+
 describe("an undecided opening message is not a plan", () => {
   it("a failed task's first agent note stays in Activity only — no 'opening plan' disclosure, no 'posted the plan'", async () => {
     const tasks = SNAP.tasks as Record<string, unknown>[];
