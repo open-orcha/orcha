@@ -132,6 +132,35 @@ Before enabling the combined feature, integration must finish and test:
 these gates are outstanding. The parent integration task and independent review
 own enabling the capability; passing this adapter's tests does not authorize it.
 
+## Why each start check stays
+
+Every check in `workflow_scheduling._base_blockers` and `workflow_eligibility` was
+reviewed after the notifier-restart stranding bug. None exists only for hosted use and
+none merely repeats another; each one guards a distinct safety or state rule.
+
+| Check | Why it stays |
+| --- | --- |
+| `project_not_active`, `workflow_not_active` | Pause, stop and cancel at project or Workflow level must stop new turns. |
+| `workflow_not_started` | The owner decides when a Workflow begins. |
+| `owner_unavailable` | Owner decisions (plans, holds, acceptance) need a live, non-viewer human owner. |
+| `task_not_waiting` | Completed, cancelled, withdrawn, in-review or already-claimed tasks must not start again. Differs from `reservation_live`: a task can be claimed without a Workflow turn. |
+| `task_draft` | An unprepared task has no agreed definition of done. |
+| `start_hold`, `human_hold` | Explicit owner holds and human stop. |
+| `owner_decision`, `owner_evidence_pending` | The agent must not run past a pending owner decision or outside-result review. |
+| `no_pending_evidence`, `evidence_version_stale` | An evidence review needs a current outside result. |
+| `invalid_graph`, `prerequisites` | Dependencies must be accepted before work starts. |
+| `reservation_live` | Never two workers on one task. It clears only when the worker is positively confirmed stopped (tracked exit, or the orphan sweep finding the pid gone), or by an owner's lost-worker Release after 30 quiet minutes. |
+| `limit_reached` | Loop/turn capacity limits. |
+| `worker_unavailable` | Agent capacity and availability. |
+| `workflow_turn` | Serial and exclusive-turn rules. |
+
+A worker turn whose run has ended but whose stop was never confirmed is not a silent
+"Running": the portal shows "Worker ended, stop not confirmed" and offers the existing
+Release lost worker action once the 30-minute window (counted from the run end) passes.
+The orphan sweep confirms such turns itself when it can see the pid is gone, so after
+`orcha up` they normally heal with no manual step. A still-running worker is never
+offered Release and never confirmed.
+
 ## Verification
 
 `tests/test_workflow_workers.py` covers the real database and API handshake,

@@ -863,3 +863,22 @@ async def test_a_running_worker_is_never_offered_release(client):
     assert row["display_state"]["label"] == "Running"
     assert row["display_state"]["release_available"] is False
     assert row["display_state"]["release_available_at"] is None
+
+
+@pytest.mark.asyncio
+async def test_a_turn_asked_to_stop_is_released_when_the_sweep_finds_its_worker_gone(client, monkeypatch):
+    # Changes requested in review, or a stop, puts the turn in "stopping" and waits for the
+    # worker to exit. If the notifier restarts first, the sweep's confirmation finishes it.
+    project = Project(client)
+    await project.start("serial", [("a", project.ann, [])])
+    launch = await project.reserve(project.ann, "a")
+    await project.activate(project.ann, launch)
+    with db_cursor() as (_, cur):
+        cur.execute("UPDATE workflow_executions SET state='stopping' WHERE run_id=%s", (launch["run_id"],))
+    bridge(client, monkeypatch, pid_alive=False)
+    assert await sweep(project) == 1
+    with db_cursor() as (_, cur):
+        cur.execute("SELECT state, worker_stopped_at FROM workflow_executions WHERE run_id=%s",
+                    (launch["run_id"],))
+        turn = cur.fetchone()
+    assert turn["state"] == "released" and turn["worker_stopped_at"] is not None
