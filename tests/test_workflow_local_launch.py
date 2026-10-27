@@ -425,3 +425,172 @@ def test_abort_and_confirm_exit_also_send_no_credential(monkeypatch):
             return 0
     assert nw.confirm_exit("http://x", "a", {"workflow": True, "proc": Done(), "run_id": "r", "workflow_generation": 1})
     assert seen == [{}, {}]
+
+
+# --- A new event continues a turn whose worker stopped to wait (task 521272c5) ----------
+#
+# The worker started the task, asked a question and exited; confirm-stopped keeps the turn.
+# The answer (or a thread message) must wake the agent by CONTINUING that turn: a fresh
+# reserve is always refused while the turn is live, so the agent never woke.
+
+async def stopped_turn(project, client):
+    await project.start("serial", [("a", project.ann, [])])
+    launch = await project.reserve(project.ann, "a")
+    await project.activate(project.ann, launch)
+    stopped = await client.post(f"/api/agents/{project.ann}/runs/{launch['run_id']}/confirm-stopped",
+                                json={"generation": launch["generation"]})
+    assert stopped.status_code == 200 and stopped.json()["state"] == "running", stopped.text
+    return launch
+
+
+async def ann_candidate(project, client):
+    scan = await client.get(f"/api/containers/{project.cid}/wake-scan", params={"cooldown": 0, "min_idle": 0})
+    assert scan.status_code == 200, scan.text
+    return next(c for c in scan.json()["candidates"] if c["agent_id"] == project.ann)
+
+
+async def notifier_launch(client, candidate, monkeypatch):
+    """Send exactly what the notifier sends for this candidate to the real route."""
+    sent = []
+    monkeypatch.setattr(nw, "runner_post", lambda url, body, headers: sent.append((url, body)))
+    assert nw.reserve_candidate("http://orcha", candidate) is None
+    (url, body), = sent
+    return await client.post(url.removeprefix("http://orcha"), json=body)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("event", ["request_answered", "task_message"])
+async def test_an_answer_or_thread_message_continues_the_stopped_workflow_turn(client, monkeypatch, event):
+    project = Project(client)
+    launch = await stopped_turn(project, client)
+    tid = project.tasks["a"]
+    if event == "request_answered":
+        asked = await client.post(f"/api/containers/{project.cid}/requests", json={
+            "requester_agent_id": project.ann, "payload": "Which file should I ship?", "type": "info",
+            "target_alias": "Owner", "originating_task_id": tid, "expires_minutes": 60})
+        assert asked.status_code == 201, asked.text
+        answered = await client.post(f"/api/requests/{asked.json()['request_id']}/respond", headers=project.headers,
+                                     json={"responder_agent_id": project.owner, "response": "The arm64 one."})
+        assert answered.status_code == 200, answered.text
+    else:
+        await project.call("POST", f"/api/tasks/{tid}/messages",
+                           {"author_agent_id": project.owner, "body": "Please carry on."}, 201)
+    candidate = await ann_candidate(project, client)
+    assert candidate["should_wake"] and candidate["latest_event"] == event
+    assert candidate["context_task_id"] == tid and candidate["workflow_id"] == project.wid
+    assert candidate["workflow_continue_run_id"] == launch["run_id"]
+    continued = await notifier_launch(client, candidate, monkeypatch)
+    assert continued.status_code == 201, continued.text
+    assert continued.json()["task_id"] == tid and continued.json()["generation"] == launch["generation"] + 1
+    await project.activate(project.ann, continued.json())  # the continued worker can start
+
+
+@pytest.mark.asyncio
+async def test_a_ready_task_still_reserves_a_fresh_turn(client, monkeypatch):
+    project = Project(client)
+    await project.start("serial", [("a", project.ann, [])])
+    candidate = await ann_candidate(project, client)
+    assert candidate["auto_start_task_ids"] == [project.tasks["a"]]
+    assert "workflow_continue_run_id" not in candidate
+    reserved = await notifier_launch(client, candidate, monkeypatch)
+    assert reserved.status_code == 201 and reserved.json()["generation"] == 1, reserved.text
+
+
+def unacked(aid, tid, event_name):
+    with db_cursor() as (_, cur):
+        cur.execute("""SELECT count(*) AS n FROM agent_events e
+                       WHERE e.event_key=%s AND e.event_name=%s AND e.payload->>'task_id'=%s
+                         AND NOT EXISTS (SELECT 1 FROM agent_event_acks k WHERE k.agent_id=%s AND k.event_id=e.id)""",
+                    (aid, event_name, tid, aid))
+        return cur.fetchone()["n"]
+
+
+@pytest.mark.asyncio
+async def test_starting_the_turn_consumes_task_ready_so_the_agent_is_not_rewoken_without_a_task(client):
+    project = Project(client)
+    await project.start("serial", [("a", project.ann, [])])
+    tid = project.tasks["a"]
+    assert unacked(project.ann, tid, "task_ready") >= 1  # what used to re-wake Ann every minute
+    launch = await project.reserve(project.ann, "a")
+    await project.activate(project.ann, launch)
+    assert unacked(project.ann, tid, "task_ready") == 0
+    assert unacked(project.ann, tid, "task_assigned") == 0
+    await client.post(f"/api/agents/{project.ann}/runs/{launch['run_id']}/confirm-stopped",
+                      json={"generation": launch["generation"]})
+    candidate = await ann_candidate(project, client)
+    assert not candidate["should_wake"] and candidate["pending_events"] == 0, candidate["reason"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("worker_exited,why", [
+    (False, "A stop was requested for this task"),  # stop while the worker still runs
+    (True, "The task's turn has already ended"),  # a stop after the exit releases the turn
+])
+async def test_a_refused_continuation_names_the_gate_that_refused_it(client, worker_exited, why):
+    project = Project(client)
+    if worker_exited:
+        launch = await stopped_turn(project, client)
+    else:
+        await project.start("serial", [("a", project.ann, [])])
+        launch = await project.reserve(project.ann, "a")
+        await project.activate(project.ann, launch)
+    detail = await project.detail(project.wid)
+    task = detail["tasks"][0]
+    await project.call("POST", f"/api/tasks/{task['id']}/stop",
+                       project.mutation(detail, expected_work_revision=task["work_revision"]))
+    refused = await client.post(f"/api/agents/{project.ann}/runs/{launch['run_id']}/continue-reserve",
+                                json={"operation_key": uid()})
+    assert refused.status_code == 409 and refused.json()["detail"]["code"] == "continuation_not_allowed"
+    assert why in refused.json()["detail"]["message"]
+
+
+def test_a_not_eligible_refusal_shows_the_specific_blocker_not_the_generic_one(monkeypatch):
+    def reject(url, body, headers):
+        raise urllib.error.HTTPError(url, 409, "no", {}, io.BytesIO(json.dumps({"detail": {
+            "code": "not_eligible", "message": "The task cannot take a turn yet.", "blockers": [
+                {"code": "task_not_waiting", "message": "This task is not waiting to take a turn."},
+                {"code": "reservation_live", "message": "The previous turn has not been released."}]}}).encode()))
+    monkeypatch.setattr(nw, "runner_post", reject)
+    candidate = {"agent_id": uid(), "alias": "Ann", "context_task_id": "task-1"}
+    assert nw.reserve_candidate("http://x", candidate) is None
+    posts = []
+    assert nw.announce_refusal("http://x", candidate, lambda url, body: posts.append(body), quiet=True)
+    assert "The task cannot take a turn yet: The previous turn has not been released" in posts[0]["body"]
+    assert "not waiting" not in posts[0]["body"]
+
+
+def test_a_refusal_reaches_the_notifier_log_in_quiet_mode_once_per_reason(monkeypatch):
+    monkeypatch.setattr(nw, "_LOGGED", {})
+    candidate = {"agent_id": uid(), "alias": "Ann", "context_task_id": "task-1"}
+    lines = []
+
+    def refuse(reason):
+        nw._refuse(candidate["agent_id"], reason, "Fix it.")
+        nw.announce_refusal("http://x", candidate, lambda url, body: None, quiet=True, log=lines.append)
+
+    refuse("This task is on hold")
+    refuse("This task is on hold")  # the next scan, 20 seconds later
+    assert len(lines) == 1 and "Ann: Workflow task task-1 not launched: This task is on hold. Fix it." in lines[0]
+    refuse("The workflow is not active")  # a new reason is news
+    assert len(lines) == 2
+
+
+def test_a_workflow_task_on_a_terminal_session_is_announced_not_silently_dropped(monkeypatch):
+    """No lease was claimed, so nothing is acked or released (a resident may hold the lease)."""
+    from types import SimpleNamespace
+    from orcha_cli import notifier_wake_candidate
+    monkeypatch.setattr(nw, "_LOGGED", {})
+    posts, lines = [], []
+    services = SimpleNamespace(
+        build_wake_prompt=lambda c: "work", select_transport=lambda c: "tmux", derive_wake_event=lambda c: "task_message",
+        _post_json=lambda url, body: posts.append((url, body)), _lifecycle_log=lines.append)
+    candidate = {"agent_id": uid(), "alias": "Ann", "should_wake": True, "context_task_id": "task-1",
+                 "workflow_id": "wf", "reason": "1 pending event"}
+    context = {"agent_hold_until": {}, "hold_now": 0}
+    for _ in range(2):
+        assert notifier_wake_candidate.process_candidate(
+            "http://x", candidate, context=context, dry_run=False, quiet=True, lease_ttl=60,
+            live_workers={}, services=services) is None
+    assert [url for url, _ in posts] == ["http://x/api/tasks/task-1/messages"]  # one note, no wake-ack
+    assert "open terminal session" in posts[0][1]["body"]
+    assert len(lines) == 1 and "open terminal session" in lines[0]

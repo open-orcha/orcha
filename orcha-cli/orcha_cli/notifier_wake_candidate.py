@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from . import notifier_wake_worker
+from . import notifier_wake_worker, notifier_workflow
 
 # B27: {agent_id: budget_reason} last logged as a budget skip, so a paused agent's skip
 # line prints once per reason instead of on every scan. Cleared when the pause lifts.
@@ -191,7 +191,13 @@ def process_candidate(
     kind = services.select_transport(candidate)
     event = services.derive_wake_event(candidate)
     if candidate.get("workflow_id") and kind != "ephemeral":
-        # tmux/resident/manual workers have no inert activation boundary yet.
+        # tmux/resident/manual workers have no inert activation boundary yet. No lease was
+        # claimed and none is released (a resident may hold one); the reason is logged
+        # once and shown on the task instead of the task silently waiting.
+        if not dry_run:
+            notifier_workflow.refuse_transport(candidate, kind)
+            notifier_workflow.announce_refusal(api_base, candidate, services._post_json, quiet=quiet,
+                                               log=getattr(services, "_lifecycle_log", None))
         return None
     if kind == "ephemeral" and not dry_run:
         skipped = _grade_ephemeral(
