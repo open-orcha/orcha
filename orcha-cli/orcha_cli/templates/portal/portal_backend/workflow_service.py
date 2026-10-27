@@ -33,6 +33,12 @@ from portal_backend.workflow_scheduling import (
 )
 
 WORKFLOWS_INTEGRATED = True
+# Task 4dab637d: when the turn's run ended, so the display and the Release action can
+# tell a worker that ended without a confirmed exit from one that is still running.
+RUN_ENDED_AT = (
+    "(SELECT wr.ended_at FROM worker_runs wr WHERE wr.run_id=workflow_executions.run_id"
+    " AND wr.status<>'running') AS run_ended_at"
+)
 
 
 def require_capability():
@@ -264,7 +270,7 @@ class WorkflowService:
     def live_turn(self, tid, lock=False):
         # lock=True only after the workflow and task locks (workflow -> task -> reservation).
         return self.one(
-            "SELECT * FROM workflow_executions WHERE task_id=%s AND state IN "
+            "SELECT *, " + RUN_ENDED_AT + " FROM workflow_executions WHERE task_id=%s AND state IN "
             "('reserved','running','awaiting_review','stopping','recovery_needed')"
             + (sql.for_update() if lock else ""),
             (tid,),
@@ -307,7 +313,7 @@ class WorkflowService:
         ):
             deps[row["task_id"]].append(row["depends_on_id"])
         executions = self.rows(
-            "SELECT * FROM workflow_executions WHERE workflow_id=%s ORDER BY generation",
+            "SELECT *, " + RUN_ENDED_AT + " FROM workflow_executions WHERE workflow_id=%s ORDER BY generation",
             (wid,),
         )
         acceptances = {}

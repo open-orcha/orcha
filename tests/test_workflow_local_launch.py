@@ -802,3 +802,64 @@ async def test_a_worker_that_may_still_be_running_is_never_confirmed_or_relaunch
     assert "workflow_continue_run_id" not in candidate
     refused = await notifier_launch(client, candidate, monkeypatch)
     assert refused.status_code == 409 and "reservation_live" in refused.text
+
+
+from datetime import timedelta
+
+from portal_backend.workflow_scheduling import _time
+
+
+async def task_row(project, tid):
+    return next(t for t in (await project.detail(project.wid))["tasks"] if t["id"] == tid)
+
+
+@pytest.mark.asyncio
+async def test_a_turn_nobody_can_confirm_shows_why_and_offers_release_after_the_quiet_period(client, monkeypatch):
+    # No notifier can confirm the exit (here: an older daemon ended the run and told the turn
+    # nothing, and no later sweep confirms it). The owner sees why, and one Release appears
+    # after the usual 30 quiet minutes, never earlier.
+    project = Project(client)
+    await project.start("serial", [("a", project.ann, [])])
+    launch = await project.reserve(project.ann, "a")
+    await project.activate(project.ann, launch)
+    bridge(client, monkeypatch, pid_alive=False)
+    monkeypatch.setattr(notifier_orphan_cleanup, "_confirm_workflow_stop", lambda api_base, row: False)
+    assert await sweep(project) == 1
+    tid = project.tasks["a"]
+
+    row = await task_row(project, tid)
+    assert row["display_state"]["label"] == "Worker ended, stop not confirmed"
+    assert row["display_state"]["release_available"] is False
+    assert row["display_state"]["release_available_at"]
+    detail = await project.detail(project.wid)
+    early = await client.post(f"/api/tasks/{tid}/release-lost-worker", headers=project.headers,
+                              json=project.mutation(detail, expected_work_revision=row["work_revision"]))
+    assert early.status_code == 409 and "release_not_yet_available" in early.text
+
+    with db_cursor() as (_, cur):  # 31 minutes pass with no word from the worker
+        cur.execute("SELECT ended_at FROM worker_runs WHERE run_id=%s", (launch["run_id"],))
+        ended = _time(cur.fetchone()["ended_at"])
+        cur.execute("UPDATE worker_runs SET ended_at=%s WHERE run_id=%s",
+                    (ended - timedelta(minutes=31), launch["run_id"]))
+        cur.execute("UPDATE workflow_executions SET last_runner_contact_at=%s WHERE run_id=%s",
+                    (ended - timedelta(minutes=31), launch["run_id"]))
+    row = await task_row(project, tid)
+    assert row["display_state"]["label"] == "Worker ended, stop not confirmed - release available"
+    assert row["display_state"]["release_available"] is True
+    detail = await project.detail(project.wid)
+    await project.call("POST", f"/api/tasks/{tid}/release-lost-worker",
+                       project.mutation(detail, expected_work_revision=row["work_revision"]))
+    row = await task_row(project, tid)
+    assert row["status"] == "not_ready" and row["awaiting_owner_decision"] == "worker_released"
+
+
+@pytest.mark.asyncio
+async def test_a_running_worker_is_never_offered_release(client):
+    project = Project(client)
+    await project.start("serial", [("a", project.ann, [])])
+    launch = await project.reserve(project.ann, "a")
+    await project.activate(project.ann, launch)
+    row = await task_row(project, project.tasks["a"])
+    assert row["display_state"]["label"] == "Running"
+    assert row["display_state"]["release_available"] is False
+    assert row["display_state"]["release_available_at"] is None

@@ -28,10 +28,34 @@ def _time(value):
     return value
 
 
+def worker_ended_unconfirmed(execution):
+    """A running turn whose run has ended but no runner ever confirmed the process exit.
+
+    ``run_ended_at`` is joined from worker_runs by the loaders. Normally the notifier
+    confirms the exit within seconds; this stays true only when no notifier can (for
+    example the worker's pid was never recorded), so the owner needs a way out.
+    """
+    return bool(
+        execution.get("run_ended_at")
+        and not execution.get("worker_stopped_at")
+        and execution["state"] in {"reserved", "running"}
+    )
+
+
 def release_deadline(execution):
-    """The same later-of clock is used by both the label and the release action."""
-    first = _time(execution.get("first_stop_at"))
-    if first is None or execution["state"] != "stopping":
+    """The same later-of clock is used by both the label and the release action.
+
+    The clock starts at a stop request, or (task 4dab637d) when the run ended
+    without a confirmed exit; either way 30 quiet minutes are required, so a worker
+    that may still be running is never released early.
+    """
+    if execution["state"] == "stopping":
+        first = _time(execution.get("first_stop_at"))
+    elif worker_ended_unconfirmed(execution):
+        first = _time(execution.get("run_ended_at"))
+    else:
+        first = None
+    if first is None:
         return None
     contact = _time(execution.get("last_runner_contact_at"))
     return max(first, contact or first) + timedelta(minutes=30)
@@ -314,6 +338,12 @@ def task_display(
             )
         elif state == "recovery_needed":
             label = "Recovery needed"
+        elif worker_ended_unconfirmed(execution):
+            label = (
+                "Worker ended, stop not confirmed - release available"
+                if available
+                else "Worker ended, stop not confirmed"
+            )
         elif state == "reserved":
             label = "Starting"
     # §17.3: the inspector warning is permanent once any attempt was released
