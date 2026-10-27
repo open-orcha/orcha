@@ -1,9 +1,8 @@
-"""Runner-only workflow launches; capability stays off until combined integration."""
+"""Workflow launches by this Orcha's own scheduler; capability stays off until combined integration."""
 
-from typing import Optional
 from uuid import uuid4
 
-from fastapi import Header, Request
+from fastapi import Request
 from starlette.concurrency import run_in_threadpool
 from starlette.responses import JSONResponse
 
@@ -40,8 +39,8 @@ class WorkflowWorkerHooks(WorkflowHooks):
 runtime_hooks_factory = IntegratedWorkflowHooks
 
 
-def _runner_run(cur, aid, run_id, credential):
-    runner = require_runner(cur, credential, aid)
+def _runner_run(cur, aid, run_id):
+    runner = require_runner(cur, aid)
     workflow, task, execution = lock_run(cur, run_id)
     cur.execute("SELECT runner_credential_id FROM workflow_launch_permits WHERE run_id=%s", (run_id,))
     if str(cur.fetchone()["runner_credential_id"]) != str(runner["id"]):
@@ -50,11 +49,10 @@ def _runner_run(cur, aid, run_id, credential):
 
 
 @app.post("/api/agents/{aid}/runs/reserve", status_code=201)
-def reserve_worker(aid: str, body: WorkflowReserve,
-                   x_orcha_runner_token: Optional[str] = Header(default=None)):
+def reserve_worker(aid: str, body: WorkflowReserve):
     require_capability()
     with db_cursor() as (_, cur):
-        runner = require_runner(cur, x_orcha_runner_token, aid)
+        runner = require_runner(cur, aid)
         service = WorkflowService(cur, runtime_hooks_factory())
         t = service.one("SELECT workflow_id,container_id FROM tasks WHERE id=%s", (body.task_id,))
         if not t or not t["workflow_id"] or str(t["container_id"]) != str(runner["container_id"]):
@@ -62,13 +60,13 @@ def reserve_worker(aid: str, body: WorkflowReserve,
         # Lock before receipt lookup so duplicate reserve calls cannot both schedule.
         service.lock(t["workflow_id"])
         payload = body.model_dump()
-        receipt = launch_receipt(cur, runner, x_orcha_runner_token, body.operation_key, payload)
+        receipt = launch_receipt(cur, runner, body.operation_key, payload)
         if receipt:
             return receipt
         service.lock(t["workflow_id"], body.expected_workflow_revision)
         service.task(t["workflow_id"], body.task_id, body.expected_work_revision)
         execution = service.reserve_turn(body.task_id, WorkflowActor(aid, True, True), run_id=str(uuid4()))
-        return preallocate_run(cur, execution, runner, x_orcha_runner_token, operation_key=body.operation_key, payload=payload)
+        return preallocate_run(cur, execution, runner, operation_key=body.operation_key, payload=payload)
 
 
 @app.post("/api/agents/{aid}/runs/{rid}/activate")
@@ -80,21 +78,20 @@ def activate_worker(aid: str, rid: str, body: WorkflowActivate):
 
 
 @app.post("/api/agents/{aid}/runs/{rid}/abort-launch")
-def abort_worker_launch(aid: str, rid: str, x_orcha_runner_token: Optional[str] = Header(default=None)):
+def abort_worker_launch(aid: str, rid: str):
     require_capability()
     with db_cursor() as (_, cur):
-        _, w, _, e = _runner_run(cur, aid, rid, x_orcha_runner_token)
+        _, w, _, e = _runner_run(cur, aid, rid)
         result = abort_launch(cur, e, run_id=rid, terminalize=terminalize)
         WorkflowService(cur, runtime_hooks_factory()).reconcile(str(w["id"]))
         return result
 
 
 @app.post("/api/agents/{aid}/runs/{rid}/confirm-stopped")
-def confirm_worker_stopped(aid: str, rid: str, body: WorkflowStopObserved,
-                           x_orcha_runner_token: Optional[str] = Header(default=None)):
+def confirm_worker_stopped(aid: str, rid: str, body: WorkflowStopObserved):
     require_capability()
     with db_cursor() as (_, cur):
-        _, w, task, e = _runner_run(cur, aid, rid, x_orcha_runner_token)
+        _, w, task, e = _runner_run(cur, aid, rid)
         result = confirm_stopped(cur, e, run_id=rid, generation=body.generation, terminalize=terminalize)
         svc = WorkflowService(cur, runtime_hooks_factory())
         cur.execute(
@@ -130,12 +127,11 @@ def confirm_worker_stopped(aid: str, rid: str, body: WorkflowStopObserved,
 
 
 @app.post("/api/agents/{aid}/runs/{rid}/continue-reserve", status_code=201)
-def continue_worker(aid: str, rid: str, body: WorkflowContinue,
-                    x_orcha_runner_token: Optional[str] = Header(default=None)):
+def continue_worker(aid: str, rid: str, body: WorkflowContinue):
     require_capability()
     with db_cursor() as (_, cur):
-        runner, _, _, e = _runner_run(cur, aid, rid, x_orcha_runner_token)
-        return continue_turn(cur, e, runner, x_orcha_runner_token, operation_key=body.operation_key,
+        runner, _, _, e = _runner_run(cur, aid, rid)
+        return continue_turn(cur, e, runner, operation_key=body.operation_key,
                              payload={"previous_run_id": rid, **body.model_dump()})
 
 

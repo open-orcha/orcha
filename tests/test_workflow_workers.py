@@ -10,7 +10,7 @@ from fastapi import HTTPException
 from portal_backend.database import db_cursor
 from portal_backend.workflow_worker_auth import bound_next, lock_run, record_runner_contact
 from portal_backend.workflow_worker_launch import (
-    abort_launch, activate, continue_turn, digest, launch_receipt, preallocate_run, require_runner,
+    abort_launch, activate, continue_turn, launch_receipt, preallocate_run, require_runner,
 )
 from portal_backend.workflow_worker_stops import confirm_stopped, release_lost, stop_execution
 from portal_backend.workflow_scheduling import release_deadline, task_display
@@ -26,17 +26,15 @@ async def turn(container, make_agent, make_task, db):
     human = (await make_agent("Owner", kind="human"))["agent_id"]
     aid = (await make_agent("Worker"))["agent_id"]
     tid = (await make_task("Build", "Working result", assignee_alias="Worker"))["id"]
-    wid, eid, credential = [str(uuid4()) for _ in range(3)]
+    wid, eid = [str(uuid4()) for _ in range(2)]
     db.execute("INSERT INTO workflows(id,container_id,owner_human_id,created_by_human_id,title,goal,launch_enabled) VALUES (%s,%s,%s,%s,'Ship','Ship safely',true)", (wid, container["id"], human, human))
     db.execute("UPDATE tasks SET workflow_id=%s,status='in_progress',preparation_state='prepared' WHERE id=%s", (wid, tid))
     db.execute("INSERT INTO workflow_executions(id,workflow_id,task_id,generation,work_revision,claimant_id,source_kind,exclusive,state) VALUES (%s,%s,%s,1,1,%s,'worker',true,'reserved')", (eid, wid, tid, aid))
-    secret = "runner-secret-test-only"
-    db.execute("INSERT INTO workflow_runner_credentials(id,container_id,agent_id,runner_instance,token_sha256) VALUES (%s,%s,%s,'test-runner',%s)", (credential, container["id"], aid, digest(secret)))
     with db_cursor() as (_, cur):
-        runner = require_runner(cur, secret, aid)
+        runner = require_runner(cur, aid)
         cur.execute("SELECT * FROM workflow_executions WHERE id=%s", (eid,))
-        launch = preallocate_run(cur, cur.fetchone(), runner, secret, operation_key="first", payload={"task_id": tid}, now=NOW)
-    return dict(aid=aid, human=human, tid=tid, wid=wid, eid=eid, secret=secret, runner=runner, launch=launch)
+        launch = preallocate_run(cur, cur.fetchone(), runner, operation_key="first", payload={"task_id": tid}, now=NOW)
+    return dict(aid=aid, human=human, tid=tid, wid=wid, eid=eid, runner=runner, launch=launch)
 
 
 def activate_turn(turn, process="a" * 32, pid=123):
@@ -62,9 +60,9 @@ async def test_reserved_is_inert_and_receipt_reuses_run(turn, db):
     assert db.execute("SELECT status,pid FROM worker_runs")[0] == {"status": "reserved", "pid": None}
     assert db.execute("SELECT run_token FROM embodiment_tokens WHERE run_id=%s", (turn["launch"]["run_id"],)) == []
     with db_cursor() as (_, cur):
-        assert launch_receipt(cur, turn["runner"], turn["secret"], "first", {"task_id": turn["tid"]}) == turn["launch"]
+        assert launch_receipt(cur, turn["runner"], "first", {"task_id": turn["tid"]}) == turn["launch"]
         with pytest.raises(HTTPException):
-            launch_receipt(cur, turn["runner"], turn["secret"], "first", {"task_id": "another"})
+            launch_receipt(cur, turn["runner"], "first", {"task_id": "another"})
 
 
 async def test_only_one_process_consumes_and_same_process_retry_is_idempotent(turn, db):
@@ -182,12 +180,12 @@ async def test_continuation_requires_positive_exit_preserves_turn_and_fences_old
     with db_cursor() as (_, cur):
         _, _, e = lock_run(cur, turn["launch"]["run_id"])
         with pytest.raises(HTTPException):
-            continue_turn(cur, e, turn["runner"], turn["secret"], operation_key="next", payload={})
+            continue_turn(cur, e, turn["runner"], operation_key="next", payload={})
         confirm_stopped(cur, e, run_id=e["run_id"], generation=1, terminalize=terminalize, now=NOW)
     db.execute("UPDATE workflows SET status='paused' WHERE id=%s", (turn["wid"],))
     with db_cursor() as (_, cur):
         _, _, e = lock_run(cur, turn["launch"]["run_id"])
-        new = continue_turn(cur, e, turn["runner"], turn["secret"], operation_key="next", payload={}, now=NOW)
+        new = continue_turn(cur, e, turn["runner"], operation_key="next", payload={}, now=NOW)
     assert new["execution_id"] == turn["eid"] and new["generation"] == 2
     assert db.execute("SELECT work_revision FROM tasks WHERE id=%s", (turn["tid"],))[0]["work_revision"] == 1
     with db_cursor() as (_, cur):
@@ -223,17 +221,26 @@ def test_bootstrap_success_executes_only_after_activation_and_strips_runner_secr
 def test_notifier_never_prepares_or_spawns_before_reservation():
     calls = []
     result = reserve_then_spawn(api_base="http://test", agent_id="agent", task_id="task", workflow_revision=1, work_revision=1,
-                                operation_key="stable", runner_token="secret", command=["agent-cli"],
+                                operation_key="stable", command=["agent-cli"],
                                 post=lambda *a: None, prepare=lambda: calls.append("prepare"), spawn=lambda *a, **k: calls.append("spawn"))
     assert result is None and not calls
 
 
-async def test_api_capability_and_runner_credentials_are_required(turn, client, monkeypatch):
+async def test_api_reserve_needs_no_credential_but_an_active_ai_agent_that_nobody_revoked(turn, client, db):
     body = {"task_id": turn["tid"], "expected_workflow_revision": 1, "expected_work_revision": 1, "operation_key": "api"}
-    url = f"/api/agents/{turn['aid']}/runs/reserve"
-    for headers in ({}, {"X-Orcha-Runner-Token": "not-a-credential"}):
-        response = await client.post(url, json=body, headers=headers)
-        assert response.status_code == 403
+    # A person is not a launchable teammate, and an unknown id is not an agent at all.
+    for aid in (turn["human"], str(uuid4())):
+        response = await client.post(f"/api/agents/{aid}/runs/reserve", json=body)
+        assert response.status_code == 403 and response.json()["detail"]["code"] == "runner_agent_invalid"
+    # A terminated teammate cannot start work either.
+    db.execute("UPDATE agents SET terminated_at=now() WHERE id=%s", (turn["aid"],))
+    response = await client.post(f"/api/agents/{turn['aid']}/runs/reserve", json=body)
+    assert response.status_code == 403 and response.json()["detail"]["code"] == "runner_agent_invalid"
+    db.execute("UPDATE agents SET terminated_at=NULL WHERE id=%s", (turn["aid"],))
+    # An explicit person-set revoke is a hold: launching stays off until it is cleared.
+    db.execute("UPDATE workflow_runner_credentials SET revoked_at=now() WHERE agent_id=%s", (turn["aid"],))
+    response = await client.post(f"/api/agents/{turn['aid']}/runs/reserve", json=body)
+    assert response.status_code == 403 and response.json()["detail"]["code"] == "runner_revoked"
 
 
 async def test_api_reserve_real_scheduler_replay_activate_and_serial_capacity(turn, client, db, monkeypatch, make_task):
@@ -248,18 +255,17 @@ async def test_api_reserve_real_scheduler_replay_activate_and_serial_capacity(tu
     db.execute("DELETE FROM workflow_executions WHERE id=%s", (turn["eid"],))
     db.execute("DELETE FROM worker_runs WHERE run_id=%s", (turn["launch"]["run_id"],))
     db.execute("UPDATE tasks SET status='ready' WHERE id=%s", (turn["tid"],))
-    headers = {"X-Orcha-Runner-Token": turn["secret"]}
     body = {"task_id": turn["tid"], "expected_workflow_revision": 1, "expected_work_revision": 1, "operation_key": "api"}
     url = f"/api/agents/{turn['aid']}/runs/reserve"
-    response = await client.post(url, json=body, headers=headers)
+    response = await client.post(url, json=body)
     assert response.status_code == 201, response.text
     launch = response.json()
-    assert (await client.post(url, json=body, headers=headers)).json() == launch
+    assert (await client.post(url, json=body)).json() == launch
     assert db.execute("SELECT status,pid FROM worker_runs WHERE run_id=%s", (launch["run_id"],))[0] == {"status": "reserved", "pid": None}
     second = (await make_task("Other", "Other result", assignee_alias="Worker"))["id"]
     db.execute("UPDATE tasks SET workflow_id=%s,status='ready',preparation_state='prepared' WHERE id=%s", (turn["wid"], second))
     revision = db.execute("SELECT revision FROM workflows WHERE id=%s", (turn["wid"],))[0]["revision"]
-    refused = await client.post(url, json={**body, "task_id": second, "expected_workflow_revision": revision, "operation_key": "other"}, headers=headers)
+    refused = await client.post(url, json={**body, "task_id": second, "expected_workflow_revision": revision, "operation_key": "other"})
     assert refused.status_code == 409 and refused.json()["detail"]["code"] == "not_eligible"
     activated = await client.post(f"/api/agents/{turn['aid']}/runs/{launch['run_id']}/activate", json={"permit": launch["permit"], "process_key": "a" * 32, "pid": 123})
     assert activated.status_code == 200, activated.text
@@ -304,7 +310,7 @@ async def test_continuation_cannot_bypass_stop_or_current_ownership(turn, db, re
         db.execute("UPDATE agent_tasks SET assignment_status='done' WHERE task_id=%s", (turn["tid"],))
     with db_cursor() as (_, cur), pytest.raises(HTTPException) as rejected:
         _, _, e = lock_run(cur, turn["launch"]["run_id"])
-        continue_turn(cur, e, turn["runner"], turn["secret"], operation_key="new", payload={})
+        continue_turn(cur, e, turn["runner"], operation_key="new", payload={})
     assert rejected.value.detail["code"] == "continuation_not_allowed"
 
 
@@ -315,9 +321,9 @@ async def test_wrong_agent_or_runner_cannot_consume_or_release(turn, make_agent,
     endpoint = f"/api/agents/{other}/runs/{turn['launch']['run_id']}"
     response = await client.post(endpoint + "/activate", json={"permit": turn["launch"]["permit"], "process_key": "a" * 32, "pid": 123})
     assert response.status_code == 403
-    response = await client.post(endpoint + "/abort-launch", headers={"X-Orcha-Runner-Token": turn["secret"]})
+    response = await client.post(endpoint + "/abort-launch")
     assert response.status_code == 403
-    response = await client.post(endpoint + "/confirm-stopped", json={"generation": 1}, headers={"X-Orcha-Runner-Token": turn["secret"]})
+    response = await client.post(endpoint + "/confirm-stopped", json={"generation": 1})
     assert response.status_code == 403
 
 
@@ -422,7 +428,6 @@ async def test_workflow_done_preserves_evidence_and_uses_task_only_acceptance(
     stopped = await client.post(
         f"/api/agents/{turn['aid']}/runs/{turn['launch']['run_id']}/confirm-stopped",
         json={"generation": 1},
-        headers={"X-Orcha-Runner-Token": turn["secret"]},
     )
     assert stopped.status_code == 200, stopped.text
 

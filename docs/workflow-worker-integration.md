@@ -29,21 +29,30 @@ The generated OpenAPI exposes:
 - `POST /api/agents/{aid}/runs/{rid}/continue-reserve`
 - `GET /api/tasks/{tid}/worker-launch-policy`
 
-Reservation and runner management require `X-Orcha-Runner-Token`, matched against
-a hashed registry entry scoped to the runner instance, agent and project. There is
-no public mint endpoint or headerless local bypass. The notifier reads per-agent
-credentials from its own `ORCHA_WORKFLOW_RUNNER_CREDENTIALS` JSON environment; both
-that mapping and the single-token variable are removed from child environments.
+Reservation, abort, stop confirmation and continuation take **no launcher token or
+credential header**: Orcha is a local tool and its scheduler is the launcher. A header
+sent anyway is ignored. What each of these routes still checks, and why:
 
-On a local native project the notifier provisions the credential itself
-(`orcha_cli/workflow_runner_provision.py`): it writes the hash of a fresh secret into
-the project's own SQLite file and keeps the secret in `.orcha/workflow-runner-credentials.json`
-(0600). That needs file access to the database, so it adds no network surface and does
-nothing for Docker or hosted deployments, which still use the environment mapping. A
-credential a person revoked is never replaced automatically. When a launch is refused
-(not a native project, a retired or non-AI assignee, a revoked or rejected credential)
-the notifier logs the reason and posts it, with the fix, to the task thread (at most
-once per 30 minutes) instead of only cooling the agent down.
+- **Agent identity** — `aid` must be an active AI teammate (not a person, not retired,
+  not in another project) and the task must be in that agent's own project. Without it
+  anyone could start work as someone else.
+- **Launcher row** — Orcha keeps one bookkeeping row per agent (created on first use,
+  `runner_instance = orcha-local`) because permits reference it. A person who sets
+  `revoked_at` on it turns launching off for that agent (`runner_revoked`); nothing
+  re-creates a revoked row.
+- **Permit** — still single use and bound to one reservation, so only the bootstrap
+  that was handed the reservation can activate it. It is no longer a caller credential.
+- **Scheduler gates** — dependencies, serial order, holds, pause/cancel/stop, completed
+  or inactive state, project status, limits/capacity, work and workflow revisions,
+  stale generation. These are state-consistency rules and are untouched.
+
+Portal membership and the LAN protections in front of the API are unchanged; this only
+removes the extra launcher gate that no local install could ever satisfy (nothing
+minted the credentials). The notifier therefore needs no
+`ORCHA_WORKFLOW_RUNNER_CREDENTIALS`, and the variable is still stripped from child
+environments. When a launch is refused the notifier logs the server's plain-English
+reason and posts it, with the fix, to the task thread (at most once per 30 minutes)
+instead of only cooling the agent down.
 
 The bootstrap receives its permit over stdin and executes no model CLI or task
 command until activation succeeds. Activation binds the process nonce and PID;

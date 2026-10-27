@@ -7,6 +7,7 @@ Only reserve_execution decides eligibility; activation consumes an existing turn
 import hashlib
 import hmac
 import json
+import os
 import secrets
 from datetime import timedelta
 from uuid import uuid4
@@ -15,37 +16,54 @@ from portal_backend import sql
 from portal_backend.workflow_graph import conflict
 from portal_backend.workflow_scheduling import _time
 
+LOCAL_RUNNER = "orcha-local"
+
 
 def digest(value):
     return hashlib.sha256(value.encode()).hexdigest()
 
 
-def require_runner(cur, token, aid):
-    """No local/headerless bypass and no authority from a body agent/runner ID."""
-    if not token:
-        conflict("runner_credential_required", "A scoped runner credential is required.", status=403)
-    cur.execute("""SELECT rc.* FROM workflow_runner_credentials rc JOIN agents a ON a.id=rc.agent_id
-                   WHERE rc.token_sha256=%s AND rc.agent_id=%s AND rc.revoked_at IS NULL
-                     AND a.container_id=rc.container_id AND a.kind='ai' AND a.terminated_at IS NULL""",
-                (digest(token), aid))
+def require_runner(cur, aid):
+    """The launcher is this Orcha server's own scheduler, not a caller-held credential.
+
+    No token is read from the request: the same trust boundary as an ordinary wake claim
+    applies (portal/LAN protections stay in front of every route). What is still checked is
+    identity: ``aid`` must be an active AI teammate. Its launcher row is Orcha's own
+    bookkeeping (permits reference it) and is created on first use; a person can still
+    revoke it, which blocks launching for that agent until they clear it.
+    """
+    cur.execute("SELECT container_id FROM agents WHERE id=%s AND kind='ai' AND terminated_at IS NULL", (aid,))
+    agent = cur.fetchone()
+    if not agent:
+        conflict("runner_agent_invalid", "Only an active AI teammate can start Workflow work.", status=403)
+    key = digest(f"orcha-local-workflow-runner:{agent['container_id']}:{aid}")
+    cur.execute("SELECT * FROM workflow_runner_credentials WHERE token_sha256=%s AND agent_id=%s", (key, aid))
     row = cur.fetchone()
     if not row:
-        conflict("runner_credential_invalid", "This runner cannot start work for that agent.", status=403)
+        cur.execute("""INSERT INTO workflow_runner_credentials (id,container_id,agent_id,runner_instance,token_sha256)
+                       VALUES (%s,%s,%s,%s,%s) ON CONFLICT (token_sha256) DO NOTHING""",
+                    (str(uuid4()), agent["container_id"], aid, LOCAL_RUNNER, key))
+        cur.execute("SELECT * FROM workflow_runner_credentials WHERE token_sha256=%s AND agent_id=%s", (key, aid))
+        row = cur.fetchone()
+    if row["revoked_at"]:
+        conflict("runner_revoked", "Launching Workflow work for this agent was turned off by a person.", status=403)
     return row
 
 
-def _permit(secret, run_id):
-    # Reproducible on reserve receipt replay without storing a recoverable permit.
-    return hmac.new(secret.encode(), ("workflow-launch:" + str(run_id)).encode(), hashlib.sha256).hexdigest()
+def _permit(runner, run_id):
+    # Reproducible on reserve receipt replay without storing a recoverable permit. The permit
+    # binds one bootstrap to one reservation (single use); it is not a caller credential.
+    key = (runner["token_sha256"] + (os.environ.get("ORCHA_SECRET_KEY") or "")).encode()
+    return hmac.new(key, ("workflow-launch:" + str(run_id)).encode(), hashlib.sha256).hexdigest()
 
 
-def _result(row, secret):
+def _result(row, runner):
     return {"run_id": str(row["run_id"]), "execution_id": str(row["execution_id"]),
             "task_id": str(row["task_id"]), "generation": row["generation"],
-            "permit": _permit(secret, row["run_id"]), "expires_at": _time(row["expires_at"]).isoformat()}
+            "permit": _permit(runner, row["run_id"]), "expires_at": _time(row["expires_at"]).isoformat()}
 
 
-def launch_receipt(cur, runner, secret, operation_key, payload):
+def launch_receipt(cur, runner, operation_key, payload):
     """Check BEFORE making another reservation, including after a lost response."""
     fingerprint = digest(json.dumps(payload, sort_keys=True, separators=(",", ":")))
     cur.execute("""SELECT p.*, wr.task_id FROM workflow_launch_permits p
@@ -57,11 +75,11 @@ def launch_receipt(cur, runner, secret, operation_key, payload):
             conflict("idempotency_conflict", "This launch receipt belongs to another request.")
         if row["revoked_at"]:
             conflict("launch_revoked", "This launch was revoked.")
-        return _result(row, secret)
+        return _result(row, runner)
     return None
 
 
-def preallocate_run(cur, execution, runner, secret, *, operation_key, payload, now=None):
+def preallocate_run(cur, execution, runner, *, operation_key, payload, now=None):
     """Bind a scheduler-created reservation to its sole inert bootstrap.
 
     The runner route has checked launch_receipt before scheduling. No shell or
@@ -76,7 +94,7 @@ def preallocate_run(cur, execution, runner, secret, *, operation_key, payload, n
     cur.execute("SELECT run_id FROM worker_runs WHERE run_id=%s", (run_id,))
     if cur.fetchone():
         conflict("launch_exists", "Replay the original launch receipt instead of creating another worker.")
-    permit = _permit(secret, run_id)
+    permit = _permit(runner, run_id)
     cur.execute("""INSERT INTO worker_runs (run_id,agent_id,task_id,wake_kind,lane,status)
                    VALUES (%s,%s,%s,'workflow','work','reserved')""",
                 (run_id, runner["agent_id"], execution["task_id"]))
@@ -89,7 +107,7 @@ def preallocate_run(cur, execution, runner, secret, *, operation_key, payload, n
     row = cur.fetchone()
     row["task_id"] = execution["task_id"]
     cur.execute("UPDATE workflow_executions SET run_id=%s WHERE id=%s", (run_id, execution["id"]))
-    return _result(row, secret)
+    return _result(row, runner)
 
 
 def activate(cur, execution, *, aid, run_id, permit, process_key, pid, now=None):
@@ -162,8 +180,8 @@ def abort_launch(cur, execution, *, run_id, terminalize, now=None):
     return {"state": "aborted"}
 
 
-def continue_turn(cur, execution, runner, secret, *, operation_key, payload, now=None):
-    receipt = launch_receipt(cur, runner, secret, operation_key, payload)
+def continue_turn(cur, execution, runner, *, operation_key, payload, now=None):
+    receipt = launch_receipt(cur, runner, operation_key, payload)
     if receipt:
         return receipt
     if payload.get("previous_run_id") and str(execution.get("run_id")) != payload["previous_run_id"]:
@@ -192,4 +210,4 @@ def continue_turn(cur, execution, runner, secret, *, operation_key, payload, now
     cur.execute("""UPDATE workflow_executions SET state='reserved',generation=generation+1,run_id=NULL,
                    worker_stopped_at=NULL,last_runner_contact_at=NULL,generation_revoked_at=NULL,
                    current_evidence_set_id=NULL,evidence_state='pending' WHERE id=%s RETURNING *""", (execution["id"],))
-    return preallocate_run(cur, cur.fetchone(), runner, secret, operation_key=operation_key, payload=payload, now=now)
+    return preallocate_run(cur, cur.fetchone(), runner, operation_key=operation_key, payload=payload, now=now)

@@ -15,7 +15,7 @@ from portal_backend import workflow_evidence_service as evidence
 from portal_backend import sql
 from portal_backend.workflow_service import result_digest
 from portal_backend.workflow_worker_stops import confirm_stopped, release_lost, stop_execution
-from portal_backend.workflow_worker_launch import continue_turn, digest
+from portal_backend.workflow_worker_launch import continue_turn, require_runner
 
 
 @pytest_asyncio.fixture
@@ -374,19 +374,14 @@ async def test_real_stop_adapter_keeps_saved_evidence_and_truthful_liveness(atte
 async def test_real_continuation_preserves_old_set_and_never_rebinds_its_run(attempt, db):
     submitted = submit(attempt)
     now = sql.utcnow()
-    secret = "test-only-evidence-runner"
-    cid = db.execute("SELECT container_id FROM tasks WHERE id=%s", (attempt["task"],))[0]["container_id"]
     with db_cursor() as (_, cur):
-        cur.execute("INSERT INTO workflow_runner_credentials(id,container_id,agent_id,runner_instance,token_sha256) "
-                    "VALUES (%s,%s,%s,'evidence-test',%s) RETURNING *",
-                    (str(uuid4()), cid, attempt["worker"], digest(secret)))
-        runner = cur.fetchone()
+        runner = require_runner(cur, attempt["worker"])
         cur.execute("SELECT * FROM workflow_executions WHERE id=%s", (attempt["execution"],))
         confirm_stopped(cur, cur.fetchone(), run_id=attempt["run"], generation=1,
                         terminalize=evidence.terminalize_workflow_run_with_evidence, now=now)
         before = evidence.evidence_reference(cur, submitted["evidence_set_id"])
         cur.execute("SELECT * FROM workflow_executions WHERE id=%s", (attempt["execution"],))
-        continued = continue_turn(cur, cur.fetchone(), runner, secret, operation_key="continue",
+        continued = continue_turn(cur, cur.fetchone(), runner, operation_key="continue",
                                   payload={"previous_run_id": attempt["run"]}, now=now)
         after = evidence.evidence_reference(cur, submitted["evidence_set_id"])
     assert continued["generation"] == 2 and continued["run_id"] != attempt["run"]

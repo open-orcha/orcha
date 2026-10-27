@@ -7,7 +7,6 @@ this adapter. Unknown capability/membership responses are not permission to spaw
 from __future__ import annotations
 
 import json
-import os
 import subprocess
 import sys
 import time
@@ -15,28 +14,13 @@ import urllib.error
 import urllib.request
 from uuid import uuid4
 
-from . import workflow_runner_provision as provision
-
-_PROVISIONED = {}  # agent_id -> secret this notifier registered on a native project
 _REFUSALS = {}  # agent_id -> (reason, fix) from the latest refused launch
 _NOTICE_TS = {}  # (agent_id, task_id) -> monotonic time of the last thread note
 NOTICE_INTERVAL_SECS = 30 * 60
-
-
-def runner_secret(agent_id):
-    """Trusted configuration only; never read a credential from wake data.
-
-    Explicit ``ORCHA_WORKFLOW_RUNNER_CREDENTIALS`` wins. Otherwise use the credential this
-    notifier registered itself for a local native project (see workflow_runner_provision).
-    """
-    try:
-        values = json.loads(os.environ.get("ORCHA_WORKFLOW_RUNNER_CREDENTIALS", "{}"))
-        value = values.get(agent_id)
-        if isinstance(value, str) and value:
-            return value
-    except (ValueError, AttributeError):
-        pass
-    return _PROVISIONED.get(agent_id)
+_FIXES = {
+    "runner_agent_invalid": "Assign the task to an active AI agent.",
+    "runner_revoked": "Whoever turned launching off for this agent has to turn it back on.",
+}
 
 
 def _refuse(agent_id, reason, fix):
@@ -44,12 +28,15 @@ def _refuse(agent_id, reason, fix):
     return None
 
 
-def _http_code(exc):
+def _refusal_detail(exc):
+    """(code, plain-English message) from an Orcha error response, or (None, None)."""
     try:
         detail = json.load(exc).get("detail")
     except (ValueError, AttributeError, OSError):
-        return None
-    return detail.get("code") if isinstance(detail, dict) else None
+        return None, None
+    if isinstance(detail, dict):
+        return detail.get("code"), detail.get("message")
+    return None, None
 
 
 def announce_refusal(api_base, candidate, post_json, *, quiet=False):
@@ -86,42 +73,27 @@ def runner_post(url, body, headers):
 
 def reserve_candidate(api_base, candidate):
     aid = candidate["agent_id"]
-    secret = runner_secret(aid)
-    if not secret:
-        try:
-            secret = _PROVISIONED[aid] = provision.ensure_secret(
-                candidate.get("headless_cwd"), api_base, aid
-            )
-        except provision.Unavailable as exc:
-            return _refuse(aid, exc.reason, exc.fix)
     task_id = candidate.get("context_task_id") or next(iter(candidate.get("auto_start_task_ids") or []), None) or candidate.get("wake_task_id")
     body = {"task_id": task_id, "expected_workflow_revision": candidate.get("workflow_revision"),
             "expected_work_revision": candidate.get("workflow_work_revision"),
             "operation_key": candidate.setdefault("_workflow_launch_key", str(uuid4()))}
     try:
-        reserved = runner_post(f"{api_base}/api/agents/{candidate['agent_id']}/runs/reserve", body,
-                               {"X-Orcha-Runner-Token": secret})
+        reserved = runner_post(f"{api_base}/api/agents/{aid}/runs/reserve", body, {})
         if not reserved or reserved.get("task_id") != task_id or not reserved.get("permit"):
             return None
-        return {**reserved, "agent_id": candidate["agent_id"], "api_base": api_base}
+        return {**reserved, "agent_id": aid, "api_base": api_base}
     except urllib.error.HTTPError as exc:
-        if _http_code(exc) in ("runner_credential_required", "runner_credential_invalid"):
-            return _refuse(
-                aid,
-                "Orcha does not accept the launcher credential configured for this agent",
-                "Remove its entry from ORCHA_WORKFLOW_RUNNER_CREDENTIALS so Orcha can set up a local one, or replace it with a valid one.",
-            )
+        code, message = _refusal_detail(exc)
+        if message:
+            return _refuse(aid, message.rstrip("."), _FIXES.get(code, "Refresh the Workflow page to see its current state."))
         return None
     except Exception:
         return None
 
 
 def abort_reserved(launch):
-    secret = runner_secret(launch["agent_id"])
-    if not secret:
-        return False
     try:
-        result = runner_post(f"{launch['api_base']}/api/agents/{launch['agent_id']}/runs/{launch['run_id']}/abort-launch", {}, {"X-Orcha-Runner-Token": secret})
+        result = runner_post(f"{launch['api_base']}/api/agents/{launch['agent_id']}/runs/{launch['run_id']}/abort-launch", {}, {})
         return result.get("state") == "aborted"
     except Exception:
         return False
@@ -134,26 +106,23 @@ def confirm_exit(api_base, aid, worker):
     process = worker.get("proc")
     if process is None or process.poll() is None:
         return False
-    secret = runner_secret(aid)
-    if not secret:
-        return False
     try:
         runner_post(f"{api_base}/api/agents/{aid}/runs/{worker['run_id']}/confirm-stopped",
-                    {"generation": worker["workflow_generation"]}, {"X-Orcha-Runner-Token": secret})
+                    {"generation": worker["workflow_generation"]}, {})
         return True
     except Exception:
         return False
 
 
 def reserve_then_spawn(*, api_base, agent_id, task_id, workflow_revision, work_revision,
-                       operation_key, runner_token, command, post, prepare, spawn=None):
+                       operation_key, command, post, prepare, spawn=None):
     """Reserve -> prepare checkout -> inert bootstrap. Return the preallocated ID.
 
     post accepts url, body, headers and returns a decoded response or raises. Callers
     persist operation_key across retries. A spawn exception is treated as uncertain;
     only the server's unconsumed-permit test may release that reservation.
     """
-    headers = {"X-Orcha-Runner-Token": runner_token}
+    headers = {}
     body = {"task_id": task_id, "expected_workflow_revision": workflow_revision,
             "expected_work_revision": work_revision, "operation_key": operation_key}
     reserved = post(f"{api_base}/api/agents/{agent_id}/runs/reserve", body, headers)
