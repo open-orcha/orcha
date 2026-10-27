@@ -65,8 +65,8 @@ export const BOARD_FILTERS: { key: BoardFilter; label: string }[] = [
   { key: "active", label: "Active" },
   { key: "backlog", label: "Backlog" },
 ];
-/** Not started yet (Linear "Backlog"): ready to pick up, or waiting on deps. */
-const BACKLOG = new Set(["ready", "pending"]);
+/** Not started yet (Linear "Backlog"): ready to pick up, waiting on deps, or on hold. */
+const BACKLOG = new Set(["ready", "pending", "not_ready"]);
 /** Finished one way or another. */
 const CLOSED = new Set(["completed", "cancelled"]);
 export function taskInFilter(t: Task, f: BoardFilter): boolean {
@@ -76,7 +76,7 @@ export function taskInFilter(t: Task, f: BoardFilter): boolean {
 }
 
 /** Card order inside a column: attention first, then live work, backlog, closed; newest first within. */
-const RANK: Record<string, number> = { needs_verification: 0, in_progress: 1, awaiting_human: 1, awaiting_request: 1, blocked: 2, failed: 2, ready: 3, pending: 4, completed: 5, cancelled: 6 };
+const RANK: Record<string, number> = { needs_verification: 0, in_progress: 1, awaiting_human: 1, awaiting_request: 1, blocked: 2, failed: 2, ready: 3, pending: 4, not_ready: 4, completed: 5, cancelled: 6 };
 export function boardCmp(a: Task, b: Task): number {
   const r = (RANK[a.status] ?? 3) - (RANK[b.status] ?? 3);
   if (r) return r;

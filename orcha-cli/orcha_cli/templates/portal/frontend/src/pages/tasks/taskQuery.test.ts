@@ -58,6 +58,14 @@ describe("groupTasks", () => {
     const g = groupTasks([T("a", "completed", 1), T("b", "needs_verification", 1), T("c", "mystery", 1), T("d", "failed", 1)], "status");
     expect(g.map((x) => x.label)).toEqual(["Needs verification", "Failed", "Completed", "Other"]);
   });
+  it("gives a held (not_ready) task its own On hold group, ahead of the finished ones", () => {
+    const g = groupTasks([T("a", "completed", 1), T("b", "not_ready", 1), T("c", "pending", 1)], "status");
+    expect(g.map((x) => x.label)).toEqual(["Pending", "On hold", "Completed"]);
+  });
+  it("sorts a held task with the not-started work, not after every finished task", () => {
+    const list = [T("done", "completed", 1), T("held", "not_ready", 1), T("live", "in_progress", 1)];
+    expect(list.sort(taskComparator({ key: "priority", dir: "asc" }, true)).map((t) => t.id)).toEqual(["live", "held", "done"]);
+  });
 });
 
 describe("taskComparator", () => {
@@ -109,6 +117,7 @@ describe("counts + status filter options", () => {
   it("hides empty buckets (and Other) unless selected", () => {
     const opts = statusFilterOptions({ ready: 2, completed: 1 }, ["failed"]).map((o) => o.k);
     expect(opts).toEqual(["ready", "failed", "completed"]);
+    expect(statusFilterOptions({ not_ready: 1 }, []).map((o) => o.label)).toEqual(["On hold"]);
     expect(statusFilterOptions({ other: 1 }, []).map((o) => o.label)).toEqual(["Other"]);
   });
 });
@@ -117,7 +126,7 @@ describe("scope pills (SCOPES / scopeOf / scopeCount)", () => {
   it("maps exact status sets to a scope and anything else to null", async () => {
     const { scopeOf } = await import("./taskQuery");
     expect(scopeOf([])).toBe("all");
-    expect(scopeOf(["pending", "ready"])).toBe("backlog");
+    expect(scopeOf(["pending", "ready", "not_ready"])).toBe("backlog");
     expect(scopeOf(["completed", "cancelled"])).toBe("done");
     expect(scopeOf(["in_progress", "needs_verification", "failed", "blocked"])).toBe("active");
     expect(scopeOf(["ready"])).toBeNull();
@@ -130,6 +139,20 @@ describe("scope pills (SCOPES / scopeOf / scopeCount)", () => {
     expect(scopeCount(c, "active")).toBe(3);
     expect(scopeCount(c, "backlog")).toBe(3);
     expect(scopeCount(c, "done")).toBe(4);
+  });
+  it("puts a held (not_ready) task under Backlog, never Active, and keeps it out of Done", async () => {
+    const { SCOPES, scopeCount, filterTasks: filter, parseTaskQuery: parse } = await import("./taskQuery");
+    const held = T("held", "not_ready", 1);
+    const backlog = SCOPES.find((x) => x.k === "backlog")!.statuses;
+    expect(backlog).toContain("not_ready");
+    expect(SCOPES.find((x) => x.k === "active")!.statuses).not.toContain("not_ready");
+    expect(SCOPES.find((x) => x.k === "done")!.statuses).not.toContain("not_ready");
+    expect(scopeCount({ ready: 1, not_ready: 2, completed: 5 }, "backlog")).toBe(3);
+    // the real filter path: ?status=<backlog statuses> keeps the held task, the Active statuses drop it
+    const backlogQuery = parse("?status=" + backlog.join(","));
+    expect(filter([held, T("done", "completed", 1)], backlogQuery).map((t) => t.id)).toEqual(["held"]);
+    const activeQuery = parse("?status=" + SCOPES.find((x) => x.k === "active")!.statuses.join(","));
+    expect(filter([held], activeQuery)).toEqual([]);
   });
   it("shortAgo trims relTime output and hides unknown", async () => {
     const { shortAgo } = await import("./taskQuery");

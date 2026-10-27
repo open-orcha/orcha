@@ -65,7 +65,7 @@ const TASKS_CAP = 10,
   REQ_CAP = 5,
   DIGEST_CAP = 6;
 
-const TASK_RANK: Record<string, number> = { needs_verification: 0, in_progress: 1, ready: 2, pending: 4, blocked: 3, failed: 3, completed: 5, cancelled: 6 };
+const TASK_RANK: Record<string, number> = { needs_verification: 0, in_progress: 1, ready: 2, pending: 4, not_ready: 4, blocked: 3, failed: 3, completed: 5, cancelled: 6 };
 const REQ_RANK: Record<string, number> = { open: 0, answered: 1 };
 
 interface ModelInfo {

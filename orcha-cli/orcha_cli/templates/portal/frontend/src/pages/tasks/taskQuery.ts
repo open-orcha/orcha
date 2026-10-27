@@ -23,6 +23,7 @@ export const GROUP_ORDER: { k: string; label: string }[] = [
   { k: "in_progress", label: "In progress" },
   { k: "ready", label: "Ready" },
   { k: "pending", label: "Pending" },
+  { k: "not_ready", label: "On hold" }, // held by its owner or a Workflow; not started
   { k: "blocked", label: "Blocked" },
   { k: "failed", label: "Failed" },
   { k: "completed", label: "Completed" },
@@ -32,7 +33,7 @@ export const KNOWN_STATUSES = GROUP_ORDER.map((g) => g.k);
 
 // ISS-37 / ISS-331 status bucket (outer sort key when grouped by status)
 const BUCKET: Record<string, number> = {
-  needs_verification: 0, in_progress: 1, ready: 2, blocked: 3, failed: 3, pending: 4, completed: 5, cancelled: 6,
+  needs_verification: 0, in_progress: 1, ready: 2, blocked: 3, failed: 3, pending: 4, not_ready: 4, completed: 5, cancelled: 6,
 };
 export const taskBucket = (t: Task) => BUCKET[t.status] ?? 9;
 export const taskTime = (t: Task) => Date.parse(t.created_at || "") || 0;
@@ -267,7 +268,7 @@ export type ScopeKey = "all" | "active" | "backlog" | "done";
 export const SCOPES: { k: ScopeKey; label: string; statuses: string[]; hint: string }[] = [
   { k: "all", label: "All tasks", statuses: [], hint: "Every task in this project" },
   { k: "active", label: "Active", statuses: ["needs_verification", "in_progress", "blocked", "failed"], hint: "Needs verification, in progress, blocked or failed" },
-  { k: "backlog", label: "Backlog", statuses: ["ready", "pending"], hint: "Ready or pending (not started)" },
+  { k: "backlog", label: "Backlog", statuses: ["ready", "pending", "not_ready"], hint: "Ready, pending or on hold (not started)" },
   { k: "done", label: "Done", statuses: ["completed", "cancelled"], hint: "Completed or cancelled" },
 ];
 

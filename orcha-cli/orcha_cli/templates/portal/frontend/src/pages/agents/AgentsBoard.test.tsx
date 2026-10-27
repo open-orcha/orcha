@@ -340,6 +340,9 @@ describe("agentModel", () => {
   it("taskInFilter buckets", () => {
     expect(taskInFilter(task("x", "", "ready", []), "backlog")).toBe(true);
     expect(taskInFilter(task("x", "", "pending", []), "active")).toBe(false);
+    // a held Workflow task is not started: Backlog, not Active
+    expect(taskInFilter(task("x", "", "not_ready", []), "backlog")).toBe(true);
+    expect(taskInFilter(task("x", "", "not_ready", []), "active")).toBe(false);
     expect(taskInFilter(task("x", "", "blocked", []), "active")).toBe(true);
     expect(taskInFilter(task("x", "", "completed", []), "active")).toBe(false);
     expect(taskInFilter(task("x", "", "completed", []), "all")).toBe(true);
