@@ -882,3 +882,39 @@ async def test_a_turn_asked_to_stop_is_released_when_the_sweep_finds_its_worker_
                     (launch["run_id"],))
         turn = cur.fetchone()
     assert turn["state"] == "released" and turn["worker_stopped_at"] is not None
+
+
+@pytest.mark.asyncio
+async def test_a_workflow_run_records_its_log_so_the_sweep_can_tell_a_normal_exit_from_a_crash(client, monkeypatch, tmp_path):
+    # The worker shared its plan and exited normally while the notifier was restarting.
+    project = Project(client)
+    await project.start("serial", [("a", project.ann, [])])
+    launch = await project.reserve(project.ann, "a")
+    log = str(tmp_path / "ann.log")
+    details = {"log_path": log, "worktree": None, "branch": None, "base_cwd": str(tmp_path), "runtime": "claude"}
+    response = await client.post(f"/api/agents/{project.ann}/runs/{launch['run_id']}/activate",
+                                 json={"permit": launch["permit"], "process_key": "p" * 32, "pid": 4242,
+                                       "run_details": details})
+    assert response.status_code == 200, response.text
+    with db_cursor() as (_, cur):
+        cur.execute("SELECT log_path, base_cwd, runtime FROM worker_runs WHERE run_id=%s", (launch["run_id"],))
+        assert dict(cur.fetchone()) == {"log_path": log, "base_cwd": str(tmp_path), "runtime": "claude"}
+    bridge(client, monkeypatch, pid_alive=False)
+    monkeypatch.setattr(notifier, "_terminal_status", lambda path: "success" if path == log else None)
+    assert await sweep(project) == 1
+    with db_cursor() as (_, cur):
+        cur.execute("SELECT status FROM worker_runs WHERE run_id=%s", (launch["run_id"],))
+        assert cur.fetchone()["status"] == "exited"
+    await reject_plan(project, project.tasks["a"])
+    candidate = await ann_candidate(project, client)
+    assert candidate["workflow_continue_run_id"] == launch["run_id"]
+
+
+def test_the_bootstrap_forwards_run_details_to_activation():
+    from orcha_cli import workflow_bootstrap
+
+    sent = []
+    config = {"run_id": "r", "agent_id": "a", "task_id": "t", "generation": 1, "permit": "x" * 32,
+              "api_base": "http://orcha", "command": ["true"], "run_details": {"log_path": "/l"}}
+    workflow_bootstrap.activate_and_exec(config, post=lambda url, body: sent.append(body) or None)
+    assert sent[0]["run_details"] == {"log_path": "/l"}

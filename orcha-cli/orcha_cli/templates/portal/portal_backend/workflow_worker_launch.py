@@ -111,7 +111,7 @@ def preallocate_run(cur, execution, runner, *, operation_key, payload, now=None)
     return _result(row, runner)
 
 
-def activate(cur, execution, *, aid, run_id, permit, process_key, pid, now=None):
+def activate(cur, execution, *, aid, run_id, permit, process_key, pid, run_details=None, now=None):
     """Consume once; a retry by the SAME bootstrap returns its SAME credential."""
     now = now or sql.utcnow()
     if not process_key or len(process_key) < 32 or pid <= 0:
@@ -155,6 +155,13 @@ def activate(cur, execution, *, aid, run_id, permit, process_key, pid, now=None)
     cur.execute("""INSERT INTO embodiment_tokens (run_token,agent_id,lane,kind,run_id,pid)
                    VALUES (%s,%s,'work','headless',%s,%s)""", (token, aid, run_id, pid))
     cur.execute("UPDATE worker_runs SET status='running',pid=%s WHERE run_id=%s", (pid, run_id))
+    # Task 4dab637d: without these the orphan sweep cannot tell a finished worker from a
+    # crashed one (no log) or capture its checkout after a notifier restart.
+    details = run_details or {}
+    cur.execute("""UPDATE worker_runs SET log_path=%s, worktree=%s, branch=%s, base_cwd=%s, runtime=%s
+                   WHERE run_id=%s""",
+                (details.get("log_path"), details.get("worktree"), details.get("branch"),
+                 details.get("base_cwd"), details.get("runtime"), run_id))
     cur.execute("UPDATE workflow_executions SET state='running',last_runner_contact_at=%s WHERE id=%s", (now, execution["id"]))
     # Activation is this task's claim, the same seam as /next: consume the assignee's
     # "task ready" and assignment wakes, or they re-wake the agent with no task after exit.

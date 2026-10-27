@@ -288,6 +288,15 @@ def spawn(
             api_base, candidate["agent_id"], lane, "headless"
         )
     )
+    if workflow_launch:
+        # Recorded on the preallocated run at activation (the run is not POSTed here).
+        workflow_launch["run_details"] = {
+            "log_path": str(log_path) if log_path else None,
+            "worktree": worktree,
+            "branch": branch,
+            "base_cwd": headless_cwd,
+            "runtime": candidate.get("model_runtime"),
+        }
     _spawn_info: dict = {}
     sent, command, process = services.spawn_headless(
         run_cwd,

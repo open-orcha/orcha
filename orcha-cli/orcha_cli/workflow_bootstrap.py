@@ -19,6 +19,8 @@ def activate_and_exec(config, *, post=None, exec_process=None, pid=None, process
     run_id, aid = config["run_id"], config["agent_id"]
     process_key = process_key or secrets.token_hex(32)
     payload = {"permit": config["permit"], "process_key": process_key, "pid": pid or os.getpid()}
+    if isinstance(config.get("run_details"), dict):
+        payload["run_details"] = config["run_details"]
     url = config["api_base"].rstrip("/") + f"/api/agents/{aid}/runs/{run_id}/activate"
     if post is None:
         def post(url, payload):

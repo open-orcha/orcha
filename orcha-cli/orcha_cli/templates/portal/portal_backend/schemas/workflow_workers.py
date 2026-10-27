@@ -10,10 +10,20 @@ class WorkflowReserve(BaseModel):
     operation_key: str = Field(min_length=1, max_length=200)
 
 
+class WorkflowRunDetails(BaseModel):
+    """Where the notifier put this run, so a later sweep can read its log and checkout."""
+    log_path: str | None = Field(default=None, max_length=4096)
+    worktree: str | None = Field(default=None, max_length=4096)
+    branch: str | None = Field(default=None, max_length=512)
+    base_cwd: str | None = Field(default=None, max_length=4096)
+    runtime: str | None = Field(default=None, max_length=64)
+
+
 class WorkflowActivate(BaseModel):
     permit: str = Field(min_length=32, max_length=256)
     process_key: str = Field(min_length=32, max_length=128)
     pid: int = Field(gt=0)
+    run_details: WorkflowRunDetails | None = None
 
 
 class WorkflowContinue(BaseModel):

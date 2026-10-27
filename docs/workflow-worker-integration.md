@@ -118,8 +118,8 @@ workflow continuation. The safe continuation API exists for their future adapter
 Before enabling the combined feature, integration must finish and test:
 
 - Combined approval/evidence/runtime hooks and every legacy mutation/terminal writer.
-- Restart adoption and durable metadata attachment to preallocated runs
-  (checkout/log/runtime metadata). Runner credential provisioning is no longer a gate:
+- Restart adoption. (Checkout/log/runtime metadata now reaches the preallocated run
+  through activation, and the orphan sweep confirms a dead local worker's stop.) Runner credential provisioning is no longer a gate:
   there is no launcher credential on a local install.
 - Runner authentication for legacy daemon finish/line telemetry, durable stop
   delivery retries and reconciliation after an API/notifier restart.
