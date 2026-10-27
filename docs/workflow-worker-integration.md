@@ -161,6 +161,13 @@ The orphan sweep confirms such turns itself when it can see the pid is gone, so 
 `orcha up` they normally heal with no manual step. A still-running worker is never
 offered Release and never confirmed.
 
+Neither silence-based server reaper (expired/missing lease or stale heartbeat)
+ends a run owned by a live Workflow turn. A notifier restart can lose heartbeat
+and output tracking while the worker continues working. Only the host process
+check can establish that worker's death; the existing sweep then finishes its
+run and confirms the stop. Wake status likewise does not promise timeout-based
+reconciliation for a turn-owned run. Non-Workflow orphan cleanup is unchanged.
+
 The wake scan applies these same checks before offering a ready Workflow task to its
 agent (`wake_scan_queries.startable_task_ids`). A task that would be refused (waiting
 for its turn, a prerequisite, a hold) is not offered, so it cannot become the launch

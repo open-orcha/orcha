@@ -18,6 +18,13 @@ This is the server-side backstop. A running row is *stranded* only when ALL hold
   same 1260s the heartbeat reaper uses, > the 1200s watchdog hard-cap): not the
   run's start, not a streamed output line, not the lane heartbeat, not a claim.
 
+A run that a live Workflow turn owns is never stranded here. Its worker holds no lane
+lease, and after a notifier restart nobody streams its output, so a busy worker looks
+silent. The turn governs that run, and the host's pid sweep ends it only once the
+process is gone, then confirms the stop so the turn can continue
+(``notifier_orphan_cleanup``). Reaping it here would revoke a working agent's
+credentials while its process keeps running.
+
 A host-sandbox row's container can legitimately outlive a daemon restart without a
 lease (adoption, remote-runner spec §3.3c), so those rows additionally wait out the
 default sandbox deadline before this backstop may act.
@@ -33,6 +40,9 @@ from portal_backend.agent_status import log_event
 # Same threshold and reasoning as the heartbeat reaper (ISS-60B): longer than the
 # 1200s watchdog hard-cap, so a legitimately busy worker is never reaped.
 STRANDED_RUN_SECS = 1260.0
+
+# Turn states in which a Workflow execution still owns its run (workflow_service.live_turn).
+_LIVE_TURN_STATES = "('reserved','running','awaiting_review','stopping','recovery_needed')"
 
 # A sandbox row may be an adopted, still-running container with no lease behind it.
 # Its daemon reconciles it by container state; this backstop only acts once even the
@@ -71,6 +81,12 @@ def last_activity_expr(lane: str, run_alias: str = "wr") -> str:
     )
 
 
+def turn_owned_expr(run_alias: str = "wr") -> str:
+    """SQL that is true when a live Workflow turn owns the run (never stranded here)."""
+    return (f"EXISTS (SELECT 1 FROM workflow_executions we WHERE we.run_id = {run_alias}.run_id "
+            f"AND we.state IN {_LIVE_TURN_STATES})")
+
+
 def lease_lapsed_expr(lane: str) -> str:
     """SQL that is true when the lane holds no live lease."""
     column = _LANES[lane]["lease_col"]
@@ -92,6 +108,7 @@ def reconcile_stranded_runs(cur, cid: str, orphan_secs: float, lane: str) -> lis
                  AND wr.status = 'running'
                  AND wr.lane = %s
                  AND {lease_lapsed_expr(lane)}
+                 AND NOT {turn_owned_expr()}
                  AND {activity} < CASE WHEN wr.sandbox_container_id IS NULL THEN %s
                                        ELSE %s END
            )

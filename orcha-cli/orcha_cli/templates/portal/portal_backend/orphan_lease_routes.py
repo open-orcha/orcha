@@ -8,7 +8,7 @@ from portal_backend.application import app
 from portal_backend.database import db_cursor
 from portal_backend.guards import require_container, valid_uuid
 from portal_backend.identity_routes import require_machine_lane_member
-from portal_backend.stranded_runs import reconcile_stranded_runs
+from portal_backend.stranded_runs import reconcile_stranded_runs, turn_owned_expr
 from portal_backend.workflow_evidence_service import terminalize_worker_run
 
 ORPHAN_LEASE_SECS = 1260.0
@@ -64,10 +64,13 @@ def _reap_lane(
     runs_by_agent = {}
     reaped_ids = [str(row["agent_id"]) for row in reaped]
     if reaped_ids:
+        # A stale lease is not proof that a Workflow worker died. Its live turn
+        # remains governed by the notifier's process check, even after a restart.
         cur.execute(
-            f"SELECT run_id,agent_id FROM worker_runs "
+            f"SELECT run_id,agent_id FROM worker_runs wr "
             f"WHERE {sql.in_list('CAST(agent_id AS TEXT)')} AND status='running' "
-            "AND lane=%s ORDER BY run_id", (sql.list_param(reaped_ids), run_lane),
+            f"AND lane=%s AND NOT {turn_owned_expr()} ORDER BY run_id",
+            (sql.list_param(reaped_ids), run_lane),
         )
         for run in cur.fetchall():
             transition = terminalize_worker_run(

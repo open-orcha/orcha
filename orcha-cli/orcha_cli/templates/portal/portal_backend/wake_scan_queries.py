@@ -1,7 +1,7 @@
 """Read wake state and pending work without deciding whether to wake."""
 
 from portal_backend import sql
-from portal_backend.stranded_runs import last_activity_expr
+from portal_backend.stranded_runs import last_activity_expr, turn_owned_expr
 
 
 def list_wake_agents(cur, cid: str, cooldown: float):
@@ -39,7 +39,7 @@ def list_wake_agents(cur, cid: str, cooldown: float):
                   (SELECT {sql.age_secs(last_activity_expr("work"))}
                      FROM worker_runs wr
                     WHERE wr.agent_id = a.id AND wr.status = 'running'
-                      AND wr.lane = 'work'
+                      AND wr.lane = 'work' AND NOT {turn_owned_expr()}
                     ORDER BY wr.started_at DESC LIMIT 1
                   ) AS embodiment_silent_seconds,
                   EXISTS (

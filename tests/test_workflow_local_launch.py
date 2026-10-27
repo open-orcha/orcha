@@ -14,6 +14,7 @@ from uuid import uuid4
 import pytest
 
 from orcha_cli import notifier_workflow as nw
+from portal_backend import sql
 from portal_backend import workflow_service as ws
 from portal_backend.database import db_cursor
 
@@ -1110,3 +1111,51 @@ async def test_a_held_backlog_does_not_fill_the_wake_batch_and_hide_later_work(c
     turn = await _bob_candidate(client, project)
     assert turn["should_wake"] and turn["context_task_id"] == waiting
     assert any("Note 0 for later." in m for m in turn["prompt_messages"]), turn["prompt_messages"][:2]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("lease", ["none", "expired", "stale"])
+async def test_a_live_workflow_turn_is_never_reaped_as_stranded_while_its_worker_works(client, monkeypatch, lease):
+    # Dana's second case: the notifier restarted mid-turn, so nobody streamed her output or
+    # held a lane lease. After 21 quiet minutes the server backstop marked her still-working
+    # run Orphaned and revoked its credentials. A live turn's run belongs to the turn and the
+    # host's pid sweep, which never ends a run whose process still answers.
+    project = Project(client)
+    await project.start("serial", [("a", project.ann, [])])
+    launch = await project.reserve(project.ann, "a")
+    await project.activate(project.ann, launch)
+    with db_cursor() as (conn, cur):
+        cur.execute("UPDATE worker_runs SET started_at=%s WHERE run_id=%s",
+                    (sql.ago(2000), launch["run_id"]))
+        if lease != "none":
+            cur.execute("""INSERT INTO agent_wake_state
+                           (agent_id,wake_lease_until,lease_kind,work_last_heartbeat_at,last_woken_at)
+                           VALUES (%s,%s,'ephemeral',%s,%s)
+                           ON CONFLICT (agent_id) DO UPDATE SET
+                           wake_lease_until=EXCLUDED.wake_lease_until,
+                           work_last_heartbeat_at=EXCLUDED.work_last_heartbeat_at,
+                           last_woken_at=EXCLUDED.last_woken_at""",
+                        (project.ann, sql.ago(60) if lease == "expired" else sql.from_now(300),
+                         sql.ago(2000), sql.ago(2000)))
+        conn.commit()
+    reaped = await project.call("POST", f"/api/containers/{project.cid}/reap-orphan-leases")
+    assert reaped["stranded"] == []
+    with db_cursor() as (_, cur):
+        cur.execute("SELECT status FROM worker_runs WHERE run_id=%s", (launch["run_id"],))
+        assert cur.fetchone()["status"] == "running"
+        cur.execute("SELECT revoked_at FROM embodiment_tokens WHERE run_id=%s", (launch["run_id"],))
+        tokens = cur.fetchall()
+        assert tokens and all(t["revoked_at"] is None for t in tokens)
+        cur.execute("SELECT worker_stopped_at FROM workflow_executions WHERE run_id=%s", (launch["run_id"],))
+        assert cur.fetchone()["worker_stopped_at"] is None
+    refused = await project.reserve(project.ann, "a", expect=409)
+    assert "reservation_live" in blockers(refused)
+    candidate = await ann_candidate(project, client)
+    assert candidate["embodiment_running"] and "reconcil" not in candidate["reason"], candidate["reason"]
+    # Excluding silence-based cleanup must not strand the turn once the process dies.
+    bridge(client, monkeypatch, pid_alive=False)
+    assert await sweep(project) == 1
+    await reject_plan(project, project.tasks["a"])
+    continued = await notifier_launch(client, await ann_candidate(project, client), monkeypatch)
+    assert continued.status_code == 201, continued.text
+    await project.activate(project.ann, continued.json())

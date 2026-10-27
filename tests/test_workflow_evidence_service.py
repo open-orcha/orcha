@@ -297,27 +297,17 @@ def test_terminal_writers_have_one_shared_evidence_boundary():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("path", ["finish", "lease_release", "orphan_lease", "stranded_run"])
+# Silence-based reapers never end a run a live turn owns (see
+# test_a_live_workflow_turn_is_never_reaped_as_stranded_while_its_worker_works).
+@pytest.mark.parametrize("path", ["finish", "lease_release"])
 async def test_real_terminal_routes_save_evidence_before_diagnostics_age_out(attempt, client, db, path):
     submitted = submit(attempt)
     if path == "finish":
         response = await client.post(f"/api/runs/{attempt['run']}/finish",
                                      json={"status": "exited", "output": "final", "diff": "+final"})
-    elif path == "lease_release":
+    else:
         response = await client.post(f"/api/agents/{attempt['worker']}/wake-ack",
                                      json={"release_lease": True, "lane": "work", "kind": "ephemeral"})
-    else:
-        old = db.ago(3600)
-        lease = db.from_now(300) if path == "orphan_lease" else db.ago(300)
-        db.execute("""INSERT INTO agent_wake_state
-                   (agent_id,wake_lease_until,lease_kind,work_last_heartbeat_at,last_woken_at)
-                   VALUES (%s,%s,'ephemeral',%s,%s) ON CONFLICT (agent_id) DO UPDATE SET
-                   wake_lease_until=EXCLUDED.wake_lease_until,lease_kind=EXCLUDED.lease_kind,
-                   work_last_heartbeat_at=EXCLUDED.work_last_heartbeat_at,last_woken_at=EXCLUDED.last_woken_at""",
-                   (attempt["worker"], lease, old, old))
-        db.execute("UPDATE worker_runs SET started_at=%s WHERE run_id=%s", (old, attempt["run"]))
-        cid = db.execute("SELECT container_id FROM tasks WHERE id=%s", (attempt["task"],))[0]["container_id"]
-        response = await client.post(f"/api/containers/{cid}/reap-orphan-leases")
     assert response.status_code == 200, response.text
     with db_cursor() as (_, cur):
         saved = evidence.evidence_reference(cur, submitted["evidence_set_id"])
