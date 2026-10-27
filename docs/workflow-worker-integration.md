@@ -161,6 +161,13 @@ The orphan sweep confirms such turns itself when it can see the pid is gone, so 
 `orcha up` they normally heal with no manual step. A still-running worker is never
 offered Release and never confirmed.
 
+The wake scan applies these same checks before offering a ready Workflow task to its
+agent (`wake_scan_queries.startable_task_ids`). A task that would be refused (waiting
+for its turn, a prerequisite, a hold) is not offered, so it cannot become the launch
+task and swallow the agent's other work, such as a review request or an answer. This
+is not an extra gate: it reads the eligibility the reserve route enforces, and the
+reserve still re-checks everything at launch.
+
 ## Verification
 
 `tests/test_workflow_workers.py` covers the real database and API handshake,

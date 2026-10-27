@@ -205,6 +205,10 @@ async def test_gates_that_must_still_refuse_a_launch(client, gate, code):
             cur.execute("UPDATE workflows SET limit_reached=true WHERE id=%s", (project.wid,))
     refused = await project.reserve(project.ann, "a", expect=409)
     assert refused["detail"]["code"] == "not_eligible" and code in blockers(refused)
+    # The wake scan applies the same gate: the task is not offered to the agent either.
+    scan = await client.get(f"/api/containers/{project.cid}/wake-scan", params={"cooldown": 0, "min_idle": 0})
+    ann = [c for c in scan.json()["candidates"] if c["agent_id"] == project.ann]
+    assert all(tid not in c["auto_start_task_ids"] for c in ann)
 
 
 @pytest.mark.asyncio
@@ -918,3 +922,26 @@ def test_the_bootstrap_forwards_run_details_to_activation():
               "api_base": "http://orcha", "command": ["true"], "run_details": {"log_path": "/l"}}
     workflow_bootstrap.activate_and_exec(config, post=lambda url, body: sent.append(body) or None)
     assert sent[0]["run_details"] == {"log_path": "/l"}
+
+
+@pytest.mark.asyncio
+async def test_a_workflow_task_waiting_its_turn_does_not_swallow_the_agents_other_work(client, monkeypatch):
+    """Code Reviewer case: a ready Workflow task that must wait (another task holds the
+    serial turn) used to become the launch task, its reserve was refused, and the whole
+    wake was dropped, so a review request addressed to the same agent never arrived."""
+    project = Project(client)
+    await project.start("serial", [("a", project.ann, []), ("c", project.bob, [])])
+    await project.reserve(project.ann, "a")  # a holds the only serial turn
+    asked = await client.post(f"/api/containers/{project.cid}/requests", json={
+        "requester_agent_id": project.ann, "payload": "Please review my change.", "type": "task",
+        "target_alias": "Bob", "expires_minutes": 60,
+        "task": {"title": "Review", "definition_of_done": "reviewed", "priority": 10}})
+    assert asked.status_code == 201, asked.text
+    scan = await client.get(f"/api/containers/{project.cid}/wake-scan", params={"cooldown": 0, "min_idle": 0})
+    bob = next(c for c in scan.json()["candidates"] if c["agent_id"] == project.bob)
+    assert bob["should_wake"], bob["reason"]
+    assert project.tasks["c"] not in bob["auto_start_task_ids"]  # it would be refused
+    assert "workflow_id" not in bob  # so the wake is not a Workflow launch at all
+    # The waiting task itself is still refused if anything does try to start it.
+    assert blockers(await project.reserve(project.bob, "c", expect=409)) & {"workflow_turn", "reservation_live"}
+

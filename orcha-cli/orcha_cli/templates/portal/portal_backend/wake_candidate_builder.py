@@ -23,6 +23,7 @@ from portal_backend.wake_scan_queries import (
     pending_event_summary,
     ready_task_ids,
     request_answer,
+    startable_task_ids,
 )
 
 
@@ -64,7 +65,7 @@ def build_wake_candidate(
     actionable_answer_ts = (
         earliest_actionable_answer_ts(cur, aid, delivered_ts) if pending else None
     )
-    auto_tasks = ready_task_ids(cur, aid, container_id)
+    auto_tasks = startable_task_ids(cur, ready_task_ids(cur, aid, container_id))
     pending_task_request = has_pending_task_request(cur, aid)
     self_wake_due, self_wake_context, self_wake_task_id, wake_task_id = (
         select_due_self_wake(

@@ -131,6 +131,48 @@ def ready_task_ids(cur, aid: str, cid: str):
     return [str(row["id"]) for row in cur.fetchall()]
 
 
+def startable_task_ids(cur, task_ids):
+    """Drop ready Workflow tasks the Workflow would refuse to start right now.
+
+    A Workflow task waiting on a prerequisite or another task's turn is 'ready' but
+    its reserve is refused, and a refused reserve ends the whole wake. Left in the
+    list it would become the launch task and swallow the agent's other work (a
+    review request, an answer) until the Workflow moved on. Uses the same
+    eligibility the reserve route checks, so nothing it would admit is dropped.
+    """
+    if not task_ids:
+        return task_ids
+    cur.execute(
+        "SELECT id, workflow_id FROM tasks WHERE id IN ("
+        + ",".join(["%s"] * len(task_ids))
+        + ")",
+        tuple(task_ids),
+    )
+    workflow_of = {str(r["id"]): r["workflow_id"] for r in cur.fetchall()}
+    if not any(workflow_of.values()):
+        return task_ids
+    from portal_backend.workflow_integration import IntegratedWorkflowHooks
+    from portal_backend.workflow_service import WorkflowService
+
+    service = WorkflowService(cur, IntegratedWorkflowHooks())
+    eligibility = {}
+    for wid in {w for w in workflow_of.values() if w}:
+        try:
+            for tid, choice in service.snapshot(str(wid))["eligibility"].items():
+                eligibility[str(tid)] = choice
+        except Exception:
+            pass  # unreadable Workflow: keep its tasks; the reserve decides
+    kept = []
+    for tid in task_ids:
+        choice = eligibility.get(tid)
+        if workflow_of.get(tid) and choice is not None and not (
+            choice["can_start"] and choice["source_kind"] == "worker"
+        ):
+            continue
+        kept.append(tid)
+    return kept
+
+
 def has_pending_task_request(cur, aid: str) -> bool:
     """Return whether the agent owes an accept or reject decision."""
     cur.execute(
