@@ -281,6 +281,58 @@ async def test_token_less_continue_after_a_confirmed_exit_and_wrong_agent_is_ref
     assert again.json()["generation"] == 2 and again.json()["run_id"] != launch["run_id"]
 
 
+# --- Signed-in people stay behind the machine-lane check (PS-07 / PS-37) --------------------
+
+@pytest.mark.asyncio
+async def test_signed_in_people_cannot_launch_as_an_agent_but_the_local_notifier_and_managers_can(client, monkeypatch):
+    project = Project(client)
+    other_cid = uid()
+    with db_cursor() as (_, cur):
+        cur.execute("INSERT INTO containers(id,name) VALUES (%s,'Elsewhere')", (other_cid,))
+        for cid, login, role, grants in [
+            (project.cid, "vera", "viewer", "[]"), (project.cid, "mel", "member", "[]"),
+            (project.cid, "gina", "member", '["manage_agents"]'), (other_cid, "maya", "owner", "[]"),
+        ]:
+            cur.execute(
+                "INSERT INTO agents(id,container_id,alias,role,kind,member_role,github_login,grants)"
+                " VALUES (%s,%s,%s,'test','human',%s,%s,%s)", (uid(), cid, login, role, login, grants))
+    await project.start("parallel", [("a", project.ann, []), ("b", project.bob, [])])
+    # The header-less local notifier launches exactly as before.
+    reserved = await project.reserve(project.ann, "a")
+    detail = await project.detail(project.wid)
+    body = {"task_id": project.tasks["a"], "expected_workflow_revision": detail["revision"],
+            "expected_work_revision": detail["tasks"][0]["work_revision"], "operation_key": uid()}
+    monkeypatch.setenv("ORCHA_TRUST_PROXY_USER", "1")
+    base = f"/api/agents/{project.ann}"
+    run = f"{base}/runs/{reserved['run_id']}"
+    activate = {"permit": reserved["permit"], "process_key": "p" * 32, "pid": 4242}
+    routes = [
+        (f"{base}/runs/reserve", body), (f"{run}/activate", activate), (f"{run}/abort-launch", None),
+        (f"{run}/confirm-stopped", {"generation": reserved["generation"]}),
+        (f"{run}/continue-reserve", {"operation_key": uid()}),
+    ]
+    refusals = {"vera": "viewer", "mel": "manage_agents", "maya": "not a member of this project"}
+    for login, why in refusals.items():
+        for url, payload in routes:
+            refused = await client.post(url, json=payload, headers={"X-Auth-Request-User": login})
+            assert refused.status_code == 403, (login, url, refused.text)
+            assert why in refused.json()["detail"], (login, url, refused.text)
+            assert "run_token" not in refused.text
+    # The refusals changed nothing: the same permit still activates for people who may.
+    for login in ("gina", "owner"):
+        ok = await client.post(f"{run}/activate", json=activate, headers={"X-Auth-Request-User": login})
+        assert ok.status_code == 200 and ok.json()["run_token"], (login, ok.text)
+    assert (await client.post(f"{run}/activate", json=activate)).status_code == 200  # local notifier replay
+    # A manager can reserve for another teammate; a viewer still cannot.
+    detail = await project.detail(project.wid)
+    b = next(t for t in detail["tasks"] if t["id"] == project.tasks["b"])
+    body_b = {"task_id": b["id"], "expected_workflow_revision": detail["revision"],
+              "expected_work_revision": b["work_revision"], "operation_key": uid()}
+    url_b = f"/api/agents/{project.bob}/runs/reserve"
+    assert (await client.post(url_b, json=body_b, headers={"X-Auth-Request-User": "vera"})).status_code == 403
+    assert (await client.post(url_b, json=body_b, headers={"X-Auth-Request-User": "gina"})).status_code == 201
+
+
 # --- Refusals are visible ---------------------------------------------------------------
 
 def refusal_error(code, message, status=403):

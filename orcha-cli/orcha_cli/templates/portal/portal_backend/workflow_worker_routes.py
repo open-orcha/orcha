@@ -8,7 +8,7 @@ from starlette.responses import JSONResponse
 
 from portal_backend.application import app
 from portal_backend.database import db_cursor
-from portal_backend.identity_routes import require_member_read
+from portal_backend.identity_routes import require_machine_lane_member, require_member_read
 from portal_backend.schemas.workflow_workers import WorkflowActivate, WorkflowContinue, WorkflowReserve, WorkflowStopObserved
 from portal_backend.workflow_graph import conflict
 from portal_backend.workflow_service import WorkflowActor, WorkflowHooks, WorkflowService, require_capability
@@ -39,6 +39,18 @@ class WorkflowWorkerHooks(WorkflowHooks):
 runtime_hooks_factory = IntegratedWorkflowHooks
 
 
+def _lane(cur, request, aid):
+    """PS-07/PS-37: these routes reserve, activate and stop work AS the AI agent, and
+    activation hands out its run token, so they sit on the machine lane like
+    embodiment-tokens, wake-claim and run start. A header-less caller (the local
+    notifier) passes through; a signed-in person must be a non-viewer member of the
+    agent's project who may manage agents. Checked first, before anything is written."""
+    cur.execute("SELECT container_id FROM agents WHERE id=%s", (aid,))
+    agent = cur.fetchone()
+    if agent:
+        require_machine_lane_member(cur, request, str(agent["container_id"]))
+
+
 def _runner_run(cur, aid, run_id):
     runner = require_runner(cur, aid)
     workflow, task, execution = lock_run(cur, run_id)
@@ -49,9 +61,10 @@ def _runner_run(cur, aid, run_id):
 
 
 @app.post("/api/agents/{aid}/runs/reserve", status_code=201)
-def reserve_worker(aid: str, body: WorkflowReserve):
+def reserve_worker(aid: str, body: WorkflowReserve, request: Request):
     require_capability()
     with db_cursor() as (_, cur):
+        _lane(cur, request, aid)
         runner = require_runner(cur, aid)
         service = WorkflowService(cur, runtime_hooks_factory())
         t = service.one("SELECT workflow_id,container_id FROM tasks WHERE id=%s", (body.task_id,))
@@ -70,17 +83,19 @@ def reserve_worker(aid: str, body: WorkflowReserve):
 
 
 @app.post("/api/agents/{aid}/runs/{rid}/activate")
-def activate_worker(aid: str, rid: str, body: WorkflowActivate):
+def activate_worker(aid: str, rid: str, body: WorkflowActivate, request: Request):
     require_capability()
     with db_cursor() as (_, cur):
+        _lane(cur, request, aid)
         _, _, execution = lock_run(cur, rid)
         return activate(cur, execution, aid=aid, run_id=rid, **body.model_dump())
 
 
 @app.post("/api/agents/{aid}/runs/{rid}/abort-launch")
-def abort_worker_launch(aid: str, rid: str):
+def abort_worker_launch(aid: str, rid: str, request: Request):
     require_capability()
     with db_cursor() as (_, cur):
+        _lane(cur, request, aid)
         _, w, _, e = _runner_run(cur, aid, rid)
         result = abort_launch(cur, e, run_id=rid, terminalize=terminalize)
         WorkflowService(cur, runtime_hooks_factory()).reconcile(str(w["id"]))
@@ -88,9 +103,10 @@ def abort_worker_launch(aid: str, rid: str):
 
 
 @app.post("/api/agents/{aid}/runs/{rid}/confirm-stopped")
-def confirm_worker_stopped(aid: str, rid: str, body: WorkflowStopObserved):
+def confirm_worker_stopped(aid: str, rid: str, body: WorkflowStopObserved, request: Request):
     require_capability()
     with db_cursor() as (_, cur):
+        _lane(cur, request, aid)
         _, w, task, e = _runner_run(cur, aid, rid)
         result = confirm_stopped(cur, e, run_id=rid, generation=body.generation, terminalize=terminalize)
         svc = WorkflowService(cur, runtime_hooks_factory())
@@ -127,9 +143,10 @@ def confirm_worker_stopped(aid: str, rid: str, body: WorkflowStopObserved):
 
 
 @app.post("/api/agents/{aid}/runs/{rid}/continue-reserve", status_code=201)
-def continue_worker(aid: str, rid: str, body: WorkflowContinue):
+def continue_worker(aid: str, rid: str, body: WorkflowContinue, request: Request):
     require_capability()
     with db_cursor() as (_, cur):
+        _lane(cur, request, aid)
         runner, _, _, e = _runner_run(cur, aid, rid)
         return continue_turn(cur, e, runner, operation_key=body.operation_key,
                              payload={"previous_run_id": rid, **body.model_dump()})

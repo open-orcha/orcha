@@ -46,9 +46,14 @@ sent anyway is ignored. What each of these routes still checks, and why:
   or inactive state, project status, limits/capacity, work and workflow revisions,
   stale generation. These are state-consistency rules and are untouched.
 
-Portal membership and the LAN protections in front of the API are unchanged; this only
-removes the extra launcher gate that no local install could ever satisfy (nothing
-minted the credentials). The notifier therefore needs no
+Portal membership and the LAN protections in front of the API are unchanged. The five launch
+routes (reserve, activate, abort-launch, confirm-stopped, continue-reserve) sit on the same
+machine lane as embodiment-tokens, wake-claim and run start (PS-07/PS-37): with no login
+header (the local notifier) they pass through, but a signed-in person must be a non-viewer
+member of the agent's project with the `manage_agents` permission (owners hold it), because
+activation hands out that agent's run token. This change only removes the extra launcher
+gate that no local install could ever satisfy (nothing minted the credentials). The notifier
+therefore needs no
 `ORCHA_WORKFLOW_RUNNER_CREDENTIALS`, and the variable is still stripped from child
 environments. When a launch is refused the notifier logs the server's plain-English
 reason and posts it, with the fix, to the task thread (at most once per 30 minutes)
