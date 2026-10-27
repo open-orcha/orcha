@@ -45,6 +45,13 @@ sent anyway is ignored. What each of these routes still checks, and why:
 - **Scheduler gates** — dependencies, serial order, holds, pause/cancel/stop, completed
   or inactive state, project status, limits/capacity, work and workflow revisions,
   stale generation. These are state-consistency rules and are untouched.
+- **Start hold** — Start releases the tasks that are prepared when it is pressed; the
+  owner may leave some unselected, and those stay "awaiting release" until Release. A
+  task the owner prepares for the first time *after* Start (for example a fourth task
+  added to a Workflow that already finished three) is released by that preparing: it is
+  the owner's own go-ahead, so a second Release click would only be a manual step. It
+  then still waits for its prerequisites, serial turn, and any person's hold (a hold
+  placed by a person is never released automatically).
 
 Portal membership and the LAN protections in front of the API are unchanged. The five launch
 routes (reserve, activate, abort-launch, confirm-stopped, continue-reserve) sit on the same

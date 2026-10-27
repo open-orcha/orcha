@@ -1819,15 +1819,27 @@ class WorkflowService:
                 "task_incomplete",
                 "Add completion criteria and choose an assignee first.",
             )
+        # Start released the tasks that were prepared when it was pressed. A task the
+        # owner prepares for the first time after that is their own go-ahead, so it
+        # needs no second Release click. A task prepared before Start and left unselected
+        # (or re-prepared later) keeps its hold, and a person's hold is never touched.
+        released = bool(
+            w["launch_enabled"]
+            and t["start_hold"]
+            and t["preparation_state"] != "prepared"
+        )
         self.cur.execute(
-            "UPDATE tasks SET preparation_state='prepared',work_revision=work_revision+1 WHERE id=%s",
-            (tid,),
+            "UPDATE tasks SET preparation_state='prepared',work_revision=work_revision+1,start_hold=%s WHERE id=%s",
+            (t["start_hold"] and not released, tid),
         )
         self.audit(
             w,
             p,
             "workflow_task_prepared",
-            {"work_revision": t["work_revision"] + 1},
+            {
+                "work_revision": t["work_revision"] + 1,
+                **({"released": True} if released else {}),
+            },
             tid,
             scope=True,
         )

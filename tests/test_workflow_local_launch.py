@@ -88,6 +88,24 @@ class Project:
         self.wid = wid
         return wid
 
+    async def add(self, key, assignee, deps=()):
+        """A person adds one more task to the running Workflow; it joins as a draft."""
+        detail = await self.detail(self.wid)
+        await self.call("POST", f"/api/workflows/{self.wid}/tasks", self.mutation(detail, tasks=[
+            {"client_key": key, "title": f"Task {key}", "description": "d", "definition_of_done": "done",
+             "assignee_id": assignee, "depends_on": [self.tasks[d] for d in deps]}]))
+        detail = await self.detail(self.wid)
+        self.tasks[key] = next(t["id"] for t in detail["tasks"] if t["title"] == f"Task {key}")
+        return self.tasks[key]
+
+    async def prepare(self, key):
+        detail = await self.detail(self.wid)
+        tid = self.tasks[key]
+        task = next(t for t in detail["tasks"] if t["id"] == tid)
+        await self.call("POST", f"/api/tasks/{tid}/prepare",
+                        self.mutation(detail, expected_work_revision=task["work_revision"]))
+        return next(t for t in (await self.detail(self.wid))["tasks"] if t["id"] == tid)
+
     async def reserve(self, aid, key, expect=201, operation_key=None):
         detail = await self.detail(self.wid)
         tid = self.tasks[key]
@@ -186,6 +204,78 @@ async def test_gates_that_must_still_refuse_a_launch(client, gate, code):
         elif gate == "limit":
             cur.execute("UPDATE workflows SET limit_reached=true WHERE id=%s", (project.wid,))
     refused = await project.reserve(project.ann, "a", expect=409)
+    assert refused["detail"]["code"] == "not_eligible" and code in blockers(refused)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["serial", "parallel"])
+async def test_a_task_added_to_a_running_workflow_launches_once_prepared_without_a_second_release(client, mode):
+    """Kedar's case: a fourth task joins a Workflow that is already running."""
+    project = Project(client)
+    await project.start(mode, [("a", project.ann, [])])
+    await project.add("n", project.bob)
+    # Until its owner prepares it the new task is a draft and cannot launch.
+    assert {"task_draft", "start_hold"} <= blockers(await project.reserve(project.bob, "n", expect=409))
+    prepared = await project.prepare("n")
+    # Preparing is the go-ahead: no Release click is left on the new task.
+    assert prepared["start_hold"] is False and "start_hold" not in {b["code"] for b in prepared["blockers"]}
+    if mode == "serial":
+        # One turn at a time, oldest first: the new task is only waiting behind task a.
+        assert [b["code"] for b in prepared["blockers"]] == ["workflow_turn"]
+        await project.reserve(project.ann, "a")
+        assert blockers(await project.reserve(project.bob, "n", expect=409)) & {"workflow_turn", "reservation_live"}
+    else:
+        assert prepared["blockers"] == [] and prepared["can_start"] is True
+        reserved = await project.reserve(project.bob, "n")
+        assert reserved["task_id"] == project.tasks["n"] and reserved["permit"]
+        await project.reserve(project.ann, "a")
+
+
+@pytest.mark.asyncio
+async def test_an_added_task_still_waits_for_its_prerequisite_and_a_hold(client):
+    project = Project(client)
+    await project.start("parallel", [("a", project.ann, [])])
+    await project.add("n", project.bob, deps=["a"])
+    await project.add("h", project.bob)
+    detail = await project.detail(project.wid)
+    held = next(t for t in detail["tasks"] if t["id"] == project.tasks["h"])
+    await project.call("POST", f"/api/tasks/{project.tasks['h']}/hold",
+                       project.mutation(detail, expected_work_revision=held["work_revision"]))
+    waiting, on_hold = await project.prepare("n"), await project.prepare("h")
+    # The release is automatic, but the prerequisite and the person's hold are not waived.
+    assert not waiting["start_hold"] and [b["code"] for b in waiting["blockers"]] == ["prerequisites"]
+    assert not on_hold["start_hold"] and [b["code"] for b in on_hold["blockers"]] == ["human_hold"]
+    assert "prerequisites" in blockers(await project.reserve(project.bob, "n", expect=409))
+    assert "human_hold" in blockers(await project.reserve(project.bob, "h", expect=409))
+    detail = await project.detail(project.wid)
+    on_hold = next(t for t in detail["tasks"] if t["id"] == project.tasks["h"])
+    await project.call("POST", f"/api/workflows/{project.wid}/release", project.mutation(
+        detail, task_ids=[on_hold["id"]], holds=["human"], task_revisions={on_hold["id"]: on_hold["work_revision"]}))
+    await project.reserve(project.bob, "h")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("gate,code", [
+    ("paused", "workflow_not_active"), ("cancelled", "workflow_not_active"), ("completed", "task_not_waiting"),
+    ("inactive_project", "project_not_active"), ("limit", "limit_reached"),
+])
+async def test_an_added_task_is_still_refused_when_the_workflow_cannot_launch(client, gate, code):
+    project = Project(client)
+    await project.start("parallel", [("a", project.ann, [])])
+    await project.add("n", project.bob)
+    await project.prepare("n")
+    detail = await project.detail(project.wid)
+    if gate in {"paused", "cancelled"}:
+        action = {"paused": "pause", "cancelled": "cancel"}[gate]
+        await project.call("POST", f"/api/workflows/{project.wid}/{action}", project.mutation(detail))
+    with db_cursor() as (_, cur):
+        if gate == "completed":
+            cur.execute("UPDATE tasks SET status='completed' WHERE id=%s", (project.tasks["n"],))
+        elif gate == "inactive_project":
+            cur.execute("UPDATE containers SET status='paused' WHERE id=%s", (project.cid,))
+        elif gate == "limit":
+            cur.execute("UPDATE workflows SET limit_reached=true WHERE id=%s", (project.wid,))
+    refused = await project.reserve(project.bob, "n", expect=409)
     assert refused["detail"]["code"] == "not_eligible" and code in blockers(refused)
 
 

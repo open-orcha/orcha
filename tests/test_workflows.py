@@ -284,6 +284,107 @@ def test_save_prepare_and_start_selected_preserves_other_holds(setup_workflow):
     assert not any(t["can_start"] for t in w["tasks"])
 
 
+def add_task(fixture, w, key, *, depends_on=()):
+    """The owner adds one prepared-looking task to a Workflow; it joins as a held draft."""
+    worker = fixture[2]
+    w = fixture[-1](
+        "add_tasks",
+        {
+            "tasks": [
+                {
+                    "client_key": key,
+                    "title": f"Task {key}",
+                    "definition_of_done": "A concrete result",
+                    "assignee_id": worker,
+                    "depends_on": list(depends_on),
+                }
+            ]
+        },
+        w["id"],
+    )
+    return w, next(t for t in w["tasks"] if t["title"] == f"Task {key}")
+
+
+def test_a_task_prepared_after_start_needs_no_second_release(setup_workflow):
+    """A fourth task joins a finished Workflow: preparing it is the owner's go-ahead."""
+    execute = setup_workflow[-1]
+    w = prepare_and_start(setup_workflow, create(setup_workflow, count=1))
+    first = w["tasks"][0]
+    e, ref = submit_result(setup_workflow, w, first["id"])
+    w = execute("accept", {"evidence": ref}, w["id"], first["id"])
+    with db_cursor() as (_, cur):
+        ws.WorkflowService(cur, setup_workflow[4]).release_confirmed(
+            e["id"], e["generation"], "process exit"
+        )
+    w, new = add_task(setup_workflow, w, "late", depends_on=[first["id"]])
+    assert new["start_hold"] and not new["can_start"]
+    assert {b["code"] for b in new["blockers"]} >= {"task_draft", "start_hold"}
+    w = execute("prepare", {}, w["id"], new["id"])
+    new = next(t for t in w["tasks"] if t["id"] == new["id"])
+    assert not new["start_hold"] and new["can_start"] and new["status"] == "ready"
+    with db_cursor(readonly=True) as (_, cur):
+        cur.execute(
+            "SELECT detail FROM workflow_history WHERE workflow_id=%s AND task_id=%s AND event='workflow_task_prepared'",
+            (w["id"], new["id"]),
+        )
+        detail = cur.fetchone()["detail"]
+    detail = json.loads(detail) if isinstance(detail, str) else detail
+    assert detail["released"] is True
+
+
+@pytest.mark.parametrize("mode", ["serial", "parallel"])
+def test_a_task_prepared_after_start_still_waits_for_prerequisites_and_holds(
+    setup_workflow, mode
+):
+    execute = setup_workflow[-1]
+    w = prepare_and_start(setup_workflow, create(setup_workflow, mode=mode, count=1))
+    first = w["tasks"][0]
+    w, waits = add_task(setup_workflow, w, "waits", depends_on=[first["id"]])
+    w, held = add_task(setup_workflow, w, "held")
+    w = execute("hold", {}, w["id"], held["id"])
+    for tid in (waits["id"], held["id"]):
+        w = execute("prepare", {}, w["id"], tid)
+    byid = {t["id"]: t for t in w["tasks"]}
+    # The start hold is gone, but nothing else is waived.
+    assert not byid[waits["id"]]["start_hold"] and not byid[waits["id"]]["can_start"]
+    assert [b["code"] for b in byid[waits["id"]]["blockers"]] == ["prerequisites"]
+    assert not byid[held["id"]]["start_hold"] and byid[held["id"]]["human_hold_by"]
+    assert not byid[held["id"]]["can_start"]
+    assert [b["code"] for b in byid[held["id"]]["blockers"]] == ["human_hold"]
+
+
+def test_preparing_never_releases_what_start_left_held_or_a_paused_workflow(
+    setup_workflow,
+):
+    execute = setup_workflow[-1]
+    w = create(setup_workflow, count=3)
+    chosen, unselected, draft = (t["id"] for t in w["tasks"])
+    for tid in (chosen, unselected):
+        w = execute("prepare", {}, w["id"], tid)
+    w = execute(
+        "start",
+        {
+            "task_ids": [chosen],
+            "task_revisions": {t["id"]: t["work_revision"] for t in w["tasks"]},
+        },
+        w["id"],
+    )
+    # Prepared before Start and not selected: editing and re-preparing keeps the hold.
+    w = execute("prepare", {"title": "Reworded"}, w["id"], unselected)
+    byid = {t["id"]: t for t in w["tasks"]}
+    assert byid[unselected]["start_hold"] and not byid[unselected]["can_start"]
+    # Never prepared before Start: preparing it now is its go-ahead.
+    assert byid[draft]["start_hold"]
+    w = execute("pause", {}, w["id"])
+    with pytest.raises(HTTPException) as err:
+        execute("prepare", {}, w["id"], draft)
+    assert err.value.detail["code"] == "workflow_not_active"
+    w = execute("resume", {}, w["id"])
+    w = execute("prepare", {}, w["id"], draft)
+    byid = {t["id"]: t for t in w["tasks"]}
+    assert not byid[draft]["start_hold"] and byid[unselected]["start_hold"]
+
+
 def test_mutation_receipt_is_atomic_and_replay_precedes_revision_check(setup_workflow):
     w = create(setup_workflow)
     execute = setup_workflow[-1]
