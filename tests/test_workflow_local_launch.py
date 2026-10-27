@@ -688,3 +688,117 @@ def test_a_workflow_task_on_a_terminal_session_is_announced_not_silently_dropped
     assert [url for url, _ in posts] == ["http://x/api/tasks/task-1/messages"]  # one note, no wake-ack
     assert "open terminal session" in posts[0][1]["body"]
     assert len(lines) == 1 and "open terminal session" in lines[0]
+
+
+# --- A notifier restart must not strand a Workflow turn (task 4dab637d) -----------------
+#
+# Dana's worker started, the notifier restarted, so nobody tracked her process any more. It
+# finished by itself; the orphan sweep later found the pid gone and marked the run Killed,
+# but nothing told the Workflow turn its worker was gone. The turn stayed live, and the
+# owner's plan rejection could only be refused ("The previous turn has not been released").
+
+import asyncio
+
+from orcha_cli import notifier, notifier_orphan_cleanup
+
+DEAD = False
+
+
+def bridge(client, monkeypatch, *, pid_alive):
+    """Point the notifier's sweep and launcher at the real routes (sync code -> ASGI app)."""
+    loop = asyncio.get_running_loop()
+
+    def call(method, url, body=None):
+        path = url.removeprefix("http://orcha")
+        return asyncio.run_coroutine_threadsafe(client.request(method, path, json=body), loop).result(30)
+
+    def get_json(url, **_):
+        response = call("GET", url)
+        return response.json() if response.status_code < 400 else None
+
+    def post_json(url, body=None, **_):
+        response = call("POST", url, body or {})
+        return response.json() if response.status_code < 400 else None
+
+    def runner_post(url, body, headers):
+        response = call("POST", url, body)
+        if response.status_code >= 400:
+            raise urllib.error.HTTPError(url, response.status_code, "refused", {}, io.BytesIO(response.content))
+        return response.json()
+
+    monkeypatch.setattr(notifier, "_get_json", get_json)
+    monkeypatch.setattr(notifier, "_post_json", post_json)
+    monkeypatch.setattr(nw, "runner_post", runner_post)
+    monkeypatch.setattr(notifier._sandbox, "managed_containers", lambda cid: [])
+    monkeypatch.setattr(notifier, "_run_pid_alive", lambda pid: pid_alive)
+
+
+async def sweep(project):
+    return await asyncio.to_thread(
+        notifier.reap_orphaned_runs, "http://orcha", project.cid, sandbox_enabled=False, quiet=True)
+
+
+async def reject_plan(project, tid):
+    return await project.call("POST", "/api/decisions", {
+        "subject_type": "plan_approval", "subject_id": tid, "decision": "reject",
+        "reason": "Please redo the plan", "actor_agent_id": project.owner, "target_agent_id": project.ann}, 201)
+
+
+@pytest.mark.asyncio
+async def test_a_plan_rejection_wakes_the_agent_after_the_orphan_sweep_ended_its_run(client, monkeypatch):
+    project = Project(client)
+    await project.start("serial", [("a", project.ann, [])])
+    launch = await project.reserve(project.ann, "a")
+    await project.activate(project.ann, launch)
+    bridge(client, monkeypatch, pid_alive=False)  # the notifier restarted; the worker's pid is gone
+    assert await sweep(project) == 1
+    tid = project.tasks["a"]
+    await reject_plan(project, tid)
+
+    candidate = await ann_candidate(project, client)
+    assert candidate["should_wake"] and candidate["latest_event"] == "decision_made"
+    launched = await notifier_launch(client, candidate, monkeypatch)
+    assert launched.status_code == 201, launched.text
+    assert launched.json()["task_id"] == tid and launched.json()["generation"] == launch["generation"] + 1
+
+
+@pytest.mark.asyncio
+async def test_a_run_an_older_sweep_already_ended_is_healed_by_the_next_sweep(client, monkeypatch):
+    # Dana's live case: the run is already stamped Killed but its turn never heard about it.
+    project = Project(client)
+    await project.start("serial", [("a", project.ann, [])])
+    launch = await project.reserve(project.ann, "a")
+    await project.activate(project.ann, launch)
+    bridge(client, monkeypatch, pid_alive=False)
+    refused = []
+    real_confirm = notifier_orphan_cleanup._confirm_workflow_stop
+    monkeypatch.setattr(notifier_orphan_cleanup, "_confirm_workflow_stop",
+                        lambda api_base, row: refused.append(row["run_id"]) or False)
+    assert await sweep(project) == 1  # an older daemon: finished the run, told the turn nothing
+    tid = project.tasks["a"]
+    await reject_plan(project, tid)
+    stuck = await ann_candidate(project, client)
+    assert refused == [launch["run_id"]] and "workflow_continue_run_id" not in stuck
+
+    monkeypatch.setattr(notifier_orphan_cleanup, "_confirm_workflow_stop", real_confirm)
+    assert await sweep(project) == 0  # nothing left to finish, but the stop is now confirmed
+    candidate = await ann_candidate(project, client)
+    assert candidate["workflow_continue_run_id"] == launch["run_id"]
+    launched = await notifier_launch(client, candidate, monkeypatch)
+    assert launched.status_code == 201, launched.text
+    assert launched.json()["generation"] == launch["generation"] + 1
+
+
+@pytest.mark.asyncio
+async def test_a_worker_that_may_still_be_running_is_never_confirmed_or_relaunched(client, monkeypatch):
+    project = Project(client)
+    await project.start("serial", [("a", project.ann, [])])
+    launch = await project.reserve(project.ann, "a")
+    await project.activate(project.ann, launch)
+    bridge(client, monkeypatch, pid_alive=True)  # the pid still answers: maybe still working
+    assert await sweep(project) == 0
+    await reject_plan(project, project.tasks["a"])
+    candidate = await ann_candidate(project, client)
+    assert "workflow_continue_run_id" not in candidate
+    refused = await notifier_launch(client, candidate, monkeypatch)
+    assert refused.status_code == 409 and "reservation_live" in refused.text

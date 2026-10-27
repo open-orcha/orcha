@@ -14,6 +14,7 @@ from typing import Optional
 # lookup at call time).
 from . import sandbox as _sandbox
 from . import notifier_embodiment as _embodiment
+from . import notifier_workflow as _workflow
 
 # M7 (remote-runner deferred follow-up, field bug "first chat message dies as
 # 'sandbox container vanished'"): minimum age before the sweep may take a
@@ -234,6 +235,26 @@ def _completed_successfully(row: dict, services) -> bool:
         return False
 
 
+def _confirm_workflow_stop(api_base: str, row: dict) -> bool:
+    """Tell a Workflow turn that its worker's host process is positively gone.
+
+    After a notifier restart nobody tracks the worker any more, so the sweep's dead-pid
+    check is the only exit observation left. Without it the turn stays live forever and
+    every later owner decision is refused. The server keeps the turn (or releases it if
+    a stop was requested) and refuses another runner's or an older generation's run.
+    """
+    generation = row.get("workflow_generation")
+    if generation is None or row.get("pid") is None or row.get("sandbox_container_id"):
+        return False
+    try:
+        _workflow.runner_post(
+            f"{api_base}/api/agents/{row.get('agent_id')}/runs/{row.get('run_id')}/confirm-stopped",
+            {"generation": generation}, {})
+        return True
+    except Exception:  # noqa: BLE001 - one refused confirmation must never break the sweep
+        return False
+
+
 def reap_orphaned_runs(
     api_base: str,
     cid: str,
@@ -385,6 +406,7 @@ def reap_orphaned_runs(
                 )
             if ok:
                 finished += 1
+                _confirm_workflow_stop(api_base, row)
             else:
                 all_finished = False
         if not live_sibling and all_finished:
@@ -408,6 +430,12 @@ def reap_orphaned_runs(
                 f"[notifier] swept {len(dead)} dead-pid orphaned "
                 f"{lane}-lane run(s) for {agent_id} ({outcome}) (#342)"
             )
+
+    # A Workflow run an earlier sweep (or an older daemon) already finished, whose turn
+    # never heard that the worker stopped: confirm it once its pid is positively gone.
+    for row in data.get("unconfirmed_workflow_runs") or []:
+        if row.get("pid") is not None and not row.get("sandbox_container_id") and not alive(row):
+            _confirm_workflow_stop(api_base, row)
 
     # Task 5 orphan pass (spec §3.5), ONCE per sweep: a live managed container that no
     # open run row references → stop it (a wake whose row was orphaned/finished behind

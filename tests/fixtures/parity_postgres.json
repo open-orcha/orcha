@@ -1047,9 +1047,11 @@
             "started_at": "iso-datetime",
             "wake_event": "null",
             "wake_kind": "str",
+            "workflow_generation": "null",
             "worktree": "null"
           }
-        ]
+        ],
+        "unconfirmed_workflow_runs": []
       }
     },
     "GET /api/containers/{cid}/tasks": {

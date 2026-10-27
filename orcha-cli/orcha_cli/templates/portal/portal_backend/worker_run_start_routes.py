@@ -201,14 +201,34 @@ def list_container_running_runs(cid: str, request: Request):
         cur.execute(
             """SELECT wr.run_id, wr.agent_id, wr.pid, wr.wake_kind, wr.wake_event, wr.lane,
                       wr.started_at, wr.sandbox_container_id, wr.worktree, wr.base_cwd,
-                      wr.log_path
+                      wr.log_path, we.generation AS workflow_generation
                  FROM worker_runs wr JOIN agents a ON a.id = wr.agent_id
+                 LEFT JOIN workflow_executions we ON we.run_id = wr.run_id
+                      AND we.worker_stopped_at IS NULL
+                      AND we.state IN ('reserved','running','awaiting_review','stopping','recovery_needed')
                 WHERE a.container_id = %s AND wr.status = 'running'
                   AND a.terminated_at IS NULL
                 ORDER BY wr.started_at DESC""",
             (cid,),
         )
         rows = cur.fetchall()
+        # Task 4dab637d: a Workflow run that an earlier sweep already finished (its pid was
+        # gone after a notifier restart) but whose turn never heard that the worker stopped.
+        # Only the notifier can check the pid, so it gets these too, to confirm the stop.
+        cur.execute(
+            """SELECT wr.run_id, wr.agent_id, wr.pid, wr.started_at, wr.sandbox_container_id,
+                      we.generation AS workflow_generation
+                 FROM workflow_executions we
+                 JOIN worker_runs wr ON wr.run_id = we.run_id
+                 JOIN agents a ON a.id = wr.agent_id
+                WHERE a.container_id = %s AND a.terminated_at IS NULL
+                  AND wr.status <> 'running' AND wr.ended_at IS NOT NULL
+                  AND we.worker_stopped_at IS NULL
+                  AND we.state IN ('reserved','running','awaiting_review','stopping','recovery_needed')
+                ORDER BY wr.started_at DESC""",
+            (cid,),
+        )
+        unconfirmed = cur.fetchall()
     return {
         "container_id": cid,
         "runs": [
@@ -223,10 +243,24 @@ def list_container_running_runs(cid: str, request: Request):
                 "worktree": row["worktree"],
                 "base_cwd": row["base_cwd"],
                 "log_path": row["log_path"],
+                "workflow_generation": row["workflow_generation"],
                 "started_at": (
                     row["started_at"].isoformat() if row["started_at"] else None
                 ),
             }
             for row in rows
+        ],
+        "unconfirmed_workflow_runs": [
+            {
+                "run_id": str(row["run_id"]),
+                "agent_id": str(row["agent_id"]),
+                "pid": row["pid"],
+                "sandbox_container_id": row["sandbox_container_id"],
+                "workflow_generation": row["workflow_generation"],
+                "started_at": (
+                    row["started_at"].isoformat() if row["started_at"] else None
+                ),
+            }
+            for row in unconfirmed
         ],
     }
