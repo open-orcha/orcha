@@ -216,9 +216,13 @@ async def test_a_task_added_to_a_running_workflow_launches_once_prepared_without
     await project.add("n", project.bob)
     # Until its owner prepares it the new task is a draft and cannot launch.
     assert {"task_draft", "start_hold"} <= blockers(await project.reserve(project.bob, "n", expect=409))
+    assert unacked(project.bob, project.tasks["n"], "task_ready") == 0
     prepared = await project.prepare("n")
     # Preparing is the go-ahead: no Release click is left on the new task.
     assert prepared["start_hold"] is False and "start_hold" not in {b["code"] for b in prepared["blockers"]}
+    if mode == "parallel":
+        # ...and its agent is woken for it, so the launcher picks it up without being asked.
+        assert unacked(project.bob, project.tasks["n"], "task_ready") >= 1
     if mode == "serial":
         # One turn at a time, oldest first: the new task is only waiting behind task a.
         assert [b["code"] for b in prepared["blockers"]] == ["workflow_turn"]

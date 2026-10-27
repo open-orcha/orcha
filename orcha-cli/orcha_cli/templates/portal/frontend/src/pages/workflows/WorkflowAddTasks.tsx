@@ -21,7 +21,9 @@ export function WorkflowAddTasks({ detail, scope, verified, stale, agents, onSav
   const saved = (result: WorkflowDetail) => { setTasks([]); setOpen(false); onSaved(result); };
   return <><Button disabled={stale || !!actionReason(detail, "add_tasks", verified)} onClick={() => setOpen(true)}>Add new tasks</Button>
     {open && <Dialog title="Add new tasks" className="wf-page" size="lg" onClose={() => { if (!frozen) setOpen(false); }} footer={<Button disabled={frozen} onClick={() => setOpen(false)}>Keep draft and close</Button>}>
-      <p>New tasks start with autonomy OFF. They are saved as drafts, with start holds. Prepare and release them explicitly after saving.</p>
+      <p>New tasks start with autonomy OFF. They are saved as drafts, with start holds. {detail.launch_enabled
+        ? "This Workflow has already started, so preparing a new task after saving also releases its start hold and it can begin once it is eligible."
+        : "Prepare and release them explicitly after saving."}</p>
       <fieldset disabled={frozen} className="wf-form-body">
         {tasks.map((task, index) => <fieldset key={task.key} className="wf-task-draft"><legend>New task {index + 1}</legend>
           <label>Task summary<input maxLength={200} value={task.title} onChange={(e) => update(task.key, { title: e.target.value })} /></label>

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Button } from "../../components/primitives/Button";
 import { Dialog } from "../../components/primitives/Dialog";
-import { availableActionReason, workflowPaths, workflowRequest } from "./workflowApi";
+import { availableActionReason, prepareReleasesHold, workflowPaths, workflowRequest } from "./workflowApi";
 import { workflowRoutes, type Impact, type WorkflowDetail, type WorkflowTask } from "./workflowContract.generated";
 import type { DraftScope } from "./workflowDraft";
 import { sendWorkflowOperation, useWorkflowOperation } from "./workflowOperations";
@@ -127,7 +127,9 @@ export function WorkflowTaskActions({ detail, task, scope, verified, stale, agen
       {currentTask && action && <>
         <h3>{label(action)}</h3>{blocked && <p>{blocked}</p>}
         {action === "prepare" ? <>
-          <p>Preparing does not start this task or release any hold.</p>
+          {prepareReleasesHold(detail, currentTask)
+            ? <p>This Workflow has already started, so preparing this task also releases its start hold and it can begin as soon as its prerequisites, turn and any other holds allow. A hold a person placed stays until they release it.</p>
+            : <p>Preparing does not start this task or release any hold.</p>}
           <label>Done when<textarea maxLength={4000} value={criteria} onChange={(e) => setCriteria(e.target.value)} /></label>
           <label>Assignee<select value={assignee} onChange={(e) => setAssignee(e.target.value)}><option value="">Choose an assignee</option>{agents.map((a) => <option key={a.id} value={a.id}>{a.alias}</option>)}</select></label>
         </> : <label>Reason<textarea maxLength={4000} value={reason} onChange={(e) => setReason(e.target.value)} /></label>}

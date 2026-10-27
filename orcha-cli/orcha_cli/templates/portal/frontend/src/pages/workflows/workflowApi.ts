@@ -178,6 +178,12 @@ export function workflowLabel(workflow: WorkflowDetail): string {
   return { active: "Active", paused: "Paused", completed: "Completed", cancelled: "Cancelled" }[workflow.status];
 }
 
+/** Mirrors the server's prepare rule: in a Workflow that has already started, the FIRST prepare of a
+ *  start-held task also releases that hold (Start only releases what was prepared when it ran). */
+export function prepareReleasesHold(workflow: Pick<WorkflowDetail, "launch_enabled">, task: { start_hold: boolean; preparation_state: string | null }): boolean {
+  return workflow.launch_enabled && task.start_hold && task.preparation_state !== "prepared";
+}
+
 export function hasWorkflowRoutes(spec: unknown): boolean {
   if (!spec || typeof spec !== "object" || !("paths" in spec) || !spec.paths || typeof spec.paths !== "object") throw new Error("OpenAPI paths unavailable");
   return Object.entries(spec.paths).some(([path, operations]) => /^\/api\/containers\/\{[^}]+\}\/workflows$/.test(path)

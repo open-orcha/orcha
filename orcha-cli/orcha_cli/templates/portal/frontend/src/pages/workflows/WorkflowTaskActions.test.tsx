@@ -23,6 +23,27 @@ it("prepares current task criteria and assignment without releasing holds or sta
   expect(JSON.parse(post[1].body as string)).toMatchObject({ expected_revision: 7, expected_work_revision: 3, definition_of_done: "Pairing and recovery checks pass", assignee_id: "andrew" });
   expect(calls.some(([url, options]) => options.method === "POST" && (url.endsWith("/start") || url.endsWith("/release")))).toBe(false);
 });
+it("tells the owner that preparing releases a hold only where the server will release it", async () => {
+  // mirrors op_prepare: the FIRST prepare of a start-held task in an already-started Workflow releases it
+  const cases = [
+    { started: true, state: "draft" as const, hold: true, releases: true },
+    { started: true, state: "prepared" as const, hold: true, releases: false },
+    { started: true, state: "draft" as const, hold: false, releases: false },
+    { started: false, state: "draft" as const, hold: true, releases: false },
+  ];
+  for (const c of cases) {
+    const task = exampleTask({ preparation_state: c.state, start_hold: c.hold, available_actions: [{ action: "prepare", enabled: true }] });
+    const detail = exampleWorkflow({ capability: writeCapability, launch_enabled: c.started, tasks: [task] });
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse(detail)));
+    const view = render(<WorkflowTaskActions detail={detail} task={task} scope={scope()} verified stale={false} agents={[]} onSaved={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "Manage Build Android" }));
+    fireEvent.click(screen.getByRole("button", { name: "Prepare task" }));
+    await screen.findByLabelText("Done when");
+    expect(!!screen.queryByText(/already started, so preparing this task also releases its start hold/), JSON.stringify(c)).toBe(c.releases);
+    expect(!!screen.queryByText("Preparing does not start this task or release any hold."), JSON.stringify(c)).toBe(!c.releases);
+    view.unmount();
+  }
+});
 it("uses the generated stop route with exact revisions and never claims shutdown from a request", async () => {
   const { detail, task } = taskCase("stop"); const fetch = vi.fn(async (url: string) => jsonResponse(url.includes("release-check") ? exampleImpact(detail, url) : detail)); const onSaved = vi.fn(); vi.stubGlobal("fetch", fetch);
   render(<WorkflowTaskActions detail={detail} task={task} scope={scope()} verified stale={false} agents={[]} onSaved={onSaved} />);

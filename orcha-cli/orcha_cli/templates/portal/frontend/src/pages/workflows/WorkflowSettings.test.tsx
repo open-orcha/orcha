@@ -40,9 +40,28 @@ it("requires the complete dependency group and both current workflow revisions b
   fireEvent.change(screen.getByLabelText("Destination"), { target: { value: "next-release" } });
   fireEvent.change(screen.getByLabelText("Reason for moving tasks"), { target: { value: "Move this untouched group to the next release" } });
   fireEvent.click(screen.getByRole("button", { name: "Review task move" })); await screen.findByRole("region", { name: "Move impact" });
+  expect(screen.getByText(/Prepare and release them there/)).toBeVisible(); // destination has not started
   expect(screen.getByRole("button", { name: "Confirm task move" })).toBeDisabled();
   fireEvent.click(screen.getByRole("button", { name: "Include the whole group" })); expect(screen.getByRole("button", { name: "Confirm task move" })).toBeDisabled();
   fireEvent.click(screen.getByRole("button", { name: "Review task move" })); await waitFor(() => expect(screen.getByRole("button", { name: "Confirm task move" })).toBeEnabled());
   fireEvent.click(screen.getByRole("button", { name: "Confirm task move" })); await waitFor(() => expect(saved).toHaveBeenCalledOnce());
   expect(writes).toHaveLength(1); expect(writes[0]).toMatchObject({ task_ids: ["build", "review"], expected_revision: 7, destination_workflow_id: "next-release", destination_revision: 12 });
+});
+it("says a moved task is released by preparing it only when the destination Workflow has already started", async () => {
+  const task = exampleTask({ available_actions: [{ action: "move", enabled: true }] });
+  const detail = exampleWorkflow({ tasks: [task], capability: writeCapability, available_actions: [{ action: "move", enabled: true }] });
+  const destination = exampleWorkflow({ id: "next-release", title: "Next release", revision: 12, launch_enabled: true, tasks: [], capability: writeCapability, available_actions: [{ action: "import", enabled: true }] });
+  vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+    if (url.includes("/containers/")) return jsonResponse({ workflows: [detail, destination], next_cursor: null, capability: writeCapability });
+    if (url.endsWith("/next-release")) return jsonResponse(destination);
+    return jsonResponse(detail);
+  }));
+  render(<WorkflowMove detail={detail} scope={scope()} verified stale={false} onSaved={vi.fn()} />);
+  fireEvent.click(screen.getByRole("button", { name: "Move or remove tasks" })); await screen.findByRole("option", { name: "Next release" });
+  fireEvent.click(screen.getByRole("checkbox", { name: "Build Android" }));
+  fireEvent.change(screen.getByLabelText("Destination"), { target: { value: "next-release" } });
+  fireEvent.change(screen.getByLabelText("Reason for moving tasks"), { target: { value: "Move this task to the running release" } });
+  fireEvent.click(screen.getByRole("button", { name: "Review task move" })); await screen.findByRole("region", { name: "Move impact" });
+  expect(screen.getByText(/That Workflow has already started, so a task that still needs preparing is released when you prepare it/)).toBeVisible();
+  expect(screen.queryByText(/Prepare and release them there/)).toBeNull();
 });

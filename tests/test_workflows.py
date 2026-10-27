@@ -385,6 +385,73 @@ def test_preparing_never_releases_what_start_left_held_or_a_paused_workflow(
     assert not byid[draft]["start_hold"] and byid[unselected]["start_hold"]
 
 
+def test_a_task_prepared_after_start_wakes_its_agent(setup_workflow, monkeypatch):
+    sent = []
+    monkeypatch.setattr(
+        ws,
+        "publish_event",
+        lambda cur, c, aid, kind, data: sent.append((kind, data.get("task_id"))),
+    )
+    execute = setup_workflow[-1]
+    w = prepare_and_start(setup_workflow, create(setup_workflow, mode="parallel", count=1))
+    w, new = add_task(setup_workflow, w, "late")
+
+    def woken():
+        return sum(1 for kind, t in sent if kind == "task_ready" and str(t) == str(new["id"]))
+
+    assert woken() == 0  # a held draft is not offered to its agent
+    execute("prepare", {}, w["id"], new["id"])
+    assert woken() == 1  # preparing is the go-ahead: the agent is woken, no Release needed
+
+
+def test_tasks_that_join_a_started_workflow_by_import_or_move_follow_the_same_rule(
+    setup_workflow,
+):
+    """Only a task that still needs its first prepare is released by it; one that
+    arrives already prepared keeps its hold until someone releases it."""
+    cid, _, worker, _, hooks, execute = setup_workflow
+    w = prepare_and_start(setup_workflow, create(setup_workflow, mode="parallel", count=1))
+    bare, ready = uid(), uid()
+    with db_cursor() as (_, cur):
+        for tid, title, criteria in ((bare, "Bare", ""), (ready, "Ready", "Done")):
+            cur.execute(
+                "INSERT INTO tasks(id,container_id,title,definition_of_done,status) VALUES (%s,%s,%s,%s,'ready')",
+                (tid, cid, title, criteria),
+            )
+        cur.execute("INSERT INTO agent_tasks(agent_id,task_id) VALUES (%s,%s)", (worker, ready))
+    with db_cursor(readonly=True) as (_, cur):
+        preview = ws.WorkflowService(cur, hooks).preview_import(cid, [bare, ready])
+    w = execute("import", {"task_ids": [bare, ready], "preview_digest": preview["preview_digest"]}, w["id"])
+    byid = {t["id"]: t for t in w["tasks"]}
+    assert (byid[bare]["preparation_state"], byid[bare]["start_hold"]) == ("draft", True)
+    assert (byid[ready]["preparation_state"], byid[ready]["start_hold"]) == ("prepared", True)
+    w = execute("prepare", {"definition_of_done": "A concrete result", "assignee_id": worker}, w["id"], bare)
+    w = execute("prepare", {}, w["id"], ready)
+    byid = {t["id"]: t for t in w["tasks"]}
+    assert not byid[bare]["start_hold"] and byid[bare]["can_start"]
+    assert byid[ready]["start_hold"] and not byid[ready]["can_start"]
+
+    # A task moved in from another Workflow keeps its preparation: a draft is still
+    # released by its first prepare, one prepared there arrives held.
+    source = create(setup_workflow, mode="parallel", count=2)
+    draft, prepared = (t["id"] for t in source["tasks"])
+    execute("prepare", {}, source["id"], prepared)
+    execute(
+        "move",
+        {
+            "task_ids": [draft, prepared],
+            "destination_workflow_id": w["id"],
+            "destination_revision": w["revision"],
+        },
+        source["id"],
+    )
+    for tid in (draft, prepared):
+        w = execute("prepare", {}, w["id"], tid)
+    byid = {t["id"]: t for t in w["tasks"]}
+    assert not byid[draft]["start_hold"] and byid[draft]["can_start"]
+    assert byid[prepared]["start_hold"] and not byid[prepared]["can_start"]
+
+
 def test_mutation_receipt_is_atomic_and_replay_precedes_revision_check(setup_workflow):
     w = create(setup_workflow)
     execute = setup_workflow[-1]

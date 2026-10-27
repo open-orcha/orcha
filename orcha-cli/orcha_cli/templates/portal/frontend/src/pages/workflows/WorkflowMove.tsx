@@ -99,7 +99,7 @@ export function WorkflowMove({ detail, scope, verified, stale, onSaved }: {
       {busy && <p role="status">Checking workflows…</p>}{error && <p role="alert">{error}</p>}
       {current && <section aria-label="Move impact"><h3>Review this move</h3><ul>{draft.tasks.map((id) => <li key={id}>{current.source.tasks.find((t) => t.id === id)?.title ?? "Unavailable task"}</li>)}</ul>
         <p>{draft.tasks.length} tasks leave {current.source.title}. Its required task count and goal acceptance will change; no task is marked accepted.</p>
-        <p>{current.destination ? `Destination: ${current.destination.title}. Tasks stay held until explicitly prepared and released; existing human holds remain.` : "These become standalone tasks. Workflow preparation, start holds and human holds are removed. Review their readiness before assigning or starting work."}</p>
+        <p>{current.destination ? `Destination: ${current.destination.title}. Tasks arrive held; existing human holds remain. ${current.destination.launch_enabled ? "That Workflow has already started, so a task that still needs preparing is released when you prepare it; one that arrives prepared needs Release." : "Prepare and release them there."}` : "These become standalone tasks. Workflow preparation, start holds and human holds are removed. Review their readiness before assigning or starting work."}</p>
       </section>}
       <WorkflowOperationNotice scope={scope} slot={slot} onSaved={saved} canRetry={async () => {
         if (op?.operation !== "move" || op.url !== workflowPaths.detail(detail.id) + "/move") return false;

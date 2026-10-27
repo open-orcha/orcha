@@ -143,6 +143,15 @@ it("invalidates reviewed task additions after an edit and sends stable dependenc
   await waitFor(() => expect(saved).toHaveBeenCalledOnce());
   const tasks = writes[0].tasks as { client_key: string; depends_on: string[] }[]; expect(tasks[1].depends_on).toEqual([tasks[0].client_key]);
 });
+it("tells the owner whether preparing a new task releases its hold, by whether the Workflow has started", () => {
+  for (const started of [true, false]) {
+    const view = render(<MemoryRouter><WorkflowAddTasks detail={{ ...detail(), launch_enabled: started }} scope={scope()} verified stale={false} agents={[]} onSaved={vi.fn()} /></MemoryRouter>);
+    fireEvent.click(screen.getByRole("button", { name: "Add new tasks" }));
+    expect(!!screen.queryByText(/already started, so preparing a new task after saving also releases its start hold/)).toBe(started);
+    expect(!!screen.queryByText(/Prepare and release them explicitly after saving/)).toBe(!started);
+    view.unmount();
+  }
+});
 it("accepts only the exact finished result shown in the preview with an explicit decision", async () => {
   const writes: Record<string, unknown>[] = []; const saved = vi.fn();
   const p = impact(["qa", "data"]); p.task_impacts![0] = { ...p.task_impacts![0], requires_acceptance: true, status: "completed", result_digest: "a".repeat(64), result_text: "Saved pairing checks passed.", definition_of_done: "Pairing passes on both platforms" };
