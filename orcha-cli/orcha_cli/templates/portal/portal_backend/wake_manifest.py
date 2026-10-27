@@ -23,6 +23,7 @@ def _wake_notification_manifest(
     delivered_ts: float,
     *,
     limit: int = _WAKE_NOTIFICATION_MANIFEST_LIMIT,
+    skip_event_ids=(),
 ) -> tuple[list[dict], bool]:
     """Rank pending agent_events with the #247 notification registry for wake routing.
 
@@ -30,7 +31,9 @@ def _wake_notification_manifest(
     drive pending_events, classifies them through _classify_notification, resolves origin +
     object priority, and returns a compact rank-ordered manifest for the notifier prompt.
     The prompt limit is applied AFTER ranking the full pending set; otherwise an older low-rank
-    backlog can hide a newer interrupt/human request from the wake prompt.
+    backlog can hide a newer interrupt/human request from the wake prompt. Rows in
+    ``skip_event_ids`` (held for a Workflow task waiting its turn) are dropped before the
+    limit for the same reason.
     """
     cur.execute(
         f"""SELECT e.id, e.event_name, e.ts, e.payload, e.target_id
@@ -41,7 +44,8 @@ def _wake_notification_manifest(
            ORDER BY e.ts ASC, e.id ASC""",
         (aid, delivered_ts, sql.list_param(_NON_WAKING_EVENTS), aid),
     )
-    raw = cur.fetchall()
+    skip = {str(event_id) for event_id in skip_event_ids}
+    raw = [r for r in cur.fetchall() if str(r["id"]) not in skip]
 
     ids: set[str] = set()
     for r in raw:

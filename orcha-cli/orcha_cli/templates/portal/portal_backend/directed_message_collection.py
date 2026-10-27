@@ -1,6 +1,6 @@
 """Collect bounded, task-aware messages for wake and resident prompts."""
 
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from typing import Any
 
 
@@ -13,8 +13,15 @@ def collect_directed_messages(
     max_chars: int,
     render_attachment_feed_line: Callable[[Any], str],
     drain_class: Callable[[Any, str, dict], dict],
+    skip_event_ids: Collection = (),
 ):
-    """Return pending prompt text, its task, and the safe acknowledgement ceiling."""
+    """Return pending prompt text, its task, and the safe acknowledgement ceiling.
+
+    ``skip_event_ids`` are rows held for later (a Workflow task waiting for its turn).
+    They are passed over before the prompt budget is spent, so a held backlog can never
+    fill the batch and hide later work; they stay unacknowledged for their own turn.
+    """
+    skip = {str(event_id) for event_id in skip_event_ids}
     messages = []
     wake_task_id = None
     ack_through_ts = max_ts
@@ -36,7 +43,7 @@ def collect_directed_messages(
         # answered on the conversation lane and must NOT be re-injected into a work wake as
         # "unanswered" (the worker would re-answer it and eclipse the wake's real reason). Turns
         # ABOVE conv_delivered_ts — the resident crashed / never booted — still surface.
-        """SELECT e.ts, e.event_name, e.payload FROM agent_events e
+        """SELECT e.id, e.ts, e.event_name, e.payload FROM agent_events e
            WHERE e.event_key = %s AND e.ts > %s
              AND e.event_name IN ('prompt', 'decision_made', 'task_message', 'task_assigned',
                                    'task_created_unassigned', 'conversation_turn')
@@ -51,6 +58,9 @@ def collect_directed_messages(
     budget = max_chars
     included_ts = delivered_ts
     for row in cur.fetchall():
+        if str(row["id"]) in skip:
+            included_ts = row["ts"]
+            continue
         payload = row["payload"] or {}
         event_name = row["event_name"]
         if event_name == "task_message":

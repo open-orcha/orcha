@@ -1055,3 +1055,58 @@ async def test_a_message_on_a_blocked_workflow_task_does_not_capture_the_agents_
     # The gate itself is untouched: the blocked task is still refused.
     refused = await project.reserve(project.bob, "b", expect=409)
     assert refused["detail"]["code"] == "not_eligible", refused
+
+
+async def test_a_held_backlog_does_not_fill_the_wake_batch_and_hide_later_work(client):
+    """Review of abd6486d: held rows on a waiting Workflow task were filtered out only after
+    the 24,000-character prompt budget and the 20-row manifest limit, so a long enough held
+    backlog filled the batch, later actionable work was never collected, and every scan
+    woke the agent with an empty prompt. Held rows are now skipped before both limits."""
+    project = Project(client)
+    await project.start("serial", [("a", project.ann, []), ("b", project.bob, [])])
+    launch = await project.reserve(project.ann, "a")  # a holds the only serial turn
+    waiting = project.tasks["b"]
+    for n in range(110):
+        await project.call("POST", f"/api/tasks/{waiting}/messages",
+                           {"author_agent_id": project.owner, "body": f"Note {n} for later. " + "x" * 300}, 201)
+    other = await client.post(f"/api/containers/{project.cid}/tasks", json={
+        "title": "Other work", "definition_of_done": "done", "priority": 10, "assignee_alias": "Bob"})
+    assert other.status_code == 201, other.text
+    other_id = other.json().get("id") or other.json()["task_id"]
+    with db_cursor() as (_, cur):
+        cur.execute("UPDATE tasks SET status='in_progress' WHERE id=%s", (other_id,))
+    instruction = "Please rename the release notes file before you push."
+    await project.call("POST", f"/api/tasks/{other_id}/messages",
+                       {"author_agent_id": project.owner, "body": instruction}, 201)
+
+    first = await _bob_candidate(client, project)
+    assert first["should_wake"], first["reason"]
+    assert first["context_task_id"] == other_id
+    assert any(instruction in m for m in first["prompt_messages"]), first["prompt_messages"]
+    assert first["notifications"] and all(
+        n.get("drain_task_id") != waiting for n in first["notifications"])
+    with db_cursor() as (_, cur):
+        cur.execute("""SELECT e.id, e.payload FROM agent_events e
+                       WHERE e.event_key=%s AND e.event_name='task_message'""", (project.bob,))
+        rows = cur.fetchall()
+    held = {r["id"] for r in rows if str((r["payload"] or {}).get("task_id")) == waiting}
+    actionable = {r["id"] for r in rows if str((r["payload"] or {}).get("task_id")) == other_id}
+    assert len(held) == 110 and actionable
+    handled = set(first["handled_event_ids"]) | set(first["delivery_handled_event_ids"])
+    assert actionable <= handled and not held & handled
+    await client.post(f"/api/agents/{project.bob}/events/ack-handled",
+                      json={"event_ids": first["delivery_handled_event_ids"]})
+    await client.post(f"/api/agents/{project.bob}/events/ack-handled",
+                      json={"event_ids": first["handled_event_ids"]})
+    # Nothing actionable is left, so no empty wake repeats while b waits.
+    assert not (await _bob_candidate(client, project))["should_wake"]
+
+    # b's turn comes: the held notes are still pending and are delivered to it.
+    with db_cursor() as (_, cur):
+        cur.execute("UPDATE workflow_executions SET state='released',worker_stopped_at=now(),released_at=now() "
+                    "WHERE run_id=%s", (launch["run_id"],))
+        cur.execute("UPDATE worker_runs SET status='exited',ended_at=now() WHERE run_id=%s", (launch["run_id"],))
+        cur.execute("UPDATE tasks SET status='completed' WHERE id IN (%s,%s)", (project.tasks["a"], other_id))
+    turn = await _bob_candidate(client, project)
+    assert turn["should_wake"] and turn["context_task_id"] == waiting
+    assert any("Note 0 for later." in m for m in turn["prompt_messages"]), turn["prompt_messages"][:2]

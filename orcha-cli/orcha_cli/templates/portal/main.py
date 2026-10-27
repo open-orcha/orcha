@@ -116,7 +116,7 @@ def resolve_model_runtime(model: Optional[str]) -> str:
     return _MODELS_BY_ID.get(resolve_model(model), {}).get("runtime", "claude")
 
 
-def _collect_directed_messages(cur, aid: str, delivered_ts, max_ts):
+def _collect_directed_messages(cur, aid: str, delivered_ts, max_ts, skip_event_ids=()):
     return collect_directed_messages(
         cur,
         aid,
@@ -125,6 +125,7 @@ def _collect_directed_messages(cur, aid: str, delivered_ts, max_ts):
         max_chars=MAX_PROMPT_BATCH_CHARS,
         render_attachment_feed_line=_render_attachment_feed_line,
         drain_class=_drain_class,
+        skip_event_ids=skip_event_ids,
     )
 
 

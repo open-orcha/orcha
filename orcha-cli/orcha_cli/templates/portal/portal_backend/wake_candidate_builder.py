@@ -60,8 +60,9 @@ def build_wake_candidate(
     auto_tasks = [tid for tid in ready if not parking.parked(tid)]
     parked = set(ready) - set(auto_tasks)
     parked_rows = False
+    held_event_ids = set()
     if pending:
-        _, parked_tasks, pending, newest = parked_pending_events(
+        held_event_ids, parked_tasks, pending, newest = parked_pending_events(
             cur,
             aid,
             delivered_ts,
@@ -76,14 +77,16 @@ def build_wake_candidate(
             parked_rows = True
             latest, latest_payload = newest or (None, None)
     if pending:
+        # Held rows are skipped before the prompt budget and the manifest limit; filtering
+        # them afterwards would let a held backlog fill the batch and hide later work.
         directed, wake_task_id, ack_through_ts = collect_directed_messages(
-            cur, aid, delivered_ts, max_ts
+            cur, aid, delivered_ts, max_ts, skip_event_ids=held_event_ids
         )
         directed = [
             m for m in directed if not (m["task_id"] and str(m["task_id"]) in parked)
         ]
         notifications, notifications_truncated = notification_manifest(
-            cur, aid, delivered_ts
+            cur, aid, delivered_ts, skip_event_ids=held_event_ids
         )
         notifications = [
             n
