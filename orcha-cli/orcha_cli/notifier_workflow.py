@@ -10,18 +10,71 @@ import json
 import os
 import subprocess
 import sys
+import time
+import urllib.error
 import urllib.request
 from uuid import uuid4
 
+from . import workflow_runner_provision as provision
+
+_PROVISIONED = {}  # agent_id -> secret this notifier registered on a native project
+_REFUSALS = {}  # agent_id -> (reason, fix) from the latest refused launch
+_NOTICE_TS = {}  # (agent_id, task_id) -> monotonic time of the last thread note
+NOTICE_INTERVAL_SECS = 30 * 60
+
 
 def runner_secret(agent_id):
-    """Trusted install-time configuration; never read a credential from wake data."""
+    """Trusted configuration only; never read a credential from wake data.
+
+    Explicit ``ORCHA_WORKFLOW_RUNNER_CREDENTIALS`` wins. Otherwise use the credential this
+    notifier registered itself for a local native project (see workflow_runner_provision).
+    """
     try:
         values = json.loads(os.environ.get("ORCHA_WORKFLOW_RUNNER_CREDENTIALS", "{}"))
         value = values.get(agent_id)
-        return value if isinstance(value, str) and value else None
+        if isinstance(value, str) and value:
+            return value
     except (ValueError, AttributeError):
+        pass
+    return _PROVISIONED.get(agent_id)
+
+
+def _refuse(agent_id, reason, fix):
+    _REFUSALS[agent_id] = (reason, fix)
+    return None
+
+
+def _http_code(exc):
+    try:
+        detail = json.load(exc).get("detail")
+    except (ValueError, AttributeError, OSError):
         return None
+    return detail.get("code") if isinstance(detail, dict) else None
+
+
+def announce_refusal(api_base, candidate, post_json, *, quiet=False):
+    """Say why a Workflow task could not launch, in the log and on the task thread.
+
+    A refusal that only cools the agent down looks like nothing happened, so the person
+    who started the Workflow gets the reason and the fix (at most once per interval).
+    """
+    aid = candidate["agent_id"]
+    refusal = _REFUSALS.pop(aid, None)
+    if not refusal:
+        return False
+    reason, fix = refusal
+    if not quiet:
+        print(f"[notifier] {candidate.get('alias')}: Workflow task not launched: {reason}. {fix}", file=sys.stderr)
+    task_id = candidate.get("context_task_id") or next(iter(candidate.get("auto_start_task_ids") or []), None) or candidate.get("wake_task_id")
+    last = _NOTICE_TS.get((aid, task_id))
+    if not task_id or (last is not None and time.monotonic() - last < NOTICE_INTERVAL_SECS):
+        return False
+    _NOTICE_TS[(aid, task_id)] = time.monotonic()
+    post_json(f"{api_base}/api/tasks/{task_id}/messages", {
+        "author_agent_id": aid,
+        "body": f"Orcha could not start this task automatically: {reason}. {fix}",
+    })
+    return True
 
 
 def runner_post(url, body, headers):
@@ -32,9 +85,15 @@ def runner_post(url, body, headers):
 
 
 def reserve_candidate(api_base, candidate):
-    secret = runner_secret(candidate["agent_id"])
+    aid = candidate["agent_id"]
+    secret = runner_secret(aid)
     if not secret:
-        return None
+        try:
+            secret = _PROVISIONED[aid] = provision.ensure_secret(
+                candidate.get("headless_cwd"), api_base, aid
+            )
+        except provision.Unavailable as exc:
+            return _refuse(aid, exc.reason, exc.fix)
     task_id = candidate.get("context_task_id") or next(iter(candidate.get("auto_start_task_ids") or []), None) or candidate.get("wake_task_id")
     body = {"task_id": task_id, "expected_workflow_revision": candidate.get("workflow_revision"),
             "expected_work_revision": candidate.get("workflow_work_revision"),
@@ -45,6 +104,14 @@ def reserve_candidate(api_base, candidate):
         if not reserved or reserved.get("task_id") != task_id or not reserved.get("permit"):
             return None
         return {**reserved, "agent_id": candidate["agent_id"], "api_base": api_base}
+    except urllib.error.HTTPError as exc:
+        if _http_code(exc) in ("runner_credential_required", "runner_credential_invalid"):
+            return _refuse(
+                aid,
+                "Orcha does not accept the launcher credential configured for this agent",
+                "Remove its entry from ORCHA_WORKFLOW_RUNNER_CREDENTIALS so Orcha can set up a local one, or replace it with a valid one.",
+            )
+        return None
     except Exception:
         return None
 

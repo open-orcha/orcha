@@ -31,10 +31,19 @@ The generated OpenAPI exposes:
 
 Reservation and runner management require `X-Orcha-Runner-Token`, matched against
 a hashed registry entry scoped to the runner instance, agent and project. There is
-no public mint endpoint or headerless local bypass. Trusted provisioning remains an
-integration prerequisite. The notifier reads per-agent credentials from its own
-`ORCHA_WORKFLOW_RUNNER_CREDENTIALS` JSON environment; both that mapping and the
-single-token variable are removed from child environments.
+no public mint endpoint or headerless local bypass. The notifier reads per-agent
+credentials from its own `ORCHA_WORKFLOW_RUNNER_CREDENTIALS` JSON environment; both
+that mapping and the single-token variable are removed from child environments.
+
+On a local native project the notifier provisions the credential itself
+(`orcha_cli/workflow_runner_provision.py`): it writes the hash of a fresh secret into
+the project's own SQLite file and keeps the secret in `.orcha/workflow-runner-credentials.json`
+(0600). That needs file access to the database, so it adds no network surface and does
+nothing for Docker or hosted deployments, which still use the environment mapping. A
+credential a person revoked is never replaced automatically. When a launch is refused
+(not a native project, a retired or non-AI assignee, a revoked or rejected credential)
+the notifier logs the reason and posts it, with the fix, to the task thread (at most
+once per 30 minutes) instead of only cooling the agent down.
 
 The bootstrap receives its permit over stdin and executes no model CLI or task
 command until activation succeeds. Activation binds the process nonce and PID;

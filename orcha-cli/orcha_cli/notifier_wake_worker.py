@@ -233,6 +233,7 @@ def spawn(
         if not workflow_launch:
             services._post_json(f"{api_base}/api/agents/{candidate['agent_id']}/wake-ack",
                                 {"kind": "workflow_admission_refused", "release_lease": True, "lane": lane})
+            notifier_workflow.announce_refusal(api_base, candidate, services._post_json, quiet=quiet)
             return None
     resume_rendered = False
     if dry_run:
