@@ -332,3 +332,9 @@
 .wf-decide .wf-choice { margin: 4px 0; padding: 6px 0; }
 .wf-decide .wf-field { align-items: stretch; margin-block: 8px 0; }
 .wf-decide .wf-field .wf-in { width: 96px; }
+/* Outcome route preview (#362 x06) */
+.wf-page .wf-impact:has(> .wf-impact-h) { padding: 0; overflow: hidden; }
+.wf-impact-h { padding: 8px 12px; font-size: var(--v2-fs-label); font-weight: var(--v2-fw-medium); color: var(--v2-text-3); border-bottom: 1px solid var(--v2-border); display: flex; justify-content: space-between; gap: 8px; }
+.wf-impact-row { display: flex; align-items: center; gap: 10px; padding: 7px 12px; font-size: var(--v2-fs-body); border-top: 1px solid var(--v2-border-subtle); }
+.wf-impact-row:first-of-type { border-top: 0; }
+.wf-impact-row .t { flex: 1; min-width: 0; white-space: normal; overflow-wrap: anywhere; color: var(--v2-text); }

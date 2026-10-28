@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { Badge } from "../../components/primitives";
 import { Button } from "../../components/primitives/Button";
 import { availableActionReason, workflowPaths, workflowRequest } from "./workflowApi";
 import { evidenceReference, evidenceSupplier, evidenceUsable, WorkflowEvidencePanel, type EvidenceSupplier } from "./WorkflowEvidence";
@@ -7,7 +8,6 @@ import type { DraftScope } from "./workflowDraft";
 import { useWorkflowForm } from "./workflowFormState";
 import { sendWorkflowOperation, useWorkflowOperation } from "./workflowOperations";
 import { WorkflowOperationNotice } from "./WorkflowOperationNotice";
-import { ROUTE_LABELS } from "./WorkflowRouteSummary";
 
 /** Plan approval and result acceptance are different decisions. This form only
  * accepts/rejects the exact submitted result, using the workflow receipt route. A step that
@@ -40,6 +40,31 @@ export function WorkflowTaskDecision({ detail, task, scope, verified, stale, onS
       : availableActionReason(current.capability, target.available_actions, verb, verified);
   };
   const routed = action === "accept" && outcomes.length > 0;
+  // What the chosen outcome would do, read live from the server's routing preview (#362 x06).
+  const [live, setLive] = useState<RoutingPreview | null>(null);
+  useEffect(() => {
+    setLive(null);
+    if (!routed || !outcomes.some((o) => o.name === outcome)) return;
+    let active = true; const controller = new AbortController();
+    void workflowRequest("RoutingPreview", `/api/tasks/${encodeURIComponent(task.id)}/outcome/preview`,
+      { method: "POST", body: { outcome, expected_work_revision: task.work_revision }, actorId: scope.identity, signal: controller.signal })
+      .then((route) => { if (active && route.task_id === task.id && route.outcome === outcome) setLive(route); }).catch(() => { if (active) setLive(null); });
+    return () => { active = false; controller.abort(); };
+  }, [routed, outcome, task.id, task.work_revision, detail.revision]);
+  const group = detail.repeat_groups?.find((g) => g.member_tasks.includes(task.id));
+  const titleOf = (id?: string | null) => detail.tasks.find((t) => t.id === id)?.title ?? "a removed step";
+  const routeLine = (name: string) => {
+    const rule = task.routes?.find((r) => r.outcome === name);
+    switch (rule?.destination ?? "next") {
+      case "return": return `↺ ${titleOf(rule?.destination_task)}, then ${task.title} again${group ? ` · round ${group.current_round + 1}` : ""}`;
+      case "step": return `→ ${titleOf(rule?.destination_task)}`;
+      case "ask_owner": return "? The owner decides what happens next";
+      case "exit_group": return "→ Leaves the loop";
+      case "stop": return "■ Stops the workflow";
+      default: { const next = detail.tasks.filter((t) => t.depends_on.includes(task.id)).map((t) => t.title);
+        return `→ ${next.length ? next.join(", ") : "Nothing else waits on this step"}`; }
+    }
+  };
   const findingList = findings.split("\n").map((f) => f.trim()).filter(Boolean).slice(0, 50).map((text) => ({ text }));
   const needsReport = routed && (!reported || reported.outcome !== outcome || findings.trim() !== reportedFindings.trim());
   const basis = JSON.stringify([detail.revision, task.work_revision, action, reason, evidence, routed ? [outcome, findings] : null]);
@@ -128,14 +153,12 @@ export function WorkflowTaskDecision({ detail, task, scope, verified, stale, onS
     {routed && <fieldset disabled={busy || unresolved || stale}><legend>Outcome</legend>
       <p>{reported ? `${reported.reporter_kind === "human" ? "A person" : "The step"} reported “${reported.outcome}”. Change it here if the result says otherwise.`
         : "This step should report an outcome, and none was reported. Choose the one this result reached."}</p>
-      {outcomes.map((o) => {
-        const rule = task.routes?.find((r) => r.outcome === o.name);
-        const to = rule?.destination_task ? detail.tasks.find((t) => t.id === rule.destination_task)?.title : null;
-        return <label key={o.name} className="wf-choice"><input type="radio" name={`outcome-${task.id}`} checked={outcome === o.name} onChange={() => setOutcome(o.name)} />
-          <span><strong>{o.name}</strong> <span className="wf-muted">Then {rule ? ROUTE_LABELS[rule.destination] : ROUTE_LABELS.next}{to ? ` ${to}` : ""}.</span></span></label>;
-      })}
-      <label>Findings for the next round (one per line)<textarea maxLength={4000} value={findings} onChange={(e) => setFindings(e.target.value)} /></label>
+      {outcomes.map((o) => <label key={o.name} className="wf-choice"><input type="radio" name={`outcome-${task.id}`} checked={outcome === o.name} onChange={() => setOutcome(o.name)} />
+        <span>{o.name}<small>{routeLine(o.name)}</small></span></label>)}
+      <label className="wf-field">Findings (one per line)<textarea maxLength={4000} value={findings} onChange={(e) => setFindings(e.target.value)} /></label>
+      <p className="wf-muted">Reporting cannot change what “done” means for any step. Changing success criteria goes through the owner.</p>
     </fieldset>}
+    {routed && !current && live && <RoutePreview route={live} detail={detail} findings={findingList.length} reporting={false} />}
     {action === "accept" && supplierRequired && supplier && <p>Result supplied by {supplier.alias} ({supplier.kind === "human" ? "person" : "agent"}). {supplier.id === scope.identity
       ? "You supplied this outside result; accepting your own result is allowed and will be recorded."
       : "The supplier and acceptor will be recorded separately."}</p>}
@@ -144,7 +167,7 @@ export function WorkflowTaskDecision({ detail, task, scope, verified, stale, onS
     {current && <>
       <p>{action === "accept" ? `Accept work revision ${task.work_revision} with ${evidence?.items.length} exact saved file versions. Holds and worker shutdown rules remain in effect.`
         : "Your feedback is recorded against this result. The owner decides what happens next; this does not restart the agent. A running worker must still stop."}</p>
-      {preview?.route && <RoutePreview route={preview.route} detail={current} reporting={needsReport} />}
+      {preview?.route && <RoutePreview route={preview.route} detail={current} findings={findingList.length} reporting={needsReport} />}
       <Button variant={action === "reject" ? "danger" : "primary"} disabled={busy || stale || unresolved || !!invalid || !!permission(current)} onClick={() => void confirm()}>
         {action === "accept" ? "Confirm accept result" : "Confirm request changes"}
       </Button>
@@ -159,14 +182,30 @@ export function WorkflowTaskDecision({ detail, task, scope, verified, stale, onS
   </section>;
 }
 
-/** What accepting with this outcome does next, from the server's read-only routing preview. */
-function RoutePreview({ route, detail, reporting }: { route: RoutingPreview; detail: WorkflowDetail; reporting: boolean }) {
-  const titles = (ids?: string[]) => (ids ?? []).map((id) => detail.tasks.find((t) => t.id === id)?.title ?? "a removed step").join(", ");
-  return <div className="wf-route-preview" aria-label="What happens next">
-    <p>{reporting ? `Records the outcome “${route.outcome}”, then accepts. ` : ""}{route.message}</p>
-    {!!route.repeats?.length && <p>Runs again: {titles(route.repeats)}.</p>}
-    {!!route.stale?.length && <p>Later steps to redo on the new work: {titles(route.stale)}.</p>}
-    {!!route.not_selected?.length && <p>Not needed on this path: {titles(route.not_selected)}.</p>}
-    {route.blocked_by === "limit" && <p>The loop is at its round limit, so the owner decides instead.</p>}
+/** What accepting with this outcome does next, from the server's read-only routing preview:
+ * each affected step with whether it repeats, goes stale, is not selected or is kept (#362 x06). */
+function RoutePreview({ route, detail, findings, reporting }: { route: RoutingPreview; detail: WorkflowDetail; findings: number; reporting: boolean }) {
+  const title = (id?: string | null) => detail.tasks.find((t) => t.id === id)?.title ?? "a removed step";
+  const heading = {
+    return: `This sends work back to ${title(route.destination_task_id)}`, step: `This moves on to ${title(route.destination_task_id)}`,
+    next: "This moves on to the next steps", ask_owner: "This asks the owner what happens next", exit_group: "This ends the loop", stop: "This stops the workflow",
+  }[route.destination];
+  const next = (route.round ?? 0) + 1;
+  const carried = findings ? ` with ${findings === 1 ? "your finding" : `your ${findings} findings`}` : "";
+  const rows: [string, string, "warn" | "neutral" | "ok", string][] = [
+    ...(route.repeats ?? []).map((id): [string, string, "warn", string] => [id, `${title(id)} · repeats in round ${next}${id === route.destination_task_id ? carried : ""}`, "warn", "Repeats"]),
+    ...(route.stale ?? []).map((id): [string, string, "warn", string] => [id, `${title(id)} · built on work that goes back · will need redoing`, "warn", "Stale"]),
+    ...(route.not_selected ?? []).map((id): [string, string, "neutral", string] => [id, `${title(id)} · not on this path`, "neutral", "Not selected"]),
+    ...(route.kept ?? []).map((id): [string, string, "ok", string] => [id, `${title(id)} · unchanged`, "ok", "Kept"]),
+  ];
+  return <div aria-label="What happens next">
+    <div className="wf-impact">
+      <div className="wf-impact-h"><span>{heading}</span><span>preview</span></div>
+      {reporting && <div className="wf-impact-row"><span className="t">Records the outcome “{route.outcome}”, then accepts.</span></div>}
+      {route.blocked_by === "limit" && <div className="wf-impact-row"><span className="t">The loop is at its round limit, so the owner decides instead of starting round {next}.</span><Badge tone="warn">Owner decides</Badge></div>}
+      {rows.map(([id, text, tone, label]) => <div key={`${label}-${id}`} className="wf-impact-row"><span className="t">{text}</span><Badge tone={tone}>{label}</Badge></div>)}
+      {!rows.length && !reporting && route.blocked_by !== "limit" && <div className="wf-impact-row"><span className="t">{route.message}</span></div>}
+    </div>
+    {route.destination === "return" && route.round != null && <p className="wf-muted">Nothing is deleted. Round {route.round} results stay in Review history.{route.blocked_by !== "limit" && route.rounds_remaining != null ? ` Rounds remaining after this: ${Math.max(route.rounds_remaining - 1, 0)}.` : ""}</p>}
   </div>;
 }

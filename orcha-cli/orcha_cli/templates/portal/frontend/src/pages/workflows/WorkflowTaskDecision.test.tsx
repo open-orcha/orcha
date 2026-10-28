@@ -150,11 +150,16 @@ describe("a step that declares outcomes", () => {
     await selectEvidence();
     expect(screen.getByText(/Choose this step’s outcome before accepting/)).toBeVisible();
     expect(screen.getByRole("button", { name: "Review decision" })).toBeDisabled();
+    expect(screen.getByRole("radio", { name: /Changes requested ↺ Write the post, then Build Android again/ })).toBeVisible();
     fireEvent.click(screen.getByRole("radio", { name: /Changes requested/ }));
-    fireEvent.change(screen.getByLabelText(/Findings for the next round/), { target: { value: "Too long\n\nNo title" } });
+    fireEvent.change(screen.getByLabelText(/^Findings/), { target: { value: "Too long\n\nNo title" } });
+    // The live preview (x06): what repeats, before the decision is reviewed.
+    expect(await screen.findByText("This sends work back to Write the post")).toBeVisible();
+    expect(screen.getByText("Write the post · repeats in round 1 with your 2 findings")).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Review decision" }));
-    expect(await screen.findByText(/Records the outcome “Changes requested”, then accepts\. Write the post runs again/)).toBeVisible();
-    expect(screen.getByText("Runs again: Write the post, Build Android.")).toBeVisible();
+    expect(await screen.findByText("Records the outcome “Changes requested”, then accepts.")).toBeVisible();
+    expect(screen.getByText("Build Android · repeats in round 1")).toBeVisible();
+    expect(screen.getAllByText("Repeats")).toHaveLength(2);
     fireEvent.click(screen.getByRole("button", { name: "Confirm accept result" }));
     await waitFor(() => expect(saved).toHaveBeenCalledOnce());
     expect(writes.map(([url]) => url)).toEqual(["/api/tasks/build/outcome", "/api/tasks/build/accept"]);
@@ -165,7 +170,7 @@ describe("a step that declares outcomes", () => {
     const { writes, saved } = setup({ outcome: "Approved", findings: [{ text: "Good" }], note: "", reporter_kind: "ai", applied: false });
     expect(screen.getByText(/The step reported “Approved”/)).toBeVisible();
     expect(screen.getByRole("radio", { name: /Approved/ })).toBeChecked();
-    expect(screen.getByText(/Then the loop ends\./)).toBeVisible();
+    expect(screen.getByText("→ Leaves the loop")).toBeVisible();
     await selectEvidence(); fireEvent.click(screen.getByRole("button", { name: "Review decision" }));
     fireEvent.click(await screen.findByRole("button", { name: "Confirm accept result" }));
     await waitFor(() => expect(saved).toHaveBeenCalledOnce());
