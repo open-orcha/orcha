@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, expect, it, vi } from "vitest";
 import { WorkflowObjectiveEditor } from "./WorkflowObjectiveEditor";
 import { WorkflowMove } from "./WorkflowMove";
+import { WorkflowSettings } from "./WorkflowSettings";
 import { exampleTask, exampleWorkflow, jsonResponse, writeCapability } from "./workflowTestFixtures";
 const scope = () => ({ origin: "https://orcha.example", project: "project", identity: crypto.randomUUID() });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
@@ -64,4 +65,22 @@ it("says a moved task is released by preparing it only when the destination Work
   fireEvent.click(screen.getByRole("button", { name: "Review task move" })); await screen.findByRole("region", { name: "Move impact" });
   expect(screen.getByText(/That Workflow has already started, so a task that still needs preparing is released when you prepare it/)).toBeVisible();
   expect(screen.queryByText(/Prepare and release them there/)).toBeNull();
+});
+
+it("lets the owner change a loop workflow's agent-turn allowance in Workflow settings (#362 x02)", async () => {
+  const detail = exampleWorkflow({ capability: writeCapability, semantics_version: 2, turn_allowance: 40, turns_used: 12,
+    available_actions: [{ action: "patch", enabled: true }] });
+  const writes: [string, RequestInit][] = []; const saved = vi.fn();
+  vi.stubGlobal("fetch", vi.fn(async (url: string, init: RequestInit) => { if (init.method === "PATCH") writes.push([url, init]); return jsonResponse(detail); }));
+  render(<WorkflowSettings detail={detail} scope={scope()} verified stale={false} humans={[]} onSaved={saved} />);
+  fireEvent.click(screen.getByRole("button", { name: "Workflow settings" }));
+  expect(screen.getByText(/12 used/)).toBeTruthy();
+  fireEvent.change(screen.getByLabelText("Reason"), { target: { value: "Long loop" } });
+  fireEvent.change(screen.getByLabelText(/Agent-turn allowance for this run/), { target: { value: "1001" } });
+  expect(screen.getByText("The agent-turn allowance can be at most 1000.")).toBeTruthy();
+  fireEvent.change(screen.getByLabelText(/Agent-turn allowance for this run/), { target: { value: "60" } });
+  fireEvent.click(screen.getByRole("button", { name: "Review settings change" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Confirm settings change" }));
+  await waitFor(() => expect(saved).toHaveBeenCalledOnce());
+  expect(JSON.parse(String(writes[0][1].body))).toMatchObject({ turn_allowance: 60, reason: "Long loop" });
 });

@@ -18,11 +18,13 @@ export function WorkflowSettings({ detail, scope, verified, stale, humans, onSav
   const ownership = useRef<HTMLHeadingElement>(null);
   useEffect(() => { if (open && initialSection === "ownership") { ownership.current?.scrollIntoView?.({ block: "start" }); ownership.current?.focus(); } }, [open, initialSection]);
   const [draft, setDraft] = useWorkflowForm(scope, `settings:${detail.id}`, { title: detail.title, goal: detail.goal,
-    mode: detail.execution_mode, taskLimit: String(detail.task_limit), roundLimit: String(detail.round_limit), reason: "", owner: "" });
+    mode: detail.execution_mode, taskLimit: String(detail.task_limit), roundLimit: String(detail.round_limit), turns: String(detail.turn_allowance ?? 40), reason: "", owner: "" });
+  const loops = detail.semantics_version === 2;
   const op = useWorkflowOperation(scope, `workflow:${detail.id}`);
   const frozen = op?.state === "sending" || op?.state === "uncertain";
   const invalid = !draft.title.trim() || !draft.goal.trim() || !draft.reason.trim() ? "Give the workflow a name, goal and reason for the change."
-    : ![draft.taskLimit, draft.roundLimit].every((value) => /^\d+$/.test(value) && Number.isSafeInteger(Number(value)) && Number(value) > 0) ? "Enter positive whole-number limits." : null;
+    : ![draft.taskLimit, draft.roundLimit, ...(loops ? [draft.turns] : [])].every((value) => /^\d+$/.test(value) && Number.isSafeInteger(Number(value)) && Number(value) > 0) ? "Enter positive whole-number limits."
+    : loops && Number(draft.turns) > 1000 ? "The agent-turn allowance can be at most 1000." : null;
   return <>{!control && <Button onClick={() => setOpen(true)}>Workflow settings</Button>}
     {open && <Dialog title="Workflow settings" size="lg" className="wf-page" onClose={() => { if (!frozen) setOpen(false); }} footer={<Button disabled={frozen} onClick={() => setOpen(false)}>Keep draft and close</Button>}>
       <p>Changing the goal or scope requires renewed goal acceptance. After Start, changing how work runs requires Pause and all current turns to end; changing a setting never stops a worker.</p>
@@ -33,13 +35,15 @@ export function WorkflowSettings({ detail, scope, verified, stale, humans, onSav
         <p>Tasks with dependencies take their turn alone, including review and worker stopping.</p>
         <label>Task limit<input type="number" min={1} value={draft.taskLimit} onChange={(e) => setDraft({ ...draft, taskLimit: e.target.value })} /></label>
         <label>Review-round limit<input type="number" min={1} value={draft.roundLimit} onChange={(e) => setDraft({ ...draft, roundLimit: e.target.value })} /></label>
+        {loops && <label>Agent-turn allowance for this run<input type="number" min={1} max={1000} value={draft.turns} onChange={(e) => setDraft({ ...draft, turns: e.target.value })} />
+          <small>{detail.turns_used ?? 0} used. When it runs out, no new agent turn starts until the owner raises it.</small></label>}
         <label>Reason<textarea maxLength={4000} value={draft.reason} onChange={(e) => setDraft({ ...draft, reason: e.target.value })} /></label>
       </fieldset>
       <WorkflowChange detail={detail} scope={scope} verified={verified} stale={stale} operation="patch" url={workflowPaths.detail(detail.id)} method="PATCH"
         label="Settings change" invalid={invalid || actionReason(detail, "patch", verified)} body={{ title: draft.title.trim(), goal: draft.goal.trim(), execution_mode: draft.mode,
-          task_limit: Number(draft.taskLimit), round_limit: Number(draft.roundLimit), reason: draft.reason.trim() }} onSaved={(result) => { setOpen(false); onSaved(result); }}
+          task_limit: Number(draft.taskLimit), round_limit: Number(draft.roundLimit), ...(loops ? { turn_allowance: Number(draft.turns) } : {}), reason: draft.reason.trim() }} onSaved={(result) => { setOpen(false); onSaved(result); }}
         check={(latest) => actionReason(latest, "patch", verified) || (latest.launch_enabled && latest.status !== "paused" && latest.execution_mode !== draft.mode ? "Pause new starts and wait for current turns before changing how work runs." : null)}>
-        {(latest) => <><p>{latest.title} → {draft.title}. Goal: {draft.goal}</p><p>Task limit: {draft.taskLimit}. Review-round limit: {draft.roundLimit}. No automatic start or resume follows this save.</p></>}
+        {(latest) => <><p>{latest.title} → {draft.title}. Goal: {draft.goal}</p><p>Task limit: {draft.taskLimit}. Review-round limit: {draft.roundLimit}.{loops ? ` Agent-turn allowance: ${draft.turns}.` : ""} No automatic start or resume follows this save.</p></>}
       </WorkflowChange>
       <h3>Objectives</h3>
       {detail.objectives.length === 0 && <p>No objectives were added to this workflow.</p>}

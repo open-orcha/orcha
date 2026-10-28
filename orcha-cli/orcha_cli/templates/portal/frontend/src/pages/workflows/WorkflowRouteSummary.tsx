@@ -47,7 +47,7 @@ export function WorkflowRouteSummary({ detail }: { detail: WorkflowDetail }) {
     <WorkflowRoutePanel detail={detail} />
     <div className="wf-impact">
       <div className="wf-impact-h"><span>Limits</span><span>bounded automated work</span></div>
-      <div className="wf-impact-row"><span className="t">{groups.length ? `Rounds: ${most} including the first · ` : ""}Agent-turn allowance for this run: {allowance} ({detail.turns_used ?? 0} used). When it runs out, no new agent turn starts until the owner raises it, reassigns, changes the scope or stops.</span></div>
+      <div className="wf-impact-row"><span className="t">{groups.length ? `Rounds: ${most} including the first · ` : ""}Agent-turn allowance for this run: {allowance} ({detail.turns_used ?? 0} used). When it runs out, no new agent turn starts until the owner raises it, reassigns, changes the scope or stops. Change it in Workflow settings before Start.</span></div>
       <div className="wf-impact-row"><span className="t">Project and agent budgets still apply. A reached limit never counts as success.</span></div>
     </div>
     <div className="wf-impact">
