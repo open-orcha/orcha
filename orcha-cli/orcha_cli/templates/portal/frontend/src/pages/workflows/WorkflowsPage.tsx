@@ -18,6 +18,7 @@ import { WorkflowActivity, WorkflowReviewHistory } from "./WorkflowHistory";
 import { WorkflowHeader } from "./WorkflowHeader";
 import { WorkflowRail } from "./WorkflowRail";
 import { WorkflowLoopDecision, WorkflowOwnerBar } from "./WorkflowLoopDecision";
+import { pathDecider } from "./WorkflowRouteSummary";
 import { WorkflowLoopGroup, WorkflowTaskRow, WorkflowTaskRows } from "./WorkflowTaskRows";
 import { WorkflowTaskInspector } from "./WorkflowTaskInspector";
 import { WorkflowHide } from "./WorkflowHide";
@@ -27,7 +28,7 @@ import { useWorkflowOperation } from "./workflowOperations";
 import { WorkflowListEmpty, WorkflowRow, WorkflowRows, WorkflowsToolbar, matchesWorkflowFilter, workflowServerStatus } from "./WorkflowListView";
 import { Skeleton, EmptyState, SplitPane, Segmented, Tabs, type MenuItemSpec } from "../../components/primitives";
 import { actionReason, hasWorkflowRoutes, WorkflowApiError, workflowPaths, workflowRequest, workflowWriteReason } from "./workflowApi";
-import type { Capability, WorkflowDetail, WorkflowList } from "./workflowContract.generated";
+import type { Capability, WorkflowDetail, WorkflowList, WorkflowTask } from "./workflowContract.generated";
 import { workflowListReturnTarget, workflowNavigationState } from "./workflowNavigation";
 import "./workflows.css";
 
@@ -203,6 +204,12 @@ function WorkflowScreen() {
   }
   const selectedTask = detail?.tasks.find((t) => t.id === selectedId) ?? null;
   const flexible = detail?.semantics_version === 2;
+  // A step left off the chosen path says which step's outcome chose it (#362 x07).
+  const notSelectedLine = (t: WorkflowTask) => {
+    if (!detail || t.route_state !== "not_selected") return undefined;
+    const by = pathDecider(detail, t);
+    return by?.reported_outcome ? `Not selected · not run because ${by.title} reported ${by.reported_outcome.outcome}` : "Not selected · not run on the chosen path";
+  };
   const decideTask = detail?.tasks.find((t) => t.id === decideId && t.awaiting_loop_decision) ?? null;
   const saved = () => { setStale(true); setRetry((n) => n + 1); };
   const openTask = (id: string) => navigate(`/tasks?${new URLSearchParams({ task: id, cid: cid ?? "", workflowReturn: `${pathname}${location.search}` })}`, { state: navigationState });
@@ -223,7 +230,7 @@ function WorkflowScreen() {
       const group = t.repeat_group_id ? detail!.repeat_groups?.find((g) => g.id === t.repeat_group_id) : undefined;
       return <WorkflowTaskRow key={t.id} loop={group ? { round: t.round ?? group.current_round } : null} task={t} selected={selectedId === t.id} onSelect={() => { setSelectedId(t.id); setTaskRequest(null); }} actorName={actorName}
         assignees={t.assignee_ids.map((id) => ({ id, alias: actorName(id), kind: snap?.agents.find((a) => a.id === id)?.kind ?? "ai" }))} menuItems={rowMenu(t)}
-        subline={dependencies ? `Depends on: ${t.depends_on.length ? names(t.depends_on) : "none"} · Needed by: ${dependents.length ? names(dependents) : "none"}` : undefined} />;
+        subline={dependencies ? `Depends on: ${t.depends_on.length ? names(t.depends_on) : "none"} · Needed by: ${dependents.length ? names(dependents) : "none"}` : notSelectedLine(t)} />;
     };
     // Consecutive members of one repeat group share a bracket (issue #362 x03); everything else is a plain row.
     const runs: { group?: NonNullable<WorkflowDetail["repeat_groups"]>[number]; tasks: typeof shown }[] = [];

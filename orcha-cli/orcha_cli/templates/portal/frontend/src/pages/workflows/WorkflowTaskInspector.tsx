@@ -18,6 +18,7 @@ import { taskReason, WorkflowTaskActions, type TaskActionRequest } from "./Workf
 import { WorkflowTaskDecision } from "./WorkflowTaskDecision";
 import { WorkflowTaskLink } from "./WorkflowTaskReturn";
 import { WorkflowLoopDecision, WorkflowLoopDecisionPrompt } from "./WorkflowLoopDecision";
+import { WorkflowWhyPath } from "./WorkflowRouteSummary";
 import { WorkflowRoundContext } from "./WorkflowRoundContext";
 import { formatServerTime } from "./WorkflowTaskRows";
 
@@ -60,6 +61,7 @@ export function WorkflowTaskInspector({ detail, task, cid, scope, verified, stal
         </ul>
       </Section>
       {detail.semantics_version === 2 && ((task.outcomes ?? []).length > 0 || task.repeat_group_id) && <WorkflowRoundContext detail={detail} task={task} />}
+      <WorkflowWhyPath detail={detail} task={task} />
       {task.awaiting_loop_decision && <Section title="Decision needed">
         <WorkflowLoopDecisionPrompt detail={detail} task={task} viewer={scope.identity} onDecide={() => setLoopOpen(true)} />
         {loopOpen && <WorkflowLoopDecision detail={detail} task={task} scope={scope} stale={stale} agents={agents} onSaved={onSaved} onClose={() => setLoopOpen(false)} />}

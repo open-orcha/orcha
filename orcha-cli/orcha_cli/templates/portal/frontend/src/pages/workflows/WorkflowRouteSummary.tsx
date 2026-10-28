@@ -4,7 +4,7 @@
  * and the agent-turn allowance for this run. Shown only for flexible (semantics 2) workflows.
  */
 import { Badge } from "../../components/primitives";
-import type { StepRoute, WorkflowDetail } from "./workflowContract.generated";
+import type { StepRoute, WorkflowDetail, WorkflowTask } from "./workflowContract.generated";
 
 export const ROUTE_LABELS: Record<StepRoute["destination"], string> = {
   next: "the next steps proceed", step: "goes to", return: "goes back to", ask_owner: "the owner decides what happens next",
@@ -44,5 +44,43 @@ export function WorkflowRouteSummary({ detail }: { detail: WorkflowDetail }) {
       <div className="wf-impact-h"><span>Incomplete settings</span><span>none</span></div>
       <div className="wf-impact-row"><span className="t">Every outcome has a destination{groups.length ? " and every loop has a round limit" : ""}. Orcha checked this when the workflow was saved.</span></div>
     </div>
+  </section>;
+}
+
+/** The step whose reported outcome chose the path through `task` (#362 x07): the nearest
+ * prerequisite, direct or not, that reported an applied outcome and has rules. */
+export function pathDecider(detail: WorkflowDetail, task: WorkflowTask): WorkflowTask | null {
+  const byId = new Map(detail.tasks.map((t) => [t.id, t]));
+  const seen = new Set<string>(); let frontier = [...task.depends_on];
+  while (frontier.length) {
+    const next: string[] = [];
+    for (const id of frontier) {
+      if (seen.has(id)) continue; seen.add(id);
+      const t = byId.get(id); if (!t) continue;
+      if (t.reported_outcome?.applied && (t.routes ?? []).some((r) => r.destination !== "next")) return t;
+      next.push(...t.depends_on);
+    }
+    frontier = next;
+  }
+  return null;
+}
+
+/** "Why this path" in the task inspector (#362 x07): the deciding step, its outcome, its rules,
+ * the steps not selected and how the choice can change. */
+export function WorkflowWhyPath({ detail, task }: { detail: WorkflowDetail; task: WorkflowTask }) {
+  if (detail.semantics_version !== 2) return null;
+  const decider = pathDecider(detail, task);
+  if (!decider?.reported_outcome) return null;
+  const title = (id?: string | null) => detail.tasks.find((t) => t.id === id)?.title ?? "a removed step";
+  const skipped = detail.tasks.filter((t) => t.route_state === "not_selected");
+  return <section className="v2-section wf-why" aria-label="Why this path">
+    <div className="v2-section-h"><h3 className="v2-section-title">Why this path</h3></div>
+    <dl className="wf-kv">
+      <dt>Deciding step</dt><dd>{decider.title}</dd>
+      <dt>Outcome</dt><dd><Badge tone="ok">{decider.reported_outcome.outcome}</Badge></dd>
+      <dt>Rule</dt><dd>{(decider.routes ?? []).map((r) => <div key={r.outcome}>{r.outcome} {ARROWS[r.destination]} {r.destination_task ? title(r.destination_task) : ROUTE_LABELS[r.destination]}</div>)}</dd>
+      {skipped.length > 0 && <><dt>Not selected</dt><dd>{skipped.map((t) => t.title).join(", ")} · neither failed nor accepted</dd></>}
+      <dt>Can it change?</dt><dd>Only an owner override, recorded beside the original outcome.</dd>
+    </dl>
   </section>;
 }

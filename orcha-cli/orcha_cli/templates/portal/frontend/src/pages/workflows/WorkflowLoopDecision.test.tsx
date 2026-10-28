@@ -3,6 +3,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
 import { WorkflowLoopDecision, WorkflowLoopDecisionPrompt, WorkflowOwnerBar } from "./WorkflowLoopDecision";
 import { WorkflowHeader } from "./WorkflowHeader";
+import { pathDecider, WorkflowWhyPath } from "./WorkflowRouteSummary";
 import { WorkflowTaskInspector } from "./WorkflowTaskInspector";
 import { exampleTask, exampleWorkflow, jsonResponse } from "./workflowTestFixtures";
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
@@ -116,4 +117,23 @@ it("shows the running loop's round and the agent turns used in the workflow head
   render(<MemoryRouter><WorkflowHeader detail={exampleWorkflow({ tasks: [exampleTask({})] })} ownerName="Kedar" verified stale={false} frozen={false} onAction={vi.fn()} onRefresh={vi.fn()} refreshing={false} primaryHidden={false} /></MemoryRouter>);
   expect(screen.queryByText(/agent turns/)).toBeNull();
   expect(screen.queryByText(/· round \d/)).toBeNull();
+});
+
+it("explains why a path was chosen and which steps were not selected (x07)", () => {
+  const review = exampleTask({ id: "review", title: "Review the request", status: "completed",
+    routes: [{ outcome: "Ready to draft", destination: "step", destination_task: "draft" }, { outcome: "Research needed", destination: "step", destination_task: "research" }],
+    reported_outcome: { outcome: "Ready to draft", applied: true } });
+  const draft = exampleTask({ id: "draft", title: "Draft the proposal", depends_on: ["review"] });
+  const research = exampleTask({ id: "research", title: "Research the market", depends_on: ["review"], route_state: "not_selected" });
+  const detail = exampleWorkflow({ semantics_version: 2, tasks: [review, draft, research] });
+  expect(pathDecider(detail, research)?.id).toBe("review");
+  render(<WorkflowWhyPath detail={detail} task={draft} />);
+  const why = screen.getByRole("region", { name: "Why this path" });
+  expect(why).toHaveTextContent("Deciding stepReview the request");
+  expect(why).toHaveTextContent("Ready to draft → Draft the proposal");
+  expect(why).toHaveTextContent("Research needed → Research the market");
+  expect(why).toHaveTextContent("Not selectedResearch the market · neither failed nor accepted");
+  cleanup();
+  const { container } = render(<WorkflowWhyPath detail={exampleWorkflow({ tasks: [review, draft] })} task={draft} />);
+  expect(container).toBeEmptyDOMElement();
 });
