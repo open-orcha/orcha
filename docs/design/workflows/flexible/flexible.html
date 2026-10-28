@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark" style="--v2-sidebar-user-w: 264px; --v2-chrome-h: 44px;">
+<head>
+<meta charset="utf-8">
+<title>Orcha Workflows — flexible workflows UX mockups (loops, outcomes, approvals, recovery)</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!--
+  Mockups for the flexible-workflows UX (Dana, 2026-10-28), extending the #350 redesign gallery (../redesign/redesign.html). Every frame is built on the
+  portal's REAL stylesheets: static/styles/v2-tokens.css, v2-primitives.css and
+  v2-shell.css (linked relatively from the repo), plus the Tasks page list rules
+  copied from pages/tasks/tasksListCss.ts. The shell chrome (sidebar + panel header)
+  is the live portal's own markup captured from localhost:8004 on PR #340 (16e5d3b9).
+  No new tokens or colours are introduced; the page CSS below is the proposed
+  replacement for pages/workflows/workflows.css (tokens only).
+  Open with ?theme=light for the light theme and ?frame=<id> to show one frame.
+-->
+<style>
+  /* pre-paint, same as frontend/index.html */
+  html { overflow-x: clip; color-scheme: dark; }
+  html, body { background: #0E0F10; color: #EEEFF1; margin: 0; font-family: "Inter Variable", "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+    font-feature-settings: "cv01", "ss03"; font-optical-sizing: auto; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+  html[data-theme="light"] { color-scheme: light; }
+  html[data-theme="light"], html[data-theme="light"] body { background: #F4F4F5; color: #1C1D1F; }
+  body { font-size: 13px; line-height: 1.5; }
+</style>
+<link rel="stylesheet" href="../../../../orcha-cli/orcha_cli/templates/portal/static/styles/v2-tokens.css">
+<link rel="stylesheet" href="../../../../orcha-cli/orcha_cli/templates/portal/static/styles/v2-primitives.css">
+<link rel="stylesheet" href="../../../../orcha-cli/orcha_cli/templates/portal/static/styles/v2-shell.css">
+<style>
+  /* the @font-face in v2-tokens.css points at /assets/fonts (served by the portal); re-register the same files relatively for this static file */
+  @font-face { font-family: "Inter Variable"; font-style: normal; font-weight: 100 900; font-display: swap;
+    src: url("../../../../orcha-cli/orcha_cli/templates/portal/static/fonts/inter-var-opsz-latin.woff2") format("woff2-variations"); }
+  @font-face { font-family: "JetBrains Mono"; font-style: normal; font-weight: 400; font-display: swap;
+    src: url("../../../../orcha-cli/orcha_cli/templates/portal/static/fonts/jetbrains-mono-latin.woff2") format("woff2"); }
+
+  /* ---- mockup sheet (not part of the design) ---- */
+  body { padding: 0; }
+  .sheet { padding: 24px 24px 64px; }
+  .sheet-h { max-width: 1440px; margin: 0 auto 24px; color: var(--v2-text-2); font-size: var(--v2-fs-body-lg); }
+  .sheet-h h1 { font: 600 24px/1.2 var(--v2-font-display); letter-spacing: -0.012em; color: var(--v2-text); margin: 0 0 6px; }
+  .frame-h { max-width: 1440px; margin: 0 auto 8px; display: flex; gap: 12px; align-items: baseline; font-size: var(--v2-fs-body); color: var(--v2-text-2); }
+  .frame-h b { color: var(--v2-text); font-weight: 600; }
+  .frame-h code { font-family: var(--v2-font-mono); font-size: 12px; color: var(--v2-text-3); }
+  .frame { position: relative; transform: translateZ(0); width: 100%; max-width: 1440px; height: 900px; overflow: hidden; margin: 0 auto 40px; background: var(--v2-window); border-radius: 12px; box-shadow: 0 0 0 1px var(--v2-panel-border); }
+  .frame .v2-app { height: 100%; }
+  .frame .v2-sb-usage { display: none; } .frame .v2-sb-scroll { min-height: 0; }
+  .frame-wrap[hidden] { display: none; }
+  body.solo .sheet { padding: 0; } body.solo .sheet-h, body.solo .frame-h { display: none; } body.solo .frame { margin: 0; border-radius: 0; box-shadow: none; max-width: none; }
+  /* annotations: numbered callouts for the spec */
+  .note { position: absolute; z-index: 90; width: 18px; height: 18px; border-radius: 50%; background: var(--v2-primary-bg); color: var(--v2-primary-text); font: 600 11px/18px var(--v2-font-sans); text-align: center; box-shadow: 0 0 0 2px var(--v2-window); pointer-events: none; }
+  html[data-notes="off"] .note { display: none; }
+
+  /* ===================== proposed pages/workflows/workflows.css (tokens only) ===================== */
+  /* page frame: flush inside the D5 panel, like the Tasks page */
+  .wf-page { height: var(--v2-content-h); min-height: 320px; display: flex; flex-direction: column; min-width: 0; }
+  .wf-page .v2-split { flex: 1; min-height: 0; }
+  .wf-page .v2-split-list, .wf-page .v2-split-inspector { background: transparent; }
+  .wf-page .v2-split-inspector { border-left: 1px solid var(--v2-border-subtle, var(--v2-border)); }
+  .wf-page .v2-inspector-h { background: var(--v2-panel, var(--v2-canvas)); }
+
+  /* toolbar (Shell toolbar slot) — identical rules to .tl-toolbar / .tl-search in tasksListCss.ts */
+  .wf-toolbar { gap: var(--v2-space-2); }
+  .wf-toolbar .v2-filterbar-main { display: flex; align-items: center; gap: var(--v2-space-2); min-width: 0; flex: 1; overflow: hidden; }
+  .wf-toolbar .wf-scopes.v2-pills { flex: 0 1 auto; min-width: 0; overflow-x: auto; }
+  .wf-toolbar .v2-filterbar-actions { display: flex; align-items: center; gap: 6px; flex: none; }
+  .wf-search { position: relative; display: inline-flex; align-items: center; min-width: 0; }
+  .wf-search > .v2-ico { position: absolute; left: 10px; width: 13px; height: 13px; color: var(--v2-text-3); pointer-events: none; }
+  .wf-search-in { width: 170px; max-width: 100%; height: 28px; padding: 0 10px 0 28px; border-radius: var(--v2-radius-full, 999px); border: 1px solid var(--v2-border); background: transparent; color: var(--v2-text); font: inherit; font-size: var(--v2-fs-meta, 12px); }
+  .wf-search-in::placeholder { color: var(--v2-text-3); }
+  .wf-filtercount { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; font-size: var(--v2-fs-meta, 12px); color: var(--v2-text-3); flex: none; }
+
+  /* list rows — same geometry as .tl-row (36 px, 32 compact, 44 touch) */
+  .wf-list { padding: 4px var(--v2-space-2) var(--v2-space-4); }
+  .wf-grp.v2-group { position: sticky; top: 0; z-index: 1; }
+  .wf-rows { display: flex; flex-direction: column; }
+  .wf-row.v2-row { display: flex; align-items: center; gap: 10px; min-height: 36px; height: 36px; padding: 0 var(--v2-space-3) 0 22px; border: 0; border-radius: 6px; font-size: var(--v2-fs-row, 13px); box-shadow: none; }
+  .wf-row.v2-row::before { display: none; }
+  .wf-row.v2-row:hover { background: var(--v2-hover); }
+  .wf-row.v2-row.is-selected { background: var(--v2-selected); }
+  .wf-row .wf-st { flex: none; display: inline-flex; }
+  .wf-row .wf-title { flex: 0 1 auto; min-width: 120px; max-width: 46%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--v2-text); font-weight: var(--v2-fw-book, 450); }
+  .wf-row .wf-goal { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--v2-text-3); font-size: var(--v2-fs-meta); }
+  .wf-row .wf-chips { flex: none; display: inline-flex; align-items: center; gap: 6px; max-width: 42%; overflow: hidden; }
+  .wf-row .wf-who { flex: none; display: inline-flex; align-items: center; justify-content: flex-end; min-width: 20px; }
+  .wf-row .wf-time { flex: none; min-width: 34px; text-align: right; font-size: var(--v2-fs-meta, 12px); color: var(--v2-text-3); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .wf-row .wf-sub { display: block; font-weight: 400; font-size: var(--v2-fs-meta); color: var(--v2-text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .wf-row.is-two { height: auto; min-height: 44px; padding-block: 6px; }
+  .wf-row.is-two .wf-title { white-space: normal; max-width: none; flex: 1 1 auto; display: flex; flex-direction: column; min-width: 0; }
+  .wf-row.is-two .wf-title > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .wf-noone { display: inline-block; width: 18px; height: 18px; border-radius: 50%; border: 1px dashed var(--v2-border-strong); flex: none; }
+  /* progress: 6 px track, accepted fill = done colour (status, not accent) */
+  .wf-prog { flex: none; display: inline-flex; align-items: center; gap: 6px; font-size: var(--v2-fs-meta); color: var(--v2-text-3); font-variant-numeric: tabular-nums; }
+  .wf-prog-bar { width: 72px; height: 5px; border-radius: 3px; background: var(--v2-prio-bar-empty); overflow: hidden; }
+  .wf-prog-bar > i { display: block; height: 100%; background: var(--v2-status-done); border-radius: 3px; }
+  .wf-prog.is-lg .wf-prog-bar { width: 160px; height: 6px; }
+
+  /* detail header */
+  .wf-head { padding: var(--v2-space-4) var(--v2-panel-px) var(--v2-space-3); border-bottom: 1px solid var(--v2-border-subtle, var(--v2-border)); display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--v2-space-2) var(--v2-space-4); align-items: start; }
+  .wf-head-title { font: 600 var(--v2-fs-display) / 1.2 var(--v2-font-display); letter-spacing: var(--v2-ls-display); color: var(--v2-text); margin: 0; min-width: 0; overflow-wrap: anywhere; }
+  .wf-head-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; color: var(--v2-text-2); font-size: var(--v2-fs-body); }
+  .wf-head-meta .v2-si-wrap.has-label { gap: 6px; }
+  .wf-head-goal { grid-column: 1; margin: 0; color: var(--v2-text-2); font-size: var(--v2-fs-body-lg); line-height: var(--v2-lh-body); max-width: 76ch; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .wf-head-actions { grid-column: 2; grid-row: 1 / span 3; display: flex; gap: var(--v2-space-2); align-items: center; }
+  .wf-tabs-row { display: flex; align-items: center; padding: 0 var(--v2-panel-px); border-bottom: 1px solid var(--v2-border-subtle, var(--v2-border)); }
+  .wf-tabs-row .v2-tabs { flex: 1; }
+  .wf-body { display: flex; flex: 1; min-height: 0; }
+  .wf-main { flex: 1; min-width: 0; display: flex; min-height: 0; }
+  .wf-main > .v2-split { flex: 1 1 auto; min-width: 0; }
+  .wf-page .v2-split-inspector { max-width: 62%; }
+  .wf-rail.v2-rail { width: 248px; flex: none; border-left: 1px solid var(--v2-border-subtle, var(--v2-border)); overflow: auto; padding: var(--v2-space-3) var(--v2-space-4); }
+  .wf-rail .v2-rail-list { margin: 0; }
+  .wf-rail .v2-rail-sec + .v2-rail-sec { margin-top: var(--v2-space-3); padding-top: var(--v2-space-3); border-top: 1px solid var(--v2-border-subtle); }
+  .wf-rail .v2-prop-v { color: var(--v2-text); }
+
+  /* inspector sections */
+  .wf-insp .v2-section { padding: var(--v2-space-3) 0; }
+  .wf-kv { display: grid; grid-template-columns: 112px minmax(0, 1fr); gap: 6px 12px; margin: 0; font-size: var(--v2-fs-body); }
+  .wf-kv dt { color: var(--v2-text-3); } .wf-kv dd { margin: 0; color: var(--v2-text); overflow-wrap: anywhere; }
+  .wf-blockers { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; color: var(--v2-text-2); font-size: var(--v2-fs-body); }
+  .wf-blockers li { display: flex; gap: 8px; align-items: flex-start; }
+  .wf-blockers li::before { content: ""; flex: none; width: 6px; height: 6px; border-radius: 50%; margin-top: 7px; background: var(--v2-text-3); }
+  .wf-blockers li.is-warn::before { background: var(--v2-warn); }
+  .wf-chipline { display: flex; flex-wrap: wrap; gap: 6px; }
+  .wf-actionsgrid { display: flex; flex-wrap: wrap; gap: var(--v2-space-2); }
+  .wf-notavail { margin: var(--v2-space-2) 0 0; padding: 0; list-style: none; display: grid; grid-template-columns: max-content minmax(0,1fr); gap: 2px 12px; font-size: var(--v2-fs-meta); color: var(--v2-text-3); }
+  .wf-notavail dt { color: var(--v2-text-2); } .wf-notavail dd { margin: 0; }
+  .wf-evi { border: 1px solid var(--v2-border); border-radius: var(--v2-radius-card); padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; }
+  .wf-evi-h { display: flex; align-items: center; gap: 8px; font-size: var(--v2-fs-body); color: var(--v2-text); font-weight: var(--v2-fw-medium); }
+  .wf-evi-file { display: flex; align-items: center; gap: 8px; font-size: var(--v2-fs-body); min-width: 0; }
+  .wf-evi-file a { color: var(--v2-accent); text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .wf-evi-file .wf-hash { font-family: var(--v2-font-mono); font-size: 11px; color: var(--v2-text-3); }
+  .wf-muted { color: var(--v2-text-3); font-size: var(--v2-fs-meta); }
+  .wf-p { margin: 0; color: var(--v2-text-2); font-size: var(--v2-fs-body); }
+  .wf-field { display: grid; gap: 6px; margin: 0 0 var(--v2-space-3); }
+  .wf-field > span { font-size: var(--v2-fs-label); font-weight: var(--v2-fw-medium); color: var(--v2-text-3); }
+  .wf-in, .wf-ta, .wf-sel { width: 100%; box-sizing: border-box; font: inherit; font-size: var(--v2-fs-body); color: var(--v2-text); background: var(--v2-surface); border: 1px solid var(--v2-border-strong); border-radius: var(--v2-radius-control); padding: 6px 10px; min-height: var(--v2-control-h); }
+  .wf-ta { min-height: 72px; resize: vertical; }
+  .wf-choice { display: flex; align-items: flex-start; gap: 10px; padding: 6px 0; font-size: var(--v2-fs-body); color: var(--v2-text); }
+  .wf-choice small { display: block; color: var(--v2-text-3); font-size: var(--v2-fs-meta); }
+  .wf-choice.is-off { color: var(--v2-text-3); }
+  /* impact card: the server's checked outcome, one row per task */
+  .wf-impact { border: 1px solid var(--v2-border); border-radius: var(--v2-radius-card); background: var(--v2-surface); overflow: hidden; }
+  .wf-impact-h { padding: 8px 12px; font-size: var(--v2-fs-label); font-weight: var(--v2-fw-medium); color: var(--v2-text-3); border-bottom: 1px solid var(--v2-border); display: flex; justify-content: space-between; }
+  .wf-impact-row { display: flex; align-items: center; gap: 10px; padding: 7px 12px; font-size: var(--v2-fs-body); border-top: 1px solid var(--v2-border-subtle); }
+  .wf-impact-row:first-of-type { border-top: 0; }
+  .wf-impact-row .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--v2-text); }
+  .wf-impact-row .r { flex: none; color: var(--v2-text-2); display: inline-flex; align-items: center; gap: 6px; }
+  .wf-impact-row .why { flex: 1 1 100%; color: var(--v2-text-3); font-size: var(--v2-fs-meta); padding-left: 24px; }
+  /* operation notice: sticky banner inside the dialog body (sending / uncertain / refused / saved) */
+  .wf-opnotice { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-radius: var(--v2-radius-card); border: 1px solid var(--v2-border); background: var(--v2-warn-soft); color: var(--v2-text); font-size: var(--v2-fs-body); margin-bottom: var(--v2-space-3); }
+  .wf-opnotice .v2-ico { width: 16px; height: 16px; color: var(--v2-warn); flex: none; }
+  .wf-opnotice.is-danger { background: var(--v2-danger-soft); } .wf-opnotice.is-danger .v2-ico { color: var(--v2-danger); }
+  .wf-opnotice .grow { flex: 1; min-width: 0; }
+  /* two-column review */
+  .wf-review { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(300px, 1fr); gap: var(--v2-space-5); }
+  .wf-decision { border: 1px solid var(--v2-border); border-radius: var(--v2-radius-card); padding: var(--v2-space-3) var(--v2-space-4); background: var(--v2-surface); position: sticky; top: 0; }
+  .wf-radio { display: flex; gap: 6px; }
+  /* checklist */
+  .wf-check { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+  .wf-check li { display: flex; align-items: center; gap: 10px; min-height: 32px; padding: 0 8px; border-radius: 6px; font-size: var(--v2-fs-body); color: var(--v2-text); }
+  .wf-check li .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .wf-check li .m { color: var(--v2-text-3); font-size: var(--v2-fs-meta); flex: none; }
+  /* create page (full view) */
+  .wf-create { max-width: 760px; padding: var(--v2-space-4) var(--v2-panel-px) var(--v2-space-8); }
+  .wf-create h2 { font: 600 var(--v2-fs-title)/1.35 var(--v2-font-sans); margin: 0 0 var(--v2-space-2); color: var(--v2-text); }
+  .wf-card { border: 1px solid var(--v2-border); border-radius: var(--v2-radius-card); background: var(--v2-surface); padding: var(--v2-space-3) var(--v2-space-4); margin-bottom: var(--v2-space-2); }
+  .wf-card-h { display: flex; align-items: center; gap: 8px; margin-bottom: var(--v2-space-2); font-size: var(--v2-fs-body); color: var(--v2-text); font-weight: var(--v2-fw-medium); }
+  .wf-card-h .v2-count { margin-left: auto; }
+  .wf-grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 var(--v2-space-4); }
+  .wf-stepper { display: flex; gap: 6px; align-items: center; color: var(--v2-text-3); font-size: var(--v2-fs-meta); margin: 0 0 var(--v2-space-4); }
+  .wf-stepper b { color: var(--v2-text); font-weight: 500; }
+  .wf-stepper i { width: 16px; height: 1px; background: var(--v2-border-strong); }
+  /* dependency graph: nodes are rows */
+  .wf-graph { display: flex; flex-direction: column; gap: 8px; padding: var(--v2-space-3) var(--v2-space-4); }
+  .wf-gnode { position: absolute; width: 280px; display: flex; align-items: center; gap: 8px; padding: 6px 10px; border: 1px solid var(--v2-border-strong); border-radius: var(--v2-radius-card); background: var(--v2-surface); font-size: var(--v2-fs-body); color: var(--v2-text); }
+  .wf-gnode.is-selected { box-shadow: var(--v2-focus-ring); border-color: var(--v2-accent); }
+  .wf-gnode .wf-sub { font-size: var(--v2-fs-meta); color: var(--v2-text-3); display: block; }
+  /* timeline tweak: workflow activity reuses .v2-tl verbatim */
+  .wf-tl { padding: var(--v2-space-3) var(--v2-panel-px); }
+  /* task page: workflow card + authority switch */
+  .wf-switch { display: inline-flex; align-items: center; gap: 8px; }
+  .wf-track { width: 28px; height: 16px; border-radius: 999px; background: var(--v2-border-strong); position: relative; }
+  .wf-track.is-on { background: var(--v2-primary-bg); }
+  .wf-track i { position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: var(--v2-primary-text); }
+  .wf-track.is-on i { left: 14px; }
+
+  /* Objective additions: shared V2 surfaces, no new theme values. */
+  .wf-compose { display:grid; grid-template-columns:minmax(0,1fr) 400px; flex:1; min-height:0; }
+  .wf-compose-canvas { position:relative; min-height:430px; overflow:auto; background:radial-gradient(var(--v2-border) 1px,transparent 1px) 0 0/18px 18px; }
+  .wf-compose-panel { padding:var(--v2-space-5); overflow:auto; border-left:1px solid var(--v2-border); background:var(--v2-panel); }
+  .wf-compose-panel h2 { font:600 var(--v2-fs-title)/1.35 var(--v2-font-sans); margin:0 0 var(--v2-space-2); }
+  .wf-compose-panel h3 { font:500 var(--v2-fs-body)/1.5 var(--v2-font-sans); margin:var(--v2-space-4) 0 var(--v2-space-2); }
+  .wf-compose-node { position:absolute; width:240px; padding:14px 16px; border:1px solid var(--v2-border-strong); border-radius:var(--v2-radius-card); background:var(--v2-surface); color:var(--v2-text); text-align:left; font:inherit; box-sizing:border-box; }
+  .wf-compose-node strong { display:block; font-weight:500; margin:7px 0 5px; }
+  .wf-compose-node.is-draft { border:2px dashed var(--v2-accent); }
+  .wf-compose-node.is-selected { box-shadow:var(--v2-focus-ring); }
+  .wf-compose-tools { display:flex; flex-wrap:wrap; align-items:center; gap:var(--v2-space-2); padding:var(--v2-space-3) var(--v2-panel-px); border-bottom:1px solid var(--v2-border); }
+  .wf-compose-tools .wf-muted { margin-right:auto; }
+  .wf-compose-caption { position:absolute; left:24px; bottom:24px; right:24px; color:var(--v2-text-2); max-width:64ch; }
+  .wf-decision-row { display:flex; gap:12px; align-items:flex-start; padding:18px; border-bottom:1px solid var(--v2-border-subtle); }
+  .wf-decision-row.is-selected { background:var(--v2-selected); }
+  .wf-decision-row strong { display:block; font-weight:500; margin:6px 0; }
+  .wf-input-strip { display:flex; gap:12px; align-items:center; padding:12px var(--v2-panel-px); border-bottom:1px solid var(--v2-border); background:var(--v2-warn-soft); }
+  .wf-input-strip span { flex:1; }
+  .wf-design-caption { position:absolute; left:280px; bottom:12px; z-index:100; padding:6px 10px; border:1px solid var(--v2-border); border-radius:var(--v2-radius-control); background:var(--v2-panel); color:var(--v2-text-2); font-size:var(--v2-fs-meta); }
+  @media(max-width:1000px) { .wf-compose { grid-template-columns:minmax(0,1fr) 340px; } }
+  @media(max-width:720px) { .wf-compose { display:block; overflow:auto; } .wf-compose-panel { border-left:0;border-top:1px solid var(--v2-border); } .wf-design-caption {left:12px;} }
+
+  /* responsive */
+  @media (max-width: 1199px) { .wf-rail.v2-rail { display: none; } .wf-head-actions .wf-rail-toggle { display: inline-flex; } }
+  .wf-rail-toggle { display: none; }
+  @media (max-width: 720px) { .wf-head { grid-template-columns: 1fr; } .wf-head-actions { grid-column: 1; grid-row: auto; } .wf-row.v2-row { padding-left: var(--v2-space-3); border-radius: 0; } .wf-row .wf-goal, .wf-row .wf-time { display: none; } .wf-review { grid-template-columns: 1fr; } }
+
+  /* ===================== flexible workflows additions (tokens only) ===================== */
+  .wf-loop { margin: 2px 0 6px 18px; border-left: 2px solid var(--v2-accent); padding-left: 8px; border-radius: 2px; }
+  .wf-loop-h { display: flex; align-items: center; gap: 8px; padding: 6px 4px 4px; font-size: var(--v2-fs-meta); color: var(--v2-text-2); }
+  .wf-loop-h b { color: var(--v2-text); font-weight: 600; }
+  .wf-rounds { display: inline-flex; gap: 4px; align-items: center; }
+  .wf-rnd { width: 9px; height: 9px; border-radius: 50%; border: 1px solid var(--v2-border-strong); display: inline-block; }
+  .wf-rnd.is-done { background: var(--v2-status-done); border-color: transparent; }
+  .wf-rnd.is-now { background: var(--v2-accent); border-color: transparent; }
+  .wf-rnd.is-stop { background: var(--v2-warn, #d29922); border-color: transparent; }
+  .wf-route { display: grid; grid-template-columns: 170px 18px minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 7px 0; font-size: var(--v2-fs-body); border-top: 1px solid var(--v2-border-subtle, var(--v2-border)); }
+  .wf-route:first-of-type { border-top: 0; }
+  .wf-route .arr { color: var(--v2-text-3); text-align: center; }
+  .wf-route .dest { color: var(--v2-text); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .wf-route .v2-badge { justify-self: start; }
+  .wf-compare { display: grid; grid-template-columns: 1fr 1fr; gap: var(--v2-space-3); }
+  .wf-compare .wf-card { margin: 0; }
+  .wf-finding { display: flex; gap: 8px; align-items: flex-start; padding: 5px 0; font-size: var(--v2-fs-body); color: var(--v2-text); }
+  .wf-finding code { font-family: var(--v2-font-mono); font-size: 11px; color: var(--v2-text-3); flex: none; }
+  .wf-finding.is-same { color: var(--v2-text-2); }
+  .wf-gate-row.v2-row { padding-left: 22px; background: color-mix(in srgb, var(--v2-accent) 6%, transparent); }
+  .wf-notsel { opacity: .55; }
+  .wf-notsel .wf-title > span:first-child { text-decoration: line-through; text-decoration-color: var(--v2-text-3); }
+  .wf-ownerbar { display: flex; align-items: center; gap: 10px; padding: 10px var(--v2-panel-px); border-bottom: 1px solid var(--v2-border-subtle, var(--v2-border)); background: color-mix(in srgb, var(--v2-warn, #d29922) 9%, transparent); font-size: var(--v2-fs-body); color: var(--v2-text); }
+  .wf-ownerbar .v2-btn { margin-left: auto; }
+  .wf-tl { list-style: none; margin: 0; padding: 0 var(--v2-panel-px); }
+  .wf-tl li { display: grid; grid-template-columns: 14px minmax(0, 1fr); gap: 10px; padding: 8px 0; border-top: 1px solid var(--v2-border-subtle, var(--v2-border)); font-size: var(--v2-fs-body); }
+  .wf-tl li:first-child { border-top: 0; }
+  .wf-tl .dot { width: 10px; height: 10px; border-radius: 50%; margin-top: 5px; background: var(--v2-border-strong); }
+  .wf-tl .dot.is-ok { background: var(--v2-status-done); } .wf-tl .dot.is-warn { background: var(--v2-warn, #d29922); } .wf-tl .dot.is-now { background: var(--v2-accent); }
+  .wf-tl .who { color: var(--v2-text-3); font-size: var(--v2-fs-meta); }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="si-todo" viewBox="0 0 14 14"><circle cx="7" cy="7" r="5.5" fill="none" stroke="currentColor" stroke-width="1.5"/></symbol>
+    <symbol id="si-dashed" viewBox="0 0 14 14"><circle cx="7" cy="7" r="5.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-dasharray="2.05 1.9"/></symbol>
+    <symbol id="si-progress" viewBox="0 0 14 14"><circle cx="7" cy="7" r="5.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M7 7V4.4A2.6 2.6 0 0 1 7 9.6z" fill="currentColor"/></symbol>
+    <symbol id="si-review" viewBox="0 0 14 14"><circle cx="7" cy="7" r="5.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M7 7V4.4A2.6 2.6 0 1 1 4.4 7z" fill="currentColor"/></symbol>
+    <symbol id="si-paused" viewBox="0 0 14 14"><circle cx="7" cy="7" r="5.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5.8 5.3v3.4M8.2 5.3v3.4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></symbol>
+    <symbol id="si-attention" viewBox="0 0 14 14"><circle cx="7" cy="7" r="5.5" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="7" cy="7" r="2" fill="currentColor"/></symbol>
+    <symbol id="si-done" viewBox="0 0 14 14"><circle cx="7" cy="7" r="6.25" fill="currentColor"/><path d="M4.4 7.2l1.8 1.8 3.5-3.8" fill="none" stroke="var(--v2-si-cut, var(--v2-canvas))" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="si-blocked" viewBox="0 0 14 14"><circle cx="7" cy="7" r="5.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M4.5 7h5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></symbol>
+    <symbol id="si-failed" viewBox="0 0 14 14"><circle cx="7" cy="7" r="5.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5 5l4 4M9 5l-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></symbol>
+    <symbol id="si-cancelled" viewBox="0 0 14 14"><circle cx="7" cy="7" r="5.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M4.2 9.8l5.6-5.6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></symbol>
+    <symbol id="i-more" viewBox="0 0 20 20"><circle cx="5" cy="10" r="1.3" fill="currentColor"/><circle cx="10" cy="10" r="1.3" fill="currentColor"/><circle cx="15" cy="10" r="1.3" fill="currentColor"/></symbol>
+    <symbol id="i-search" viewBox="0 0 20 20"><circle cx="8.5" cy="8.5" r="5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="m13 13 3.5 3.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
+    <symbol id="i-filter" viewBox="0 0 20 20"><path d="M3.5 5h13M6 10h8M8.5 15h3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 20 20"><path d="M16 10a6 6 0 1 1-1.8-4.3M16 3.5v3h-3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-x" viewBox="0 0 20 20"><path d="M5 5l10 10M15 5L5 15" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
+    <symbol id="i-expand" viewBox="0 0 20 20"><path d="M7 4H4v3M13 4h3v3M7 16H4v-3M13 16h3v-3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
+    <symbol id="i-chev" viewBox="0 0 20 20"><path d="M5 7.5 10 12l5-4.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-chevr" viewBox="0 0 20 20"><path d="M7.5 5 12 10l-4.5 5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-back" viewBox="0 0 20 20"><path d="M12 5l-5 5 5 5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-check" viewBox="0 0 20 20"><path d="M4.5 10.5l3.5 3.5 7.5-8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-warn" viewBox="0 0 20 20"><path d="M10 3.5l7 12.5H3z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M10 8v3.5M10 13.8v.2" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></symbol>
+    <symbol id="i-info" viewBox="0 0 20 20"><circle cx="10" cy="10" r="7" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M10 9v5M10 6.5v.2" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></symbol>
+    <symbol id="i-play" viewBox="0 0 20 20"><path d="M6.5 4.5v11l9-5.5z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></symbol>
+    <symbol id="i-flag" viewBox="0 0 20 20"><path d="M5 17V4h9l-2 3 2 3H5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></symbol>
+    <symbol id="i-zoomin" viewBox="0 0 20 20"><circle cx="8.5" cy="8.5" r="5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="m13 13 3.5 3.5M8.5 6v5M6 8.5h5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
+    <symbol id="i-zoomout" viewBox="0 0 20 20"><circle cx="8.5" cy="8.5" r="5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="m13 13 3.5 3.5M6 8.5h5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
+    <symbol id="i-fit" viewBox="0 0 20 20"><rect x="4" y="4" width="12" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M8 8h4v4H8z" fill="none" stroke="currentColor" stroke-width="1.4"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 20 20"><path d="M10 4v12M4 10h12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
+    <symbol id="i-ext" viewBox="0 0 20 20"><path d="M11 4h5v5M16 4l-7 7M14 11v4a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-link" viewBox="0 0 20 20"><path d="M8.5 11.5a3 3 0 0 0 4.2 0l2.3-2.3a3 3 0 0 0-4.2-4.2l-1 1M11.5 8.5a3 3 0 0 0-4.2 0L5 10.8a3 3 0 0 0 4.2 4.2l1-1" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
+    <symbol id="i-file" viewBox="0 0 20 20"><path d="M6 3h6l4 4v10H6z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M12 3v4h4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></symbol>
+    <symbol id="i-sparkle" viewBox="0 0 20 20"><path d="M10 3l1.6 4.4L16 9l-4.4 1.6L10 15l-1.6-4.4L4 9l4.4-1.6z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></symbol>
+  </defs>
+</svg>
+<template id="chrome">
+<aside-wrap><aside class="v2-sidebar sidebar" aria-label="Embodent navigation"><div class="v2-sb-top"><button type="button" class="v2-sb-switch" aria-haspopup="menu" aria-expanded="false" aria-label="Embodent workspace menu"><span class="v2-sb-mark"><svg viewBox="-720 -663 1326 1326" width="34" height="34" role="img" aria-label="Embodent" style="max-width: 100%; max-height: 100%;"><g fill="none" stroke-width="204" stroke-linecap="round" stroke-linejoin="round" stroke="#ECEDF1" style="stroke: var(--v2-logo-ink, #ECEDF1);"><path d="M390 -504 L0 -504 A504 504 0 0 0 0 504 L390 504 M0 0 L330 0" stroke-opacity="0.5"></path><path d="M390 -354 L0 -354 A354 354 0 0 0 0 354 L390 354 M0 0 L330 0"></path></g></svg></span><span class="v2-sb-word">Embodent</span><svg class="v2-ico v2-chev" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 7.5 10 12l5-4.5"></path></svg></button><span class="v2-grow"></span><button type="button" class="v2-sb-circle v2-sb-search" aria-label="Search" aria-keyshortcuts="Meta+K Control+K /" data-v2-navrow=""><svg class="v2-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5"></circle><path d="m13 13 3.5 3.5"></path></svg></button><button type="button" class="v2-sb-circle v2-sb-compose is-bordered" aria-label="New task — Pick an acting human first — actions never impersonate a human" aria-disabled="true"><svg class="v2-ico" viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 4H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2v-3"></path><path d="M14.2 3.3a1.5 1.5 0 0 1 2.1 2.1L10.5 11.2 8 12l.8-2.5z"></path></svg></button></div><nav class="v2-sb-nav" aria-label="Workspace"><a class="v2-sb-link v2-sb-needs" aria-label="Needs you — loading" data-v2-navrow="" href="/needs" data-discover="true"><svg class="v2-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 11.5 5 4.8A1.2 1.2 0 0 1 6.1 4h7.8a1.2 1.2 0 0 1 1.1.8l2 6.7V15a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"></path><path d="M3 11.5h4l1 2h4l1-2h4"></path></svg><span class="v2-grow">Needs you</span></a><a class="v2-sb-link" data-v2-navrow="" href="/projects" data-discover="true"><svg class="v2-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="3.5" width="5.5" height="5.5" rx="1.3"></rect><rect x="11" y="3.5" width="5.5" height="5.5" rx="1.3"></rect><rect x="3.5" y="11" width="5.5" height="5.5" rx="1.3"></rect><rect x="11" y="11" width="5.5" height="5.5" rx="1.3"></rect></svg><span class="v2-grow">All projects</span></a><a class="v2-sb-link" data-v2-navrow="" href="/settings" data-discover="true"><svg class="v2-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 2.8l1.3.25.35 1.75 1.2.65 1.6-.95 1.8 1.8-.95 1.6.65 1.2 1.75.35v2.6l-1.75.35-.65 1.2.95 1.6-1.8 1.8-1.6-.95-1.2.65-.35 1.75H8.7l-.35-1.75-1.2-.65-1.6.95-1.8-1.8.95-1.6-.65-1.2L2.3 11.3V8.7l1.75-.35.65-1.2-.95-1.6 1.8-1.8 1.6.95 1.2-.65.35-1.75z"></path><circle cx="10" cy="10" r="2.4"></circle></svg><span class="v2-grow">Settings</span></a></nav><div class="v2-sb-scroll"><section class="v2-sb-sec" aria-labelledby="sb-proj-h"><div class="v2-sb-h"><button type="button" class="v2-sb-h-btn" aria-expanded="true"><span>Projects</span><svg class="v2-sb-caret" viewBox="0 0 10 10" width="9" height="9" aria-hidden="true"><path d="M2 3.5h6L5 7z" fill="currentColor"></path></svg></button><span class="v2-grow"></span><button type="button" class="v2-sb-add" aria-label="New project"><svg class="v2-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 4v12M4 10h12"></path></svg></button></div><ul class="v2-sb-projects" aria-label="Projects"><li class="v2-sb-proj is-selected has-tree" data-proj="e720c233-70ce-43ad-981f-51b10833eb35"><div class="v2-sb-proj-row"><span class="v2-sb-gutter"><button type="button" class="v2-sb-proj-caret" aria-expanded="true" aria-controls="sb-pa-e720c233-70ce-43ad-981f-51b10833eb35" aria-label="Hide branches and live agents in openorcha"><svg class="v2-sb-caret" viewBox="0 0 10 10" width="9" height="9" aria-hidden="true"><path d="M2 3.5h6L5 7z" fill="currentColor"></path></svg></button></span><a class="v2-sb-proj-link" aria-label="openorcha, Active, current project" aria-current="true" data-v2-navrow="" href="/" data-discover="true"><span class="v2-picon v2-sb-picon" aria-hidden="true" data-icon="default" style="position: relative; display: inline-grid; place-items: center; flex: 0 0 auto; width: 18px; height: 18px; line-height: 1;"><svg class="v2-picon-glyph" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="color: var(--v2-text-2);"><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"></path><path d="m3.3 7 8.7 5 8.7-5"></path><path d="M12 22V12"></path></svg></span><span class="v2-sb-proj-name">openorcha</span></a><button type="button" class="v2-sb-more" aria-haspopup="menu" aria-expanded="false" aria-label="openorcha actions"><svg class="v2-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="5" cy="10" r=".8"></circle><circle cx="10" cy="10" r=".8"></circle><circle cx="15" cy="10" r=".8"></circle></svg></button></div><ul class="v2-sb-tree v2-sb-proj-agents" aria-label="Branches and live agents in openorcha"><li class="v2-sb-br"><div class="v2-sb-br-row"><a class="v2-sb-br-main" data-v2-navrow="" aria-label="orcha/task-CodeCleanupAgent-2799ac2b-37e — primary checkout · open-orcha/orcha, open Code" href="/code" data-discover="true"><svg class="v2-sb-br-ico" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><circle cx="4.5" cy="3.5" r="1.5"></circle><circle cx="4.5" cy="12.5" r="1.5"></circle><circle cx="11.5" cy="5" r="1.5"></circle><path d="M4.5 5v6M11.5 6.5c0 2.6-2.4 3.2-5.6 4.4"></path></svg><span class="v2-sb-br-text"><span class="v2-sb-br-line"><span class="v2-sb-br-name"><span class="v2-sb-br-head">orcha/task-CodeCleanupAgent</span><span class="v2-sb-br-tail">-2799ac2b-37e</span></span><span class="v2-sb-br-badge">primary</span></span><span class="v2-sb-br-repo">open-orcha/orcha</span></span></a></div></li></ul></li></ul></section></div><div class="v2-sb-usage"><button type="button" class="v2-sb-usage-btn" data-testid="sb-plan-usage" aria-label="Usage: Claude 47%, Codex 43%" aria-haspopup="dialog" aria-expanded="false"><span class="v2-pu-lbl">Usage</span><span class="v2-pu-many"><span class="v2-pu-item" data-provider="claude"><svg viewBox="0 0 24 24" width="13" height="13" focusable="false" data-brand="claude" aria-hidden="true" style="color: rgb(217, 119, 87);"><path d="m4.7144 15.9555 4.7174-2.6471.079-.2307-.079-.1275h-.2307l-.7893-.0486-2.6956-.0729-2.3375-.0971-2.2646-.1214-.5707-.1215-.5343-.7042.0546-.3522.4797-.3218.686.0608 1.5179.1032 2.2767.1578 1.6514.0972 2.4468.255h.3886l.0546-.1579-.1336-.0971-.1032-.0972L6.973 9.8356l-2.55-1.6879-1.3356-.9714-.7225-.4918-.3643-.4614-.1578-1.0078.6557-.7225.8803.0607.2246.0607.8925.686 1.9064 1.4754 2.4893 1.8336.3643.3035.1457-.1032.0182-.0728-.164-.2733-1.3539-2.4467-1.445-2.4893-.6435-1.032-.17-.6194c-.0607-.255-.1032-.4674-.1032-.7285L6.287.1335 6.6997 0l.9957.1336.419.3642.6192 1.4147 1.0018 2.2282 1.5543 3.0296.4553.8985.2429.8318.091.255h.1579v-.1457l.1275-1.706.2368-2.0947.2307-2.6957.0789-.7589.3764-.9107.7468-.4918.5828.2793.4797.686-.0668.4433-.2853 1.8517-.5586 2.9021-.3643 1.9429h.2125l.2429-.2429.9835-1.3053 1.6514-2.0643.7286-.8196.85-.9046.5464-.4311h1.0321l.759 1.1293-.34 1.1657-1.0625 1.3478-.8804 1.1414-1.2628 1.7-.7893 1.36.0729.1093.1882-.0183 2.8535-.607 1.5421-.2794 1.8396-.3157.8318.3886.091.3946-.3278.8075-1.967.4857-2.3072.4614-3.4364.8136-.0425.0304.0486.0607 1.5482.1457.6618.0364h1.621l3.0175.2247.7892.522.4736.6376-.079.4857-1.2142.6193-1.6393-.3886-3.825-.9107-1.3113-.3279h-.1822v.1093l1.0929 1.0686 2.0035 1.8092 2.5075 2.3314.1275.5768-.3218.4554-.34-.0486-2.2039-1.6575-.85-.7468-1.9246-1.621h-.1275v.17l.4432.6496 2.3436 3.5214.1214 1.0807-.17.3521-.6071.2125-.6679-.1214-1.3721-1.9246L14.38 17.959l-1.1414-1.9428-.1397.079-.674 7.2552-.3156.3703-.7286.2793-.6071-.4614-.3218-.7468.3218-1.4753.3886-1.9246.3157-1.53.2853-1.9004.17-.6314-.0121-.0425-.1397.0182-1.4328 1.9672-2.1796 2.9446-1.7243 1.8456-.4128.164-.7164-.3704.0667-.6618.4008-.5889 2.386-3.0357 1.4389-1.882.929-1.0868-.0062-.1579h-.0546l-6.3385 4.1164-1.1293.1457-.4857-.4554.0608-.7467.2307-.2429 1.9064-1.3114Z" fill="currentColor"></path></svg><span class="v2-pu-pct" data-tone="ok">47%</span></span><span class="v2-pu-item" data-provider="codex"><svg viewBox="0 0 24 24" width="13" height="13" focusable="false" data-brand="openai" aria-hidden="true"><path d="M22.2819 9.8211a5.9847 5.9847 0 0 0-.5157-4.9108 6.0462 6.0462 0 0 0-6.5098-2.9A6.0651 6.0651 0 0 0 4.9807 4.1818a5.9847 5.9847 0 0 0-3.9977 2.9 6.0462 6.0462 0 0 0 .7427 7.0966 5.98 5.98 0 0 0 .511 4.9107 6.051 6.051 0 0 0 6.5146 2.9001A5.9847 5.9847 0 0 0 13.2599 24a6.0557 6.0557 0 0 0 5.7718-4.2058 5.9894 5.9894 0 0 0 3.9977-2.9001 6.0557 6.0557 0 0 0-.7475-7.0729zm-9.022 12.6081a4.4755 4.4755 0 0 1-2.8764-1.0408l.1419-.0804 4.7783-2.7582a.7948.7948 0 0 0 .3927-.6813v-6.7369l2.02 1.1686a.071.071 0 0 1 .038.052v5.5826a4.504 4.504 0 0 1-4.4945 4.4944zm-9.6607-4.1254a4.4708 4.4708 0 0 1-.5346-3.0137l.142.0852 4.783 2.7582a.7712.7712 0 0 0 .7806 0l5.8428-3.3685v2.3324a.0804.0804 0 0 1-.0332.0615L9.74 19.9502a4.4992 4.4992 0 0 1-6.1408-1.6464zM2.3408 7.8956a4.485 4.485 0 0 1 2.3655-1.9728V11.6a.7664.7664 0 0 0 .3879.6765l5.8144 3.3543-2.0201 1.1685a.0757.0757 0 0 1-.071 0l-4.8303-2.7865A4.504 4.504 0 0 1 2.3408 7.872zm16.5963 3.8558L13.1038 8.364 15.1192 7.2a.0757.0757 0 0 1 .071 0l4.8303 2.7913a4.4944 4.4944 0 0 1-.6765 8.1042v-5.6772a.79.79 0 0 0-.407-.667zm2.0107-3.0231l-.142-.0852-4.7735-2.7818a.7759.7759 0 0 0-.7854 0L9.409 9.2297V6.8974a.0662.0662 0 0 1 .0284-.0615l4.8303-2.7866a4.4992 4.4992 0 0 1 6.6802 4.66zM8.3065 12.863l-2.02-1.1638a.0804.0804 0 0 1-.038-.0567V6.0742a4.4992 4.4992 0 0 1 7.3757-3.4537l-.142.0805L8.704 5.459a.7948.7948 0 0 0-.3927.6813zm1.0976-2.3654l2.602-1.4998 2.6069 1.4998v2.9994l-2.5974 1.4997-2.6067-1.4997Z" fill="currentColor"></path></svg><span class="v2-pu-pct" data-tone="ok">43%</span></span></span></button></div><div class="v2-sb-foot"><div class="v2-sb-acct" aria-label="Acting as Kedar — the human authority on this project"><span class="av v2-av v2-av-20 human" title="Kedar · Human" data-kind="human" aria-hidden="true" style="background: hsl(238 var(--v2-av-fill-s, 34%) var(--v2-av-fill-l, 28%)); color: hsl(238 var(--v2-av-ink-s, 72%) var(--v2-av-ink-l, 86%));"><span class="v2-av-init" aria-hidden="true">K</span></span><span class="v2-sb-acct-text"><span class="v2-sb-acct-lbl">Acting as</span><span class="v2-sb-acct-who">Kedar</span></span></div><span class="v2-grow"></span><a href="https://github.com/open-orcha/orcha#readme" target="_blank" rel="noreferrer" class="v2-sb-circle v2-sb-help" aria-label="Help &amp; docs (opens in a new tab)"><svg class="v2-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="10" cy="10" r="7"></circle><path d="M7.9 7.8a2.2 2.2 0 0 1 4.2.8c0 1.5-2.1 1.9-2.1 3.3M10 14.2h.01"></path></svg></a><button class="v2-sb-circle v2-sb-toggle sb-toggle" type="button" aria-label="Collapse sidebar" aria-expanded="true" aria-keyshortcuts="["><svg class="v2-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="14" height="12" rx="2"></rect><path d="M8 4v12"></path></svg></button></div><div class="v2-sb-resize" role="separator" aria-orientation="vertical" aria-label="Resize sidebar" aria-valuemin="200" aria-valuemax="360" aria-valuenow="264" tabindex="0" draggable="false"></div></aside></aside-wrap><div class="v2-panel-top"><header class="v2-header topbar is-d-compact has-tabs"><button type="button" aria-label="Open navigation" title="Open navigation" class="v2-iconbtn v2-iconbtn-md v2-iconbtn-circle v2-hamburger" aria-expanded="false" aria-controls="sidebar"><svg class="v2-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 6h13M3.5 10h13M3.5 14h13"></path></svg></button><div class="v2-header-crumbs crumbs"><nav aria-label="Breadcrumb" class="v2-crumbs"><ol><li><a title="openorcha · project overview" href="/" data-discover="true"><span class="v2-picon v2-header-pav" aria-hidden="true" data-icon="default" style="position: relative; display: inline-grid; place-items: center; flex: 0 0 auto; width: 16px; height: 16px; line-height: 1;"><svg class="v2-picon-glyph" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="color: var(--v2-text-2);"><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"></path><path d="m3.3 7 8.7 5 8.7-5"></path><path d="M12 22V12"></path></svg></span><span class="v2-header-pname">openorcha</span></a><span class="v2-crumb-sep" aria-hidden="true">/</span></li><li class="is-current"><span aria-current="page" title="Workflows">Workflows</span></li></ol></nav></div><nav class="v2-ptabs" aria-label="Project sections"><div class="v2-ptabs-scroll"><a class="v2-ptab" data-section="home" href="/" data-discover="true"><svg class="v2-ico v2-ptab-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 9.5 10 4l7 5.5V17a1 1 0 0 1-1 1h-3v-5H7v5H4a1 1 0 0 1-1-1z"></path></svg><span class="v2-ptab-label">Overview</span></a><a class="v2-ptab is-current" aria-current="page" data-section="workflows" href="/workflows" data-discover="true"><svg class="v2-ico v2-ptab-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="7" width="5" height="6" rx="1"></rect><rect x="13" y="2" width="5" height="6" rx="1"></rect><rect x="13" y="12" width="5" height="6" rx="1"></rect><path d="M7 10h3V5h3M10 10v5h3"></path></svg><span class="v2-ptab-label">Workflows</span></a><a class="v2-ptab" data-section="tasks" href="/tasks" data-discover="true"><svg class="v2-ico v2-ptab-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.2" y="3.2" width="13.6" height="13.6" rx="3"></rect><path d="M6.6 10l2.2 2.2 4.6-4.8"></path></svg><span class="v2-ptab-label">Tasks</span></a><a class="v2-ptab" data-section="routines" href="/routines" data-discover="true"><svg class="v2-ico v2-ptab-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16.4 8.2A6.8 6.8 0 1 0 16 13"></path><path d="M16.8 4.6v3.8H13"></path><path d="M10 6.6V10l2.2 1.4"></path></svg><span class="v2-ptab-label">Routines</span></a><a class="v2-ptab" data-section="agents" href="/agents" data-discover="true"><svg class="v2-ico v2-ptab-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="7" cy="7.5" r="2.6"></circle><circle cx="13.5" cy="8" r="2.1"></circle><path d="M2.6 16c.4-2.4 2.2-3.8 4.4-3.8s4 1.4 4.4 3.8M12 12.5c2 .1 3.4 1.4 3.8 3.5"></path></svg><span class="v2-ptab-label">Agents</span></a><a class="v2-ptab" data-section="org" href="/org" data-discover="true"><svg class="v2-ico v2-ptab-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="7.5" y="2.8" width="5" height="4" rx="1.2"></rect><rect x="2.8" y="13.2" width="5" height="4" rx="1.2"></rect><rect x="12.2" y="13.2" width="5" height="4" rx="1.2"></rect><path d="M10 6.8v3.2M5.3 13.2V10h9.4v3.2"></path></svg><span class="v2-ptab-label">Org</span></a><a class="v2-ptab" data-section="requests" href="/requests" data-discover="true"><svg class="v2-ico v2-ptab-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 7h9l-2.4-2.4M15 13H6l2.4 2.4"></path></svg><span class="v2-ptab-label">Requests</span></a><a class="v2-ptab" data-section="code" href="/code" data-discover="true"><svg class="v2-ico v2-ptab-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 6.5 3.5 10 7 13.5M13 6.5 16.5 10 13 13.5M11 4.5l-2 11"></path></svg><span class="v2-ptab-label">Code</span></a><a class="v2-ptab" data-section="github" href="/github" data-discover="true"><svg class="v2-ico v2-ptab-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="4.8" r="1.8"></circle><circle cx="6" cy="15.2" r="1.8"></circle><circle cx="14" cy="7" r="1.8"></circle><path d="M6 6.6v6.8M14 8.8c0 3-2.6 3.8-6.3 5"></path></svg><span class="v2-ptab-label">GitHub</span></a><a class="v2-ptab" data-section="activity" href="/activity" data-discover="true"><svg class="v2-ico v2-ptab-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 10h3l2-5 3 10 2-7 1.5 2h3.5"></path></svg><span class="v2-ptab-label">Activity</span></a><a class="v2-ptab" data-section="metrics" href="/metrics" data-discover="true"><svg class="v2-ico v2-ptab-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 16.5h13M6 13.5V10M10 13.5V5.5M14 13.5V8"></path></svg><span class="v2-ptab-label">Metrics</span></a></div></nav><div class="v2-grow"></div><div class="v2-header-primary"><button type="button" class="v2-btn v2-btn-primary v2-btn-md" data-chrome-primary="" title="Create a new workflow (C)"><svg class="v2-ico v2-btn-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 4v12M4 10h12"></path></svg><span class="v2-btn-label">New workflow</span></button></div><div class="v2-header-tools"><button type="button" aria-label="Search (⌘K)" title="Search (⌘K)" class="v2-iconbtn v2-iconbtn-md v2-iconbtn-circle v2-header-search v2-circbtn"><svg class="v2-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5"></circle><path d="m13 13 3.5 3.5"></path></svg></button><button type="button" class="v2-exec-btn" aria-haspopup="dialog" aria-expanded="false" aria-label="Execution — On · wake service active" title="Execution — On · wake service active"><svg class="v2-ico v2-exec-glyph" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 3v6.5"></path><path d="M6.1 5.6a6 6 0 1 0 7.8 0"></path></svg><span class="v2-exec-dot" aria-hidden="true"></span><span class="v2-exec-state">Running</span><svg class="v2-ico v2-chev" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 7.5 10 12l5-4.5"></path></svg></button><button type="button" class="v2-bell attn-pill" title="Notifications" aria-label="Notifications" aria-haspopup="dialog" aria-expanded="false" aria-controls="ncFloat"><svg class="v2-ico bell" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9a4 4 0 0 1 8 0c0 3 1.2 4 1.8 4.6.3.3.1.9-.4.9H4.6c-.5 0-.7-.6-.4-.9C4.8 13 6 12 6 9z"></path><path d="M8.4 17a1.8 1.8 0 0 0 3.2 0"></path></svg></button></div></header></div>
+</template>
+<script>
+  // mockup plumbing: stamp the live shell chrome into each frame, mark the active project tab, apply ?theme / ?frame / ?notes
+  const q = new URLSearchParams(location.search);
+  if (q.get("theme") === "light") document.documentElement.setAttribute("data-theme", "light");
+  if (q.get("notes") === "off") document.documentElement.setAttribute("data-notes", "off");
+  document.addEventListener("DOMContentLoaded", () => {
+    const tpl = document.getElementById("chrome");
+    const only = q.get("frame"); if (only) document.body.classList.add("solo");
+    document.querySelectorAll(".frame-wrap").forEach((wrap) => {
+      const frame = wrap.querySelector(".frame");
+      if (only && frame.id !== only) { wrap.hidden = true; return; }
+      const app = frame.querySelector(".v2-app");
+      const clone = tpl.content.cloneNode(true);
+      const aside = clone.querySelector("aside-wrap > aside");
+      const top = clone.querySelector(".v2-panel-top");
+      const tab = frame.dataset.tab || "workflows";
+      top.querySelectorAll(".v2-ptab").forEach((a) => { const on = a.dataset.section === tab; a.classList.toggle("is-current", on); if (on) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current"); });
+      const hdr = top.querySelector(".v2-header"); if (frame.dataset.density) { hdr.classList.remove("is-d-compact"); hdr.classList.add(frame.dataset.density); }
+      const crumb = top.querySelector('.v2-crumbs [aria-current="page"]'); if (crumb) crumb.textContent = frame.dataset.crumb || (tab === "tasks" ? "Tasks" : "Workflows");
+      const primary = top.querySelector("[data-chrome-primary] .v2-btn-label"); if (primary) { if (frame.dataset.primary === "none") top.querySelector(".v2-header-primary").remove(); else primary.textContent = frame.dataset.primary || (tab === "tasks" ? "New task" : "New workflow"); }
+      if (frame.dataset.chrome === "none") { top.remove(); }
+      app.insertBefore(aside, app.firstChild);
+      const main = app.querySelector(".v2-main"); if (top) main.insertBefore(top, main.firstChild);
+    });
+  });
+</script>
+<div class="sheet">
+<div class="sheet-h"><h1>Flexible workflows — loops, outcomes, approvals, recovery</h1>Design frames for the approved product requirements (issue #355). Every frame extends the #350 redesign on the same V2 primitives; sample data is a fictional Recipe App team. Controls marked “proposed” need the API additions listed in README.md. Frames are 1440 × 900; numbered dots are the spec callouts. Static gallery, not an app.</div>
+
+
+<!-- ============================ A1 · Create workflow: outcomes, repeat group, approval gate ============================ -->
+<div class="frame-wrap"><div class="frame-h"><b>A1 · Create workflow — outcomes, a repeat group and an approval gate</b><span>Walkthrough A · proposed: outcome routes, repeat groups, gate steps</span></div>
+<div class="frame" id="x01" data-tab="workflows" data-crumb="New workflow" style="--v2-content-h: 838px;">
+<div class="v2-app"><div class="v2-frame-main"><div class="v2-main main" data-v2-surface="panel"><main class="v2-content content" tabindex="-1" style="overflow:auto">
+<div class="wf-create" style="max-width:820px">
+  <div class="wf-stepper"><b>1 Goal</b><i></i><b>2 Steps</b><i></i><span>3 Review and save</span><span style="margin-left:auto" class="wf-muted">Draft kept while this app stays open · nothing starts until you review Start</span></div>
+  <h2>Steps <span class="v2-count">3 of 200</span></h2>
+  <div class="wf-card">
+    <div class="wf-card-h"><svg class="v2-si v2-si-c-todo" width="14" height="14"><use href="#si-todo"/></svg>Step 1 <span class="v2-chip v2-chip-sm"><span class="v2-chip-text">Draft · Autonomy OFF</span></span><button type="button" class="v2-btn v2-btn-ghost v2-btn-sm" style="margin-left:auto"><span class="v2-btn-label">Remove</span></button></div>
+    <label class="wf-field"><span>Step summary</span><input class="wf-in" value="Write the launch post"></label>
+    <div class="wf-grid2"><div class="wf-field"><span>Assignee</span><button type="button" class="v2-btn v2-btn-secondary v2-btn-md v2-menubtn" style="justify-content:flex-start"><span class="av v2-av v2-av-16 ai" style="background: hsl(272 34% 28%); color: hsl(272 72% 86%);"><span class="v2-av-init">W</span></span><span class="v2-btn-label">Writer</span><svg class="v2-ico v2-chev"><use href="#i-chev"/></svg></button></div><div class="wf-field"><span>Outcomes this step can report</span><div class="wf-chipline"><span class="v2-chip v2-chip-sm"><span class="v2-chip-text">Ready for review</span></span><span class="v2-chip v2-chip-sm"><span class="v2-chip-text">Blocked</span></span><button type="button" class="v2-chip v2-chip-sm"><svg class="v2-ico v2-chip-ico" style="width:12px;height:12px"><use href="#i-plus"/></svg><span class="v2-chip-text">Add outcome</span></button></div></div></div>
+    <div class="wf-field"><span>What happens next</span><div class="wf-impact"><div class="wf-route"><span class="v2-badge v2-tone-ok">Ready for review</span><span class="arr">→</span><span class="dest">Review the post</span><span class="wf-muted">next step</span></div><div class="wf-route"><span class="v2-badge v2-tone-warn">Blocked</span><span class="arr">→</span><span class="dest">Ask the owner (Kedar)</span><span class="wf-muted">stop and ask</span></div></div><span class="wf-muted">Every outcome needs one destination or “ask the owner”. Two rules for one outcome are refused when you review the draft.</span></div>
+  </div>
+  <div class="wf-card">
+    <div class="wf-card-h"><svg class="v2-si v2-si-c-todo" width="14" height="14"><use href="#si-todo"/></svg>Step 2 <span class="v2-chip v2-chip-sm"><span class="v2-chip-text">Draft · Autonomy OFF</span></span><span class="wf-muted">Depends on Step 1</span><button type="button" class="v2-btn v2-btn-ghost v2-btn-sm" style="margin-left:auto"><span class="v2-btn-label">Remove</span></button></div>
+    <label class="wf-field"><span>Step summary</span><input class="wf-in" value="Review the post"></label>
+    <div class="wf-grid2"><div class="wf-field"><span>Assignee · reports the review outcome</span><button type="button" class="v2-btn v2-btn-secondary v2-btn-md v2-menubtn" style="justify-content:flex-start"><span class="av v2-av v2-av-16 ai" style="background: hsl(208 34% 28%); color: hsl(208 72% 86%);"><span class="v2-av-init">R</span></span><span class="v2-btn-label">Reviewer</span><svg class="v2-ico v2-chev"><use href="#i-chev"/></svg></button><span class="wf-muted">Only this assignee can report Passed or Changes requested; the writer cannot.</span></div><div class="wf-field"><span>Outcomes this step can report</span><div class="wf-chipline"><span class="v2-chip v2-chip-sm"><span class="v2-chip-text">Passed</span></span><span class="v2-chip v2-chip-sm"><span class="v2-chip-text">Changes requested</span></span><span class="v2-chip v2-chip-sm"><span class="v2-chip-text">No progress</span></span></div></div></div>
+    <div class="wf-field"><span>What happens next</span><div class="wf-impact"><div class="wf-route"><span class="v2-badge v2-tone-ok">Passed</span><span class="arr">→</span><span class="dest">Publish approval (gate)</span><span class="wf-muted">leaves the loop</span></div><div class="wf-route"><span class="v2-badge v2-tone-warn">Changes requested</span><span class="arr">↺</span><span class="dest">Write the launch post · new round</span><span class="wf-muted">return inside the loop</span></div><div class="wf-route"><span class="v2-badge v2-tone-neutral">No progress</span><span class="arr">→</span><span class="dest">Ask the owner (Kedar)</span><span class="wf-muted">pause</span></div></div></div>
+  </div>
+  <div class="wf-card" style="border-color:var(--v2-accent)">
+    <div class="wf-card-h"><svg class="v2-ico" style="width:14px;height:14px;color:var(--v2-accent)"><use href="#i-refresh"/></svg>Repeat group · <b>Draft and review</b> <span class="v2-badge v2-tone-accent">Proposed</span><button type="button" class="v2-btn v2-btn-ghost v2-btn-sm" style="margin-left:auto"><span class="v2-btn-label">Remove group</span></button></div>
+    <div class="wf-grid2">
+      <div class="wf-field"><span>Steps in the group</span><div class="wf-chipline"><span class="v2-chip v2-chip-sm"><span class="v2-chip-text">1 Write the launch post</span></span><span class="v2-chip v2-chip-sm"><span class="v2-chip-text">2 Review the post</span></span></div></div>
+      <div class="wf-field"><span>Review point</span><select class="wf-sel"><option>Review the post (Reviewer)</option></select></div>
+      <div class="wf-field"><span>Leave the group when</span><select class="wf-sel"><option>Review the post reports Passed</option></select></div>
+      <div class="wf-field"><span>Most rounds, including the first</span><input class="wf-in" value="5" style="width:72px"><span class="wf-muted">Required. The default is 5; you can lower it. Raising it later is a separate owner decision.</span></div>
+      <div class="wf-field"><span>When the limit is reached or the loop stalls</span><select class="wf-sel"><option>Ask Kedar (owner)</option></select></div>
+      <div class="wf-field"><span>Each new round receives</span><span class="wf-muted">The last reviewed draft, the reviewer’s findings, the reason for the return and links to earlier rounds. Always on.</span></div>
+    </div>
+  </div>
+  <div class="wf-card">
+    <div class="wf-card-h"><svg class="v2-si v2-si-c-review" width="14" height="14"><use href="#si-review"/></svg>Step 3 · Approval gate <span class="v2-badge v2-tone-accent">Proposed</span><span class="wf-muted">Reached when the group exits on Passed</span><button type="button" class="v2-btn v2-btn-ghost v2-btn-sm" style="margin-left:auto"><span class="v2-btn-label">Remove</span></button></div>
+    <div class="wf-grid2"><label class="wf-field"><span>Gate name</span><input class="wf-in" value="Publish approval"></label><div class="wf-field"><span>Approval policy</span><button type="button" class="v2-btn v2-btn-secondary v2-btn-md v2-menubtn" style="justify-content:flex-start"><span class="v2-btn-label">Publish approval · version 2</span><svg class="v2-ico v2-chev"><use href="#i-chev"/></svg></button><span class="wf-muted">Kedar or Priya, one is enough · no self-review · reminder after 2 days · escalates to Kedar after 4 days</span></div></div>
+    <div class="wf-field" style="margin:0"><span>What approval permits</span><input class="wf-in" value="Publishing this exact version of the post"></div>
+  </div>
+  <h2 style="margin-top:16px">Review and save</h2>
+  <div class="wf-card">
+    <div class="wf-impact"><div class="wf-impact-h"><span>Checked draft</span><span>3 steps · 1 repeat group · 1 gate · one step at a time</span></div><div class="wf-impact-row"><svg class="v2-ico" style="width:14px;height:14px;color:var(--v2-ok)"><use href="#i-check"/></svg><span class="t">Every outcome has one destination. The group has a review point, an exit and a limit of 5 rounds.</span></div><div class="wf-impact-row"><svg class="v2-ico" style="width:14px;height:14px;color:var(--v2-ok)"><use href="#i-check"/></svg><span class="t">The gate has two eligible approvers; neither is the writer.</span></div></div>
+    <div style="display:flex;gap:8px;align-items:center;margin-top:12px"><button type="button" class="v2-btn v2-btn-primary v2-btn-md"><span class="v2-btn-label">Save workflow</span></button><span class="wf-muted">Saved in Preparing. Starting work is a separate action after saving.</span></div>
+  </div>
+</div>
+</main></div></div></div>
+<span class="note" style="left:296px;top:96px">1</span><span class="note" style="left:296px;top:300px">2</span><span class="note" style="left:296px;top:536px">3</span><span class="note" style="left:296px;top:712px">4</span>
+</div></div>
+
+<!-- ============================ A2 · Start review: routes, limits, approvers ============================ -->
+<div class="frame-wrap"><div class="frame-h"><b>A2 · Start review — the route, limits and approvers before any work begins</b><span>Walkthrough A · extends #350 frame 04 · proposed fields marked</span></div>
+<div class="frame" id="x02" data-tab="workflows" style="--v2-content-h: 838px;">
+<div class="v2-app"><div class="v2-frame-main"><div class="v2-main main" data-v2-surface="panel"><main class="v2-content content is-flush" tabindex="-1">
+<div class="wf-page"><header class="wf-head"><h1 class="wf-head-title">Recipe App launch post</h1><div class="wf-head-meta"><span class="v2-badge v2-tone-neutral">Preparing</span><span>Owner: Kedar</span><span>One step at a time</span><span>0/3 steps</span></div><p class="wf-head-goal">Publish a launch post that a first-time reader can follow to try the Recipe App.</p><div class="wf-head-actions"><button type="button" class="v2-btn v2-btn-primary v2-btn-md"><span class="v2-btn-label">Review start</span></button><button type="button" class="v2-iconbtn v2-iconbtn-circle"><svg class="v2-ico"><use href="#i-more"/></svg></button></div></header>
+<div class="wf-tabs-row"><div class="v2-tabs" role="tablist"><button type="button" class="v2-tab is-selected" role="tab"><span class="v2-tab-label">Steps</span><span class="v2-count">3</span></button><button type="button" class="v2-tab" role="tab"><span class="v2-tab-label">Route</span></button><button type="button" class="v2-tab" role="tab"><span class="v2-tab-label">Review history</span></button><button type="button" class="v2-tab" role="tab"><span class="v2-tab-label">Activity</span></button></div></div>
+<div style="padding:24px" class="wf-muted">Steps are listed behind the dialog.</div></div>
+</main></div></div></div>
+<div class="v2-overlay" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;"><div class="v2-dialog v2-dialog-lg" role="dialog" aria-modal="true" style="width:760px;max-width:94%;">
+  <div class="v2-dialog-h"><h2 class="v2-dialog-title">Start this workflow?</h2><div class="v2-dialog-desc">Recipe App launch post · Orcha checked the route, limits and approvers just now. Nothing starts until you confirm.</div></div>
+  <div class="v2-dialog-b">
+    <div class="wf-impact"><div class="wf-impact-h"><span>Expected route</span><span>3 steps · 1 repeat group · 1 gate</span></div>
+      <div class="wf-impact-row"><span class="t">1 Write the launch post → 2 Review the post, repeated until Passed, at most 5 rounds</span><span class="v2-badge v2-tone-accent">Loop</span></div>
+      <div class="wf-impact-row"><span class="t">Passed → Publish approval (Kedar or Priya, one is enough)</span><span class="v2-badge v2-tone-neutral">Gate</span></div>
+      <div class="wf-impact-row"><span class="t">Blocked, No progress, or round 5 still asking for changes → waits for Kedar</span><span class="v2-badge v2-tone-warn">Stops and asks</span></div>
+    </div>
+    <div class="wf-impact" style="margin-top:12px"><div class="wf-impact-h"><span>Limits</span><span>bounded automated work</span></div>
+      <div class="wf-impact-row"><span class="t">Rounds: 5 including the first · Agent turns for this run: 40 · Estimated cost shown as it accrues, no exact ceiling</span></div>
+      <div class="wf-impact-row"><span class="t">Project and agent budgets still apply. A reached limit never counts as success.</span></div>
+    </div>
+    <div class="wf-impact" style="margin-top:12px"><div class="wf-impact-h"><span>Incomplete settings</span><span>none</span></div><div class="wf-impact-row"><svg class="v2-ico" style="width:14px;height:14px;color:var(--v2-ok)"><use href="#i-check"/></svg><span class="t">Every outcome has a destination, the loop has a limit, both approvers are eligible, the writer is excluded from approving.</span></div></div>
+    <p class="wf-muted" style="margin:12px 0 0">Example of a refused start: “Repeat group Draft and review has no maximum rounds” would appear here with a link to the setting, and the Start button would stay disabled.</p>
+  </div>
+  <div class="v2-dialog-f"><button type="button" class="v2-btn v2-btn-secondary v2-btn-md"><span class="v2-btn-label">Not now</span></button><button type="button" class="v2-btn v2-btn-primary v2-btn-md"><span class="v2-btn-label">Start workflow</span></button></div>
+</div></div>
+<span class="note" style="left:356px;top:214px">1</span><span class="note" style="left:356px;top:392px">2</span><span class="note" style="left:356px;top:508px">3</span>
+</div></div>
+
+<!-- ============================ B1 · The loop running: round 2 of 5 with feedback carried in ============================ -->
+<div class="frame-wrap"><div class="frame-h"><b>B1 · The loop running — round 2 of 5, feedback carried into the new round</b><span>Walkthrough B · extends #350 frames 02 and 03 · proposed: rounds, outcomes, feedback packet</span></div>
+<div class="frame" id="x03" data-tab="workflows" style="--v2-content-h: 838px;">
+<div class="v2-app"><div class="v2-frame-main"><div class="v2-main main" data-v2-surface="panel"><main class="v2-content content is-flush" tabindex="-1">
+<div class="wf-page">
+  <header class="wf-head"><h1 class="wf-head-title">Recipe App launch post</h1><div class="wf-head-meta"><span class="v2-si-wrap has-label"><svg class="v2-si v2-si-c-progress" width="14" height="14"><use href="#si-progress"/></svg><span class="v2-si-label">Active</span></span><span>·</span><span>Kedar</span><span>·</span><span class="v2-chip v2-chip-sm"><span class="v2-chip-text">One step at a time</span></span><span class="wf-prog is-lg"><span class="wf-prog-bar"><i style="width:0%"></i></span><span>0/3 steps · round 2 of 5</span></span></div><p class="wf-head-goal">Publish a launch post that a first-time reader can follow to try the Recipe App.</p><div class="wf-head-actions"><button type="button" class="v2-btn v2-btn-secondary v2-btn-md"><span class="v2-btn-label">Pause</span></button><button type="button" class="v2-iconbtn v2-iconbtn-circle"><svg class="v2-ico"><use href="#i-refresh"/></svg></button><button type="button" class="v2-iconbtn v2-iconbtn-circle"><svg class="v2-ico"><use href="#i-more"/></svg></button></div></header>
+  <div class="wf-tabs-row"><div class="v2-tabs" role="tablist"><button type="button" class="v2-tab is-selected" role="tab"><span class="v2-tab-label">Steps</span><span class="v2-count">3</span></button><button type="button" class="v2-tab" role="tab"><span class="v2-tab-label">Route</span></button><button type="button" class="v2-tab" role="tab"><span class="v2-tab-label">Review history</span><span class="v2-count">1</span></button><button type="button" class="v2-tab" role="tab"><span class="v2-tab-label">Activity</span></button></div></div>
+  <div class="wf-body"><div class="wf-main"><div class="v2-split">
+    <div class="v2-split-list"><div class="wf-list"><div class="wf-rows">
+      <div class="wf-loop">
+        <div class="wf-loop-h"><svg class="v2-ico" style="width:13px;height:13px;color:var(--v2-accent)"><use href="#i-refresh"/></svg><b>Draft and review</b><span>·</span><span>Round 2 of 5</span><span class="wf-rounds" aria-label="Round 2 of 5"><i class="wf-rnd is-done"></i><i class="wf-rnd is-now"></i><i class="wf-rnd"></i><i class="wf-rnd"></i><i class="wf-rnd"></i></span><span>·</span><span>exits when Review reports Passed</span><span>·</span><span>then asks Kedar</span></div>
+        <div class="v2-row wf-row is-two is-selected" role="option" aria-selected="true" tabindex="0"><span class="wf-st"><svg class="v2-si v2-si-c-progress" width="14" height="14"><use href="#si-progress"/></svg></span><span class="wf-title"><span>Write the launch post</span><span class="wf-sub">Round 2 · running · received draft v1 and 3 findings from round 1</span></span><span class="wf-chips"><span class="v2-chip v2-chip-sm"><span class="v2-chip-text">Autonomy OFF</span></span></span><span class="wf-who"><span class="av v2-av v2-av-20 ai" style="background: hsl(272 34% 28%); color: hsl(272 72% 86%);"><span class="v2-av-init">W</span></span></span></div>
+        <div class="v2-row wf-row is-two" role="option" tabindex="0"><span class="wf-st"><svg class="v2-si v2-si-c-todo" width="14" height="14"><use href="#si-dashed"/></svg></span><span class="wf-title"><span>Review the post</span><span class="wf-sub">Round 2 · waits for the new draft · round 1 reported Changes requested</span></span><span class="wf-who"><span class="av v2-av v2-av-20 ai" style="background: hsl(208 34% 28%); color: hsl(208 72% 86%);"><span class="v2-av-init">R</span></span></span></div>
+      </div>
+      <div class="v2-row wf-row is-two wf-gate-row" role="option" tabindex="0"><span class="wf-st"><svg class="v2-si v2-si-c-todo" width="14" height="14"><use href="#si-dashed"/></svg></span><span class="wf-title"><span>Publish approval</span><span class="wf-sub">Gate · Kedar or Priya · reached when the review reports Passed</span></span><span class="wf-chips"><span class="v2-chip v2-chip-sm"><span class="v2-chip-text">Policy v2</span></span></span><span class="wf-who"><span class="av v2-av v2-av-20 human" style="background: hsl(238 34% 28%); color: hsl(238 72% 86%);"><span class="v2-av-init">K</span></span></span></div>
+    </div></div></div>
+    <div class="v2-split-inspector wf-insp"><div class="v2-inspector-h"><div style="display:flex;align-items:center;gap:8px"><svg class="v2-si v2-si-c-progress" width="14" height="14"><use href="#si-progress"/></svg><strong class="v2-inspector-title">Write the launch post</strong></div><div class="wf-muted">Writer · Autonomy OFF · round 2, attempt 1</div></div>
+      <div style="padding:0 var(--v2-space-4);overflow:auto">
+        <section class="v2-section"><dl class="wf-kv"><dt>Round</dt><dd>2 of 5 in “Draft and review”</dd><dt>Attempt</dt><dd>1 · a retry would not use a round</dd><dt>Why it runs</dt><dd>Round 1 review reported <b>Changes requested</b> (rule: Changes requested ↺ Write the launch post)</dd><dt>Waiting on</dt><dd>Writer’s worker · started 4 min ago</dd></dl></section>
+        <section class="v2-section"><div class="v2-section-h"><h3 class="v2-section-title">Received this round</h3></div>
+          <div class="wf-evi"><div class="wf-evi-h"><span class="v2-badge v2-tone-neutral">Input</span> Draft v1 · exact version from round 1 <span class="wf-muted" style="margin-left:auto">sha256 7a1c…e4f0</span></div>
+            <div class="wf-finding"><code>F1</code><span>Missing the install link in the first paragraph</span></div><div class="wf-finding"><code>F2</code><span>Screenshot shows the old icon</span></div><div class="wf-finding"><code>F3</code><span>Claims “no sign-up” but the beta needs an invite</span></div>
+            <div class="wf-muted">Reviewer’s original words are kept with the findings. Reason for return: Changes requested, round 1.</div></div></section>
+        <section class="v2-section"><div class="v2-section-h"><h3 class="v2-section-title">Actions</h3></div><div style="display:flex;gap:8px;flex-wrap:wrap"><button type="button" class="v2-btn v2-btn-secondary v2-btn-sm"><span class="v2-btn-label">Open discussion</span></button><button type="button" class="v2-btn v2-btn-secondary v2-btn-sm"><span class="v2-btn-label">Hold step…</span></button><button type="button" class="v2-btn v2-btn-secondary v2-btn-sm"><span class="v2-btn-label">Reassign…</span></button></div><p class="wf-muted" style="margin:8px 0 0">Stop workflow lives in the workflow menu. Raising the round limit is only offered at the limit.</p></section>
+      </div></div>
+  </div></div></div>
+</div>
+</main></div></div></div>
+<span class="note" style="left:296px;top:242px">1</span><span class="note" style="left:296px;top:300px">2</span><span class="note" style="left:296px;top:388px">3</span><span class="note" style="left:860px;top:300px">4</span><span class="note" style="left:860px;top:430px">5</span>
+</div></div>
+
+</div>
+</body>
+</html>
