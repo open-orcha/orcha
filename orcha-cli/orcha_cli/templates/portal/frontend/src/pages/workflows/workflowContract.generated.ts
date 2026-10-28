@@ -1,5 +1,5 @@
 // Generated from FastAPI OpenAPI slices. DO NOT EDIT.
-// Workflow source SHA-256: 33f2e0219dc7b1aca57f112305cef54644a9aa5d43d934bfc25a86898700e638
+// Workflow source SHA-256: 187cf006b92394932a15f176c810aa02a640cfe24251d8c5d1d689b50b84d815
 // Evidence GET source SHA-256: f2a794298f992bd3ff3955fa5d6aefc30a97e373794a3c1e9d03c8f46796853e
 // Regenerate with tools/generate-workflow-contract.mjs and both source files.
 
@@ -100,6 +100,12 @@ export type DisplayState = {
   "release_available_at"?: string | null;
   "warning"?: string | null;
   "list_warning"?: boolean;
+};
+
+export type EarlierRound = {
+  "round": number;
+  "ended"?: string | null;
+  "findings"?: Array<RoundFinding>;
 };
 
 export type EvidenceBasis = {
@@ -392,6 +398,29 @@ export type ReviewRound = {
   "next_review"?: NewTask | null;
 };
 
+export type RoundContext = {
+  "task_id": string;
+  "outcomes"?: Array<StepOutcome>;
+  "group"?: RoundGroup | null;
+};
+
+export type RoundFinding = {
+  "text": string;
+  "severity"?: string | null;
+};
+
+export type RoundGroup = {
+  "name": string;
+  "round": number;
+  "max_rounds": number;
+  "state": string;
+  "review_step"?: string | null;
+  "is_review_step": boolean;
+  "exit_outcome": string;
+  "this_round": ThisRound;
+  "earlier_rounds"?: Array<EarlierRound>;
+};
+
 export type RoutingPreview = {
   "task_id": string;
   "outcome": string;
@@ -478,6 +507,14 @@ export type TaskMutation = {
   "idempotency_key": string;
   "reason"?: string;
   "expected_work_revision": number;
+};
+
+export type ThisRound = {
+  "trigger"?: string | null;
+  "outcome"?: string | null;
+  "findings"?: Array<RoundFinding>;
+  "note"?: string | null;
+  "owner_note"?: string | null;
 };
 
 export type TransferOwner = {
@@ -749,6 +786,7 @@ export type WorkflowModels = {
   CompletionCheck: CompletionCheck;
   DependencyEdit: DependencyEdit;
   DisplayState: DisplayState;
+  EarlierRound: EarlierRound;
   EvidenceBasis: EvidenceBasis;
   EvidenceItem: EvidenceItem;
   EvidenceReference: EvidenceReference;
@@ -781,6 +819,9 @@ export type WorkflowModels = {
   RetryTask: RetryTask;
   ReviewHistory: ReviewHistory;
   ReviewRound: ReviewRound;
+  RoundContext: RoundContext;
+  RoundFinding: RoundFinding;
+  RoundGroup: RoundGroup;
   RoutingPreview: RoutingPreview;
   StepOutcome: StepOutcome;
   StepRoute: StepRoute;
@@ -791,6 +832,7 @@ export type WorkflowModels = {
   TaskAutonomyUpdate: TaskAutonomyUpdate;
   TaskBatch: TaskBatch;
   TaskMutation: TaskMutation;
+  ThisRound: ThisRound;
   TransferOwner: TransferOwner;
   ValidationError: ValidationError;
   VisibilityCheck: VisibilityCheck;
@@ -1324,6 +1366,33 @@ export const workflowSchemas = {
     "type": "object",
     "required": [
       "label"
+    ]
+  },
+  "EarlierRound": {
+    "properties": {
+      "round": {
+        "type": "integer"
+      },
+      "ended": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "findings": {
+        "items": {
+          "$ref": "#/components/schemas/RoundFinding"
+        },
+        "type": "array"
+      }
+    },
+    "type": "object",
+    "required": [
+      "round"
     ]
   },
   "EvidenceBasis": {
@@ -2796,6 +2865,105 @@ export const workflowSchemas = {
       "outcome"
     ]
   },
+  "RoundContext": {
+    "properties": {
+      "task_id": {
+        "type": "string"
+      },
+      "outcomes": {
+        "items": {
+          "$ref": "#/components/schemas/StepOutcome"
+        },
+        "type": "array"
+      },
+      "group": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/RoundGroup"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "type": "object",
+    "required": [
+      "task_id"
+    ]
+  },
+  "RoundFinding": {
+    "properties": {
+      "text": {
+        "type": "string"
+      },
+      "severity": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "type": "object",
+    "required": [
+      "text"
+    ]
+  },
+  "RoundGroup": {
+    "properties": {
+      "name": {
+        "type": "string"
+      },
+      "round": {
+        "type": "integer"
+      },
+      "max_rounds": {
+        "type": "integer"
+      },
+      "state": {
+        "type": "string"
+      },
+      "review_step": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "is_review_step": {
+        "type": "boolean"
+      },
+      "exit_outcome": {
+        "type": "string"
+      },
+      "this_round": {
+        "$ref": "#/components/schemas/ThisRound"
+      },
+      "earlier_rounds": {
+        "items": {
+          "$ref": "#/components/schemas/EarlierRound"
+        },
+        "type": "array"
+      }
+    },
+    "type": "object",
+    "required": [
+      "name",
+      "round",
+      "max_rounds",
+      "state",
+      "is_review_step",
+      "exit_outcome",
+      "this_round"
+    ]
+  },
   "RoutingPreview": {
     "properties": {
       "task_id": {
@@ -3240,6 +3408,57 @@ export const workflowSchemas = {
       "idempotency_key",
       "expected_work_revision"
     ]
+  },
+  "ThisRound": {
+    "properties": {
+      "trigger": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "outcome": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "findings": {
+        "items": {
+          "$ref": "#/components/schemas/RoundFinding"
+        },
+        "type": "array"
+      },
+      "note": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "owner_note": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "type": "object"
   },
   "TransferOwner": {
     "properties": {
@@ -4856,6 +5075,10 @@ export const workflowRoutes = [
     "method": "post",
     "operation": "retry",
     "body": "RetryTask"
+  },
+  {
+    "path": "/api/tasks/{tid}/round-context",
+    "method": "get"
   },
   {
     "path": "/api/tasks/{tid}/stop",

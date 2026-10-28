@@ -502,6 +502,28 @@ def preview_task_outcome(tid: str, body: model.OutcomeChoice, request: Request):
         return svc.routing_preview(tid, body.outcome, body.expected_work_revision)
 
 
+@app.get("/api/tasks/{tid}/round-context", response_model=model.RoundContext)
+def task_round_context(tid: str, request: Request):
+    """The outcomes and round feedback the step's worker sees in its prompt."""
+    from portal_backend.workflow_prompt import round_context
+
+    with db_cursor(readonly=True) as (_, cur):
+        svc = service.WorkflowService(cur, HOOKS)
+        t = svc.one("SELECT * FROM tasks WHERE id=%s", (tid,))
+        if not t or not t["workflow_id"]:
+            conflict(
+                "workflow_task_required", "A workflow task is required.", status=404
+            )
+        require_member_read(cur, request, t["container_id"])
+        w = svc.workflow(t["workflow_id"])
+        context = (
+            round_context(cur, t, t["workflow_id"])
+            if w.get("semantics_version") == 2
+            else None
+        )
+        return context or {"task_id": str(tid)}
+
+
 @app.put(
     "/api/tasks/{tid}/dependencies",
     response_model=model.WorkflowDetail,

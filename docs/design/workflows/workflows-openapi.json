@@ -1072,6 +1072,46 @@
         "x-workflow-operation": "retry"
       }
     },
+    "/api/tasks/{tid}/round-context": {
+      "get": {
+        "summary": "Task Round Context",
+        "description": "The outcomes and round feedback the step's worker sees in its prompt.",
+        "operationId": "task_round_context_api_tasks__tid__round_context_get",
+        "parameters": [
+          {
+            "name": "tid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoundContext"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/tasks/{tid}/stop": {
       "post": {
         "summary": "Workflow Task Stop",
@@ -3308,6 +3348,37 @@
         ],
         "title": "DisplayState"
       },
+      "EarlierRound": {
+        "properties": {
+          "round": {
+            "type": "integer",
+            "title": "Round"
+          },
+          "ended": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ended"
+          },
+          "findings": {
+            "items": {
+              "$ref": "#/components/schemas/RoundFinding"
+            },
+            "type": "array",
+            "title": "Findings"
+          }
+        },
+        "type": "object",
+        "required": [
+          "round"
+        ],
+        "title": "EarlierRound"
+      },
       "EvidenceBasis": {
         "properties": {
           "narrative": {
@@ -5021,6 +5092,121 @@
         ],
         "title": "ReviewRound"
       },
+      "RoundContext": {
+        "properties": {
+          "task_id": {
+            "type": "string",
+            "title": "Task Id"
+          },
+          "outcomes": {
+            "items": {
+              "$ref": "#/components/schemas/StepOutcome"
+            },
+            "type": "array",
+            "title": "Outcomes"
+          },
+          "group": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RoundGroup"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "task_id"
+        ],
+        "title": "RoundContext",
+        "description": "What a step's worker is told about its outcomes and loop round (version 2).\nEmpty outcomes and a null group on version-1 workflows."
+      },
+      "RoundFinding": {
+        "properties": {
+          "text": {
+            "type": "string",
+            "title": "Text"
+          },
+          "severity": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Severity"
+          }
+        },
+        "type": "object",
+        "required": [
+          "text"
+        ],
+        "title": "RoundFinding"
+      },
+      "RoundGroup": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "round": {
+            "type": "integer",
+            "title": "Round"
+          },
+          "max_rounds": {
+            "type": "integer",
+            "title": "Max Rounds"
+          },
+          "state": {
+            "type": "string",
+            "title": "State"
+          },
+          "review_step": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Review Step"
+          },
+          "is_review_step": {
+            "type": "boolean",
+            "title": "Is Review Step"
+          },
+          "exit_outcome": {
+            "type": "string",
+            "title": "Exit Outcome"
+          },
+          "this_round": {
+            "$ref": "#/components/schemas/ThisRound"
+          },
+          "earlier_rounds": {
+            "items": {
+              "$ref": "#/components/schemas/EarlierRound"
+            },
+            "type": "array",
+            "title": "Earlier Rounds"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "round",
+          "max_rounds",
+          "state",
+          "is_review_step",
+          "exit_outcome",
+          "this_round"
+        ],
+        "title": "RoundGroup"
+      },
       "RoutingPreview": {
         "properties": {
           "task_id": {
@@ -5541,6 +5727,63 @@
           "expected_work_revision"
         ],
         "title": "TaskMutation"
+      },
+      "ThisRound": {
+        "properties": {
+          "trigger": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trigger"
+          },
+          "outcome": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outcome"
+          },
+          "findings": {
+            "items": {
+              "$ref": "#/components/schemas/RoundFinding"
+            },
+            "type": "array",
+            "title": "Findings"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "owner_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner Note"
+          }
+        },
+        "type": "object",
+        "title": "ThisRound"
       },
       "TransferOwner": {
         "properties": {

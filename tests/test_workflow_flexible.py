@@ -483,3 +483,20 @@ def test_version_one_prompt_has_no_round_context(setup_workflow, monkeypatch):
     with db_cursor(readonly=True) as (_, cur):
         cur.execute("SELECT * FROM tasks WHERE id=%s", (w["tasks"][0]["id"],))
         assert "round_context" not in workflow_for_prompt(cur, dict(cur.fetchone()))
+
+
+@pytest.mark.asyncio
+async def test_round_context_endpoint_matches_the_prompt(client, setup_workflow, flexible):
+    execute = setup_workflow[-1]
+    w = prepare_and_start(setup_workflow, execute("create", loop_draft(setup_workflow[2])))
+    ids = {t["title"]: t["id"] for t in w["tasks"]}
+    write, review = ids["Write the launch post"], ids["Review the post"]
+    w = finish(setup_workflow, w, write)
+    w = finish(setup_workflow, w, review, "Changes requested", ["Too long"])
+    headers = {"X-Orcha-Local-Actor": setup_workflow[1].id}
+    body = (await client.get(f"/api/tasks/{write}/round-context", headers=headers)).json()
+    assert body["task_id"] == write and body["outcomes"] == []
+    assert body["group"]["round"] == 2
+    assert [f["text"] for f in body["group"]["this_round"]["findings"]] == ["Too long"]
+    body = (await client.get(f"/api/tasks/{ids['Publish']}/round-context", headers=headers)).json()
+    assert body == {"task_id": ids["Publish"], "outcomes": [], "group": None}

@@ -460,6 +460,46 @@ class RepeatGroupView(BaseModel):
     state: str
 
 
+class RoundFinding(BaseModel):
+    text: str
+    severity: str | None = None
+
+
+class ThisRound(BaseModel):
+    trigger: str | None = None
+    outcome: str | None = None
+    findings: list[RoundFinding] = Field(default_factory=list)
+    note: str | None = None
+    owner_note: str | None = None
+
+
+class EarlierRound(BaseModel):
+    round: int
+    ended: str | None = None
+    findings: list[RoundFinding] = Field(default_factory=list)
+
+
+class RoundGroup(BaseModel):
+    name: str
+    round: int
+    max_rounds: int
+    state: str
+    review_step: str | None = None
+    is_review_step: bool
+    exit_outcome: str
+    this_round: ThisRound
+    earlier_rounds: list[EarlierRound] = Field(default_factory=list)
+
+
+class RoundContext(BaseModel):
+    """What a step's worker is told about its outcomes and loop round (version 2).
+    Empty outcomes and a null group on version-1 workflows."""
+
+    task_id: str
+    outcomes: list[StepOutcome] = Field(default_factory=list)
+    group: RoundGroup | None = None
+
+
 class WorkflowDetail(BaseModel):
     id: str
     container_id: str
