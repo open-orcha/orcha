@@ -3829,6 +3829,22 @@
             "type": "array",
             "maxItems": 3,
             "title": "Depends On"
+          },
+          "outcomes": {
+            "items": {
+              "$ref": "#/components/schemas/StepOutcome"
+            },
+            "type": "array",
+            "maxItems": 8,
+            "title": "Outcomes"
+          },
+          "routes": {
+            "items": {
+              "$ref": "#/components/schemas/StepRoute"
+            },
+            "type": "array",
+            "maxItems": 8,
+            "title": "Routes"
           }
         },
         "additionalProperties": false,
@@ -4264,6 +4280,72 @@
         ],
         "title": "ReleaseTasks"
       },
+      "RepeatGroup": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "member_tasks": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 10,
+            "minItems": 2,
+            "title": "Member Tasks"
+          },
+          "review_task": {
+            "type": "string",
+            "title": "Review Task"
+          },
+          "exit_outcome": {
+            "type": "string",
+            "maxLength": 40,
+            "minLength": 1,
+            "title": "Exit Outcome"
+          },
+          "max_rounds": {
+            "type": "integer",
+            "maximum": 20.0,
+            "minimum": 1.0,
+            "title": "Max Rounds",
+            "default": 5
+          },
+          "escalation_owner_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Escalation Owner Id"
+          },
+          "stall_rule": {
+            "type": "string",
+            "enum": [
+              "findings_and_artifact",
+              "off"
+            ],
+            "title": "Stall Rule",
+            "default": "findings_and_artifact"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name",
+          "member_tasks",
+          "review_task",
+          "exit_outcome"
+        ],
+        "title": "RepeatGroup",
+        "description": "A bounded repeat-until loop: members repeat until the review step reports\n`exit_outcome`, at most `max_rounds` rounds before the owner decides."
+      },
       "RetryTask": {
         "properties": {
           "expected_revision": {
@@ -4496,6 +4578,75 @@
           "outcome"
         ],
         "title": "ReviewRound"
+      },
+      "StepOutcome": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 40,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "success",
+              "changes",
+              "failure",
+              "custom"
+            ],
+            "title": "Kind",
+            "default": "custom"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "StepOutcome",
+        "description": "A result a step may report (semantics version 2). Outcomes are optional: a step\nwithout any behaves like a version-1 step and simply lets its dependents proceed."
+      },
+      "StepRoute": {
+        "properties": {
+          "outcome": {
+            "type": "string",
+            "maxLength": 40,
+            "minLength": 1,
+            "title": "Outcome"
+          },
+          "destination": {
+            "type": "string",
+            "enum": [
+              "next",
+              "step",
+              "return",
+              "ask_owner",
+              "exit_group",
+              "stop"
+            ],
+            "title": "Destination"
+          },
+          "destination_task": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Destination Task"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "outcome",
+          "destination"
+        ],
+        "title": "StepRoute",
+        "description": "What happens next for one outcome. `step` is a branch to one direct dependent,\n`return` starts a new round of the reporter's repeat group at an earlier member."
       },
       "TaskAcceptance": {
         "properties": {
@@ -5053,6 +5204,36 @@
             "type": "object",
             "title": "Import Acceptances"
           },
+          "semantics_version": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "enum": [
+                  1,
+                  2
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Semantics Version"
+          },
+          "repeat_groups": {
+            "items": {
+              "$ref": "#/components/schemas/RepeatGroup"
+            },
+            "type": "array",
+            "maxItems": 5,
+            "title": "Repeat Groups"
+          },
+          "turn_allowance": {
+            "type": "integer",
+            "maximum": 1000.0,
+            "minimum": 1.0,
+            "title": "Turn Allowance",
+            "default": 40
+          },
           "idempotency_key": {
             "type": "string",
             "maxLength": 200,
@@ -5365,6 +5546,36 @@
             },
             "type": "object",
             "title": "Import Acceptances"
+          },
+          "semantics_version": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "enum": [
+                  1,
+                  2
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Semantics Version"
+          },
+          "repeat_groups": {
+            "items": {
+              "$ref": "#/components/schemas/RepeatGroup"
+            },
+            "type": "array",
+            "maxItems": 5,
+            "title": "Repeat Groups"
+          },
+          "turn_allowance": {
+            "type": "integer",
+            "maximum": 1000.0,
+            "minimum": 1.0,
+            "title": "Turn Allowance",
+            "default": 40
           }
         },
         "additionalProperties": false,

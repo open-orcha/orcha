@@ -1,5 +1,5 @@
 // Generated from FastAPI OpenAPI slices. DO NOT EDIT.
-// Workflow source SHA-256: 24361d478e39beb2ff1803ddd20f45d5ee2e3ce6231092fdd62dfc3492f2d734
+// Workflow source SHA-256: d02d098f50e21551dd25a4529e8b3f7c5361dd6efa6e133977b0ac8315481974
 // Evidence GET source SHA-256: f2a794298f992bd3ff3955fa5d6aefc30a97e373794a3c1e9d03c8f46796853e
 // Regenerate with tools/generate-workflow-contract.mjs and both source files.
 
@@ -221,6 +221,8 @@ export type NewTask = {
   "assignee_id"?: string | null;
   "priority"?: number;
   "depends_on"?: Array<string>;
+  "outcomes"?: Array<StepOutcome>;
+  "routes"?: Array<StepRoute>;
 };
 
 export type Objective = {
@@ -296,6 +298,16 @@ export type ReleaseTasks = {
   "holds"?: Array<"start" | "human">;
 };
 
+export type RepeatGroup = {
+  "name": string;
+  "member_tasks": Array<string>;
+  "review_task": string;
+  "exit_outcome": string;
+  "max_rounds"?: number;
+  "escalation_owner_id"?: string | null;
+  "stall_rule"?: "findings_and_artifact" | "off";
+};
+
 export type RetryTask = {
   "expected_revision": number;
   "idempotency_key": string;
@@ -330,6 +342,17 @@ export type ReviewRound = {
   "outcome": "changes_requested" | "accepted" | "inconclusive";
   "correction"?: NewTask | null;
   "next_review"?: NewTask | null;
+};
+
+export type StepOutcome = {
+  "name": string;
+  "kind"?: "success" | "changes" | "failure" | "custom";
+};
+
+export type StepRoute = {
+  "outcome": string;
+  "destination": "next" | "step" | "return" | "ask_owner" | "exit_group" | "stop";
+  "destination_task"?: string | null;
 };
 
 export type TaskAcceptance = {
@@ -434,6 +457,9 @@ export type WorkflowCreate = {
   "tasks"?: Array<NewTask>;
   "existing_task_ids"?: Array<string>;
   "import_acceptances"?: Record<string, ImportAcceptance>;
+  "semantics_version"?: 1 | 2 | null;
+  "repeat_groups"?: Array<RepeatGroup>;
+  "turn_allowance"?: number;
   "idempotency_key": string;
   "preview_digest"?: string | null;
 };
@@ -482,6 +508,9 @@ export type WorkflowDraft = {
   "tasks"?: Array<NewTask>;
   "existing_task_ids"?: Array<string>;
   "import_acceptances"?: Record<string, ImportAcceptance>;
+  "semantics_version"?: 1 | 2 | null;
+  "repeat_groups"?: Array<RepeatGroup>;
+  "turn_allowance"?: number;
 };
 
 export type WorkflowImpact = {
@@ -662,9 +691,12 @@ export type WorkflowModels = {
   Progress: Progress;
   Receipt: Receipt;
   ReleaseTasks: ReleaseTasks;
+  RepeatGroup: RepeatGroup;
   RetryTask: RetryTask;
   ReviewHistory: ReviewHistory;
   ReviewRound: ReviewRound;
+  StepOutcome: StepOutcome;
+  StepRoute: StepRoute;
   TaskAcceptance: TaskAcceptance;
   TaskApprovalHistory: TaskApprovalHistory;
   TaskApprovalRecord: TaskApprovalRecord;
@@ -1781,6 +1813,20 @@ export const workflowSchemas = {
         },
         "type": "array",
         "maxItems": 3
+      },
+      "outcomes": {
+        "items": {
+          "$ref": "#/components/schemas/StepOutcome"
+        },
+        "type": "array",
+        "maxItems": 8
+      },
+      "routes": {
+        "items": {
+          "$ref": "#/components/schemas/StepRoute"
+        },
+        "type": "array",
+        "maxItems": 8
       }
     },
     "additionalProperties": false,
@@ -2156,6 +2202,61 @@ export const workflowSchemas = {
       "idempotency_key"
     ]
   },
+  "RepeatGroup": {
+    "properties": {
+      "name": {
+        "type": "string",
+        "maxLength": 80,
+        "minLength": 1
+      },
+      "member_tasks": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array",
+        "maxItems": 10,
+        "minItems": 2
+      },
+      "review_task": {
+        "type": "string"
+      },
+      "exit_outcome": {
+        "type": "string",
+        "maxLength": 40,
+        "minLength": 1
+      },
+      "max_rounds": {
+        "type": "integer",
+        "maximum": 20,
+        "minimum": 1
+      },
+      "escalation_owner_id": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "stall_rule": {
+        "type": "string",
+        "enum": [
+          "findings_and_artifact",
+          "off"
+        ]
+      }
+    },
+    "additionalProperties": false,
+    "type": "object",
+    "required": [
+      "name",
+      "member_tasks",
+      "review_task",
+      "exit_outcome"
+    ]
+  },
   "RetryTask": {
     "properties": {
       "expected_revision": {
@@ -2359,6 +2460,65 @@ export const workflowSchemas = {
       "reviewed_task_id",
       "reviewed_artifact",
       "outcome"
+    ]
+  },
+  "StepOutcome": {
+    "properties": {
+      "name": {
+        "type": "string",
+        "maxLength": 40,
+        "minLength": 1
+      },
+      "kind": {
+        "type": "string",
+        "enum": [
+          "success",
+          "changes",
+          "failure",
+          "custom"
+        ]
+      }
+    },
+    "additionalProperties": false,
+    "type": "object",
+    "required": [
+      "name"
+    ]
+  },
+  "StepRoute": {
+    "properties": {
+      "outcome": {
+        "type": "string",
+        "maxLength": 40,
+        "minLength": 1
+      },
+      "destination": {
+        "type": "string",
+        "enum": [
+          "next",
+          "step",
+          "return",
+          "ask_owner",
+          "exit_group",
+          "stop"
+        ]
+      },
+      "destination_task": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "additionalProperties": false,
+    "type": "object",
+    "required": [
+      "outcome",
+      "destination"
     ]
   },
   "TaskAcceptance": {
@@ -2829,6 +2989,32 @@ export const workflowSchemas = {
         },
         "type": "object"
       },
+      "semantics_version": {
+        "anyOf": [
+          {
+            "type": "integer",
+            "enum": [
+              1,
+              2
+            ]
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "repeat_groups": {
+        "items": {
+          "$ref": "#/components/schemas/RepeatGroup"
+        },
+        "type": "array",
+        "maxItems": 5
+      },
+      "turn_allowance": {
+        "type": "integer",
+        "maximum": 1000,
+        "minimum": 1
+      },
       "idempotency_key": {
         "type": "string",
         "maxLength": 200,
@@ -3098,6 +3284,32 @@ export const workflowSchemas = {
           "$ref": "#/components/schemas/ImportAcceptance"
         },
         "type": "object"
+      },
+      "semantics_version": {
+        "anyOf": [
+          {
+            "type": "integer",
+            "enum": [
+              1,
+              2
+            ]
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "repeat_groups": {
+        "items": {
+          "$ref": "#/components/schemas/RepeatGroup"
+        },
+        "type": "array",
+        "maxItems": 5
+      },
+      "turn_allowance": {
+        "type": "integer",
+        "maximum": 1000,
+        "minimum": 1
       }
     },
     "additionalProperties": false,

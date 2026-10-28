@@ -22,6 +22,7 @@ from portal_backend.workflow_graph import (
     descendants,
     validate_graph,
 )
+from portal_backend import workflow_routing as routing
 from portal_backend.workflow_scheduling import (
     LIVE_EXECUTIONS,
     accepted,
@@ -1528,9 +1529,10 @@ class WorkflowService:
                 "preview_changed",
                 "The workflow draft or imported work changed. Review it again.",
             )
+        version = routing.semantics_for(body)
         wid = _id()
         self.cur.execute(
-            "INSERT INTO workflows(id,container_id,owner_human_id,created_by_human_id,title,goal,execution_mode) VALUES (%s,%s,%s,%s,%s,%s,%s)",
+            "INSERT INTO workflows(id,container_id,owner_human_id,created_by_human_id,title,goal,execution_mode,semantics_version,turn_allowance) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)",
             (
                 wid,
                 cid,
@@ -1539,6 +1541,8 @@ class WorkflowService:
                 body["title"],
                 body["goal"],
                 body.get("execution_mode", "serial"),
+                version,
+                body.get("turn_allowance", 40),
             ),
         )
         w = self.workflow(wid)
@@ -1551,7 +1555,11 @@ class WorkflowService:
                 self.preview_import(cid, body["existing_task_ids"])["preview_digest"],
                 body.get("import_acceptances", {}),
             )
-        self._add(w, actor, body.get("tasks", []))
+        ids = self._add(w, actor, body.get("tasks", []))
+        if routing.wants_flow(body):
+            self._save_flow(
+                w, *routing.draft_flow(body.get("tasks", []), body.get("repeat_groups", []), ids)
+            )
         for o in body.get("objectives", []):
             self.cur.execute(
                 "INSERT INTO workflow_objectives(id,workflow_id,title,criteria) VALUES (%s,%s,%s,%s)",
@@ -1587,6 +1595,12 @@ class WorkflowService:
             if row["task_id"] in ids:
                 deps.setdefault(row["task_id"], []).append(row["depends_on_id"])
         validate_graph(ids, deps)
+        routing.semantics_for(draft)
+        if routing.wants_flow(draft):
+            outcomes, routes, groups = routing.draft_flow(
+                draft["tasks"], draft["repeat_groups"]
+            )
+            routing.check_flow(ids, deps, outcomes, routes, groups)
         preview["preview_digest"] = _digest(
             {"draft": draft, "import_digest": preview["preview_digest"]}
         )
@@ -1611,6 +1625,23 @@ class WorkflowService:
             "INSERT INTO agent_tasks(agent_id,task_id,assignment_status) VALUES (%s,%s,'assigned') ON CONFLICT (agent_id,task_id) DO UPDATE SET assignment_status='assigned',assigned_at=excluded.assigned_at",
             (aid, task["id"]),
         )
+
+    def _save_flow(self, w, outcomes, routes, groups):
+        """Validate the workflow's complete flow (stored plus proposed) and store it."""
+        s = self.snapshot(w["id"])
+        routing.check_flow(s["tasks"], s["dependencies"], outcomes, routes, groups)
+        for g in groups:
+            owner = g.get("escalation_owner_id")
+            if owner and not self.one(
+                "SELECT 1 AS present FROM agents WHERE id=%s AND container_id=%s AND kind='human' AND terminated_at IS NULL",
+                (owner, w["container_id"]),
+            ):
+                conflict(
+                    "escalation_owner_unavailable",
+                    "Choose a person in this project to decide when a loop needs help.",
+                    status=422,
+                )
+        routing.save_flow(self, w, outcomes, routes, groups)
 
     def _add(self, w, actor, specs):
         self.active(w)
@@ -1820,6 +1851,18 @@ class WorkflowService:
 
     def op_add_tasks(self, w, actor, b, tid):
         ids = self._add(w, actor, b["tasks"])
+        if any(t.get("outcomes") or t.get("routes") for t in b["tasks"]):
+            if w.get("semantics_version", 1) != 2:
+                conflict(
+                    "flexible_disabled",
+                    "Outcomes and next-step rules need the newer workflow version.",
+                    status=422,
+                )
+            outcomes, routes, groups = routing.load_flow(self, w["id"])
+            added_outcomes, added_routes, _ = routing.draft_flow(b["tasks"], [], ids)
+            self._save_flow(
+                w, {**outcomes, **added_outcomes}, {**routes, **added_routes}, groups
+            )
         self.audit(
             w,
             self.actor(actor, w["container_id"]),
@@ -1964,6 +2007,63 @@ class WorkflowService:
 
     def op_start(self, w, actor, b, tid):
         self._release(w, actor, b, start=True)
+        if w.get("semantics_version", 1) == 2:
+            outcomes, routes, groups = routing.load_flow(self, w["id"])
+            s = self.snapshot(w["id"])
+            routing.check_flow(s["tasks"], s["dependencies"], outcomes, routes, groups)
+            for g in groups:
+                self._start_round(w, g, "initial", g["member_tasks"], {})
+            self._record_definition(w, actor, "start")
+
+    def _assignees(self, wid):
+        found = {}
+        for r in self.rows(
+            "SELECT a.task_id,a.agent_id FROM agent_tasks a JOIN tasks t ON t.id=a.task_id WHERE t.workflow_id=%s AND a.assignment_status='assigned'",
+            (wid,),
+        ):
+            found.setdefault(r["task_id"], []).append(r["agent_id"])
+        return found
+
+    def _record_definition(self, w, actor, reason):
+        w = self.workflow(w["id"])
+        flow = routing.load_flow(self, w["id"])
+        body = routing.definition_snapshot(
+            self.snapshot(w["id"]), *flow, self._assignees(w["id"])
+        )
+        p = self.actor(actor, w["container_id"])
+        return routing.record_definition_version(self, w, p["id"], reason, body)
+
+    def _start_round(self, w, g, trigger, task_ids, inputs, **detail):
+        """Open the next round of a repeat group for `task_ids` at their current work
+        revisions. The caller has already bumped revisions for a repeat round."""
+        number = (g.get("current_round") or 0) + 1
+        rid = _id()
+        self.cur.execute(
+            "INSERT INTO workflow_group_rounds(id,group_id,workflow_id,round_number,trigger_kind,return_from_task_id,return_to_task_id,reason,inputs) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+            (
+                rid,
+                g["id"],
+                w["id"],
+                number,
+                trigger,
+                detail.get("return_from"),
+                detail.get("return_to"),
+                detail.get("reason"),
+                _json(inputs),
+            ),
+        )
+        for tid in task_ids:
+            t = self.one("SELECT work_revision FROM tasks WHERE id=%s", (tid,))
+            self.cur.execute(
+                "INSERT INTO workflow_step_instances(task_id,work_revision,group_round_id) VALUES (%s,%s,%s) ON CONFLICT (task_id,work_revision) DO UPDATE SET group_round_id=excluded.group_round_id",
+                (tid, t["work_revision"], rid),
+            )
+        self.cur.execute(
+            "UPDATE workflow_repeat_groups SET current_round=%s,state='open' WHERE id=%s",
+            (number, g["id"]),
+        )
+        g["current_round"], g["state"] = number, "open"
+        return rid
 
     def op_release(self, w, actor, b, tid):
         self._release(w, actor, b)
