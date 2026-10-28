@@ -17,7 +17,7 @@ import { WorkflowResolveReview, WorkflowReviewEditor } from "./WorkflowReviewEdi
 import { WorkflowActivity, WorkflowReviewHistory } from "./WorkflowHistory";
 import { WorkflowHeader } from "./WorkflowHeader";
 import { WorkflowRail } from "./WorkflowRail";
-import { WorkflowOwnerBar } from "./WorkflowLoopDecision";
+import { WorkflowLoopDecision, WorkflowOwnerBar } from "./WorkflowLoopDecision";
 import { WorkflowLoopGroup, WorkflowTaskRow, WorkflowTaskRows } from "./WorkflowTaskRows";
 import { WorkflowTaskInspector } from "./WorkflowTaskInspector";
 import { WorkflowHide } from "./WorkflowHide";
@@ -73,6 +73,7 @@ function WorkflowScreen() {
   const [restoreId, setRestoreId] = useState<string | null>(null);
   const [inputOpen, setInputOpen] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [decideId, setDecideId] = useState<string | null>(null);
   const [menuDialog, setMenuDialog] = useState<"import" | "add_tasks" | "move" | "review_round" | "settings" | "transfer_owner" | "hide" | null>(params.get("addTask") ? "import" : null);
   const [actionRequest, setActionRequest] = useState<WorkflowActionRequest | null>(null);
   const [taskRequest, setTaskRequest] = useState<{ taskId: string; action: TaskActionRequest["action"] | "review"; seq: number } | null>(null);
@@ -201,6 +202,7 @@ function WorkflowScreen() {
     </div></Shell>;
   }
   const selectedTask = detail?.tasks.find((t) => t.id === selectedId) ?? null;
+  const decideTask = detail?.tasks.find((t) => t.id === decideId && t.awaiting_loop_decision) ?? null;
   const saved = () => { setStale(true); setRetry((n) => n + 1); };
   const openTask = (id: string) => navigate(`/tasks?${new URLSearchParams({ task: id, cid: cid ?? "", workflowReturn: `${pathname}${location.search}` })}`, { state: navigationState });
   const rowMenu = (task: WorkflowDetail["tasks"][number]): (MenuItemSpec | "separator")[] => [
@@ -262,7 +264,8 @@ function WorkflowScreen() {
         {availability === "ready" && writeReason && <p className="wf-bar">{writeReason}</p>}
       </div>}
       {detail.hidden && <p role="status" className="wf-bar">This workflow is hidden. Its tasks, messages and evidence are kept. Restore it from the workflow menu; restoring never starts work.</p>}
-      <WorkflowOwnerBar detail={detail} viewer={scope.identity} ownerName={actorName(detail.owner_human_id)} onDecide={(id) => { query("tab", "tasks"); setSelectedId(id); setTaskRequest(null); }} />
+      <WorkflowOwnerBar detail={detail} viewer={scope.identity} ownerName={actorName(detail.owner_human_id)} onDecide={setDecideId} />
+      {decideTask && <WorkflowLoopDecision detail={detail} task={decideTask} scope={scope} stale={stale} agents={aiAgents} onSaved={saved} onClose={() => setDecideId(null)} />}
       <WorkflowActions detail={detail} scope={scope} verified={verified} stale={stale} onSaved={saved} request={actionRequest} />
       <WorkflowInput detail={detail} scope={scope} stale={stale} open={inputOpen} onOpen={() => setInputOpen(true)} onClose={() => setInputOpen(false)} onSaved={saved} onChecklist={() => setActionRequest({ action: "finish", seq: ++requestSeq.current })} />
       {!inputOpen && <><div className="wf-tabs-row">

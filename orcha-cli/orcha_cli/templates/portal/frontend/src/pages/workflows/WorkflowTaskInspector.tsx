@@ -17,7 +17,7 @@ import { WorkflowTaskAcceptanceRecord } from "./WorkflowTaskAcceptanceRecord";
 import { taskReason, WorkflowTaskActions, type TaskActionRequest } from "./WorkflowTaskActions";
 import { WorkflowTaskDecision } from "./WorkflowTaskDecision";
 import { WorkflowTaskLink } from "./WorkflowTaskReturn";
-import { WorkflowLoopDecision } from "./WorkflowLoopDecision";
+import { WorkflowLoopDecision, WorkflowLoopDecisionPrompt } from "./WorkflowLoopDecision";
 import { WorkflowRoundContext } from "./WorkflowRoundContext";
 import { formatServerTime } from "./WorkflowTaskRows";
 
@@ -33,12 +33,13 @@ export function WorkflowTaskInspector({ detail, task, cid, scope, verified, stal
   const unresolved = operation?.state === "sending" || operation?.state === "uncertain";
   const [view, setView] = useState("details");
   const [decisionOpen, setDecisionOpen] = useState(false);
+  const [loopOpen, setLoopOpen] = useState(false);
   useEffect(() => { if (reviewRequest !== null && task.status === "needs_verification") setDecisionOpen(true); }, [reviewRequest, task.status]);
   const assignees = task.assignee_ids.map((id) => ({ id, alias: actorName(id) }));
   const prerequisites = task.depends_on.map((id) => ({ id, title: detail.tasks.find((p) => p.id === id)?.title ?? "Prerequisite unavailable" }));
   const dependents = detail.tasks.filter((other) => other.depends_on.includes(task.id)).map((other) => ({ id: other.id, title: other.title }));
   const warning = task.display_state.warning;
-  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => { if (e.key === "Escape" && !decisionOpen && !unresolved) { e.preventDefault(); e.stopPropagation(); onClose(); } };
+  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => { if (e.key === "Escape" && !decisionOpen && !loopOpen && !unresolved) { e.preventDefault(); e.stopPropagation(); onClose(); } };
   return <div className="wf-insp" onKeyDown={onKeyDown}>
     <Inspector label={`Task: ${task.title}`} onClose={() => { if (!unresolved) onClose(); }} onExpand={onExpand}
       title={<><StatusIcon status={task.status} label={task.display_state.label} /> {task.title}</>}
@@ -60,7 +61,8 @@ export function WorkflowTaskInspector({ detail, task, cid, scope, verified, stal
       </Section>
       {detail.semantics_version === 2 && ((task.outcomes ?? []).length > 0 || task.repeat_group_id) && <WorkflowRoundContext detail={detail} task={task} />}
       {task.awaiting_loop_decision && <Section title="Decision needed">
-        <WorkflowLoopDecision detail={detail} task={task} scope={scope} stale={stale} agents={agents} onSaved={onSaved} />
+        <WorkflowLoopDecisionPrompt detail={detail} task={task} viewer={scope.identity} onDecide={() => setLoopOpen(true)} />
+        {loopOpen && <WorkflowLoopDecision detail={detail} task={task} scope={scope} stale={stale} agents={agents} onSaved={onSaved} onClose={() => setLoopOpen(false)} />}
       </Section>}
       <Section title="Actions">
         <WorkflowTaskActions inline detail={detail} task={task} scope={scope} verified={verified} stale={stale} agents={agents} onSaved={onSaved} request={request}

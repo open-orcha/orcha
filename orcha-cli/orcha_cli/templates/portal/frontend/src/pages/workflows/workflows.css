@@ -325,3 +325,10 @@
 .wf-evi { border: 1px solid var(--v2-border); border-radius: var(--v2-radius-card); padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; }
 .wf-route.is-read { grid-template-columns: max-content 18px minmax(0, 1fr); }
 .wf-earlier { margin: 6px 0 0; padding-left: 18px; color: var(--v2-text-2); font-size: var(--v2-fs-body); }
+/* Owner decision dialog (#362 x04, x05) */
+.wf-decide .wf-card { margin-block: 0 12px; }
+.wf-decide .wf-compare { margin-bottom: 12px; }
+.wf-decide-options { border: 0; margin: 0; padding: 0; min-width: 0; }
+.wf-decide .wf-choice { margin: 4px 0; padding: 6px 0; }
+.wf-decide .wf-field { align-items: stretch; margin-block: 8px 0; }
+.wf-decide .wf-field .wf-in { width: 96px; }

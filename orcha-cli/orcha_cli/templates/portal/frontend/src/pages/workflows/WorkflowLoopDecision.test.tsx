@@ -1,50 +1,79 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
-import { WorkflowLoopDecision, WorkflowOwnerBar } from "./WorkflowLoopDecision";
+import { WorkflowLoopDecision, WorkflowLoopDecisionPrompt, WorkflowOwnerBar } from "./WorkflowLoopDecision";
 import { WorkflowTaskInspector } from "./WorkflowTaskInspector";
 import { exampleTask, exampleWorkflow, jsonResponse } from "./workflowTestFixtures";
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 const group = { id: "g1", name: "Draft and review", member_tasks: ["write", "build"], review_task: "build", exit_outcome: "Approved", max_rounds: 3, stall_rule: "findings_and_artifact", current_round: 3, state: "limit_reached" };
-const task = exampleTask({ awaiting_loop_decision: "limit_reached", outcomes: [{ name: "Approved", kind: "success" }, { name: "Changes requested", kind: "changes" }] });
+const task = exampleTask({ awaiting_loop_decision: "limit_reached", repeat_group_id: "g1", outcomes: [{ name: "Approved", kind: "success" }, { name: "Changes requested", kind: "changes" }],
+  reported_outcome: { outcome: "Changes requested", findings: [{ text: "Claims no sign-up but the beta needs an invite" }] } });
+const roundContext = (id: string, earlier: { round: number; findings: { text: string }[] }[], previous: { text: string }[]) => ({
+  task_id: id, outcomes: [], group: { name: "Draft and review", round: 3, max_rounds: 3, state: "limit_reached", is_review_step: true, exit_outcome: "Approved",
+    this_round: { trigger: "return", outcome: "Changes requested", findings: previous }, earlier_rounds: earlier } });
 
-it("offers the limit choices with their consequences and sends the new round limit", async () => {
+it("asks what happens at the limit with what is still open and numbered choices, and sends the new round limit (x04)", async () => {
   const detail = exampleWorkflow({ repeat_groups: [group], tasks: [task] });
   const scope = { origin: "https://orcha.example", project: detail.container_id, identity: detail.owner_human_id };
   const calls: [string, RequestInit | undefined][] = [];
-  vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => { calls.push([url, init]); return jsonResponse(detail); }));
-  render(<WorkflowLoopDecision detail={detail} task={task} scope={scope} stale={false} agents={[]} onSaved={vi.fn()} />);
-  expect(screen.getByText("The loop reached its round limit")).toBeVisible();
-  expect(screen.getByText(/round 3 of 3/)).toBeVisible();
-  fireEvent.click(screen.getByLabelText(/Allow more rounds/));
-  fireEvent.change(screen.getByLabelText("Most rounds"), { target: { value: "5" } });
-  fireEvent.click(screen.getByRole("button", { name: "Allow more rounds" }));
+  vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+    if (String(url).endsWith("/round-context")) return jsonResponse(roundContext(task.id, [{ round: 2, findings: [{ text: "Claims no sign-up but the beta needs an invite" }, { text: "Old screenshot" }] }], [{ text: "Claims  no sign-up but the beta needs an invite" }]));
+    calls.push([url, init]); return jsonResponse(detail);
+  }));
+  const onClose = vi.fn();
+  render(<WorkflowLoopDecision detail={detail} task={task} scope={scope} stale={false} agents={[]} onSaved={vi.fn()} onClose={onClose} />);
+  const dialog = screen.getByRole("dialog", { name: "The loop reached its limit. What should happen?" });
+  expect(dialog).toHaveTextContent("Draft and review · 3 of 3 rounds used · last outcome: Changes requested (round 3) · 1 unresolved finding");
+  expect(screen.getByText("Still open after round 3")).toBeVisible();
+  expect(await screen.findByText(/raised in rounds 1, 2 and 3/)).toBeVisible();
+  expect(screen.getByText(/1 earlier finding was resolved along the way/)).toBeVisible();
+  expect(screen.getByLabelText(/Allow 2 more rounds \(new maximum 5, 3 used\)/)).toBeChecked();
+  fireEvent.change(screen.getByLabelText("More rounds"), { target: { value: "1" } });
+  expect(screen.getByLabelText(/Allow 1 more round \(new maximum 4, 3 used\)/)).toBeChecked();
+  fireEvent.click(screen.getByRole("button", { name: "Allow 1 more round" }));
   await waitFor(() => expect(calls).toHaveLength(1));
   const [url, init] = calls[0];
   expect(url).toBe(`/api/workflows/${detail.id}/decisions`);
-  expect(JSON.parse(String(init?.body))).toMatchObject({ kind: "raise_limit", task_id: task.id, new_max_rounds: 5, expected_revision: detail.revision });
+  expect(JSON.parse(String(init?.body))).toMatchObject({ kind: "raise_limit", task_id: task.id, new_max_rounds: 4, expected_revision: detail.revision });
+  await waitFor(() => expect(onClose).toHaveBeenCalled());
+});
+
+it("sets the stalled rounds side by side and marks the findings that came back unchanged (x05)", async () => {
+  const stalled = { ...task, awaiting_loop_decision: "stalled" as const };
+  const detail = exampleWorkflow({ repeat_groups: [{ ...group, state: "stalled" }], tasks: [stalled] });
+  const scope = { origin: "https://orcha.example", project: detail.container_id, identity: detail.owner_human_id };
+  vi.stubGlobal("fetch", vi.fn(async () => jsonResponse(roundContext(task.id, [], [{ text: "Claims no sign-up but the beta needs an invite" }]))));
+  render(<WorkflowLoopDecision detail={detail} task={stalled} scope={scope} stale={false} agents={[]} onSaved={vi.fn()} onClose={vi.fn()} />);
+  expect(screen.getByRole("dialog", { name: "The loop stopped making progress. What should happen?" })).toBeVisible();
+  expect(screen.getByText("Why Orcha paused: rounds 2 and 3 side by side")).toBeVisible();
+  expect(await screen.findByText("unchanged")).toBeVisible();
+  expect(screen.getByLabelText(/Resume with guidance for the worker/)).toBeChecked();
+  expect(screen.getByRole("button", { name: "Resume round 4" })).toBeDisabled();
+  fireEvent.change(screen.getByLabelText("Note to the worker"), { target: { value: "Say invite-only beta." } });
+  expect(screen.getByRole("button", { name: "Resume round 4" })).toBeEnabled();
 });
 
 it("tells people other than the owner who decides", () => {
   const detail = exampleWorkflow({ repeat_groups: [group], tasks: [task] });
-  render(<WorkflowLoopDecision detail={detail} task={task} scope={{ origin: "o", project: detail.container_id, identity: "someone-else" }} stale={false} agents={[]} onSaved={vi.fn()} />);
+  render(<WorkflowLoopDecisionPrompt detail={detail} task={task} viewer="someone-else" onDecide={vi.fn()} />);
   expect(screen.getByText(/The workflow owner decides what happens next/)).toBeVisible();
   expect(screen.queryByRole("button")).toBeNull();
 });
 
-it("shows a refused decision's save status once, in the decision section", async () => {
+it("shows a refused decision's save status once, in the dialog", async () => {
   const detail = exampleWorkflow({ repeat_groups: [group], tasks: [task] });
   const scope = { origin: "https://orcha.example", project: detail.container_id, identity: detail.owner_human_id };
-  vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ detail: { code: "revision_conflict", message: "The workflow changed. Refresh and decide again." } }, 409)));
-  render(<WorkflowLoopDecision detail={detail} task={task} scope={scope} stale={false} agents={[]} onSaved={vi.fn()} />);
+  vi.stubGlobal("fetch", vi.fn(async (url: string) => String(url).endsWith("/round-context") ? jsonResponse(roundContext(task.id, [], []))
+    : jsonResponse({ detail: { code: "revision_conflict", message: "The workflow changed. Refresh and decide again." } }, 409)));
+  render(<WorkflowLoopDecision detail={detail} task={task} scope={scope} stale={false} agents={[]} onSaved={vi.fn()} onClose={vi.fn()} />);
   fireEvent.click(screen.getByLabelText(/Stop the loop/));
   fireEvent.click(screen.getByRole("button", { name: "Stop the loop" }));
   expect(await screen.findByText("The workflow changed. Refresh and decide again.")).toBeVisible();
   expect(screen.getAllByLabelText("Save status")).toHaveLength(1);
 });
 
-it("shows a loop decision's save status once in the task inspector", async () => {
+it("opens the decision from the task inspector and shows its save status once", async () => {
   const detail = exampleWorkflow({ repeat_groups: [group], tasks: [task] });
   const scope = { origin: "https://orcha.example", project: detail.container_id, identity: detail.owner_human_id };
   vi.stubGlobal("fetch", vi.fn(async (url: string) => String(url).endsWith("/decisions")
@@ -52,6 +81,7 @@ it("shows a loop decision's save status once in the task inspector", async () =>
     : jsonResponse({ detail: { code: "not_found", message: "Not found" } }, 404)));
   render(<MemoryRouter><WorkflowTaskInspector detail={detail} task={task} cid={detail.container_id} scope={scope} verified stale={false} agents={[]}
     actorName={(id) => id} onSaved={vi.fn()} onClose={vi.fn()} onExpand={vi.fn()} request={null} onRequest={vi.fn()} reviewRequest={null} /></MemoryRouter>);
+  fireEvent.click(screen.getByRole("button", { name: "Decide…" }));
   fireEvent.click(screen.getByLabelText(/Stop the loop/));
   fireEvent.click(screen.getByRole("button", { name: "Stop the loop" }));
   expect(await screen.findByText("The workflow changed. Refresh and decide again.")).toBeVisible();
