@@ -39,6 +39,7 @@ def list_container_requests(
     status: Optional[str] = None,
     sort: Optional[str] = None,
     sort_dir: Optional[str] = Query(default=None, alias="dir"),
+    workflow: Optional[str] = None,
 ):
     """ISS-68: paginated request rows for lazy list loading. Status order per Kedar's spec:
     open → answered → closed, then priority, created_at DESC, id (id = stable tiebreaker so
@@ -48,7 +49,16 @@ def list_container_requests(
     omitted = either side). `status` (optional) filters to one lifecycle state — without it the
     list mixes open+answered+closed, so a caller using this as a census of e.g. open requests
     would silently get closed rows in the window. Same row shape as the snapshot's requests[]
-    (drop-in), just paginated + reordered. Returns {requests, total, has_more}."""
+    (drop-in), just paginated + reordered. Returns {requests, total, has_more}.
+
+    GH #350 (workflow redesign, spec §7.1): every row now carries `originating_task_id` (mig 028,
+    the task the requester was working on when it asked — distinct from `spawned_task_id` /
+    `task_link`, the task a request CREATED) plus `origin_task` {task_id, title, status,
+    workflow_id}. `workflow` (optional, workflow id) scopes the list to requests whose
+    originating task is a CURRENT member of that workflow (`tasks.workflow_id`); membership is
+    resolved on the server, so a request raised from an unlinked task is never silently
+    attributed to a workflow. `total`/`has_more` keep the scoped count so a partially loaded
+    page can say "at least N"."""
     if not valid_uuid(cid):
         raise HTTPException(400, "container_id is not a valid UUID")
     if agent is not None and not valid_uuid(agent):
@@ -57,6 +67,8 @@ def list_container_requests(
         raise HTTPException(400, "direction must be 'in' or 'out'")
     if status is not None and status not in REQUEST_STATUSES:
         raise HTTPException(400, "status is not a recognized request status")
+    if workflow is not None and not valid_uuid(workflow):
+        raise HTTPException(400, "workflow is not a valid UUID")
     validate_sort(sort, sort_dir)
     limit = max(1, min(limit, 100))
     offset = max(0, offset)
@@ -78,6 +90,18 @@ def list_container_requests(
         if status is not None:
             where += " AND status = %s"
             params.append(status)
+        if workflow is not None:
+            cur.execute(
+                "SELECT 1 FROM workflows WHERE id = %s AND container_id = %s",
+                (workflow, cid),
+            )
+            if cur.fetchone() is None:
+                raise HTTPException(404, "workflow not found")
+            where += (
+                " AND originating_task_id IN"
+                " (SELECT wt.id FROM tasks wt WHERE wt.workflow_id = %s AND wt.container_id = %s)"
+            )
+            params.extend([workflow, cid])
         cur.execute(f"SELECT count(*) AS n FROM requests WHERE {where}", tuple(params))
         total = cur.fetchone()["n"]
         default_order = (
@@ -95,13 +119,18 @@ def list_container_requests(
         )
         task_link_obj = sql.json_object(
             "'task_id'", "st.id", "'title'", "st.title", "'status'", "st.status")
+        origin_task_obj = sql.json_object(
+            "'task_id'", "ot.id", "'title'", "ot.title", "'status'", "ot.status",
+            "'workflow_id'", "ot.workflow_id")
         cur.execute(
             f"""SELECT id, type, status, priority, requester_id, target_id,
                        payload, agent_payload, response, rejection_reason, spawned_task_id,
                        expires_at, created_at, responded_at, closed_at,
-                       parent_request_id, chain_depth, detail,
+                       parent_request_id, chain_depth, detail, originating_task_id,
                        (SELECT {task_link_obj}
                           FROM tasks st WHERE st.id = requests.spawned_task_id) AS task_link,
+                       (SELECT {origin_task_obj}
+                          FROM tasks ot WHERE ot.id = requests.originating_task_id) AS origin_task,
                        (SELECT a.alias FROM agents a
                           WHERE a.id = CASE requests.status WHEN 'open' THEN requests.target_id
                                                             WHEN 'answered' THEN requests.requester_id END)

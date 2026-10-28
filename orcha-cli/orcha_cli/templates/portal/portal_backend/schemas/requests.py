@@ -169,6 +169,17 @@ class RequestRow(BaseModel):
         "`code_thread` {thread_id, kind, path, start_line, end_line, link}; an auto-resolved "
         "one carries `auto_resolved`.",
     )
+    originating_task_id: Optional[str] = Field(
+        default=None,
+        description="GH #350: the task the requester was working on when it raised this request "
+        "(mig 028). Distinct from `spawned_task_id` / `task_link`, which name the task a request "
+        "CREATED. Null when the request was raised outside any task.",
+    )
+    origin_task: Optional[dict] = Field(
+        default=None,
+        description="GH #350: {task_id, title, status, workflow_id} of the originating task, "
+        "resolved on the server; `workflow_id` is its CURRENT workflow membership or null.",
+    )
 
 
 class RequestListResponse(BaseModel):
