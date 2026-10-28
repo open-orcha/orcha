@@ -127,15 +127,15 @@ describe("flexible workflow authoring", () => {
     const loop = within(screen.getByRole("group", { name: "Loop 1" }));
     fireEvent.change(loop.getByLabelText("Loop name"), { target: { value: "Draft and review" } });
     fireEvent.click(loop.getByRole("checkbox", { name: "Write the post" })); fireEvent.click(loop.getByRole("checkbox", { name: "Review the post" }));
-    fireEvent.change(loop.getByLabelText("Review step"), { target: { value: (loop.getByRole("option", { name: "Review the post" }) as HTMLOptionElement).value } });
-    fireEvent.change(loop.getByLabelText("Ends when the review reports"), { target: { value: "Approved" } });
+    fireEvent.change(loop.getByLabelText("Review point"), { target: { value: (loop.getByRole("option", { name: "Review the post" }) as HTMLOptionElement).value } });
+    fireEvent.change(loop.getByLabelText("Leave the group when"), { target: { value: "Approved" } });
     const draft = readDraft(s);
     expect(draftProblems(draft).filter((p) => p.key !== "name" && p.key !== "goal")).toEqual([]);
     const [write, review] = draft.tasks;
     expect(toWireDraft(draft)).toMatchObject({
       tasks: [{ client_key: write.key }, { client_key: review.key, outcomes: [{ name: "Approved", kind: "success" }, { name: "Changes requested", kind: "changes" }],
         routes: [{ outcome: "Approved", destination: "exit_group", destination_task: null }, { outcome: "Changes requested", destination: "return", destination_task: write.key }] }],
-      repeat_groups: [{ name: "Draft and review", member_tasks: [write.key, review.key], review_task: review.key, exit_outcome: "Approved", max_rounds: 3 }],
+      repeat_groups: [{ name: "Draft and review", member_tasks: [write.key, review.key], review_task: review.key, exit_outcome: "Approved", max_rounds: 5 }],
     });
     expect(toWireDraft(draft).tasks?.[0]).not.toHaveProperty("outcomes");
   });
@@ -148,7 +148,7 @@ describe("flexible workflow authoring", () => {
     const loop = within(screen.getByRole("group", { name: "Loop 1" }));
     fireEvent.change(loop.getByLabelText("Loop name"), { target: { value: "Edit loop" } });
     fireEvent.click(loop.getByRole("checkbox", { name: "Write" })); fireEvent.click(loop.getByRole("checkbox", { name: "Review" }));
-    fireEvent.change(loop.getByLabelText("Review step"), { target: { value: (loop.getByRole("option", { name: "Review" }) as HTMLOptionElement).value } });
+    fireEvent.change(loop.getByLabelText("Review point"), { target: { value: (loop.getByRole("option", { name: "Review" }) as HTMLOptionElement).value } });
     expect(loop.getByText("Add outcomes to Review first.")).toBeVisible();
     expect(draftProblems(readDraft(s)).map((p) => p.message)).toContain("Edit loop ends on an outcome its review step does not have.");
     cleanup();

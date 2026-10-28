@@ -283,3 +283,47 @@
   .wf-page.wf-flush { min-height: 0; }
   .wf-toolbar { flex-wrap: wrap; }
 }
+
+/* ===== Flexible workflows (issue #362, tokens only; class names follow docs/design/workflows/flexible/flexible.html) ===== */
+.wf-in, .wf-sel { width: 100%; box-sizing: border-box; font: inherit; font-size: var(--v2-fs-body); color: var(--v2-text); background: var(--v2-surface); border: 1px solid var(--v2-border-strong); border-radius: var(--v2-radius-control); padding: 6px 10px; min-height: var(--v2-control-h); }
+.wf-in-num { width: 72px; }
+.wf-card-h { display: flex; align-items: center; gap: 8px; margin-bottom: var(--v2-space-2); font-size: var(--v2-fs-body); color: var(--v2-text); font-weight: var(--v2-fw-medium); }
+.wf-card-h b { font-weight: 600; }
+.wf-push { margin-left: auto; }
+.wf-grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 var(--v2-space-4); }
+.wf-grid2 > .wf-field { align-items: stretch; }
+.wf-route { display: grid; grid-template-columns: 170px 18px minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 7px 0; font-size: var(--v2-fs-body); border-top: 1px solid var(--v2-border-subtle, var(--v2-border)); }
+.wf-route:first-of-type { border-top: 0; }
+.wf-route .arr { color: var(--v2-text-3); text-align: center; }
+.wf-route .dest { color: var(--v2-text); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wf-route .v2-badge { justify-self: start; }
+.wf-rules { width: 100%; box-sizing: border-box; padding: 4px 12px; }
+.wf-route.is-edit { grid-template-columns: minmax(200px, 260px) 18px minmax(0, 1fr) auto auto; }
+.wf-route-name { display: flex; gap: 6px; min-width: 0; }
+.wf-route-name .wf-in { flex: 1 1 auto; min-width: 0; }
+.wf-route-name .wf-sel { flex: 0 0 auto; width: auto; }
+.wf-in.wf-tone-ok { border-color: color-mix(in srgb, var(--v2-status-done) 55%, var(--v2-border-strong)); }
+.wf-in.wf-tone-warn { border-color: color-mix(in srgb, var(--v2-warn, #d29922) 55%, var(--v2-border-strong)); }
+.wf-in.wf-tone-danger { border-color: color-mix(in srgb, var(--v2-danger) 55%, var(--v2-border-strong)); }
+.wf-loop-card { border-color: var(--v2-accent); }
+.wf-choice-chip { display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px; border: 1px solid var(--v2-border-strong); border-radius: var(--v2-radius-full, 999px); font-size: var(--v2-fs-meta); color: var(--v2-text-2); cursor: pointer; }
+.wf-choice-chip.is-on { border-color: var(--v2-accent); color: var(--v2-text); background: color-mix(in srgb, var(--v2-accent) 10%, transparent); }
+.wf-choice-chip input { margin: 0; }
+.wf-loop { margin: 2px 0 6px 18px; border-left: 2px solid var(--v2-accent); padding-left: 8px; border-radius: 2px; }
+.wf-loop-h { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 6px 4px 4px; font-size: var(--v2-fs-meta); color: var(--v2-text-2); }
+.wf-loop-h b { color: var(--v2-text); font-weight: 600; }
+.wf-rounds { display: inline-flex; gap: 4px; align-items: center; }
+.wf-rnd { width: 9px; height: 9px; border-radius: 50%; border: 1px solid var(--v2-border-strong); display: inline-block; }
+.wf-rnd.is-done { background: var(--v2-status-done); border-color: transparent; }
+.wf-rnd.is-now { background: var(--v2-accent); border-color: transparent; }
+.wf-rnd.is-stop { background: var(--v2-warn, #d29922); border-color: transparent; }
+.wf-compare { display: grid; grid-template-columns: 1fr 1fr; gap: var(--v2-space-3); }
+.wf-compare .wf-card { margin: 0; }
+.wf-finding { display: flex; gap: 8px; align-items: flex-start; padding: 5px 0; font-size: var(--v2-fs-body); color: var(--v2-text); }
+.wf-finding code { font-family: var(--v2-font-mono); font-size: 11px; color: var(--v2-text-3); flex: none; }
+.wf-finding.is-same { color: var(--v2-text-2); }
+.wf-row.v2-row.wf-notsel { opacity: .55; }
+.wf-notsel .wf-title > span:first-child { text-decoration: line-through; text-decoration-color: var(--v2-text-3); }
+.wf-ownerbar { display: flex; align-items: center; gap: 10px; padding: 10px var(--v2-panel-px); border-bottom: 1px solid var(--v2-border-subtle, var(--v2-border)); background: color-mix(in srgb, var(--v2-warn, #d29922) 9%, transparent); font-size: var(--v2-fs-body); color: var(--v2-text); }
+.wf-ownerbar .v2-btn { margin-left: auto; }
+@media (max-width: 720px) { .wf-grid2, .wf-compare { grid-template-columns: 1fr; } .wf-route, .wf-route.is-edit { grid-template-columns: 1fr; } .wf-route .arr { display: none; } }
