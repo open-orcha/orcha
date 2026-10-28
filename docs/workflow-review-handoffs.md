@@ -16,6 +16,9 @@ other required tasks). Existing serial scheduling still admits just one turn.
    `/api/agents/{agent}/runs/{run}/review-handoff` with `review_task_id`,
    `expected_work_revision`, and `result` describing the exact submitted draft.
    The result is captured as evidence; the source task remains unfinished.
+   Handoff capture permits a summary-only submission and does not enforce changed
+   files. Include the actual review artifacts in the submission; reviewers and the
+   human verifier must assess them against the task’s full requirements.
 2. Exit the worker. Only the runner's positive `confirm-stopped` observation, with
    saved evidence, releases the slot. A quiet heartbeat, expired lease, or handoff
    request alone never frees capacity. The reviewer then uses ordinary reservation,

@@ -244,3 +244,17 @@ async def test_auto_reconcile_does_not_skip_an_active_parked_message(client):
                 assert (r['id'] in acked) == (r['payload']['request_id']==stale)
             if r['event_name']=='task_message':
                 assert r['id'] not in acked
+
+
+async def test_idle_daemon_scan_and_empty_recovery_never_take_the_graph_lock(client, monkeypatch):
+    from portal_backend import workflow_service
+    p = Project(client)
+    def unexpected_lock(*args, **kwargs):
+        pytest.fail('An idle scan or empty reconciliation must not take the graph lock')
+    # Observe the actual lock seam, not just whether a durable row happens to exist.
+    monkeypatch.setattr(workflow_service, 'lock_container_graph', unexpected_lock)
+    await _bob_candidate(client,p)
+    with db_cursor() as (_,cur):
+        assert reconcile_events(cur,p.bob,p.cid,[],dry_run=False)['obsolete']==[]
+        cur.execute('SELECT 1 FROM container_task_graph_guard WHERE container_id=%s',(p.cid,))
+        assert cur.fetchone() is None

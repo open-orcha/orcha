@@ -55,11 +55,11 @@ def reconcile_events(cur, aid, cid, event_ids, *, dry_run=True):
     """
     if len(event_ids) > 200:
         raise ValueError("At most 200 events may be reconciled at once")
+    if not event_ids:
+        return {"dry_run": dry_run, "obsolete": [], "preserved_event_ids": []}
     if not dry_run:
         from portal_backend.workflow_service import lock_container_graph
         lock_container_graph(cur, cid)
-    if not event_ids:
-        return {"dry_run": dry_run, "obsolete": [], "preserved_event_ids": []}
     cur.execute("""SELECT e.id,e.event_name,e.payload FROM agent_events e
         WHERE e.event_key=%s AND """ + sql.in_list("e.id") + """
         AND NOT EXISTS (SELECT 1 FROM agent_event_acks a WHERE a.agent_id=%s AND a.event_id=e.id)

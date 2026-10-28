@@ -99,7 +99,8 @@ def wake_scan(
             from portal_backend.stale_wake_events import stale_pending_events, reconcile_events
             for agent in agents:
                 obsolete = stale_pending_events(cur, str(agent["id"]), agent["delivered_ts"])
-                reconcile_events(cur, str(agent["id"]), cid, list(obsolete)[:200], dry_run=False)
+                if obsolete:
+                    reconcile_events(cur, str(agent["id"]), cid, list(obsolete)[:200], dry_run=False)
         candidates = [
             build_wake_candidate(
                 cur,
