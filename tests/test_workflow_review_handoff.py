@@ -46,9 +46,13 @@ async def verdict(p,r,h,outcome):
     assert res.status_code==200,res.text
 
 
-async def test_full_loop_preserves_unfinished_work_and_requires_human_verification(client):
+@pytest.mark.parametrize('autonomy', ['off', 'on'])
+async def test_full_loop_preserves_unfinished_work_and_requires_human_verification(client, autonomy):
     p=Project(client)
     await p.start('serial',[('design',p.ann,[]),('review',p.bob,[]),('implementation',p.ann,['design'])])
+    if autonomy == 'on':
+        for key in ('design', 'review'):
+            await p.call('PUT', f"/api/tasks/{p.tasks[key]}/autonomy", {'autonomy': 'on', 'actor_agent_id': p.owner})
     source=await launch(p,p.ann,'design')
     h=await handoff(p,source)
     # An explicit handoff is NOT a successful task completion or proof of exit.
