@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { exampleWorkflow, exampleTask, jsonResponse, readCapability, workflowSpec, writeCapability } from "./workflowTestFixtures";
@@ -141,4 +141,17 @@ it("does not carry a row action to a different selected task", async () => {
   fireEvent.click(screen.getByRole("option", { name: /Write release notes/ }));
   expect(screen.getByRole("region", { name: "Task: Write release notes" })).toBeVisible();
   expect(screen.queryByRole("dialog")).toBeNull();
+});
+
+it("lists a loop's steps together in one bracket even when the server lists another step between them", async () => {
+  const group = { id: "g1", name: "Draft and review", member_tasks: ["write", "review"], review_task: "review", exit_outcome: "Passed", max_rounds: 5, escalation_owner_id: "kedar", stall_rule: "findings_and_artifact", current_round: 2, state: "open" };
+  const write = exampleTask({ id: "write", title: "Write the launch post", repeat_group_id: "g1", round: 2 });
+  const publish = exampleTask({ id: "publish", title: "Publish approval", depends_on: ["review"] });
+  const review = exampleTask({ id: "review", title: "Review the post", repeat_group_id: "g1", round: 2, depends_on: ["write"] });
+  reads(() => exampleWorkflow({ semantics_version: 2, repeat_groups: [group], tasks: [write, publish, review] }));
+  renderPage("/workflows/release?cid=project");
+  const loop = await screen.findByRole("group", { name: "Draft and review, round 2 of 5" });
+  expect(screen.getAllByRole("group", { name: /Draft and review/ })).toHaveLength(1);
+  expect(within(loop).getAllByRole("option").map((o) => o.getAttribute("title"))).toEqual(["Write the launch post", "Review the post"]);
+  expect(screen.getAllByRole("option").map((o) => o.getAttribute("title"))).toEqual(["Write the launch post", "Review the post", "Publish approval"]);
 });

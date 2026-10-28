@@ -232,9 +232,26 @@ function WorkflowScreen() {
         assignees={t.assignee_ids.map((id) => ({ id, alias: actorName(id), kind: snap?.agents.find((a) => a.id === id)?.kind ?? "ai" }))} menuItems={rowMenu(t)}
         subline={dependencies ? `Depends on: ${t.depends_on.length ? names(t.depends_on) : "none"} · Needed by: ${dependents.length ? names(dependents) : "none"}` : notSelectedLine(t)} />;
     };
-    // Consecutive members of one repeat group share a bracket (issue #362 x03); everything else is a plain row.
-    const runs: { group?: NonNullable<WorkflowDetail["repeat_groups"]>[number]; tasks: typeof shown }[] = [];
+    // The members of one repeat group are listed together where the first of them appears, in dependency
+    // order, so a loop reads as one bracket (issue #362 x03). The server lists steps in creation order,
+    // which can leave a later step (an approval after the loop) between a loop's draft and its review.
+    const inDependencyOrder = (members: typeof shown) => {
+      const out: typeof shown = []; const seen = new Set<string>();
+      const visit = (m: typeof shown[number]) => {
+        if (seen.has(m.id)) return; seen.add(m.id);
+        for (const id of m.depends_on) { const earlier = members.find((x) => x.id === id); if (earlier) visit(earlier); }
+        out.push(m);
+      };
+      members.forEach(visit); return out;
+    };
+    const ordered: typeof shown = []; const placed = new Set<string>();
     for (const t of shown) {
+      if (placed.has(t.id)) continue;
+      const members = t.repeat_group_id ? inDependencyOrder(shown.filter((m) => m.repeat_group_id === t.repeat_group_id)) : [t];
+      for (const m of members) { placed.add(m.id); ordered.push(m); }
+    }
+    const runs: { group?: NonNullable<WorkflowDetail["repeat_groups"]>[number]; tasks: typeof shown }[] = [];
+    for (const t of ordered) {
       const group = t.repeat_group_id ? detail!.repeat_groups?.find((g) => g.id === t.repeat_group_id) : undefined;
       const last = runs[runs.length - 1];
       if (group && last?.group?.id === group.id) last.tasks.push(t); else runs.push({ group, tasks: [t] });

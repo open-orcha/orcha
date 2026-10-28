@@ -53,3 +53,13 @@ it("shows a loop that has not opened yet as not started, with no round lit (roun
   expect([...dots].map((d) => d.className)).toEqual(Array(5).fill("wf-rnd"));
   expect(within(loop).queryByText(/^Round 0/)).toBeNull();
 });
+
+it("does not repeat the state label when the first blocker says the same thing", () => {
+  row({ display_state: { label: "Waiting for Write the launch post", release_available: false, release_available_at: null, warning: null, list_warning: false },
+    blockers: [{ code: "prerequisites", message: "Waiting for Write the launch post.", task_id: "t1" }] }, { round: 2 });
+  expect(screen.getByText("Round 2 · Waiting for Write the launch post")).toBeVisible();
+  cleanup();
+  row({ display_state: { label: "Not ready", release_available: false, release_available_at: null, warning: null, list_warning: false },
+    blockers: [{ code: "prerequisites", message: "Waiting for Research.", task_id: "t1" }] });
+  expect(screen.getByText("Not ready · Waiting for Research.")).toBeVisible();
+});

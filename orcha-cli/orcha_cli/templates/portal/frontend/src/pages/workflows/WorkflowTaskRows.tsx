@@ -5,11 +5,20 @@
  */
 import { forwardRef, useRef, useState, type ReactNode } from "react";
 import { Avatar, AvatarStack, Chip, IconButton, List, Menu, Row, StatusIcon, type MenuItemSpec } from "../../components/primitives";
+import { Icon } from "../../components/ui";
 import type { WorkflowTask } from "./workflowContract.generated";
 
 export function formatServerTime(value: string): string {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? "an unavailable time" : date.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "long" });
+}
+
+/** The first blocker's message, unless it only repeats the state label ("Waiting for Review" twice). */
+function blockerUnlessRepeated(task: WorkflowTask): string | undefined {
+  const message = task.blockers[0]?.message;
+  if (!message) return undefined;
+  const same = (text: string) => text.trim().replace(/\.$/, "").toLowerCase();
+  return same(message) === same(task.display_state.label) ? undefined : message;
 }
 
 export interface WorkflowTaskRowProps {
@@ -35,7 +44,7 @@ export const WorkflowTaskRow = forwardRef<HTMLElement, WorkflowTaskRowProps>(fun
   const warning = task.display_state.list_warning ? task.display_state.warning || "Released without stop confirmation: the worker may still be running outside Orcha." : null;
   const sub = subline ?? (withdrawn ? `Withdrawn by ${task.withdrawn_by ? actorName(task.withdrawn_by) : "Name unavailable"}`
     : task.display_state.release_available_at ? `Release lost worker becomes available at ${formatServerTime(task.display_state.release_available_at)}`
-    : [loop && loop.round > 0 ? `Round ${loop.round}` : null, task.display_state.label, task.blockers[0]?.message].filter(Boolean).join(" · "));
+    : [loop && loop.round > 0 ? `Round ${loop.round}` : null, task.display_state.label, blockerUnlessRepeated(task)].filter(Boolean).join(" · "));
   return <Row ref={(el) => { if (el) el.id = `workflow-task-${task.id}`; if (typeof ref === "function") ref(el); else if (ref) ref.current = el; }} id={`workflow-task-${task.id}`} className={`wf-row is-two${notSelected ? " wf-notsel" : ""}`} selected={selected} dim={withdrawn} onActivate={onSelect} title={task.title}>
     <span className="wf-st"><StatusIcon status={task.status} label={task.display_state.label} /></span>
     <span className="wf-title"><span>{task.title}</span><span className="wf-sub">{sub}</span></span>
@@ -70,7 +79,7 @@ export function WorkflowLoopGroup({ group, reviewTitle, ownerName, children }: {
   const of = round < 1 ? `Not started · up to ${group.max_rounds} rounds` : `Round ${round} of ${group.max_rounds}`;
   return <div className="wf-loop" role="group" aria-label={`${group.name}, ${of.toLowerCase()}`}>
     <div className="wf-loop-h">
-      <b>{group.name}</b><span aria-hidden="true">·</span><span>{of}</span>
+      <Icon name="refresh" cls="v2-ico wf-loop-ico" /><b>{group.name}</b><span aria-hidden="true">·</span><span>{of}</span>
       <span className="wf-rounds" role="img" aria-label={of}>{Array.from({ length: group.max_rounds }, (_, i) => i + 1).map((n) =>
         <i key={n} className={`wf-rnd${n < round || (n === round && ended) ? " is-done" : n === round ? (paused ? " is-stop" : " is-now") : ""}`} />)}</span>
       {reviewTitle && <><span aria-hidden="true">·</span><span>exits when {reviewTitle} reports {group.exit_outcome}</span></>}
