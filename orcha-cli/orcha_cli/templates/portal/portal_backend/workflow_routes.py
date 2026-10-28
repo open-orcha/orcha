@@ -458,6 +458,7 @@ _workflow_action("/api/workflows/{wid}/goal/accept", "accept_goal", model.Accept
 _workflow_action(
     "/api/workflows/{wid}/transfer-owner", "transfer_owner", model.TransferOwner
 )
+_workflow_action("/api/workflows/{wid}/decisions", "loop_decision", model.LoopDecision)
 _workflow_action(
     "/api/workflows/{wid}/review-rounds",
     "review_round",

@@ -324,3 +324,38 @@ def test_turn_allowance_counts_worker_turns_and_blocks_when_used(setup_workflow,
     w = execute("patch", {"turn_allowance": 5}, w["id"])
     review = next(t for t in w["tasks"] if t["title"] == "Review the post")
     assert "allowance_exhausted" not in {b["code"] for b in review["blockers"]}
+
+
+def test_owner_raises_the_limit_and_the_loop_continues(setup_workflow, flexible):
+    execute = setup_workflow[-1]
+    draft = loop_draft(setup_workflow[2])
+    draft["repeat_groups"][0]["max_rounds"] = 1
+    w = prepare_and_start(setup_workflow, execute("create", draft))
+    ids = {t["title"]: t["id"] for t in w["tasks"]}
+    write, review = ids["Write the launch post"], ids["Review the post"]
+    before = {t["id"]: t["work_revision"] for t in w["tasks"]}
+    w = finish(setup_workflow, w, write)
+    w = finish(setup_workflow, w, review, "Changes requested", ["Still too long"])
+    assert code(execute, "loop_decision", {"kind": "pick_outcome", "task_id": review}, w["id"]) == "decision_not_available"
+    w = execute(
+        "loop_decision",
+        {"kind": "raise_limit", "task_id": review, "new_max_rounds": 2, "note": "One more try"},
+        w["id"],
+    )
+    byid = {t["id"]: t for t in w["tasks"]}
+    assert byid[write]["work_revision"] == before[write] + 1 and byid[write]["can_start"]
+    with db_cursor(readonly=True) as (_, cur):
+        cur.execute(
+            "SELECT subject_kind,chosen,original_outcome FROM workflow_owner_decisions WHERE workflow_id=%s",
+            (w["id"],),
+        )
+        assert [tuple(dict(r).values()) for r in cur.fetchall()] == [
+            ("limit_reached", "raise_limit", "Changes requested")
+        ]
+        cur.execute(
+            "SELECT trigger_kind,inputs FROM workflow_group_rounds r JOIN workflow_repeat_groups g ON g.id=r.group_id WHERE g.workflow_id=%s AND r.round_number=2",
+            (w["id"],),
+        )
+        row = cur.fetchone()
+        inputs = json.loads(row["inputs"]) if isinstance(row["inputs"], str) else row["inputs"]
+        assert row["trigger_kind"] == "owner_raise_limit" and inputs["owner_note"] == "One more try"

@@ -2758,6 +2758,172 @@ class WorkflowService:
             "method": "finding text and file versions",
         }
 
+    def op_loop_decision(self, w, actor, b, tid):
+        """Owner decisions at a round limit, a stall, a missing outcome or ask-the-owner."""
+        p = self.owner(w, actor)
+        self.active(w, allow_paused=True)
+        tid = b["task_id"]
+        t = self.task(w["id"], tid)
+        waiting = t.get("awaiting_loop_decision")
+        if not waiting:
+            conflict("no_loop_decision", "This step is not waiting for a decision.")
+        allowed = {
+            "limit_reached": {"raise_limit", "reassign_continue", "accept_override", "stop"},
+            "stalled": {"resume_stalled", "reassign_continue", "accept_override", "stop"},
+            "missing_outcome": {"pick_outcome", "stop"},
+            "ask_owner": {"pick_outcome", "stop"},
+        }[waiting]
+        kind = b["kind"]
+        if kind not in allowed:
+            conflict(
+                "decision_not_available",
+                "That choice is not available for this decision.",
+                status=422,
+                options=sorted(allowed),
+            )
+        flow = routing.load_flow(self, w["id"])
+        group = next((g for g in flow[2] if g["review_task"] == tid), None)
+        d = self.one(
+            "SELECT d.*,r.outcome_name,r.findings,r.note FROM workflow_route_decisions d JOIN workflow_outcome_reports r ON r.id=d.report_id WHERE r.task_id=%s AND r.work_revision=%s",
+            (tid, t["work_revision"]),
+        )
+        original = d["outcome_name"] if d else None
+        self.cur.execute(
+            "UPDATE tasks SET awaiting_loop_decision=NULL WHERE id=%s", (tid,)
+        )
+        if kind == "stop":
+            s = self.snapshot(w["id"])
+            for child in descendants(tid, s["dependencies"]):
+                if s["tasks"][child]["status"] not in routing.STARTED:
+                    self.cur.execute(
+                        "UPDATE tasks SET route_state='not_selected' WHERE id=%s",
+                        (child,),
+                    )
+            if group:
+                self._end_round(group, "stopped")
+                self.cur.execute(
+                    "UPDATE workflow_repeat_groups SET state='stopped' WHERE id=%s",
+                    (group["id"],),
+                )
+        elif kind == "accept_override":
+            self._end_round(group, "accepted_override")
+            self.cur.execute(
+                "UPDATE workflow_repeat_groups SET state='exited' WHERE id=%s",
+                (group["id"],),
+            )
+        elif kind == "pick_outcome":
+            if not b.get("outcome"):
+                conflict("outcome_required", "Choose an outcome.", status=422)
+            preview = routing.resolve(self.snapshot(w["id"]), flow, tid, b["outcome"])
+            if preview["destination"] == "ask_owner":
+                conflict(
+                    "decision_not_available",
+                    "Choose an outcome that decides what happens next.",
+                    status=422,
+                )
+            if d:
+                self.cur.execute(
+                    "DELETE FROM workflow_outcome_reports WHERE id=%s", (d["report_id"],)
+                )
+            report_id = _id()
+            self.cur.execute(
+                "INSERT INTO workflow_outcome_reports(id,workflow_id,task_id,work_revision,reporter_id,reporter_kind,outcome_name,findings,note) VALUES (%s,%s,%s,%s,%s,'human',%s,%s,%s)",
+                (
+                    report_id,
+                    w["id"],
+                    tid,
+                    t["work_revision"],
+                    p["id"],
+                    preview["outcome"],
+                    d["findings"] if d and isinstance(d["findings"], str) else _json(d["findings"] if d else []),
+                    b.get("note") or (d["note"] if d else None),
+                ),
+            )
+            self.cur.execute(
+                "INSERT INTO workflow_route_decisions(id,workflow_id,report_id,destination_kind,destination_task_id,group_id,preview) VALUES (%s,%s,%s,%s,%s,%s,%s)",
+                (
+                    _id(),
+                    w["id"],
+                    report_id,
+                    preview["destination"],
+                    preview["destination_task_id"],
+                    group["id"] if group else None,
+                    _json(preview),
+                ),
+            )
+            self._apply_route(w, self.task(w["id"], tid), p)
+        else:
+            if kind == "raise_limit":
+                if not b.get("new_max_rounds") or b["new_max_rounds"] <= group["current_round"]:
+                    conflict(
+                        "round_limit",
+                        "Raise the limit above the rounds already used.",
+                        status=422,
+                    )
+                group["max_rounds"] = b["new_max_rounds"]
+            elif kind == "reassign_continue":
+                group["max_rounds"] = max(group["max_rounds"], group["current_round"] + 1)
+            self.cur.execute(
+                "UPDATE workflow_repeat_groups SET max_rounds=%s WHERE id=%s",
+                (group["max_rounds"], group["id"]),
+            )
+            preview = routing.resolve(self.snapshot(w["id"]), flow, tid, original)
+            if preview["destination"] != "return":
+                conflict(
+                    "decision_not_available",
+                    "Only a send-back can continue the loop.",
+                    status=422,
+                )
+            if kind == "reassign_continue" and b.get("assignee_id"):
+                self.assign(
+                    self.task(w["id"], preview["destination_task_id"]), b["assignee_id"]
+                )
+            self.cur.execute(
+                "UPDATE workflow_route_decisions SET applied_at=COALESCE(applied_at,%s) WHERE id=%s",
+                (sql.utcnow(), d["id"]),
+            )
+            self._repeat(
+                w,
+                t,
+                group,
+                preview,
+                d,
+                trigger={
+                    "raise_limit": "owner_raise_limit",
+                    "reassign_continue": "owner_reassign",
+                    "resume_stalled": "owner_resume",
+                }[kind],
+                note=b.get("note") or None,
+            )
+        self.cur.execute(
+            "INSERT INTO workflow_owner_decisions(id,workflow_id,task_id,group_id,subject_kind,chosen,original_outcome,detail,reason,decided_by) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+            (
+                _id(),
+                w["id"],
+                tid,
+                group["id"] if group else None,
+                waiting,
+                kind,
+                original,
+                _json(
+                    {
+                        k: b.get(k)
+                        for k in ("new_max_rounds", "assignee_id", "outcome", "note")
+                        if b.get(k)
+                    }
+                ),
+                b.get("reason") or None,
+                p["id"],
+            ),
+        )
+        self.audit(
+            w,
+            p,
+            "workflow_loop_decided",
+            {"subject": waiting, "chosen": kind, "original_outcome": original},
+            tid,
+        )
+
     def _reopen(self, tid):
         latest = self.one(
             "SELECT agent_id FROM agent_tasks WHERE task_id=%s ORDER BY assigned_at DESC, agent_id DESC LIMIT 1",

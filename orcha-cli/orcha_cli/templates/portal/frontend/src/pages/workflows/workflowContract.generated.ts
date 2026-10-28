@@ -1,5 +1,5 @@
 // Generated from FastAPI OpenAPI slices. DO NOT EDIT.
-// Workflow source SHA-256: 826c026d39b7453c589a7aa655c4c06cab62eb823a9f6dff560eb0a4d25cbada
+// Workflow source SHA-256: 2bc8a20d66c4c963c56226335a0790aee31d23ccc6961dd3e2677425805f7d61
 // Evidence GET source SHA-256: f2a794298f992bd3ff3955fa5d6aefc30a97e373794a3c1e9d03c8f46796853e
 // Regenerate with tools/generate-workflow-contract.mjs and both source files.
 
@@ -197,6 +197,18 @@ export type ImportTasks = {
 export type IntegrationCapability = {
   "available"?: boolean;
   "reason"?: string | null;
+};
+
+export type LoopDecision = {
+  "expected_revision": number;
+  "idempotency_key": string;
+  "reason"?: string;
+  "kind": "raise_limit" | "reassign_continue" | "accept_override" | "resume_stalled" | "pick_outcome" | "stop";
+  "task_id": string;
+  "new_max_rounds"?: number | null;
+  "assignee_id"?: string | null;
+  "outcome"?: string | null;
+  "note"?: string;
 };
 
 export type MoveTasks = {
@@ -718,6 +730,7 @@ export type WorkflowModels = {
   ImportTaskImpact: ImportTaskImpact;
   ImportTasks: ImportTasks;
   IntegrationCapability: IntegrationCapability;
+  LoopDecision: LoopDecision;
   MoveTasks: MoveTasks;
   Mutation: Mutation;
   NewObjective: NewObjective;
@@ -1761,6 +1774,83 @@ export const workflowSchemas = {
       }
     },
     "type": "object"
+  },
+  "LoopDecision": {
+    "properties": {
+      "expected_revision": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "idempotency_key": {
+        "type": "string",
+        "maxLength": 200,
+        "minLength": 1
+      },
+      "reason": {
+        "type": "string",
+        "maxLength": 4000
+      },
+      "kind": {
+        "type": "string",
+        "enum": [
+          "raise_limit",
+          "reassign_continue",
+          "accept_override",
+          "resume_stalled",
+          "pick_outcome",
+          "stop"
+        ]
+      },
+      "task_id": {
+        "type": "string"
+      },
+      "new_max_rounds": {
+        "anyOf": [
+          {
+            "type": "integer",
+            "maximum": 20,
+            "minimum": 1
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "assignee_id": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "outcome": {
+        "anyOf": [
+          {
+            "type": "string",
+            "maxLength": 40,
+            "minLength": 1
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "note": {
+        "type": "string",
+        "maxLength": 4000
+      }
+    },
+    "additionalProperties": false,
+    "type": "object",
+    "required": [
+      "expected_revision",
+      "idempotency_key",
+      "kind",
+      "task_id"
+    ]
   },
   "MoveTasks": {
     "properties": {
@@ -4606,6 +4696,12 @@ export const workflowRoutes = [
   {
     "path": "/api/workflows/{wid}/completion-check",
     "method": "get"
+  },
+  {
+    "path": "/api/workflows/{wid}/decisions",
+    "method": "post",
+    "operation": "loop_decision",
+    "body": "LoopDecision"
   },
   {
     "path": "/api/workflows/{wid}/dependencies",

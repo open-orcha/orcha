@@ -260,6 +260,25 @@ class OutcomeReport(TaskMutation):
     note: str = Field(default="", max_length=4000)
 
 
+class LoopDecision(Mutation):
+    """The owner's choice when a loop or an outcome waits for them. Every decision is
+    recorded beside the outcome that caused it."""
+
+    kind: Literal[
+        "raise_limit",
+        "reassign_continue",
+        "accept_override",
+        "resume_stalled",
+        "pick_outcome",
+        "stop",
+    ]
+    task_id: str
+    new_max_rounds: int | None = Field(default=None, ge=1, le=20)
+    assignee_id: str | None = None
+    outcome: OutcomeName | None = None
+    note: str = Field(default="", max_length=4000)
+
+
 class RoutingPreview(BaseModel):
     task_id: str
     outcome: str
