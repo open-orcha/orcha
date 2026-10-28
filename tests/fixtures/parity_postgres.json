@@ -768,6 +768,7 @@
             "status": "str",
             "title": "str",
             "work_revision": "int",
+            "workflow_hidden": "null",
             "workflow_id": "null"
           }
         ]
@@ -1006,6 +1007,8 @@
             "expires_at": "iso-datetime",
             "id": "str",
             "is_stale": "bool",
+            "origin_task": "null",
+            "originating_task_id": "null",
             "owner_alias": "str",
             "owner_id": "str",
             "parent_request_id": "null|str",
@@ -1164,6 +1167,7 @@
             "status": "str",
             "title": "str",
             "work_revision": "int",
+            "workflow_hidden": "null",
             "workflow_id": "null"
           }
         ],
@@ -1463,6 +1467,8 @@
       "booleans": {},
       "datetime_formats": {},
       "types": {
+        "container_id": "str",
+        "originating_task_id": "null",
         "request_id": "str",
         "requester_id": "str",
         "status": "str",
@@ -1770,6 +1776,7 @@
             "status": "str",
             "title": "str",
             "work_revision": "int",
+            "workflow_hidden": "null",
             "workflow_id": "null"
           }
         ]
