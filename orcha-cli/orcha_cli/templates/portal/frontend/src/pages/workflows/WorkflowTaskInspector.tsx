@@ -17,6 +17,7 @@ import { WorkflowTaskAcceptanceRecord } from "./WorkflowTaskAcceptanceRecord";
 import { taskReason, WorkflowTaskActions, type TaskActionRequest } from "./WorkflowTaskActions";
 import { WorkflowTaskDecision } from "./WorkflowTaskDecision";
 import { WorkflowTaskLink } from "./WorkflowTaskReturn";
+import { WorkflowLoopDecision } from "./WorkflowLoopDecision";
 import { formatServerTime } from "./WorkflowTaskRows";
 
 export function WorkflowTaskInspector({ detail, task, cid, scope, verified, stale, agents, actorName, onSaved, onClose, onExpand, request, onRequest, reviewRequest }: {
@@ -56,6 +57,9 @@ export function WorkflowTaskInspector({ detail, task, cid, scope, verified, stal
           {task.display_state.release_available_at && <li>If the worker stays silent, Release lost worker becomes available at <time dateTime={task.display_state.release_available_at}>{formatServerTime(task.display_state.release_available_at)}</time>. Refresh to check availability.</li>}
         </ul>
       </Section>
+      {task.awaiting_loop_decision && <Section title="Decision needed">
+        <WorkflowLoopDecision detail={detail} task={task} scope={scope} stale={stale} agents={agents} onSaved={onSaved} />
+      </Section>}
       <Section title="Actions">
         <WorkflowTaskActions inline detail={detail} task={task} scope={scope} verified={verified} stale={stale} agents={agents} onSaved={onSaved} request={request}
           leading={task.status === "needs_verification" ? <Button size="sm" variant="secondary" disabled={stale || unresolved} title={stale ? "Refresh before making changes." : undefined} onClick={() => setDecisionOpen(true)}>Review result…</Button> : undefined} />
