@@ -6,6 +6,8 @@ import { WorkflowHeader } from "./WorkflowHeader";
 import { pathDecider, WorkflowWhyPath } from "./WorkflowRouteSummary";
 import { WorkflowTaskInspector } from "./WorkflowTaskInspector";
 import { exampleTask, exampleWorkflow, jsonResponse } from "./workflowTestFixtures";
+import type { WorkflowTask } from "./workflowContract.generated";
+type WorkflowTaskRoutes = NonNullable<WorkflowTask["routes"]>;
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 const group = { id: "g1", name: "Draft and review", member_tasks: ["write", "build"], review_task: "build", exit_outcome: "Approved", max_rounds: 3, stall_rule: "findings_and_artifact", current_round: 3, state: "limit_reached" };
@@ -136,4 +138,17 @@ it("explains why a path was chosen and which steps were not selected (x07)", () 
   cleanup();
   const { container } = render(<WorkflowWhyPath detail={exampleWorkflow({ tasks: [review, draft] })} task={draft} />);
   expect(container).toBeEmptyDOMElement();
+});
+
+it.each([
+  { wait: "missing_outcome" as const, routes: [{ outcome: "Done", destination: "next" }, { outcome: "Unsure", destination: "ask_owner" }, { outcome: "Blocked", destination: "stop" }] },
+  { wait: "ask_owner" as const, routes: [{ outcome: "Done", destination: "next" }, { outcome: "Unsure", destination: "ask_owner" }, { outcome: "blocked", destination: "ask_owner" }] },
+])("offers only outcomes whose rule decides what happens next ($wait)", ({ wait, routes }) => {
+  const step = exampleTask({ awaiting_loop_decision: wait, outcomes: [{ name: "Done", kind: "success" }, { name: "Unsure", kind: "custom" }, { name: "Blocked", kind: "failure" }],
+    routes: routes.map((r) => ({ ...r, destination_task: null })) as WorkflowTaskRoutes, reported_outcome: wait === "ask_owner" ? { outcome: "Unsure" } : null });
+  const detail = exampleWorkflow({ semantics_version: 2, tasks: [step] });
+  render(<WorkflowLoopDecision detail={detail} task={step} scope={{ origin: "https://orcha.example", project: detail.container_id, identity: detail.owner_human_id }} stale={false} agents={[]} onSaved={vi.fn()} onClose={vi.fn()} />);
+  expect(screen.getByLabelText(/Choose the outcome/)).toBeChecked();
+  const offered = [...(screen.getByLabelText("Outcome") as HTMLSelectElement).options].map((o) => o.textContent);
+  expect(offered).toEqual(wait === "missing_outcome" ? ["Choose…", "Done", "Blocked"] : ["Choose…", "Done"]);
 });

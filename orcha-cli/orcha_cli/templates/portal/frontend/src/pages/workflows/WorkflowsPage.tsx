@@ -242,7 +242,7 @@ function WorkflowScreen() {
     return <WorkflowTaskRows label={dependencies ? "Workflow tasks and dependencies" : "Workflow tasks"}>
       {runs.map((run, i) => run.group
         ? <WorkflowLoopGroup key={`${run.group.id}-${i}`} group={run.group} reviewTitle={detail!.tasks.find((r) => r.id === run.group!.review_task)?.title}
-          ownerName={actorName(run.group.escalation_owner_id ?? detail!.owner_human_id)}>{run.tasks.map(row)}</WorkflowLoopGroup>
+          ownerName={actorName(detail!.owner_human_id)}>{run.tasks.map(row)}</WorkflowLoopGroup>
         : run.tasks.map(row))}
     </WorkflowTaskRows>;
   };
@@ -273,7 +273,7 @@ function WorkflowScreen() {
       </div>}
       {detail.hidden && <p role="status" className="wf-bar">This workflow is hidden. Its tasks, messages and evidence are kept. Restore it from the workflow menu; restoring never starts work.</p>}
       <WorkflowOwnerBar detail={detail} viewer={scope.identity} ownerName={actorName(detail.owner_human_id)} onDecide={setDecideId} />
-      {decideTask && <WorkflowLoopDecision detail={detail} task={decideTask} scope={scope} stale={stale} agents={aiAgents} onSaved={saved} onClose={() => setDecideId(null)} />}
+      {decideTask && <WorkflowLoopDecision key={`${decideTask.id}:${decideTask.awaiting_loop_decision}`} detail={detail} task={decideTask} scope={scope} stale={stale} agents={aiAgents} onSaved={saved} onClose={() => setDecideId(null)} />}
       <WorkflowActions detail={detail} scope={scope} verified={verified} stale={stale} onSaved={saved} request={actionRequest} />
       <WorkflowInput detail={detail} scope={scope} stale={stale} open={inputOpen} onOpen={() => setInputOpen(true)} onClose={() => setInputOpen(false)} onSaved={saved} onChecklist={() => setActionRequest({ action: "finish", seq: ++requestSeq.current })} />
       {!inputOpen && <><div className="wf-tabs-row">

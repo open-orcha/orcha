@@ -105,7 +105,8 @@ export function WorkflowLoopDecision({ detail, task, scope, stale, agents, onSav
     raise_limit: `Allow ${plural(extra, "more round")}`, reassign_continue: "Reassign and continue", accept_override: "Accept as it is",
     resume_stalled: `Resume round ${next}`, pick_outcome: "Use this outcome", stop: "Stop the loop",
   };
-  const outcomes = (task.outcomes ?? []).filter((o) => wait !== "ask_owner" || o.name !== task.routes?.find((r) => r.destination === "ask_owner")?.outcome);
+  // The server refuses any outcome whose own rule asks the owner again, in every wait state.
+  const outcomes = (task.outcomes ?? []).filter((o) => task.routes?.find((r) => r.outcome.toLowerCase() === o.name.toLowerCase())?.destination !== "ask_owner");
   const invalid = !kind ? "Choose what happens next."
     : kind === "raise_limit" && (!group || extra < 1 || rounds > 20) ? `Allow between 1 and ${Math.max(20 - used, 1)} more rounds (at most 20 in all).`
     : kind === "reassign_continue" && !assignee ? "Choose who takes the step."
