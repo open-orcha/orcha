@@ -577,6 +577,38 @@
 <span class="note" style="left:258px;top:176px">1</span><span class="note" style="left:258px;top:246px">2</span><span class="note" style="left:258px;top:446px">3</span><span class="note" style="left:784px;top:246px">4</span><span class="note" style="left:784px;top:470px">5</span>
 </div></div>
 
+<!-- ============================ F2 · Approval policies surface and the Needs-your-input strip ============================ -->
+<div class="frame-wrap"><div class="frame-h"><b>F2 · Approval policies — named, versioned, reusable; and gate approvals in Needs your input</b><span>Walkthrough F · proposed: policy catalogue with versions and usage</span></div>
+<div class="frame" id="x09" data-tab="workflows" data-crumb="Approval policies" data-primary="New policy" style="--v2-content-h: 838px;">
+<div class="v2-app"><div class="v2-frame-main"><div class="v2-main main" data-v2-surface="panel"><main class="v2-content content is-flush" tabindex="-1">
+<div class="wf-page">
+  <div class="wf-input-strip"><span><b>Needs your input</b> · 2 decisions · <span class="wf-muted">1 gate approval · 1 finished work</span></span><button type="button" class="v2-btn v2-btn-secondary v2-btn-sm"><span class="v2-btn-label">Open</span></button></div>
+  <div class="wf-compose" style="grid-template-columns:380px minmax(0,1fr)">
+    <div style="overflow:auto;border-right:1px solid var(--v2-border-subtle,var(--v2-border))">
+      <div class="wf-decision-row is-selected"><div><span class="v2-badge v2-tone-accent">Policy · v2</span><strong>Publish approval</strong><span class="wf-muted">Kedar or Priya · one is enough · no self-review · used by 3 workflows</span></div></div>
+      <div class="wf-decision-row"><div><span class="v2-badge v2-tone-accent">Policy · v1</span><strong>Release approval</strong><span class="wf-muted">Kedar · reminder after 1 day · used by 1 workflow</span></div></div>
+      <div class="wf-decision-row"><div><span class="v2-badge v2-tone-accent">Policy · v3</span><strong>Customer-facing copy</strong><span class="wf-muted">Priya and Sam, both required · 2 days · used by 2 workflows</span></div></div>
+      <div style="padding:18px" class="wf-muted">Changing a policy makes a new version. Running workflows keep the version they started with; new runs use the latest.</div>
+    </div>
+    <aside class="wf-compose-panel" style="padding:24px 36px"><h2>Publish approval <span class="v2-badge v2-tone-neutral">version 2</span></h2><p class="wf-muted">Created by Kedar · version 2 since 12 Oct · version 1 kept for the 1 run still using it</p>
+      <div class="wf-grid2" style="margin-top:16px">
+        <div class="wf-field"><span>Who can approve</span><div class="wf-chipline"><span class="v2-chip v2-chip-sm"><span class="v2-chip-text">Kedar</span></span><span class="v2-chip v2-chip-sm"><span class="v2-chip-text">Priya</span></span><button type="button" class="v2-chip v2-chip-sm"><svg class="v2-ico v2-chip-ico" style="width:12px;height:12px"><use href="#i-plus"/></svg><span class="v2-chip-text">Add person</span></button></div><span class="wf-muted">People only. Agents can never satisfy this policy.</span></div>
+        <div class="wf-field"><span>How many must approve</span><div class="v2-seg" role="radiogroup"><button type="button" class="v2-seg-item" role="radio" aria-checked="true">One is enough</button><button type="button" class="v2-seg-item" role="radio" aria-checked="false">Everyone listed</button></div></div>
+        <div class="wf-field"><span>Self-review</span><label class="wf-choice" style="padding:0"><input type="checkbox" class="v2-checkbox" checked><span>The person who produced or started the work cannot approve it</span></label></div>
+        <div class="wf-field"><span>Deadline</span><input class="wf-in" value="4 days" style="width:120px"><span class="wf-muted">Reminder after 2 days, then escalates to Kedar. A deadline reminds or escalates; it never approves.</span></div>
+        <div class="wf-field"><span>What approval permits</span><input class="wf-in" value="Publishing the approved version"></div>
+        <div class="wf-field"><span>If an approver loses access</span><span class="wf-muted">Their pending approvals stop counting; the workflow owner is named to resolve it.</span></div>
+      </div>
+      <div class="wf-impact" style="margin-top:8px"><div class="wf-impact-h"><span>Where this policy is used</span><span>3 workflows</span></div><div class="wf-impact-row"><span class="t">Recipe App launch post · gate Publish approval · waiting for approval now</span><span class="v2-badge v2-tone-warn">v2</span></div><div class="wf-impact-row"><span class="t">Newsletter, October · gate Publish approval · completed</span><span class="v2-badge v2-tone-neutral">v2</span></div><div class="wf-impact-row"><span class="t">Help-centre rewrite · gate Publish approval · active, started on v1</span><span class="v2-badge v2-tone-neutral">v1</span></div></div>
+      <div style="display:flex;gap:8px;margin-top:16px"><button type="button" class="v2-btn v2-btn-primary v2-btn-md"><span class="v2-btn-label">Save as version 3</span></button><button type="button" class="v2-btn v2-btn-secondary v2-btn-md"><span class="v2-btn-label">Discard changes</span></button><span class="wf-muted" style="align-self:center">Applies to new runs. Running workflows are not changed.</span></div>
+    </aside>
+  </div>
+</div>
+</main></div></div></div>
+<div class="wf-design-caption">Design proposal: named, versioned approval policies and gate decisions require new API contracts (README §7).</div>
+<span class="note" style="left:270px;top:104px">1</span><span class="note" style="left:270px;top:160px">2</span><span class="note" style="left:660px;top:250px">3</span><span class="note" style="left:660px;top:560px">4</span>
+</div></div>
+
 </div>
 </body>
 </html>
