@@ -2754,6 +2754,14 @@ class WorkflowService:
             ),
         )
 
+    def _owner_ends_round(self, group, reason):
+        """An owner's accept-anyway or stop is how the round ended, even when it had already
+        paused at its limit or on a stall (that pause stays in `stall` and the audit)."""
+        self.cur.execute(
+            "UPDATE workflow_group_rounds SET end_reason=%s,ended_at=COALESCE(ended_at,%s) WHERE group_id=%s AND round_number=%s",
+            (reason, sql.utcnow(), group["id"], group["current_round"]),
+        )
+
     def _stall(self, group, d):
         """Same findings and unchanged reviewed work as the previous round's review."""
         if group["stall_rule"] == "off" or (group["current_round"] or 0) < 2:
@@ -2901,13 +2909,13 @@ class WorkflowService:
                         (child,),
                     )
             if group:
-                self._end_round(group, "stopped")
+                self._owner_ends_round(group, "stopped")
                 self.cur.execute(
                     "UPDATE workflow_repeat_groups SET state='stopped' WHERE id=%s",
                     (group["id"],),
                 )
         elif kind == "accept_override":
-            self._end_round(group, "accepted_override")
+            self._owner_ends_round(group, "accepted_override")
             self.cur.execute(
                 "UPDATE workflow_repeat_groups SET state='exited' WHERE id=%s",
                 (group["id"],),

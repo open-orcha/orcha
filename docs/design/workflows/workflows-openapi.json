@@ -5289,6 +5289,41 @@
             "type": "string",
             "title": "Task Id"
           },
+          "workflow_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workflow Id"
+          },
+          "workflow_revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workflow Revision",
+            "description": "Send as expected_revision when reporting an outcome."
+          },
+          "work_revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Work Revision",
+            "description": "Send as expected_work_revision when reporting an outcome."
+          },
           "outcomes": {
             "items": {
               "$ref": "#/components/schemas/StepOutcome"

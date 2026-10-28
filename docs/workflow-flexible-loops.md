@@ -36,7 +36,11 @@ Start. Prerequisites stay acyclic; a loop is a repeat group, never a cycle in th
 ## How a round runs
 
 1. The step's worker (or a person) reports an outcome while the step runs or awaits review:
-   `POST /api/tasks/{tid}/outcome` with `outcome`, up to 50 `findings` and a `note`. Only the
+   `POST /api/tasks/{tid}/outcome` with `outcome`, up to 50 `findings` (`{"text": ...}`), a
+   `note`, and the usual fences: `expected_revision`, `expected_work_revision` and a fresh
+   `idempotency_key`. A worker reads the two revisions from
+   `GET /api/tasks/{tid}/round-context` (`workflow_revision`, `work_revision`) just before
+   reporting, and on `revision_conflict` reads them again and retries with a new key. Only the
    step's current worker or a person can report; a report for an older work revision is
    refused. A new report replaces an unapplied one.
 2. `POST /api/tasks/{tid}/outcome/preview` shows, read-only, what that outcome would do:

@@ -147,13 +147,19 @@ def _round_lines(context):
     if names:
         lines.append("Before you mark this step done, report exactly one outcome: "
                      + ", ".join(f"'{n}'" for n in names)
-                     + f" (POST /api/tasks/{context.get('task_id')}/outcome with outcome, findings and note). "
-                     "The outcome decides what happens next.")
+                     + ". The outcome decides what happens next. To report it, first GET "
+                     f"/api/tasks/{context.get('task_id')}/round-context for workflow_revision and "
+                     f"work_revision, then POST /api/tasks/{context.get('task_id')}/outcome with "
+                     "outcome, findings (a list of {\"text\": ...}), note, "
+                     "expected_revision = workflow_revision, expected_work_revision = work_revision "
+                     "and idempotency_key = a new unique string. If it is refused with "
+                     "revision_conflict, read round-context again and retry with a new key.")
     group = context.get("group")
     if group:
         lines.append(f"This step is in the repeat group '{group['name']}', round {group['round']} "
                      f"of at most {group['max_rounds']}. The loop ends when "
-                     f"'{group['review_step']}' reports '{group['exit_outcome']}'.")
+                     f"{repr(group['review_step']) if group.get('review_step') else 'its review step'} "
+                     f"reports '{group['exit_outcome']}'.")
         this = group.get("this_round") or {}
         if group["round"] > 1:
             lines.append(f"This round was started because the outcome was "

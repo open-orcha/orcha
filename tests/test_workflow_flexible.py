@@ -444,6 +444,11 @@ def test_owner_accepts_anyway_at_the_limit_and_dependents_proceed(setup_workflow
             (w["id"],),
         )
         assert tuple(dict(cur.fetchone()).values()) == ("accept_override", "Changes requested")
+        cur.execute(
+            "SELECT end_reason FROM workflow_group_rounds r JOIN workflow_repeat_groups g ON g.id=r.group_id WHERE g.workflow_id=%s ORDER BY round_number",
+            (w["id"],),
+        )
+        assert [r["end_reason"] for r in cur.fetchall()] == ["accepted_override"]
 
 
 def test_owner_stops_the_loop_and_later_steps_are_not_needed(setup_workflow, flexible):
@@ -461,6 +466,12 @@ def test_owner_stops_the_loop_and_later_steps_are_not_needed(setup_workflow, fle
     assert not byid[ids["Publish"]]["can_start"]
     assert w["repeat_groups"][0]["state"] == "stopped"
     assert "loop_decision_pending" not in {b["code"] for b in w["completion"]["blockers"]}
+    with db_cursor(readonly=True) as (_, cur):
+        cur.execute(
+            "SELECT end_reason FROM workflow_group_rounds r JOIN workflow_repeat_groups g ON g.id=r.group_id WHERE g.workflow_id=%s ORDER BY round_number",
+            (w["id"],),
+        )
+        assert [r["end_reason"] for r in cur.fetchall()] == ["stopped"]
 
 
 def test_round_two_prompt_carries_the_findings_and_the_rule(setup_workflow, flexible):
@@ -524,7 +535,52 @@ async def test_round_context_endpoint_matches_the_prompt(client, setup_workflow,
     assert body["group"]["round"] == 2
     assert [f["text"] for f in body["group"]["this_round"]["findings"]] == ["Too long"]
     body = (await client.get(f"/api/tasks/{ids['Publish']}/round-context", headers=headers)).json()
-    assert body == {"task_id": ids["Publish"], "outcomes": [], "group": None}
+    assert {k: body[k] for k in ("task_id", "outcomes", "group")} == {
+        "task_id": ids["Publish"], "outcomes": [], "group": None}
+
+
+@pytest.mark.asyncio
+async def test_worker_reports_its_outcome_with_only_what_the_prompt_names(client, setup_workflow, flexible):
+    """The prompt's recipe, over HTTP as the step's worker: read round-context, then report."""
+    from orcha_cli.notifier_protocol import _render_workflow
+    from portal_backend.workflow_prompt import workflow_for_prompt
+    from test_workflows import uid
+
+    execute = setup_workflow[-1]
+    worker = setup_workflow[2]
+    w = prepare_and_start(setup_workflow, execute("create", loop_draft(worker)))
+    write, review, _ = loop_ids(w)
+    w = finish(setup_workflow, w, write)
+    e, ref = submit_result(setup_workflow, w, review)
+    with db_cursor() as (_, cur):
+        cur.execute("SELECT * FROM tasks WHERE id=%s", (review,))
+        text = _render_workflow(workflow_for_prompt(cur, dict(cur.fetchone())))
+    for named in ("round-context", "workflow_revision", "work_revision", "expected_revision",
+                  "expected_work_revision", "idempotency_key", "revision_conflict"):
+        assert named in text
+    token = uid()
+    with db_cursor() as (_, cur):
+        cur.execute(
+            "INSERT INTO embodiment_tokens(run_token,agent_id,lane,kind) VALUES (%s,%s,'work','headless')",
+            (token, worker),
+        )
+    headers = {"X-Orcha-Run-Token": token}
+    context = (await client.get(f"/api/tasks/{review}/round-context", headers=headers)).json()
+    assert context["workflow_id"] == w["id"]
+    report = {
+        "outcome": "Changes requested",
+        "findings": [{"text": "Too long"}],
+        "note": "Cut it to one screen.",
+        "expected_revision": context["workflow_revision"],
+        "expected_work_revision": context["work_revision"],
+        "idempotency_key": uid(),
+    }
+    response = await client.post(f"/api/tasks/{review}/outcome", json=report, headers=headers)
+    assert response.status_code == 200, response.text
+    reported = {t["id"]: t for t in response.json()["tasks"]}[review]["reported_outcome"]
+    assert (reported["outcome"], reported["reporter_kind"]) == ("Changes requested", "ai")
+    w = execute("accept", {"evidence": ref}, w["id"], review)
+    assert w["repeat_groups"][0]["current_round"] == 2
 
 
 def flow_body(ids, *, max_rounds=3, publish_outcomes=(), exit_outcome="Approved", write_outcomes=()):

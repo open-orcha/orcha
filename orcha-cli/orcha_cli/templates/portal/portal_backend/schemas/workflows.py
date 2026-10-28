@@ -529,6 +529,13 @@ class RoundContext(BaseModel):
     Empty outcomes and a null group on version-1 workflows."""
 
     task_id: str
+    workflow_id: str | None = None
+    workflow_revision: int | None = Field(
+        default=None, description="Send as expected_revision when reporting an outcome."
+    )
+    work_revision: int | None = Field(
+        default=None, description="Send as expected_work_revision when reporting an outcome."
+    )
     outcomes: list[StepOutcome] = Field(default_factory=list)
     group: RoundGroup | None = None
 

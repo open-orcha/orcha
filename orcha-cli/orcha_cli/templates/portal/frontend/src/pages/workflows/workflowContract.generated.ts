@@ -1,5 +1,5 @@
 // Generated from FastAPI OpenAPI slices. DO NOT EDIT.
-// Workflow source SHA-256: 8c4f5526b43984df04fe8d2056f88456b6023897b209198a36ea9474e7043b52
+// Workflow source SHA-256: 09be48b3092179b5d9a13747bea69ee297b03b75e6bac9aa4218c3ec0a3cd7c7
 // Evidence GET source SHA-256: f2a794298f992bd3ff3955fa5d6aefc30a97e373794a3c1e9d03c8f46796853e
 // Regenerate with tools/generate-workflow-contract.mjs and both source files.
 
@@ -424,6 +424,9 @@ export type ReviewRound = {
 
 export type RoundContext = {
   "task_id": string;
+  "workflow_id"?: string | null;
+  "workflow_revision"?: number | null;
+  "work_revision"?: number | null;
   "outcomes"?: Array<StepOutcome>;
   "group"?: RoundGroup | null;
 };
@@ -3014,6 +3017,36 @@ export const workflowSchemas = {
     "properties": {
       "task_id": {
         "type": "string"
+      },
+      "workflow_id": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "workflow_revision": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "work_revision": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ]
       },
       "outcomes": {
         "items": {

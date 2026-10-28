@@ -34,7 +34,15 @@ def round_context(cur, task, wid):
     group = cur.fetchone()
     if not outcomes and not group:
         return None
-    context = {"task_id": str(task["id"]), "outcomes": outcomes, "group": None}
+    # The fences a worker sends with its outcome report, read fresh on every call.
+    cur.execute("SELECT revision FROM workflows WHERE id=%s", (wid,))
+    workflow = cur.fetchone()
+    cur.execute("SELECT work_revision FROM tasks WHERE id=%s", (task["id"],))
+    work = cur.fetchone()
+    context = {"task_id": str(task["id"]), "workflow_id": str(wid),
+               "workflow_revision": workflow["revision"] if workflow else None,
+               "work_revision": work["work_revision"] if work else None,
+               "outcomes": outcomes, "group": None}
     if group:
         cur.execute("SELECT title FROM tasks WHERE id=%s", (group["review_task_id"],))
         review = cur.fetchone()
