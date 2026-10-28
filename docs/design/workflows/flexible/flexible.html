@@ -291,6 +291,7 @@
   document.addEventListener("DOMContentLoaded", () => {
     const tpl = document.getElementById("chrome");
     const only = q.get("frame"); if (only) document.body.classList.add("solo");
+    document.querySelectorAll(".frame[data-clone]").forEach((f) => { f.innerHTML = document.getElementById(f.dataset.clone).innerHTML; });
     document.querySelectorAll(".frame-wrap").forEach((wrap) => {
       const frame = wrap.querySelector(".frame");
       if (only && frame.id !== only) { wrap.hidden = true; return; }
@@ -358,6 +359,11 @@
 <span class="note" style="left:296px;top:96px">1</span><span class="note" style="left:296px;top:300px">2</span><span class="note" style="left:296px;top:536px">3</span><span class="note" style="left:296px;top:712px">4</span>
 </div></div>
 
+
+<!-- ============================ A1b · Create workflow, scrolled: the repeat group and the gate ============================ -->
+<div class="frame-wrap"><div class="frame-h"><b>A1b · Create workflow — the repeat group and the approval gate (same page, scrolled)</b><span>Walkthrough A · proposed</span></div>
+<div class="frame" id="x01b" data-clone="x01" data-tab="workflows" data-crumb="New workflow" data-scroll="610" style="--v2-content-h: 838px;"></div></div>
+
 <!-- ============================ A2 · Start review: routes, limits, approvers ============================ -->
 <div class="frame-wrap"><div class="frame-h"><b>A2 · Start review — the route, limits and approvers before any work begins</b><span>Walkthrough A · extends #350 frame 04 · proposed fields marked</span></div>
 <div class="frame" id="x02" data-tab="workflows" style="--v2-content-h: 838px;">
@@ -414,7 +420,64 @@
   </div></div></div>
 </div>
 </main></div></div></div>
-<span class="note" style="left:296px;top:242px">1</span><span class="note" style="left:296px;top:300px">2</span><span class="note" style="left:296px;top:388px">3</span><span class="note" style="left:860px;top:300px">4</span><span class="note" style="left:860px;top:430px">5</span>
+<span class="note" style="left:296px;top:242px">1</span><span class="note" style="left:296px;top:300px">2</span><span class="note" style="left:296px;top:388px">3</span><span class="note" style="left:996px;top:286px">4</span><span class="note" style="left:996px;top:446px">5</span>
+</div></div>
+
+<!-- ============================ C1 · Round limit reached: the owner decides ============================ -->
+<div class="frame-wrap"><div class="frame-h"><b>C1 · Round limit reached — no round 6; the owner decides</b><span>Walkthrough C · proposed: limit decision with retained count</span></div>
+<div class="frame" id="x04" data-tab="workflows" style="--v2-content-h: 838px;">
+<div class="v2-app"><div class="v2-frame-main"><div class="v2-main main" data-v2-surface="panel"><main class="v2-content content is-flush" tabindex="-1">
+<div class="wf-page">
+  <header class="wf-head"><h1 class="wf-head-title">Recipe App launch post</h1><div class="wf-head-meta"><span class="v2-si-wrap has-label"><svg class="v2-si v2-si-c-paused" width="14" height="14"><use href="#si-attention"/></svg><span class="v2-si-label">Waiting for Kedar</span></span><span>·</span><span>Kedar</span><span>·</span><span class="wf-prog is-lg"><span class="wf-prog-bar"><i style="width:0%"></i></span><span>0/3 steps · round 5 of 5</span></span></div><p class="wf-head-goal">Publish a launch post that a first-time reader can follow to try the Recipe App.</p><div class="wf-head-actions"><button type="button" class="v2-btn v2-btn-primary v2-btn-md"><span class="v2-btn-label">Decide…</span></button><button type="button" class="v2-iconbtn v2-iconbtn-circle"><svg class="v2-ico"><use href="#i-more"/></svg></button></div></header>
+  <div class="wf-ownerbar"><svg class="v2-ico" style="width:14px;height:14px;color:var(--v2-warn,#d29922)"><use href="#i-flag"/></svg><span><b>Needs you.</b> “Draft and review” used all 5 rounds and the last review still asked for changes. No round 6 was started. Nothing is lost: 5 drafts and 5 reviews are kept.</span><button type="button" class="v2-btn v2-btn-primary v2-btn-sm"><span class="v2-btn-label">Decide…</span></button></div>
+  <div class="wf-tabs-row"><div class="v2-tabs" role="tablist"><button type="button" class="v2-tab is-selected" role="tab"><span class="v2-tab-label">Steps</span><span class="v2-count">3</span></button><button type="button" class="v2-tab" role="tab"><span class="v2-tab-label">Route</span></button><button type="button" class="v2-tab" role="tab"><span class="v2-tab-label">Review history</span><span class="v2-count">5</span></button><button type="button" class="v2-tab" role="tab"><span class="v2-tab-label">Activity</span></button></div></div>
+  <div class="wf-list"><div class="wf-rows"><div class="wf-loop" style="border-color:var(--v2-warn,#d29922)"><div class="wf-loop-h"><b>Draft and review</b><span>·</span><span>Round 5 of 5 · limit reached</span><span class="wf-rounds"><i class="wf-rnd is-done"></i><i class="wf-rnd is-done"></i><i class="wf-rnd is-done"></i><i class="wf-rnd is-done"></i><i class="wf-rnd is-stop"></i></span><span>·</span><span>waiting for Kedar</span></div>
+    <div class="v2-row wf-row is-two" role="option" tabindex="0"><span class="wf-st"><svg class="v2-si v2-si-c-done" width="14" height="14"><use href="#si-done"/></svg></span><span class="wf-title"><span>Write the launch post</span><span class="wf-sub">Round 5 · finished · draft v5</span></span><span class="wf-who"><span class="av v2-av v2-av-20 ai" style="background: hsl(272 34% 28%); color: hsl(272 72% 86%);"><span class="v2-av-init">W</span></span></span></div>
+    <div class="v2-row wf-row is-two" role="option" tabindex="0"><span class="wf-st"><svg class="v2-si v2-si-c-review" width="14" height="14"><use href="#si-attention"/></svg></span><span class="wf-title"><span>Review the post</span><span class="wf-sub">Round 5 · reported Changes requested · 1 finding left (F3)</span></span><span class="wf-who"><span class="av v2-av v2-av-20 ai" style="background: hsl(208 34% 28%); color: hsl(208 72% 86%);"><span class="v2-av-init">R</span></span></span></div></div>
+    <div class="v2-row wf-row is-two wf-gate-row" role="option" tabindex="0"><span class="wf-st"><svg class="v2-si v2-si-c-todo" width="14" height="14"><use href="#si-dashed"/></svg></span><span class="wf-title"><span>Publish approval</span><span class="wf-sub">Gate · not reached · the loop did not exit on Passed</span></span></div>
+  </div></div>
+</div>
+</main></div></div></div>
+<div class="v2-overlay" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;"><div class="v2-dialog v2-dialog-lg" role="dialog" aria-modal="true" style="width:720px;max-width:94%;">
+  <div class="v2-dialog-h"><h2 class="v2-dialog-title">The loop reached its limit. What should happen?</h2><div class="v2-dialog-desc">Draft and review · 5 of 5 rounds used · last outcome: Changes requested (round 5, Reviewer) · 1 unresolved finding</div></div>
+  <div class="v2-dialog-b">
+    <div class="wf-card" style="margin-bottom:12px"><div class="wf-card-h">Still open after round 5</div><div class="wf-finding"><code>F3</code><span>Claims “no sign-up” but the beta needs an invite <span class="wf-muted">· raised in rounds 1, 3, 4 and 5</span></span></div><div class="wf-muted">Findings F1 and F2 were resolved in round 2. Open draft v5 and the round-5 review from Review history.</div></div>
+    <label class="wf-choice"><input type="radio" name="d04" class="v2-checkbox v2-check-dot" checked><span>Allow 2 more rounds (new maximum 7, 5 used)<small>Round 6 starts with draft v5 and finding F3. Rounds already used stay counted; this never makes the loop unlimited.</small></span></label>
+    <label class="wf-choice"><input type="radio" name="d04" class="v2-checkbox v2-check-dot"><span>Reassign the writing step, then allow 1 more round<small>Pick a different writer for round 6. The reviewer and the policy stay the same.</small></span></label>
+    <label class="wf-choice"><input type="radio" name="d04" class="v2-checkbox v2-check-dot"><span>Accept draft v5 as it is and move to Publish approval<small>Records that you overrode the round-5 review. The original “Changes requested” stays in history beside your decision.</small></span></label>
+    <label class="wf-choice"><input type="radio" name="d04" class="v2-checkbox v2-check-dot"><span>Stop the workflow<small>Keeps all five rounds. Nothing is published.</small></span></label>
+    <label class="wf-field" style="margin-top:8px"><span>Reason (shown in Activity)</span><textarea class="wf-ta" style="min-height:56px">The invite wording keeps slipping; two more rounds with the exact sentence to use.</textarea></label>
+  </div>
+  <div class="v2-dialog-f"><button type="button" class="v2-btn v2-btn-secondary v2-btn-md"><span class="v2-btn-label">Not now</span></button><button type="button" class="v2-btn v2-btn-primary v2-btn-md"><span class="v2-btn-label">Allow 2 more rounds</span></button></div>
+</div></div>
+<span class="note" style="left:270px;top:180px">1</span><span class="note" style="left:376px;top:232px">2</span><span class="note" style="left:376px;top:392px">3</span><span class="note" style="left:376px;top:544px">4</span>
+</div></div>
+
+<!-- ============================ C2 · Stalled loop: same findings twice, paused with a comparison ============================ -->
+<div class="frame-wrap"><div class="frame-h"><b>C2 · Stalled loop — two rounds with the same unresolved findings, paused for the owner</b><span>Walkthrough C · proposed: stall detection on finding ids and unchanged versions</span></div>
+<div class="frame" id="x05" data-tab="workflows" style="--v2-content-h: 838px;">
+<div class="v2-app"><div class="v2-frame-main"><div class="v2-main main" data-v2-surface="panel"><main class="v2-content content is-flush" tabindex="-1">
+<div class="wf-page">
+  <header class="wf-head"><h1 class="wf-head-title">Recipe App launch post</h1><div class="wf-head-meta"><span class="v2-si-wrap has-label"><svg class="v2-si v2-si-c-paused" width="14" height="14"><use href="#si-paused"/></svg><span class="v2-si-label">Paused: no progress</span></span><span>·</span><span>Kedar</span><span>·</span><span class="wf-prog is-lg"><span class="wf-prog-bar"><i style="width:0%"></i></span><span>0/3 steps · round 3 of 5</span></span></div><p class="wf-head-goal">Publish a launch post that a first-time reader can follow to try the Recipe App.</p><div class="wf-head-actions"><button type="button" class="v2-btn v2-btn-primary v2-btn-md"><span class="v2-btn-label">Decide…</span></button><button type="button" class="v2-iconbtn v2-iconbtn-circle"><svg class="v2-ico"><use href="#i-more"/></svg></button></div></header>
+  <div class="wf-ownerbar"><svg class="v2-ico" style="width:14px;height:14px;color:var(--v2-warn,#d29922)"><use href="#i-flag"/></svg><span><b>Paused for you.</b> Rounds 2 and 3 reported the same two findings and the draft did not change between them. Round 4 was not started; 2 rounds remain.</span><button type="button" class="v2-btn v2-btn-primary v2-btn-sm"><span class="v2-btn-label">Decide…</span></button></div>
+  <div class="wf-tabs-row"><div class="v2-tabs" role="tablist"><button type="button" class="v2-tab" role="tab"><span class="v2-tab-label">Steps</span><span class="v2-count">3</span></button><button type="button" class="v2-tab" role="tab"><span class="v2-tab-label">Route</span></button><button type="button" class="v2-tab is-selected" role="tab"><span class="v2-tab-label">Review history</span><span class="v2-count">3</span></button><button type="button" class="v2-tab" role="tab"><span class="v2-tab-label">Activity</span></button></div></div>
+  <div style="padding:16px var(--v2-panel-px);overflow:auto">
+    <div class="v2-section-h"><h3 class="v2-section-title">Why Orcha paused: rounds 2 and 3 side by side</h3><div class="v2-section-actions"><span class="wf-muted">Compared by finding ids and file versions. Wording similarity is only a warning.</span></div></div>
+    <div class="wf-compare">
+      <div class="wf-card"><div class="wf-card-h">Round 2 · Changes requested <span class="wf-muted" style="margin-left:auto">Reviewer · 2 h ago</span></div><div class="wf-muted" style="margin-bottom:6px">Reviewed draft v2 · sha256 51be…0a7d</div><div class="wf-finding is-same"><code>F2</code><span>Screenshot shows the old icon</span></div><div class="wf-finding is-same"><code>F3</code><span>Claims “no sign-up” but the beta needs an invite</span></div></div>
+      <div class="wf-card"><div class="wf-card-h">Round 3 · Changes requested <span class="wf-muted" style="margin-left:auto">Reviewer · 20 min ago</span></div><div class="wf-muted" style="margin-bottom:6px">Reviewed draft v3 · <b>same content as v2</b> · sha256 51be…0a7d</div><div class="wf-finding is-same"><code>F2</code><span>Screenshot shows the old icon <span class="v2-badge v2-tone-warn">unchanged</span></span></div><div class="wf-finding is-same"><code>F3</code><span>Claims “no sign-up” but the beta needs an invite <span class="v2-badge v2-tone-warn">unchanged</span></span></div></div>
+    </div>
+    <div class="wf-card" style="margin-top:12px"><div class="wf-card-h">Your options</div>
+      <label class="wf-choice"><input type="radio" name="d05" class="v2-checkbox v2-check-dot" checked><span>Resume with guidance for the writer<small>Round 4 starts with draft v3, F2, F3 and your note. Rounds remaining: 2.</small></span></label>
+      <label class="wf-choice"><input type="radio" name="d05" class="v2-checkbox v2-check-dot"><span>Reassign the writing step and resume<small>Round 4 starts with a different writer.</small></span></label>
+      <label class="wf-choice"><input type="radio" name="d05" class="v2-checkbox v2-check-dot"><span>Stop the workflow<small>Keeps all three rounds.</small></span></label>
+      <label class="wf-field" style="margin:8px 0 0"><span>Note to the writer</span><textarea class="wf-ta" style="min-height:48px">Replace the screenshot with assets/icon-2026.png and say “invite-only beta” in the first paragraph.</textarea></label>
+      <div style="display:flex;gap:8px;margin-top:10px"><button type="button" class="v2-btn v2-btn-primary v2-btn-md"><span class="v2-btn-label">Resume round 4</span></button><button type="button" class="v2-btn v2-btn-secondary v2-btn-md"><span class="v2-btn-label">Open round 3 review</span></button></div>
+    </div>
+  </div>
+</div>
+</main></div></div></div>
+<span class="note" style="left:270px;top:180px">1</span><span class="note" style="left:270px;top:262px">2</span><span class="note" style="left:270px;top:470px">3</span>
 </div></div>
 
 </div>
