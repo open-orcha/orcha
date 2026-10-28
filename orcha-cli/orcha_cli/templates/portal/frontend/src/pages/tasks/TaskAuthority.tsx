@@ -14,7 +14,7 @@ export function useWorkflowPlanApproval(taskId: string): boolean {
   const { identityPending } = useSnapshot();
   const authority = useActingAuthority();
   const capabilityReason = member?.detail.capability.reason;
-  return !!member && !stale && !identityPending && !!authority.human
+  return !!member && !member.detail.hidden && !stale && !identityPending && !!authority.human
     && authority.human.member_role !== "viewer"
     && member.task.autonomy === "off" && typeof member.task.autonomy_revision === "number"
     && member.detail.capability.workflow_read === true
@@ -114,7 +114,7 @@ function TaskAuthorityState({ task }: { task: Task }) {
       <p>{mode === "on" ? "The agent may approve its plan, start work and accept its finished result." : "The plan and finished work each need approval."}</p>
       <p>Changes apply to future actions. Completed work, dependencies, holds and stop instructions stay in effect. A person still finishes the workflow. Direct requests are always allowed.</p>
       {blocked && <p>{blocked}</p>}
-      <Button size="sm" disabled={!!blocked || busy || uncertain} onClick={() => setConfirm(mode === "on" ? "off" : "on")}>Change to {mode === "on" ? "OFF" : "ON"}</Button>
+      <button type="button" role="switch" aria-label="Task autonomy" aria-checked={mode === "on"} className="wf-switch" disabled={!!blocked || busy || uncertain} title={blocked ?? undefined} onClick={() => setConfirm(mode === "on" ? "off" : "on")}><span aria-hidden="true" />{mode.toUpperCase()}</button>
       {confirm && <div role="group" aria-label="Confirm task autonomy change">
         <p>{confirm === "on" ? "Allow this agent to approve its own future plan and finished work?" : "Require approval for this task’s future plan and finished work?"}</p>
         <Button disabled={busy} onClick={() => setConfirm(null)}>Keep current setting</Button>

@@ -211,7 +211,7 @@ export function TaskRow({ t, snap, selected, onSelect, compact, groupedBy, revie
 }) {
   const act = latestActivity(t);
   const { member } = useTaskWorkflow(t.id);
-  const chips = member ? [<Chip key="workflow" size="sm">{member.detail.title} · Autonomy {member.task.autonomy === "on" ? "ON" : "OFF"}</Chip>] : taskChips(snap, t, { reviewOn, level }).slice(0, phone ? 1 : 2);
+  const chips = member && !member.detail.hidden ? [<Chip key="workflow" size="sm">Workflow</Chip>] : taskChips(snap, t, { reviewOn, level }).slice(0, phone ? 1 : 2);
   const hideWho = groupedBy === "assignee" && assigneesOf(t).length <= 1;
   return (
     <Row
@@ -224,7 +224,7 @@ export function TaskRow({ t, snap, selected, onSelect, compact, groupedBy, revie
       <PriorityIcon priority={t.priority} className="tl-prio" />
       <span className="tl-id">{shortId(t.id)}</span>
       {!member ? <StatusIcon status={t.status} className="tl-st" /> : <WorkflowTaskStatus taskId={t.id} fallback={t.status} className="tl-st" />}
-      <span className="tl-title">{t.title}{member && <WorkflowTaskStatus taskId={t.id} fallback={t.status} className="wf-task-label" showLabel />}</span>
+      <span className="tl-title">{t.title}{member && !member.detail.hidden && <WorkflowTaskStatus taskId={t.id} fallback={t.status} className="wf-task-label" showLabel />}</span>
       {chips.length ? <span className="tl-chips">{chips}</span> : null}
       <span className="tl-who">
         <Who snap={snap} t={t} hide={hideWho} />
@@ -405,7 +405,7 @@ export function TaskBoard({ tasks, selected, onSelect, snap, reviewOn, level, st
                 const actors = actorsOf(snap, x);
                 const working = taskIsWorking(snap, x);
                 const member = workflows?.members.get(x.id);
-                const chips = member ? <Chip size="sm">{member.detail.title} · Autonomy {member.task.autonomy === "on" ? "ON" : "OFF"}</Chip> : taskChips(snap, x, { reviewOn, level });
+                const chips = member && !member.detail.hidden ? <Chip size="sm">Workflow</Chip> : taskChips(snap, x, { reviewOn, level });
                 return (
                   <BoardCard
                     key={x.id}
@@ -430,7 +430,7 @@ export function TaskBoard({ tasks, selected, onSelect, snap, reviewOn, level, st
                           <span className="v2-sr">{lv} priority</span>
                         </Chip>
                         {chips}
-                        {member && <WorkflowTaskStatus taskId={x.id} fallback={x.status} showLabel />}
+                        {member && !member.detail.hidden && <WorkflowTaskStatus taskId={x.id} fallback={x.status} showLabel />}
                       </>
                     }
                     selected={x.id === selected}

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Badge } from "../../components/primitives";
 import { Button } from "../../components/primitives/Button";
 import { workflowPaths, workflowRequest } from "./workflowApi";
 import type { EvidenceBasis, EvidenceReference, SavedEvidenceSet, WorkflowDetail, WorkflowTaskEvidence } from "./workflowContract.generated";
@@ -62,13 +63,14 @@ export function WorkflowEvidencePanel({ detail, taskId, selected, onSelect }: {
     {current && !usable && <p className="wf-warning">{current.state === "pending" ? "Saving evidence… Acceptance is unavailable until it is saved." : "Evidence missing or changed — refresh the task or add evidence before accepting."}</p>}
     {onSelect && <label className="wf-choice"><input type="checkbox" checked={usable && selected === current?.evidence_set_id} disabled={busy || !usable || !!error}
       onChange={(e) => onSelect(e.target.checked && current ? evidenceReference(current) : null, task.work_revision, e.target.checked && current ? current : null)} />Use current saved evidence from {task.title}</label>}
-    {page?.sets.map((set) => <section key={set.evidence_set_id} aria-label={`Evidence revision ${set.result_revision}`}>
+    {page?.sets.map((set) => <section className="wf-evi" key={set.evidence_set_id} aria-label={`Evidence revision ${set.result_revision}`}>
       <h4>{set.evidence_set_id === page.current_evidence_set_id ? "Current evidence" : "Earlier evidence"} · result revision {set.result_revision} · work revision {set.work_revision}</h4>
-      <p>{set.state === "pending" ? "Saving evidence…" : set.state === "missing" ? "Evidence missing" : set.state === "superseded" ? "Superseded evidence" : "Saved evidence"}{set.purpose === "attempt_record" && " · Attempt record; not a result for acceptance"}</p>
+      <p><Badge tone={set.state === "saved" ? "ok" : set.state === "missing" ? "danger" : set.state === "pending" ? "warn" : "neutral"}>{set.state === "pending" ? "Saving evidence…" : set.state === "missing" ? "Evidence missing" : set.state === "superseded" ? "Superseded evidence" : "Saved evidence"}</Badge>{set.purpose === "attempt_record" && " · Attempt record; not a result for acceptance"}</p>
       {set.missing_reason && <p>{set.missing_reason}</p>}
       <ul>{set.items.map((item) => <li key={item.item_id}>
         {item.storage_state === "readable" ? <a href={`/api/tasks/${encodeURIComponent(taskId)}/deliverables/${encodeURIComponent(item.deliverable_id)}/versions/${item.deliverable_version}/raw`}>{kindName[item.kind]} — version {item.deliverable_version}</a>
           : <span>{kindName[item.kind]} — version {item.deliverable_version}: {item.storage_state === "missing_after_restore" ? "file missing after restore" : item.storage_state}</span>}
+        <details className="wf-fingerprint"><summary>Fingerprint {item.sha256.slice(0, 12)}</summary><code>{item.sha256}</code></details>
         <p>{sourceName[item.source]} · {item.snapshot_phase === "terminal" ? "Final snapshot" : "Submission snapshot"}</p>
         {item.source === "import" && item.captured_by_alias
           ? <p>Reviewed and accepted on import by {item.captured_by_alias}.</p>

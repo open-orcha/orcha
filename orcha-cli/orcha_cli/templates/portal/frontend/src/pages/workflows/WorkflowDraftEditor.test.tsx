@@ -15,18 +15,21 @@ function add(title: string) {
   const inputs = screen.getAllByLabelText("Task summary");
   fireEvent.change(inputs.at(-1)!, { target: { value: title } });
 }
+function pick(index: number, name: string) { fireEvent.click(task(index).getByRole("button", { name: "Add prerequisite" })); fireEvent.click(screen.getByRole("menuitem", { name })); }
 function task(index: number) { return within(screen.getByRole("group", { name: `Task ${index}` })); }
 
 describe("local workflow preparation", () => {
   it("keeps dependencies on rename, blocks cycles and refuses silent removal of referenced tasks", () => {
     render(<WorkflowDraftEditor scope={scope()} saveUnavailableReason={reason} />);
     add("Build Android"); add("Review builds");
-    fireEvent.click(task(2).getByRole("checkbox", { name: "Build Android" }));
-    expect(task(1).getByRole("checkbox", { name: /Review builds/ })).toBeDisabled();
+    pick(2, "Build Android");
+    fireEvent.click(task(1).getByRole("button", { name: "Add prerequisite" }));
+    expect(screen.getByRole("menuitem", { name: /Review builds/ })).toHaveAttribute("aria-disabled", "true");
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
     expect(task(1).getByRole("button", { name: "Remove task 1" })).toBeDisabled();
     fireEvent.change(task(1).getByLabelText("Task summary"), { target: { value: "Build both apps" } });
-    expect(task(2).getByRole("checkbox", { name: "Build both apps" })).toBeChecked();
-    fireEvent.click(task(2).getByRole("checkbox", { name: "Build both apps" }));
+    expect(task(2).getByRole("button", { name: "Remove prerequisite Build both apps" })).toBeVisible();
+    fireEvent.click(task(2).getByRole("button", { name: "Remove prerequisite Build both apps" }));
     fireEvent.click(task(1).getByRole("button", { name: "Remove task 1" }));
     expect(screen.getAllByLabelText("Task summary")).toHaveLength(1);
   });
@@ -34,11 +37,14 @@ describe("local workflow preparation", () => {
   it("caps dependencies at three while keeping selected choices removable", () => {
     render(<WorkflowDraftEditor scope={scope()} saveUnavailableReason={reason} />);
     ["Release", "Build Android", "Build iOS", "Write guide", "Check package"].forEach(add);
-    ["Build Android", "Build iOS", "Write guide"].forEach((name) => fireEvent.click(task(1).getByRole("checkbox", { name })));
-    expect(task(1).getByRole("checkbox", { name: /Check package/ })).toBeDisabled();
-    expect(task(1).getByRole("checkbox", { name: "Build iOS" })).toBeEnabled();
-    fireEvent.click(task(1).getByRole("checkbox", { name: "Build iOS" }));
-    expect(task(1).getByRole("checkbox", { name: "Check package" })).toBeEnabled();
+    ["Build Android", "Build iOS", "Write guide"].forEach((name) => pick(1, name));
+    fireEvent.click(task(1).getByRole("button", { name: "Add prerequisite" }));
+    expect(screen.getByRole("menuitem", { name: /Check package/ })).toHaveAttribute("aria-disabled", "true");
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+    fireEvent.click(task(1).getByRole("button", { name: "Remove prerequisite Build iOS" }));
+    fireEvent.click(task(1).getByRole("button", { name: "Add prerequisite" }));
+    expect(screen.getByRole("menuitem", { name: "Check package" })).not.toHaveAttribute("aria-disabled", "true");
+
   });
 
   it("retains a draft across navigation but separates identities and projects", () => {
@@ -62,7 +68,7 @@ describe("local workflow preparation", () => {
     const fetch = vi.spyOn(globalThis, "fetch");
     render(<WorkflowDraftEditor scope={scope()} saveUnavailableReason={reason} />);
     add("Build iOS");
-    expect(screen.getByText("Draft · Unassigned · Task autonomy OFF")).toBeVisible();
+    expect(screen.getByText("Draft · Autonomy OFF · Not saved")).toBeVisible();
     expect(screen.getByRole("button", { name: "Save workflow" })).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: "Discard draft" }));
     fireEvent.click(screen.getByRole("button", { name: "Keep editing" }));
@@ -88,6 +94,7 @@ describe("local workflow preparation", () => {
       }) } as Response;
     }));
     render(<WorkflowDraftEditor scope={scope()} saveUnavailableReason={reason} />);
+    fireEvent.click(screen.getByRole("button", { name: "Add existing tasks…" }));
     expect(screen.getByText("Enter a task name to search.")).toBeVisible();
     fireEvent.change(screen.getByLabelText("Find an existing task"), { target: { value: "build" } });
     const results = await screen.findByRole("group", { name: "Task search results" });

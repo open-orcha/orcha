@@ -239,6 +239,8 @@ export function mapSnapshot(rawIn: any): Snapshot {
     rejection_reason: r.rejection_reason != null ? r.rejection_reason : null,
     in_service_of: r.parent_request_id || null,
     chain_depth: r.chain_depth || 0,
+    originating_task_id: r.originating_task_id ?? null,
+    origin_task: r.origin_task ?? null,
     task_link: r.task_link || (r.spawned_task_id ? { task_id: r.spawned_task_id } : null),
     // Escalation (REQ-013/071/100): the legacy status, OR an additive backend
     // flag (`escalated` / `escalated_at`) — the escalate route and the expiry

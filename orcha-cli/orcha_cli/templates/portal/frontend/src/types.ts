@@ -155,6 +155,8 @@ export interface Run {
 }
 
 export interface OrchaRequest {
+  originating_task_id?: string | null;
+  origin_task?: { task_id: string; title: string; status: string; workflow_id: string | null } | null;
   id: string;
   type: string;
   status: string;

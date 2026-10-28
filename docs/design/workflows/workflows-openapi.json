@@ -5094,6 +5094,18 @@
             "type": "string",
             "title": "Title"
           },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
           "goal": {
             "type": "string",
             "title": "Goal"
@@ -5376,6 +5388,18 @@
           "title": {
             "type": "string",
             "title": "Title"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
           },
           "goal": {
             "type": "string",

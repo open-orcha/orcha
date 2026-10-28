@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "../../components/primitives/Button";
 import { Dialog } from "../../components/primitives/Dialog";
 import { actionReason, availableActionReason, workflowPaths, workflowRequest } from "./workflowApi";
@@ -7,6 +7,7 @@ import type { DraftScope } from "./workflowDraft";
 import { useWorkflowForm } from "./workflowFormState";
 import { sendWorkflowOperation, useWorkflowOperation } from "./workflowOperations";
 import { WorkflowOperationNotice } from "./WorkflowOperationNotice";
+import { useDialogOpen, type DialogControl } from "./workflowDialogs";
 
 // Display the full connected group in both directions. This only explains the
 // selection; the server rechecks membership, history, closure and both revisions.
@@ -24,10 +25,12 @@ export function connectedTasks(detail: WorkflowDetail, selected: string[]): stri
   return [...group];
 }
 
-export function WorkflowMove({ detail, scope, verified, stale, onSaved }: {
-  detail: WorkflowDetail; scope: DraftScope; verified: boolean; stale: boolean; onSaved: (detail: WorkflowDetail) => void;
+export function WorkflowMove({ detail, scope, verified, stale, onSaved, control }: {
+  detail: WorkflowDetail; scope: DraftScope; verified: boolean; stale: boolean; onSaved: (detail: WorkflowDetail) => void; control?: DialogControl;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useDialogOpen(control);
+  // A menu-opened dialog loads its destinations the same way the trigger button did.
+  useEffect(() => { if (control?.open) void loadDestinations(); }, [control?.open]);
   const [draft, setDraft] = useWorkflowForm(scope, `move:${detail.id}`, { tasks: [] as string[], destination: "", reason: "" });
   const [destinations, setDestinations] = useState<WorkflowDetail[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
@@ -76,7 +79,7 @@ export function WorkflowMove({ detail, scope, verified, stale, onSaved }: {
     if (result.state === "saved" && result.result) saved(result.result);
     else if (result.state === "refused") setPreview(null);
   }
-  return <><Button disabled={stale || !!actionReason(detail, "move", verified)} onClick={() => { setOpen(true); void loadDestinations(); }}>Move or remove tasks</Button>
+  return <>{!control && <Button disabled={stale || !!actionReason(detail, "move", verified)} onClick={() => { setOpen(true); void loadDestinations(); }}>Move or remove tasks</Button>}
     {open && <Dialog title="Move or remove tasks" size="lg" className="wf-page" onClose={() => { if (!frozen) setOpen(false); }}
       footer={<><Button disabled={frozen} onClick={() => setOpen(false)}>Keep draft and close</Button><Button disabled={invalid} onClick={() => void confirm()} variant="primary">Confirm task move</Button></>}>
       <p>Only tasks without work or review history may move. Their entire connected dependency group must move together. Accepted results stay in their original workflow.</p>

@@ -22,29 +22,29 @@ it("offers only OFF/ON after discovery and records a deliberately confirmed owne
     writes.push(JSON.parse(String(init?.body))); return jsonResponse({ task_id: "build", autonomy: "on", autonomy_revision: 2, changed: true });
   }));
   render(<TaskAuthority task={task} />);
-  await waitFor(() => expect(screen.getByRole("button", { name: "Change to ON" })).toBeEnabled());
-  fireEvent.click(screen.getByRole("button", { name: "Change to ON" })); expect(writes).toEqual([]);
+  await waitFor(() => expect(screen.getByRole("switch", { name: "Task autonomy", checked: false })).toBeEnabled());
+  fireEvent.click(screen.getByRole("switch", { name: "Task autonomy", checked: false })); expect(writes).toEqual([]);
   expect(screen.getByText(/Completed work, dependencies, holds/)).toBeVisible();
   fireEvent.click(screen.getByRole("button", { name: "Save ON" }));
   await screen.findByText("Task autonomy ON saved. It applies to future actions.");
   expect(writes).toEqual([{ autonomy: "on", actor_agent_id: "kedar" }]);
-  expect(screen.getByRole("button", { name: "Change to OFF" })).toBeEnabled();
+  expect(screen.getByRole("switch", { name: "Task autonomy", checked: true })).toBeEnabled();
 });
 it.each(["viewer", "member", "unknown", "offline"])("never permits %s authority to change the task", async (kind) => {
   if (kind === "offline") readOnly = true; else role = kind === "unknown" ? undefined : kind;
   const fetch = vi.fn(async () => jsonResponse(spec)); vi.stubGlobal("fetch", fetch);
   render(<TaskAuthority task={task} />); await waitFor(() => expect(fetch).toHaveBeenCalledOnce());
-  expect(screen.getByRole("button", { name: "Change to ON" })).toBeDisabled();
+  expect(screen.getByRole("switch", { name: "Task autonomy", checked: false })).toBeDisabled();
   expect(screen.queryByRole("button", { name: "Save ON" })).toBeNull();
 });
 it("keeps unsupported and failed discovery distinct and sends no setting change", async () => {
   const fetch = vi.fn(async () => jsonResponse({ paths: {} })); vi.stubGlobal("fetch", fetch);
   const view = render(<TaskAuthority task={task} />);
   await screen.findByText("Task autonomy changes are unavailable on this server.");
-  expect(screen.getByRole("button", { name: "Change to ON" })).toBeDisabled();
+  expect(screen.getByRole("switch", { name: "Task autonomy", checked: false })).toBeDisabled();
   view.unmount(); fetch.mockImplementation(async () => { throw new Error("offline"); }); render(<TaskAuthority task={task} />);
   await screen.findByText("Task authority could not be checked. Refresh before changing it.");
-  expect(screen.getByRole("button", { name: "Change to ON" })).toBeDisabled();
+  expect(screen.getByRole("switch", { name: "Task autonomy", checked: false })).toBeDisabled();
 });
 it.each(["lost", "malformed", "wrong task"])("reports a %s response as unconfirmed and never automatically repeats it", async (kind) => {
   let writes = 0;
@@ -58,10 +58,10 @@ it.each(["lost", "malformed", "wrong task"])("reports a %s response as unconfirm
     return jsonResponse({ container: { id: "project" }, tasks: [{ ...task, autonomy: "on", autonomy_revision: 2 }], agents: [], requests: [] });
   }));
   render(<TaskAuthority task={task} />);
-  await waitFor(() => expect(screen.getByRole("button", { name: "Change to ON" })).toBeEnabled());
-  fireEvent.click(screen.getByRole("button", { name: "Change to ON" })); fireEvent.click(screen.getByRole("button", { name: "Save ON" }));
+  await waitFor(() => expect(screen.getByRole("switch", { name: "Task autonomy", checked: false })).toBeEnabled());
+  fireEvent.click(screen.getByRole("switch", { name: "Task autonomy", checked: false })); fireEvent.click(screen.getByRole("button", { name: "Save ON" }));
   await screen.findByText(/The change is unconfirmed/);
-  expect(screen.getByRole("button", { name: "Change to ON" })).toBeDisabled(); expect(writes).toBe(1);
+  expect(screen.getByRole("switch", { name: "Task autonomy", checked: false })).toBeDisabled(); expect(writes).toBe(1);
   fireEvent.click(screen.getByRole("button", { name: "Check current setting" }));
   await screen.findByText(/Current setting: ON. The earlier change has no save receipt/);
   expect(writes).toBe(1); expect(screen.queryByText(/autonomy ON saved/)).toBeNull();
@@ -84,7 +84,7 @@ it("clears prior approval reads and confirmations immediately when the identity 
   const view = render(<TaskAuthority task={task} />);
   await waitFor(() => expect(screen.getByRole("button", { name: "Read approval history" })).toBeEnabled());
   fireEvent.click(screen.getByRole("button", { name: "Read approval history" })); await screen.findByLabelText("Recorded task approvals");
-  fireEvent.click(screen.getByRole("button", { name: "Change to ON" }));
+  fireEvent.click(screen.getByRole("switch", { name: "Task autonomy", checked: false }));
   identity = "another-reader"; delayed = true; view.rerender(<TaskAuthority task={task} />);
   expect(screen.queryByLabelText("Recorded task approvals")).toBeNull(); expect(screen.queryByRole("button", { name: "Save ON" })).toBeNull();
 });

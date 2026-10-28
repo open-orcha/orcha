@@ -6,7 +6,7 @@ const context = vi.hoisted(() => ({ cid: "project", identity: null as null | { a
   snap: { agents: [{ id: "kedar", alias: "Kedar" }, { id: "andrew", alias: "Andrew" }] } }));
 const authority = vi.hoisted(() => ({ human: null as null | { id: string; kind: string; member_role: string }, reason: null, readOnly: false, pending: false }));
 vi.mock("../../shell/Shell", () => ({ Shell: ({ children, primaryAction, toolbar }: { children: React.ReactNode; primaryAction?: React.ReactNode; toolbar?: React.ReactNode }) => <main>{toolbar}{primaryAction}{children}</main> }));
-vi.mock("../../state/SnapshotProvider", () => ({ useSnapshot: () => context, useActingAuthority: () => authority }));
+vi.mock("../../state/SnapshotProvider", async (original) => ({ ...await original<typeof import("../../state/SnapshotProvider")>(), useSnapshot: () => context, useActingAuthority: () => authority }));
 import { WorkflowsPage } from "./WorkflowsPage";
 beforeEach(() => { context.cid = "project"; context.identity = null; context.identityTrusted = false; context.identityPending = false; authority.human = null; });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
@@ -73,9 +73,19 @@ it("keeps stale rows on an interrupted refresh but hides them after access is de
 it("renders server stop outcomes and deadline without unlocking release from the browser clock", async () => {
   reads(() => exampleWorkflow({ tasks: [exampleTask({ display_state: { label: "Stopping - accepted", release_available: false, release_available_at: "2020-01-01T00:00:00Z", warning: null } })] }));
   renderPage("/workflows/release?cid=project");
-  expect(await screen.findByText(/Stopping - accepted/)).toBeVisible(); expect(screen.getByText(/Refresh to check availability/)).toBeVisible();
-  expect(screen.getByRole("button", { name: "Review start" })).toBeDisabled();
-  fireEvent.click(screen.getByRole("button", { name: "Dependencies" })); expect(screen.getByText(/Arrows point from a prerequisite/)).toBeVisible();
+  const row = await screen.findByRole("option", { name: /Build Android/ });
+  expect(row).toHaveTextContent(/Release lost worker becomes available at/);
+  fireEvent.click(row);
+  expect(await screen.findByText(/Refresh to check availability/)).toBeVisible();
+  expect(screen.getAllByText(/Stopping - accepted/).length).toBeGreaterThan(0);
+  // Start is not offered: the primary falls back to the checklist and the menu item carries the server reason.
+  expect(screen.getByRole("button", { name: "Finish checklist" })).toBeEnabled();
+  fireEvent.click(screen.getByRole("button", { name: "More workflow actions" }));
+  expect(screen.getByRole("menuitem", { name: "Review start" })).toHaveAttribute("aria-disabled", "true");
+  fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
+  fireEvent.click(screen.getByRole("tab", { name: /Dependencies/ }));
+  fireEvent.click(screen.getByRole("radio", { name: "Graph and list" }));
+  expect(screen.getByText(/Arrows point from a prerequisite/)).toBeVisible();
 });
 it("refuses a detail belonging to another project without displaying its name", async () => {
   reads(() => exampleWorkflow({ container_id: "private-project", title: "Secret workflow" }));
@@ -85,7 +95,12 @@ it("refuses a detail belonging to another project without displaying its name", 
 it("does not trust capability alone as verified human sign-in", async () => {
   reads(() => exampleWorkflow({ capability: writeCapability, available_actions: [{ action: "start", enabled: true }] }));
   renderPage("/workflows/release?cid=project"); await screen.findByRole("heading", { name: "Mobile release" });
-  expect(screen.getByRole("button", { name: "Review start" })).toBeDisabled(); expect(screen.getByRole("button", { name: "Create workflow" })).toBeDisabled();
+  // The server says start is enabled, but no verified human is acting: the primary is the checklist and Review start stays disabled.
+  expect(screen.queryByRole("button", { name: "Review start" })).toBeNull();
+  expect(screen.getByRole("button", { name: "Finish checklist" })).toBeEnabled();
+  fireEvent.click(screen.getByRole("button", { name: "More workflow actions" }));
+  expect(screen.getByRole("menuitem", { name: "Review start" })).toHaveAttribute("aria-disabled", "true");
+  expect(screen.getByRole("menuitem", { name: "Add new tasks…" })).toHaveAttribute("aria-disabled", "true");
 });
 it("rejects malformed detail rather than treating missing tasks or blockers as success", async () => {
   reads(() => ({ id: "release", title: "Wrong shape" })); renderPage("/workflows/release?cid=project");
@@ -108,6 +123,22 @@ it("restores list filters and keyboard focus after a workflow detail round trip"
 it("focuses the requested task after the workflow read finishes", async () => {
   reads(() => exampleWorkflow());
   renderPage("/workflows/release?cid=project#workflow-task-build");
-  await screen.findByRole("link", { name: "Build Android" });
+  await screen.findByRole("option", { name: /Build Android/ });
   expect(document.getElementById("workflow-task-build")).toHaveFocus();
+  // The named task also opens in the inspector.
+  expect(await screen.findByRole("region", { name: "Task: Build Android" })).toBeVisible();
+});
+
+it("does not carry a row action to a different selected task", async () => {
+  authority.human = { id: "kedar", kind: "human", member_role: "owner" };
+  const task = exampleTask({ available_actions: [{ action: "prepare", enabled: true }] });
+  reads(() => exampleWorkflow({ capability: writeCapability, tasks: [task, { ...task, id: "other", title: "Write release notes" }] }));
+  renderPage("/workflows/release?cid=project");
+  fireEvent.click(await screen.findByRole("button", { name: "Actions for Build Android" }));
+  fireEvent.click(screen.getByRole("menuitem", { name: "Prepare task" }));
+  await screen.findByLabelText("Done when");
+  fireEvent.click(screen.getByRole("button", { name: "Close" }));
+  fireEvent.click(screen.getByRole("option", { name: /Write release notes/ }));
+  expect(screen.getByRole("region", { name: "Task: Write release notes" })).toBeVisible();
+  expect(screen.queryByRole("dialog")).toBeNull();
 });

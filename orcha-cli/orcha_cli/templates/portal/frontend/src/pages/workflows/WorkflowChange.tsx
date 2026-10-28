@@ -22,7 +22,7 @@ export function WorkflowChange({ detail, scope, verified, stale, operation, url,
   const slot = `workflow:${detail.id}`;
   const op = useWorkflowOperation(scope, slot);
   const unresolved = op?.state === "sending" || op?.state === "uncertain";
-  const basis = JSON.stringify([url, method, body]);
+  const basis = JSON.stringify([detail.revision, url, method, body]);
   const current = preview?.basis === basis ? preview.detail : null;
   const guard = (latest: WorkflowDetail) => latest.id !== detail.id || latest.container_id !== scope.project
     ? "This workflow changed. Open it again from its project."

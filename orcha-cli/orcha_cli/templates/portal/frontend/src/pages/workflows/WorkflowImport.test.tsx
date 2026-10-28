@@ -135,7 +135,8 @@ it("invalidates reviewed task additions after an edit and sends stable dependenc
   render(<MemoryRouter><WorkflowAddTasks detail={detail()} scope={scope()} verified stale={false} agents={[]} onSaved={saved} /></MemoryRouter>);
   fireEvent.click(screen.getByRole("button", { name: "Add new tasks" }));
   for (const title of ["Build", "Review"]) { fireEvent.click(screen.getByRole("button", { name: "Add task summary" })); fireEvent.change(screen.getAllByLabelText("Task summary").at(-1)!, { target: { value: title } }); }
-  fireEvent.click(screen.getByRole("checkbox", { name: "Build" }));
+  fireEvent.click(screen.getAllByRole("button", { name: "Add prerequisite" })[1]);
+  fireEvent.click(screen.getByRole("menuitem", { name: "Build" }));
   fireEvent.click(screen.getByRole("button", { name: "Review task addition" })); await screen.findByRole("button", { name: "Confirm task addition" });
   fireEvent.change(screen.getAllByLabelText("Task summary")[0], { target: { value: "Build Android" } });
   expect(screen.queryByRole("button", { name: "Confirm task addition" })).toBeNull(); expect(writes).toHaveLength(0);

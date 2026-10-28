@@ -337,6 +337,7 @@ class WorkflowDetail(BaseModel):
     id: str
     container_id: str
     title: str
+    created_at: datetime | None = None
     goal: str
     owner_human_id: str
     status: Literal["active", "paused", "completed", "cancelled"]

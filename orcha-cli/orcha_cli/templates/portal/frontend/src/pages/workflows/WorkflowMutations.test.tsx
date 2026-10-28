@@ -27,7 +27,8 @@ it("sends one atomic creation with draft dependencies and objectives, never stag
     fireEvent.change(screen.getAllByLabelText("Task summary").at(-1)!, { target: { value: title } });
   }
   const second = within(screen.getByRole("group", { name: "Task 2" }));
-  fireEvent.click(second.getByRole("checkbox", { name: "Build Android" }));
+  fireEvent.click(second.getByRole("button", { name: "Add prerequisite" }));
+  fireEvent.click(screen.getByRole("menuitem", { name: "Build Android" }));
   fireEvent.click(screen.getByRole("button", { name: "Add objective" }));
   fireEvent.change(screen.getByLabelText("Objective title"), { target: { value: "Reliable pairing" } });
   fireEvent.change(screen.getByLabelText("Objective done when"), { target: { value: "Both builds pass" } });

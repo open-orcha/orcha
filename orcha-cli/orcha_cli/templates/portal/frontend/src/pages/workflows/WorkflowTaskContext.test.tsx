@@ -21,6 +21,16 @@ function mockReads(read: (url: string) => Response | Promise<Response>) {
     : url.endsWith("/capability") ? jsonResponse(writeCapability) : read(url));
   vi.stubGlobal("fetch", fetch); return fetch;
 }
+it("hides workflow presentation while retaining hidden membership guards", async () => {
+  const fetch = mockReads(() => jsonResponse({ capability: writeCapability, workflows: [exampleWorkflow({ hidden: true, status: "completed" })] }));
+  render(<MemoryRouter><WorkflowTaskProvider><WorkflowTaskStatus taskId="build" fallback="completed" showLabel /><Probe /></WorkflowTaskProvider></MemoryRouter>);
+  await waitFor(() => expect(fetch.mock.calls.some(([url]) => url.includes("visibility=all"))).toBe(true));
+  await waitFor(() => expect(screen.queryByText(/Checking workflow membership/)).toBeNull());
+  expect(screen.getByRole("button", { name: "Legacy action" })).toBeDisabled();
+  expect(screen.queryByRole("region", { name: "Task workflow" })).toBeNull();
+  expect(screen.queryByText("Mobile release")).toBeNull();
+  expect(screen.queryByText(/Prepared · waiting for Start/)).toBeNull();
+});
 it("clears the server's list warning while preserving permanent inspector history and recorded withdrawal", async () => {
   const warning = "Released without stop confirmation: the worker may still be running outside Orcha.";
   const task = exampleTask({ display_state: { label: "Worker released · owner decides", warning, list_warning: true } });

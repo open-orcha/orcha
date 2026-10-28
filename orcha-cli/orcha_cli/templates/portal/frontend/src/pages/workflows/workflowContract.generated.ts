@@ -1,5 +1,5 @@
 // Generated from FastAPI OpenAPI slices. DO NOT EDIT.
-// Workflow source SHA-256: bf57f176fe49c24513d7669e6bd57ec73561818512a4cb8d3bc57b1bd126482c
+// Workflow source SHA-256: 24361d478e39beb2ff1803ddd20f45d5ee2e3ce6231092fdd62dfc3492f2d734
 // Evidence GET source SHA-256: f2a794298f992bd3ff3955fa5d6aefc30a97e373794a3c1e9d03c8f46796853e
 // Regenerate with tools/generate-workflow-contract.mjs and both source files.
 
@@ -442,6 +442,7 @@ export type WorkflowDetail = {
   "id": string;
   "container_id": string;
   "title": string;
+  "created_at"?: string | null;
   "goal": string;
   "owner_human_id": string;
   "status": "active" | "paused" | "completed" | "cancelled";
@@ -487,6 +488,7 @@ export type WorkflowImpact = {
   "id": string;
   "container_id": string;
   "title": string;
+  "created_at"?: string | null;
   "goal": string;
   "owner_human_id": string;
   "status": "active" | "paused" | "completed" | "cancelled";
@@ -2862,6 +2864,17 @@ export const workflowSchemas = {
       "title": {
         "type": "string"
       },
+      "created_at": {
+        "anyOf": [
+          {
+            "type": "string",
+            "format": "date-time"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
       "goal": {
         "type": "string"
       },
@@ -3104,6 +3117,17 @@ export const workflowSchemas = {
       },
       "title": {
         "type": "string"
+      },
+      "created_at": {
+        "anyOf": [
+          {
+            "type": "string",
+            "format": "date-time"
+          },
+          {
+            "type": "null"
+          }
+        ]
       },
       "goal": {
         "type": "string"

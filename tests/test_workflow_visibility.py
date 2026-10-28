@@ -80,7 +80,8 @@ def test_hide_and_restore_keep_every_task_record_and_never_start_work(setup_work
     assert {
         t["id"]: (t["status"], t["work_revision"], t["depends_on"]) for t in hidden["tasks"]
     } == before
-    assert hidden["activity"][0]["event"] == "workflow_hidden"
+    # SQLite timestamps can tie within a millisecond; UUID tie-breaking is not event order.
+    assert sum(e["event"] == "workflow_hidden" for e in hidden["activity"]) == 1
 
     # Same key + same body = the saved receipt, not a second change.
     with db_cursor(readonly=True) as (_, cur):
@@ -103,7 +104,7 @@ def test_hide_and_restore_keep_every_task_record_and_never_start_work(setup_work
     assert {
         t["id"]: (t["status"], t["work_revision"], t["depends_on"]) for t in restored["tasks"]
     } == before
-    assert restored["activity"][0]["event"] == "workflow_restored"
+    assert sum(e["event"] == "workflow_restored" for e in restored["activity"]) == 1
     with db_cursor(readonly=True) as (_, cur):
         svc = ws.WorkflowService(cur, hooks)
         assert svc.live_turns(w["id"]) == 0  # restore never started a worker

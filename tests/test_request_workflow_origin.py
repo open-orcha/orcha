@@ -40,7 +40,7 @@ async def test_request_rows_carry_origin_link_and_workflow_filter_scopes_them(
     owner = actor.id
     w = create(setup_workflow, count=2)
     wid = w["id"]
-    member_task = w["tasks"][0]["id"]
+    member_task = next(task["id"] for task in w["tasks"] if task["title"] == "Task 0")
 
     # A task OUTSIDE the workflow, so an origin link alone must not imply membership.
     r = await client.post(

@@ -64,7 +64,7 @@ it("lets a verified human member approve an OFF task plan without workflow-owner
   const call = vi.mocked(fetch).mock.calls.find(([url, init]) => url === "/api/decisions" && init?.method === "POST")!;
   expect(JSON.parse(String(call[1]?.body))).toMatchObject({ subject_type: "plan_approval", subject_id: "build", actor_agent_id: "kedar", target_agent_id: "andrew" });
   expect(screen.queryByRole("region", { name: "Verification" })).toBeNull();
-  expect(screen.getByRole("button", { name: "Change to ON" })).toBeDisabled();
+  expect(screen.getByRole("switch", { name: "Task autonomy", checked: false })).toBeDisabled();
 });
 it.each(["on", "unsupported"])("does not offer a workflow plan decision for %s authority", async (kind) => {
   extensions.identity = async () => ({ agent_id: "kedar", member_role: "member" }) as Identity;
@@ -148,7 +148,7 @@ it("does not offer the ordinary run-stop route for a cancelled workflow or lose 
 });
 it("carries the workflow label and OFF presentation into the global task list", async () => {
   page("/tasks?cid=project");
-  expect(await screen.findByText("Mobile release · Autonomy OFF")).toBeVisible();
+  expect(await screen.findByText("Workflow")).toBeVisible();
   expect(screen.getByText("Prepared · waiting for Start")).toBeVisible();
 });
 it("retains a typed comment while membership refresh fails and keeps old information labelled", async () => {

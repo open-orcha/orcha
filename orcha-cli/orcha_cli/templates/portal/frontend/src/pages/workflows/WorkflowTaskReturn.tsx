@@ -34,7 +34,7 @@ export function WorkflowTaskReturn({ taskId }: { taskId: string }) {
     if (!target) return;
     const controller = new AbortController(); let active = true;
     void workflowRequest("WorkflowDetail", workflowPaths.detail(target.id), { signal: controller.signal }).then((detail) => {
-      if (active && detail.id === target.id && detail.container_id === cid && detail.capability.workflow_read && detail.tasks.some((t) => t.id === taskId)) setName(detail.title);
+      if (active && !detail.hidden && detail.id === target.id && detail.container_id === cid && detail.capability.workflow_read && detail.tasks.some((t) => t.id === taskId)) setName(detail.title);
     }).catch(() => { /* An invalid/stale return hint never grants membership or hides the task. */ });
     return () => { active = false; controller.abort(); };
   }, [target?.id, cid, taskId, identity?.agent_id]);

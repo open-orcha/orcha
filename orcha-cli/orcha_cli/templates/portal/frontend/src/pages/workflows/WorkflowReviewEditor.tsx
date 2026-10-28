@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "../../components/primitives/Button";
 import { Dialog } from "../../components/primitives/Dialog";
 import { actionReason, availableActionReason, workflowPaths } from "./workflowApi";
@@ -8,11 +8,13 @@ import type { DraftScope } from "./workflowDraft";
 import { useWorkflowForm } from "./workflowFormState";
 import { useWorkflowOperation } from "./workflowOperations";
 import { WorkflowEvidencePanel } from "./WorkflowEvidence";
+import { useDialogOpen, type DialogControl } from "./workflowDialogs";
 
-export function WorkflowReviewEditor({ detail, scope, verified, stale, agents, onSaved }: {
-  detail: WorkflowDetail; scope: DraftScope; verified: boolean; stale: boolean; agents: { id: string; alias: string }[]; onSaved: (detail: WorkflowDetail) => void;
+export function WorkflowReviewEditor({ detail, scope, verified, stale, agents, onSaved, control }: {
+  detail: WorkflowDetail; scope: DraftScope; verified: boolean; stale: boolean; agents: { id: string; alias: string }[]; onSaved: (detail: WorkflowDetail) => void; control?: DialogControl;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useDialogOpen(control);
+  useEffect(() => { if (control?.open) setReference(null); }, [control?.open]);
   const [draft, setDraft] = useWorkflowForm(scope, `round:${detail.id}`, { loop: "", newLoop: crypto.randomUUID(), review: "", reviewed: "",
     outcome: "changes_requested", pair: false, correction: { key: crypto.randomUUID(), title: "", criteria: "", assignee: "" }, next: { key: crypto.randomUUID(), title: "", criteria: "", assignee: "" } });
   const [reference, setReference] = useState<EvidenceReference | null>(null);
@@ -22,7 +24,7 @@ export function WorkflowReviewEditor({ detail, scope, verified, stale, agents, o
   const invalid = actionReason(detail, "review_round", verified) || (!draft.review || !draft.reviewed || !reference ? "Choose the review task, the task it reviewed and its current saved evidence."
     : draft.pair && draft.outcome === "changes_requested" && [draft.correction, draft.next].some((t) => !t.title.trim() || !t.criteria.trim() || !t.assignee) ? "Give both new tasks a title, completion criteria and assignee." : null);
   const taskBody = (task: typeof draft.correction) => ({ client_key: task.key, title: task.title.trim(), definition_of_done: task.criteria.trim(), description: "", assignee_id: task.assignee, priority: 100, depends_on: [] });
-  return <><Button disabled={stale || !!actionReason(detail, "review_round", verified)} onClick={() => { setReference(null); setOpen(true); }}>Record review outcome</Button>
+  return <>{!control && <Button disabled={stale || !!actionReason(detail, "review_round", verified)} onClick={() => { setReference(null); setOpen(true); }}>Record review outcome</Button>}
     {open && <Dialog title="Record review and next steps" className="wf-page" size="lg" onClose={() => { if (!frozen) setOpen(false); }} footer={<Button disabled={frozen} onClick={() => setOpen(false)}>Keep draft and close</Button>}>
       <p>The review outcome records findings. Acceptance of the delivered report is a separate action. Corrections and follow-up reviews use fresh tasks.</p>
       <fieldset disabled={frozen} className="wf-form-body">

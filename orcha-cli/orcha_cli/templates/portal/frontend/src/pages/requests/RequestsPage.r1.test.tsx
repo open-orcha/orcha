@@ -111,6 +111,10 @@ describe("requestActions (truthful gates)", () => {
   const snap = { agents: RAW.agents, tasks: [], requests: [] } as unknown as Snapshot;
   const h = RAW.agents[2] as unknown as Parameters<typeof requestActions>[2];
   const req = (o: Partial<OrchaRequest>) => ({ id: "x", type: "q", status: "open", from: "forge", to: "mira", requester_id: "a1", target_id: "a2", ...o }) as OrchaRequest;
+  it("does not offer Answer when an explicit target is absent from the loaded roster", () => {
+    expect(requestActions(snap, req({ to: "human", target_id: "unloaded-agent" }), h).answer).toBe(false);
+    expect(requestActions(snap, req({ to: "human", target_id: null }), h).answer).toBe(true);
+  });
   it("nudges only when an AI agent other than you owns the next action", () => {
     expect(requestActions(snap, req({}), h).nudge).toBe(true); // open → target mira (AI)
     expect(requestActions(snap, req({ to: "kedar", target_id: "h1" }), h).nudge).toBe(false); // addressed to you

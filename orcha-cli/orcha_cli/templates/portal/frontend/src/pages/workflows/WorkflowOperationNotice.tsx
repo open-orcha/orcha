@@ -29,7 +29,7 @@ export function WorkflowOperationNotice({ scope, slot, canRetry, onSaved }: {
     } catch (e) { setError(e instanceof Error ? e.message : "Could not check the saved result."); }
     finally { setBusy(false); }
   }
-  return <section className="wf-notice" aria-label="Save status" aria-live="polite">
+  return <section className={`wf-opnotice ${operation.state === "refused" ? "is-danger" : "is-warn"}`} role={operation.state === "refused" ? "alert" : "status"} aria-label="Save status" aria-live="polite">
     <p>{operation.state === "sending" ? "Saving… Keep this page open while Orcha confirms the result." : operation.message}</p>
     {error && <p role="alert">{error}</p>}
     {operation.state === "uncertain" && <div className="wf-actions">

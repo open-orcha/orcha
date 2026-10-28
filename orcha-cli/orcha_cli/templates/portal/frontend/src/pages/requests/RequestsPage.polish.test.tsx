@@ -102,6 +102,11 @@ describe("decision card — titled by who owns the next action", () => {
   const snap = { agents: RAW.agents, requests: [], tasks: [] } as never;
   const req = (o: Partial<OrchaRequest>) => ({ id: "q", type: "question", status: "open", from: "forge", to: "mira", requester_id: "a1", target_id: "a2", payload: "p", ...o }) as OrchaRequest;
 
+  it("does not claim an explicitly targeted request belongs to the human when its name is unavailable", () => {
+    expect(requestNextStep(snap, req({ to: "human", target_id: "unloaded-agent" }), h).mine).toBe(false);
+    expect(requestNextStep(snap, req({ to: "human", target_id: null }), h).mine).toBe(true);
+  });
+
   it("pure: you / waiting on target / answered · waiting on requester / escalated", () => {
     expect(requestNextStep(snap, req({ to: "kedar", target_id: "h1" }), h)).toMatchObject({ mine: true, title: "forge asks you" });
     // the card names the decision by request type (Linear's triage card), never a vague "Your move"

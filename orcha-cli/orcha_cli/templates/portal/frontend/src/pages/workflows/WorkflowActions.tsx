@@ -13,12 +13,17 @@ import { acceptanceAttributionUnavailable, samePersonOutsideAcceptance, Workflow
 import { useWorkflowForm } from "./workflowFormState";
 import { impactMatches, readWorkflowImpact, WorkflowImpactView } from "./WorkflowImpact";
 
-type Action = "start" | "pause" | "resume" | "cancel" | "finish";
+export type WorkflowAction = "start" | "pause" | "resume" | "cancel" | "finish";
+type Action = WorkflowAction;
+/** A header-menu request (issue #350 §4.2): `seq` lets the same action be requested twice in a row. */
+export interface WorkflowActionRequest { action: WorkflowAction; seq: number }
 const labels: Record<Action, string> = { start: "Review start", pause: "Pause new starts", resume: "Resume workflow", cancel: "Cancel workflow", finish: "Finish checklist" };
 const confirmation: Record<Action, string> = { start: "Start selected tasks", pause: "Pause new starts", resume: "Resume workflow", cancel: "Cancel workflow", finish: "Finish workflow" };
 
-export function WorkflowActions({ detail, scope, verified, stale, onSaved }: {
+export function WorkflowActions({ detail, scope, verified, stale, onSaved, request }: {
   detail: WorkflowDetail; scope: DraftScope; verified: boolean; stale: boolean; onSaved: (detail: WorkflowDetail) => void;
+  /** When provided, the header menu opens dialogs and the inline button row is not rendered. */
+  request?: WorkflowActionRequest | null;
 }) {
   const active = useRef(true);
   useEffect(() => { active.current = true; return () => { active.current = false; }; }, []);
@@ -35,6 +40,8 @@ export function WorkflowActions({ detail, scope, verified, stale, onSaved }: {
   const unresolved = operation?.state === "sending" || operation?.state === "uncertain";
   const fresh = async () => workflowRequest("WorkflowDetail", workflowPaths.detail(detail.id), { actorId: scope.identity });
   const startEligible = (task: WorkflowDetail["tasks"][number]) => task.preparation_state === "prepared" && task.start_hold && !task.withdrawn_at && !["completed", "cancelled"].includes(task.status);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- a new seq is a new request; review() reads current props
+  useEffect(() => { if (request) void review(request.action); }, [request?.seq]);
 
   async function review(next: Action) {
     setAction(next); setPreview(null); setImpact(null); setError("");
@@ -74,17 +81,21 @@ export function WorkflowActions({ detail, scope, verified, stale, onSaved }: {
     else if (result.state === "refused") setPreview(null);
   }
   return <>
-    <div className="wf-actions" aria-label="Workflow actions">{(Object.keys(labels) as Action[]).map((a) => {
+    {request === undefined && <div className="wf-actions" aria-label="Workflow actions">{(Object.keys(labels) as Action[]).map((a) => {
       const reason = actionReason(detail, a, verified);
       // The checklist stays discoverable for readers, even with unmet requirements.
       return <Button key={a} disabled={busy || (a !== "finish" && (stale || unresolved || !!reason))}
         title={a === "finish" ? "Review requirements before finishing" : reason ?? undefined} onClick={() => void review(a)}>{labels[a]}</Button>;
-    })}</div>
+    })}</div>}
+    {!action && <>
     <WorkflowOperationNotice scope={scope} slot={slot} onSaved={(result) => { onSaved(result); setAction(null); }}
       canRetry={async () => { const current = await fresh(); return current.container_id === scope.project && current.id === detail.id && !actionReason(current, operation?.operation ?? "", verified); }} />
-    {action && <Dialog title={labels[action]} onClose={() => { if (!busy && operation?.state !== "sending") setAction(null); }} className="wf-page" size="lg"
-      footer={<><Button onClick={() => setAction(null)} disabled={busy || operation?.state === "sending"}>{action === "start" ? "Keep preparing" : "Close"}</Button>
+    </>}
+    {action && <Dialog title={labels[action]} onClose={() => { if (!busy && !unresolved) setAction(null); }} className="wf-page" size="lg"
+      footer={<><Button onClick={() => setAction(null)} disabled={busy || unresolved}>{action === "start" ? "Keep preparing" : "Close"}</Button>
         <Button variant={action === "cancel" ? "danger" : "primary"} disabled={confirmBlocked} onClick={() => void confirm()}>{confirmation[action]}</Button></>}>
+    <WorkflowOperationNotice scope={scope} slot={slot} onSaved={(result) => { onSaved(result); setAction(null); }}
+      canRetry={async () => { const current = await fresh(); return current.container_id === scope.project && current.id === detail.id && !actionReason(current, operation?.operation ?? "", verified); }} />
       {busy && <p role="status">Checking the current workflow…</p>}
       {error && <p role="alert">{error}</p>}
       {!preview && !busy && <Button onClick={() => void review(action)}>Refresh review</Button>}
@@ -114,14 +125,24 @@ export function WorkflowActions({ detail, scope, verified, stale, onSaved }: {
         {action === "finish" && <>
           <p>{preview.progress.accepted} of {preview.progress.total} tasks accepted. {preview.progress.objectives_accepted} of {preview.progress.objectives_total} objectives accepted.</p>
           <p>Goal: {preview.goal}</p><p>{preview.goal_accepted_revision === preview.goal_revision ? "Current goal accepted." : "The current goal still needs acceptance with saved evidence."}</p>
-          <ul>{preview.objectives.map((o) => <li key={o.id}>{o.title} — {o.criteria} — {o.accepted_revision === o.revision ? "Accepted" : "Needs acceptance"}</li>)}</ul>
+
           <ul>{preview.completion.blockers.map((b, i) => <li key={i}>{b.message}{b.task_id && <> <WorkflowTaskLink cid={scope.project} taskId={b.task_id}>Open task</WorkflowTaskLink></>}</li>)}</ul>
           {samePersonAccepted.length > 0 && <p>{samePersonAccepted.length} owner-supplied {samePersonAccepted.length === 1 ? "result" : "results"} accepted by the same person. <Button onClick={() => setEvidenceTask(samePersonAccepted[0].id)}>View</Button></p>}
           {preview.tasks.some(acceptanceAttributionUnavailable) && <p>Finish is unavailable because one or more legacy acceptances do not record who submitted the result. There is no supported recovery path for those records yet.</p>}
-          <h3>Saved evidence</h3>
-          {preview.tasks.filter((t) => t.acceptance).map((t) => <WorkflowTaskAcceptanceRecord key={t.id} task={t} />)}
           <label>Inspect a task’s saved evidence<select value={evidenceTask} onChange={(e) => setEvidenceTask(e.target.value)}><option value="">Choose a task</option>{preview.tasks.map((t) => <option key={t.id} value={t.id}>{t.title}</option>)}</select></label>
-          {evidenceTask && <WorkflowEvidencePanel key={evidenceTask} detail={preview} taskId={evidenceTask} />}
+          <section className="wf-checklist" aria-label="Required tasks"><h3>Required tasks</h3>
+            {preview.tasks.filter((t) => !t.withdrawn_at).map((t) => <details key={t.id} open={evidenceTask === t.id} onToggle={(e) => { if (e.currentTarget.open) setEvidenceTask(t.id); else setEvidenceTask((id) => id === t.id ? "" : id); }}>
+              <summary><span>{t.title}</span><span className="wf-muted">{t.acceptance ? "Accepted" : t.display_state.label} · Evidence</span></summary>
+              {evidenceTask === t.id && <>{t.acceptance && <WorkflowTaskAcceptanceRecord task={t} />}<WorkflowEvidencePanel detail={preview} taskId={t.id} /></>}
+            </details>)}
+          </section>
+          {preview.tasks.filter((t) => t.withdrawn_at && t.id === evidenceTask).map((t) => <section key={t.id} aria-label="Withdrawn task evidence">
+            <h3>{t.title} · Removed from required scope</h3>
+            {t.acceptance && <WorkflowTaskAcceptanceRecord task={t} />}
+            <WorkflowEvidencePanel detail={preview} taskId={t.id} />
+          </section>)}
+          <h3>Objectives</h3>
+          {preview.objectives.filter((o) => o.accepted_revision === o.revision).map((o) => <p key={o.id}>{o.title} · Accepted</p>)}
           {preview.evidence_capability?.available !== true && <p>Saved evidence review is unavailable on this connection, so finishing remains unavailable.</p>}
           <p>Objective and goal acceptance are separate recorded steps before Finish.</p>
           {preview.objectives.filter((o) => o.accepted_revision !== o.revision).map((objective) => <details key={objective.id}><summary>Review {objective.title}</summary>

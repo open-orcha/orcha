@@ -1,3 +1,5 @@
+import { useWorkflowForm } from "../workflows/workflowFormState";
+import type { DraftScope } from "../workflows/workflowDraft";
 /**
  * Requests page (V2, owner D) — Linear Inbox layout over the UNCHANGED backend.
  *
@@ -552,7 +554,7 @@ function MoreMenu({ items, label = "More request actions" }: { items: MenuItemSp
 export function requestActions(snap: Snapshot | null, req: OrchaRequest, h: Agent | null) {
   const none = { answer: false, convert: false, escalate: false, nudge: false, close: false, nudgeWho: "" };
   if (!h || req.status === "closed" || req.status === "converted_to_task") return none;
-  const isTarget = String(req.target_id) === String(h.id) || req.to === "human";
+  const isTarget = req.target_id != null ? String(req.target_id) === String(h.id) : req.to === "human";
   const isRequester = String(req.requester_id) === String(h.id);
   const live = req.status === "open" || req.status === "answered";
   // Nudge wakes whoever owns the NEXT action (backend request_nudge_routes: open → target,
@@ -601,7 +603,7 @@ function askTitle(req: OrchaRequest, from: string): string {
  * an item that is counted as waiting on you.
  */
 export function requestNextStep(snap: Snapshot | null, req: OrchaRequest, h: Agent | null): { mine: boolean; owner: string | null; title: string } {
-  const isTarget = !!h && (String(req.target_id) === String(h.id) || req.to === "human");
+  const isTarget = !!h && (req.target_id != null ? String(req.target_id) === String(h.id) : req.to === "human");
   const isRequester = !!h && String(req.requester_id) === String(h.id);
   const name = (a: string) => partyLabel(snap, a);
   const esc = isEscalated(req);
@@ -640,6 +642,8 @@ export function RequestDetail({
   idShown,
   statusShown,
   typeShown,
+  draftScope,
+  readOnlyReason,
 }: {
   r: OrchaRequest;
   onSelect: (id: string) => void;
@@ -652,13 +656,16 @@ export function RequestDetail({
   statusShown?: boolean;
   /** The host header already names the request type ("Question request"). */
   typeShown?: boolean;
+  draftScope?: DraftScope;
+  readOnlyReason?: string;
 }) {
   const { snap, refresh } = useSnapshot();
   const toast = useToast();
-  const authority = useActingAuthority();
+  const connectionAuthority = useActingAuthority();
+  const authority = readOnlyReason ? { ...connectionAuthority, human: null, readOnly: true, reason: readOnlyReason } : connectionAuthority;
   const noHuman = noHumanReqReason(authority);
   const [answering, setAnswering] = useState(false); // inline answer box open (ISS-53)
-  const [ansDraft, setAnsDraft] = useState("");
+  const [ansDraft, setAnsDraft] = useWorkflowForm(draftScope ?? { origin: window.location.origin, project: snap?.container?.id ?? "", identity: authority.human?.id ?? "unverified" }, `request-answer:${r.id}`, "");
   const [ansErr, setAnsErr] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   const [modal, setModal] = useState<ModalSt | null>(null);

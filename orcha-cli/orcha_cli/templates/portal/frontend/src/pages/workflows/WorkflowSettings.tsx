@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useEffect, useRef } from "react";
 import { Button } from "../../components/primitives/Button";
 import { Dialog } from "../../components/primitives/Dialog";
+import { Segmented, MenuButton } from "../../components/primitives";
 import { actionReason, workflowPaths } from "./workflowApi";
 import { WorkflowChange } from "./WorkflowChange";
 import type { WorkflowDetail } from "./workflowContract.generated";
@@ -8,24 +9,27 @@ import type { DraftScope } from "./workflowDraft";
 import { useWorkflowForm } from "./workflowFormState";
 import { useWorkflowOperation } from "./workflowOperations";
 import { WorkflowObjectiveEditor } from "./WorkflowObjectiveEditor";
+import { useDialogOpen, type DialogControl } from "./workflowDialogs";
 
-export function WorkflowSettings({ detail, scope, verified, stale, humans, onSaved }: {
-  detail: WorkflowDetail; scope: DraftScope; verified: boolean; stale: boolean; humans: { id: string; alias: string }[]; onSaved: (detail: WorkflowDetail) => void;
+export function WorkflowSettings({ detail, scope, verified, stale, humans, onSaved, control, initialSection = "settings" }: {
+  detail: WorkflowDetail; scope: DraftScope; verified: boolean; stale: boolean; humans: { id: string; alias: string }[]; onSaved: (detail: WorkflowDetail) => void; control?: DialogControl; initialSection?: "settings" | "ownership";
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useDialogOpen(control);
+  const ownership = useRef<HTMLHeadingElement>(null);
+  useEffect(() => { if (open && initialSection === "ownership") { ownership.current?.scrollIntoView?.({ block: "start" }); ownership.current?.focus(); } }, [open, initialSection]);
   const [draft, setDraft] = useWorkflowForm(scope, `settings:${detail.id}`, { title: detail.title, goal: detail.goal,
     mode: detail.execution_mode, taskLimit: String(detail.task_limit), roundLimit: String(detail.round_limit), reason: "", owner: "" });
   const op = useWorkflowOperation(scope, `workflow:${detail.id}`);
   const frozen = op?.state === "sending" || op?.state === "uncertain";
   const invalid = !draft.title.trim() || !draft.goal.trim() || !draft.reason.trim() ? "Give the workflow a name, goal and reason for the change."
     : ![draft.taskLimit, draft.roundLimit].every((value) => /^\d+$/.test(value) && Number.isSafeInteger(Number(value)) && Number(value) > 0) ? "Enter positive whole-number limits." : null;
-  return <><Button onClick={() => setOpen(true)}>Workflow settings</Button>
+  return <>{!control && <Button onClick={() => setOpen(true)}>Workflow settings</Button>}
     {open && <Dialog title="Workflow settings" size="lg" className="wf-page" onClose={() => { if (!frozen) setOpen(false); }} footer={<Button disabled={frozen} onClick={() => setOpen(false)}>Keep draft and close</Button>}>
       <p>Changing the goal or scope requires renewed goal acceptance. After Start, changing how work runs requires Pause and all current turns to end; changing a setting never stops a worker.</p>
       <fieldset disabled={frozen || stale || !!actionReason(detail, "patch", verified)} className="wf-form-body">
         <label>Workflow name<input maxLength={200} value={draft.title} onChange={(e) => setDraft({ ...draft, title: e.target.value })} /></label>
         <label>Goal<textarea maxLength={4000} value={draft.goal} onChange={(e) => setDraft({ ...draft, goal: e.target.value })} /></label>
-        <label>How work runs<select value={draft.mode} onChange={(e) => setDraft({ ...draft, mode: e.target.value as "serial" | "parallel" })}><option value="serial">One task at a time</option><option value="parallel">Independent tasks together</option></select></label>
+        <div className="wf-field"><span>How work runs</span><Segmented label="How work runs" value={draft.mode} onChange={(mode) => setDraft({ ...draft, mode: mode as "serial" | "parallel" })} items={[{ key: "serial", label: "One task at a time" }, { key: "parallel", label: "Independent tasks together" }]} /></div>
         <p>Tasks with dependencies take their turn alone, including review and worker stopping.</p>
         <label>Task limit<input type="number" min={1} value={draft.taskLimit} onChange={(e) => setDraft({ ...draft, taskLimit: e.target.value })} /></label>
         <label>Review-round limit<input type="number" min={1} value={draft.roundLimit} onChange={(e) => setDraft({ ...draft, roundLimit: e.target.value })} /></label>
@@ -40,9 +44,9 @@ export function WorkflowSettings({ detail, scope, verified, stale, humans, onSav
       <h3>Objectives</h3>
       {detail.objectives.length === 0 && <p>No objectives were added to this workflow.</p>}
       {detail.objectives.map((objective) => <WorkflowObjectiveEditor key={objective.id} detail={detail} objectiveId={objective.id} scope={scope} verified={verified} stale={stale} onSaved={onSaved} />)}
-      <h3>Transfer ownership</h3><p>The new owner must be an eligible human member. Task assignees do not become workflow owners.</p>
-      <label>New owner<select value={draft.owner} disabled={frozen || stale || !!actionReason(detail, "transfer_owner", verified)} onChange={(e) => setDraft({ ...draft, owner: e.target.value })}>
-        <option value="">Choose a person</option>{humans.filter((h) => h.id !== detail.owner_human_id).map((h) => <option key={h.id} value={h.id}>{h.alias}</option>)}</select></label>
+      <h3 ref={ownership} tabIndex={-1}>Transfer ownership</h3><p>The new owner must be an eligible human member. Task assignees do not become workflow owners.</p>
+      <div className="wf-field"><span>New owner</span><MenuButton label={`New owner: ${humans.find((h) => h.id === draft.owner)?.alias ?? "Choose a person"}`} menuLabel="Choose new owner"
+        disabled={frozen || stale || !!actionReason(detail, "transfer_owner", verified)} items={humans.filter((h) => h.id !== detail.owner_human_id).map((h) => ({ label: h.alias, onSelect: () => setDraft({ ...draft, owner: h.id }) }))} /></div>
       <WorkflowChange detail={detail} scope={scope} verified={verified} stale={stale} operation="transfer_owner" url={workflowPaths.detail(detail.id) + "/transfer-owner"}
         label="Ownership transfer" invalid={!draft.owner ? "Choose a new owner." : actionReason(detail, "transfer_owner", verified)} body={{ new_owner_id: draft.owner, reason: draft.reason.trim() }}
         check={(latest) => actionReason(latest, "transfer_owner", verified)} onSaved={(result) => { setOpen(false); onSaved(result); }}>

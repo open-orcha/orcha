@@ -26,6 +26,7 @@ export function WorkflowTaskDecision({ detail, task, scope, verified, stale, onS
   const operation = useWorkflowOperation(scope, slot);
   const unresolved = operation?.state === "sending" || operation?.state === "uncertain";
   const permission = (current: WorkflowDetail, verb = action) => {
+    if (current.hidden) return "Restore this hidden workflow before reviewing work.";
     const target = current.tasks.find((t) => t.id === task.id);
     return current.id !== detail.id || current.container_id !== scope.project || !target
       ? "This task is no longer in this workflow. Refresh before continuing."
@@ -84,17 +85,21 @@ export function WorkflowTaskDecision({ detail, task, scope, verified, stale, onS
     <h3>Review finished work</h3>
     <p>Done when: {task.definition_of_done}</p>
     <p>This decision is about the finished result, separate from its plan approval. Accepting a result never finishes the workflow.</p>
-    <fieldset disabled={busy || unresolved || stale}><legend>Decision</legend>
-      <label className="wf-choice"><input type="radio" name={`decision-${task.id}`} checked={action === "accept"} onChange={() => setAction("accept")} />Accept result</label>
-      <label className="wf-choice"><input type="radio" name={`decision-${task.id}`} checked={action === "reject"} onChange={() => setAction("reject")} />Request changes</label>
-      <label>{action === "reject" ? "What needs to change" : "Review note (optional)"}<textarea maxLength={4000} value={reason} onChange={(e) => setReason(e.target.value)} /></label>
-    </fieldset>
+    <div className="wf-review">
+    <div className="wf-review-evidence">
     <fieldset disabled={busy || unresolved || stale || !!permission(detail)}><legend>Saved result to review</legend>
       <WorkflowEvidencePanel key={`${detail.id}:${task.id}:${task.work_revision}:${task.current_evidence_set_id}`} detail={detail} taskId={task.id}
         selected={evidence?.evidence_set_id} onSelect={action === "accept" ? (next, _revision, selected) => {
           const attribution = selected ? evidenceSupplier(selected) : { required: false, supplier: null };
           setEvidence(next); setSupplier(attribution.supplier); setSupplierRequired(attribution.required); setPreview(null);
         } : undefined} />
+    </fieldset>
+    </div>
+    <div className="wf-review-decision">
+    <fieldset disabled={busy || unresolved || stale}><legend>Decision</legend>
+      <label className="wf-choice"><input type="radio" name={`decision-${task.id}`} checked={action === "accept"} onChange={() => setAction("accept")} />Accept result</label>
+      <label className="wf-choice"><input type="radio" name={`decision-${task.id}`} checked={action === "reject"} onChange={() => setAction("reject")} />Request changes</label>
+      <label>{action === "reject" ? "What needs to change" : "Review note (optional)"}<textarea maxLength={4000} value={reason} onChange={(e) => setReason(e.target.value)} /></label>
     </fieldset>
     {action === "accept" && supplierRequired && supplier && <p>Result supplied by {supplier.alias} ({supplier.kind === "human" ? "person" : "agent"}). {supplier.id === scope.identity
       ? "You supplied this outside result; accepting your own result is allowed and will be recorded."
@@ -108,6 +113,7 @@ export function WorkflowTaskDecision({ detail, task, scope, verified, stale, onS
         {action === "accept" ? "Confirm accept result" : "Confirm request changes"}
       </Button>
     </>}
+    </div></div>
     <WorkflowOperationNotice scope={scope} slot={slot} onSaved={onSaved} canRetry={async () => {
       const verb = operation?.operation;
       if (!operation || (verb !== "accept" && verb !== "reject") || operation.url !== `/api/tasks/${encodeURIComponent(task.id)}/${verb}` || stale) return false;

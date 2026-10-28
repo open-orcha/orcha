@@ -6,15 +6,16 @@
  */
 import { forwardRef, useRef, useState, type ReactNode } from "react";
 import { Icon } from "../../components/ui";
+import { relTime } from "../../lib/format";
 import {
-  Avatar, Chip, EmptyState, FilterPills, IconButton, List, ListGroup, Popover, Row, StatusIcon, Tooltip,
+  Avatar, Button, Chip, EmptyState, FilterPills, IconButton, List, ListGroup, Popover, Row, StatusIcon, Tooltip,
 } from "../../components/primitives";
 import { PageToolbar } from "../../shell/PageChrome";
 import { RadioList } from "../tasks/TaskListView";
 import { workflowLabel } from "./workflowApi";
 import type { WorkflowDetail } from "./workflowContract.generated";
 
-export type WorkflowFilter = "open" | "preparing" | "active" | "paused" | "ready" | "completed" | "cancelled" | "all";
+export type WorkflowFilter = "open" | "preparing" | "active" | "paused" | "ready" | "completed" | "cancelled" | "all" | "hidden";
 export const WORKFLOW_FILTERS: { key: WorkflowFilter; label: string; title: string }[] = [
   { key: "open", label: "Open", title: "Active or paused workflows" },
   { key: "preparing", label: "Preparing", title: "Active workflows whose Start has not run" },
@@ -23,6 +24,7 @@ export const WORKFLOW_FILTERS: { key: WorkflowFilter; label: string; title: stri
   { key: "ready", label: "Ready to finish", title: "Every required task and objective is accepted" },
   { key: "completed", label: "Completed", title: "Finished workflows" },
   { key: "cancelled", label: "Cancelled", title: "Cancelled workflows" },
+  { key: "hidden", label: "Hidden", title: "Hidden workflows — open one to restore it" },
   { key: "all", label: "All", title: "Every loaded workflow, grouped by status" },
 ];
 /** The server receives status=active|paused|completed|cancelled; the finer pills filter loaded pages. */
@@ -30,7 +32,7 @@ export function workflowServerStatus(filter: string): string {
   return ["preparing", "active", "ready"].includes(filter) ? "active" : ["paused", "completed", "cancelled"].includes(filter) ? filter : "";
 }
 export function matchesWorkflowFilter(w: WorkflowDetail, filter: string): boolean {
-  return filter === "open" ? w.status === "active" || w.status === "paused"
+  return filter === "hidden" ? !!w.hidden : w.hidden ? false : filter === "open" ? w.status === "active" || w.status === "paused"
     : filter === "preparing" ? w.status === "active" && !w.launch_enabled
     : filter === "ready" ? w.status === "active" && w.completion.can_finish
     : filter === "active" ? w.status === "active" && w.launch_enabled
@@ -63,24 +65,27 @@ export interface WorkflowRowProps {
   href: string;
   state?: unknown;
   ownerName: string;
+  onRestore?: () => void;
   onActivate?: (e: { preventDefault(): void }) => void;
 }
-/** One 36 px row: glyph · title · goal · chips · progress · owner. No age column: list rows carry no timestamp. */
-export const WorkflowRow = forwardRef<HTMLElement, WorkflowRowProps>(function WorkflowRow({ workflow: w, href, ownerName, onActivate }, ref) {
+/** One 36 px row: glyph · title · goal · chips · progress · owner · age. */
+export const WorkflowRow = forwardRef<HTMLElement, WorkflowRowProps>(function WorkflowRow({ workflow: w, href, ownerName, onActivate, onRestore }, ref) {
   const label = workflowLabel(w);
   const blocker = w.completion.blockers[0];
   const mode = MODE_LABEL[w.execution_mode];
-  return <Row ref={ref} id={w.id} href={href} className="wf-row" onActivate={onActivate} title={w.goal ? `${w.title} — ${w.goal}` : w.title}>
+  return <Row ref={ref} id={w.id} href={w.hidden ? undefined : href} className="wf-row" onActivate={onActivate} title={w.goal ? `${w.title} — ${w.goal}` : w.title}>
     <span className="wf-st"><StatusIcon status={workflowStatusIcon(w)} label={label} /></span>
     <span className="wf-title">{w.title}</span>
-    <span className="wf-goal">{w.goal}</span>
+    <span className="wf-goal">{w.hidden ? `Hidden by ${w.hidden_by_alias ?? "Name unavailable"}${w.hidden_at ? ` on ${new Date(w.hidden_at).toLocaleDateString()}` : ""}` : w.goal}</span>
     <span className="wf-chips">
       <Chip title={mode.long}>{mode.short}</Chip>
       {blocker ? <Chip dot="warn" title={blocker.message}>{blocker.code === "tasks_unaccepted" ? "Tasks pending" : "Blocked"}</Chip> : null}
       {w.hidden ? <Chip dot="neutral" title={w.hidden_reason ?? "Hidden from the usual list"}>Hidden</Chip> : null}
     </span>
     <WorkflowProgressBar accepted={w.progress.accepted} total={w.progress.total} />
+    {w.hidden && onRestore && <span onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}><Button variant="ghost" size="sm" onClick={(e) => { e.preventDefault(); onRestore(); }}>Restore</Button></span>}
     <span className="wf-who"><Avatar alias={ownerName} kind="human" size={20} label={`Owner: ${ownerName}`} /></span>
+    {w.created_at && <time className="wf-age" dateTime={w.created_at} title={`Created ${new Date(w.created_at).toLocaleString()}`}>{relTime(w.created_at)}</time>}
   </Row>;
 });
 

@@ -1,3 +1,4 @@
+import { Badge } from "../../components/primitives";
 import type { Impact, WorkflowDetail, WorkflowImpact } from "./workflowContract.generated";
 import { workflowPaths, workflowRequest } from "./workflowApi";
 
@@ -34,7 +35,7 @@ const resultingLabels = {
 
 export function WorkflowImpactView({ impact, detail }: { impact: Impact; detail: WorkflowDetail }) {
   const title = (id: string) => detail.tasks.find((t) => t.id === id)?.title ?? "Task no longer available";
-  return <section aria-label="Checked action impact"><h3>What this action will do</h3>
+  return <section className="wf-impact" aria-label="Checked action impact"><h3>What this action will do</h3>
     {impact.kind === "cancellation" ? <>
       <h4>Current task states</h4>
       <ul>{Object.entries(impact.counts_by_state ?? {}).map(([state, count]) => <li key={state}>{state.replaceAll("_", " ")}: {count}</li>)}</ul>
@@ -45,7 +46,7 @@ export function WorkflowImpactView({ impact, detail }: { impact: Impact; detail:
     </> : <>
       <p>These are the server’s checked outcomes. Ready tasks still wait for their turn; a release does not promise an immediate start.</p>
       <ul>{impact.tasks?.map((task) => <li key={task.task_id}>
-        <p>{task.title || "Task no longer available"} — {resultingLabels[task.resulting_status]}{!task.selected && " · Not selected"}</p>
+        <p>{task.title || "Task no longer available"} — <Badge>{resultingLabels[task.resulting_status]}</Badge>{!task.selected && " · Not selected"}</p>
         {task.refusal && <p>{task.refusal.message}</p>}
         {task.blockers?.map((blocker, i) => <p key={i}>{blocker.message}</p>)}
       </li>)}</ul>

@@ -2,7 +2,7 @@ import { createContext, useContext, useEffect, useState, type ReactNode } from "
 import { Link } from "react-router-dom";
 import { getJSON, type ApiError } from "../../api/client";
 import { Button } from "../../components/primitives/Button";
-import { StatusIcon } from "../../components/primitives";
+import { Property, PropertySection, StatusIcon } from "../../components/primitives";
 import { useActingAuthority, useSnapshot } from "../../state/SnapshotProvider";
 import { WorkflowEvidencePanel } from "./WorkflowEvidence";
 import { WorkflowTaskAcceptanceRecord } from "./WorkflowTaskAcceptanceRecord";
@@ -54,7 +54,8 @@ function MembershipIndex({ scope, cid, actorId, children }: { scope: string; cid
       const cursors = new Set<string>();
       let cursor: string | null = null;
       do {
-        const query = new URLSearchParams({ limit: "50" });
+        // Hidden membership must still guard legacy task mutations.
+        const query = new URLSearchParams({ limit: "50", visibility: "all" });
         if (cursor) query.set("cursor", cursor);
         const page = await workflowRequest("WorkflowList", workflowPaths.collection(cid!) + `?${query}`, { signal: controller.signal, actorId });
         if (!page.capability.workflow_read || page.workflows.some((w) => w.container_id !== cid || !w.capability.workflow_read)) {
@@ -101,12 +102,12 @@ export function WorkflowTaskStatus({ taskId, fallback, showLabel = false, classN
   taskId: string; fallback: string; showLabel?: boolean; className?: string; size?: number;
 }) {
   const { member, stale } = useTaskWorkflow(taskId);
-  if (!member) return <StatusIcon status={fallback} showLabel={showLabel} className={className} size={size} />;
+  if (!member || member.detail.hidden) return <StatusIcon status={fallback} showLabel={showLabel} className={className} size={size} />;
   const listWarning = member.task.display_state.list_warning === true;
   const warningText = member.task.display_state.warning || "Released without stop confirmation: the worker may still be running outside Orcha.";
   const label = `${member.task.display_state.label}${stale ? " (last loaded)" : ""}${listWarning ? ` · ${warningText}` : ""}`;
   if (!showLabel) return <span className={className} role="img" aria-label={label} title={label}>
-    <StatusIcon status="unknown" size={size} />
+    <StatusIcon status={member.task.status} size={size} />
   </span>;
   return <span className={`wf-task-state ${className ?? ""}`} title={member.task.display_state.label}>
     {member.task.display_state.label}{stale && " (last loaded)"}{listWarning && <span aria-label={warningText}> · Warning</span>}
@@ -120,9 +121,9 @@ export function WorkflowTaskInspector({ taskId }: { taskId: string }) {
   const { index, member, stale } = useTaskWorkflow(taskId);
   const { snap, identityPending } = useSnapshot();
   const authority = useActingAuthority();
-  if (!index || index.state === "unsupported") return null;
+  if (!index || index.state === "unsupported" || member?.detail.hidden) return null;
   const verified = !identityPending && !!authority.human;
-  return <section aria-label="Task workflow" className="wf-task-context">
+  return <PropertySection title="Workflow"><Property label="Membership" layout="stack"><section aria-label="Task workflow" className="wf-task-context">
     {index.state === "loading" && <p role="status">Checking workflow membership… Task changes wait until this check finishes.</p>}
     {index.error && <p role="alert">{index.error}</p>}
     {member && <>
@@ -142,5 +143,5 @@ export function WorkflowTaskInspector({ taskId }: { taskId: string }) {
       {!stale && <WorkflowEvidencePanel key={`${member.detail.id}:${taskId}:${member.detail.revision}`} detail={member.detail} taskId={taskId} />}
     </>}
     {(member || index.state !== "ready") && <Button disabled={index.state === "loading"} onClick={index.refresh}>Refresh task workflow</Button>}
-  </section>;
+  </section></Property></PropertySection>;
 }

@@ -123,3 +123,25 @@ it("calls withdrawn outside evidence Let worker start without automatically retr
   fireEvent.click(screen.getByRole("button", { name: "Manage Build Android" }));
   expect(screen.getByRole("button", { name: "Let worker start" })).toBeEnabled(); expect(fetch).not.toHaveBeenCalled();
 });
+
+it("invalidates a dependency review after an edit and freezes it during an uncertain save", async () => {
+  const { detail, task } = taskCase("dependencies");
+  detail.tasks.push(exampleTask({ id: "prerequisite", title: "Prepare release" }));
+  const writes: string[] = [];
+  vi.stubGlobal("fetch", vi.fn(async (_url: string, init?: RequestInit) => {
+    if (init?.method === "PUT") { writes.push(String(init.body)); throw new TypeError("Lost response"); }
+    return jsonResponse(detail);
+  }));
+  render(<WorkflowTaskActions detail={detail} task={task} scope={scope()} verified stale={false} agents={[]} onSaved={vi.fn()} inline request={{ action: "dependencies", seq: 1 }} />);
+  fireEvent.change(await screen.findByLabelText("Reason"), { target: { value: "Require release preparation" } });
+  fireEvent.click(screen.getByRole("checkbox", { name: "Prepare release" }));
+  const dialog = within(screen.getByRole("dialog"));
+  expect(dialog.getByRole("button", { name: "Edit dependencies" })).toBeDisabled();
+  fireEvent.click(screen.getByRole("button", { name: "Review dependency change" }));
+  await waitFor(() => expect(dialog.getByRole("button", { name: "Edit dependencies" })).toBeEnabled());
+  fireEvent.click(dialog.getByRole("button", { name: "Edit dependencies" }));
+  await screen.findByRole("button", { name: "Check saved result" });
+  expect(screen.getByLabelText("Reason")).toBeDisabled();
+  expect(screen.getByRole("checkbox", { name: "Prepare release" })).toBeDisabled();
+  expect(JSON.parse(writes[0])).toMatchObject({ depends_on: ["prerequisite"], expected_revision: 7, expected_work_revision: 3 });
+});

@@ -165,6 +165,7 @@ export function availableActionReason(capability: Capability, actions: Available
 }
 
 export function actionReason(detail: WorkflowDetail, action: string, hasHuman: boolean): string | null {
+  if (detail.hidden && action !== "restore") return "Restore this hidden workflow before making changes.";
   return availableActionReason(detail.capability, detail.available_actions, action, hasHuman);
 }
 

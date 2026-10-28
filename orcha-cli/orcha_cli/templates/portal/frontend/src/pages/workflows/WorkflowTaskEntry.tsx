@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useDialogOpen, type DialogControl } from "./workflowDialogs";
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { Button } from "../../components/primitives/Button";
 import { Dialog } from "../../components/primitives/Dialog";
@@ -9,16 +10,17 @@ import type { WorkflowDetail } from "./workflowContract.generated";
 
 /** Explicit, read-only discovery from the existing task inspector. Navigation
  * only seeds a retained draft; importing still requires the full group preview. */
-export function WorkflowTaskEntry({ taskId }: { taskId: string }) {
+export function WorkflowTaskEntry({ taskId, control }: { taskId: string; control?: DialogControl }) {
   const { cid, identityTrusted, identityPending } = useSnapshot();
   const authority = useActingAuthority();
   const { index, member } = useTaskWorkflow(taskId);
   if (member || (index && !["ready", "unsupported"].includes(index.state))) return null;
   const actorId = !identityPending ? authority.human?.id ?? null : null;
-  return <TaskEntry key={JSON.stringify([cid, taskId, actorId, identityTrusted])} cid={cid} taskId={taskId} actorId={actorId} />;
+  return <TaskEntry key={JSON.stringify([cid, taskId, actorId, identityTrusted])} cid={cid} taskId={taskId} actorId={actorId} control={control} />;
 }
-function TaskEntry({ cid, taskId, actorId }: { cid: string | null; taskId: string; actorId: string | null }) {
-  const [open, setOpen] = useState(false);
+function TaskEntry({ cid, taskId, actorId, control }: { cid: string | null; taskId: string; actorId: string | null; control?: DialogControl }) {
+  const [open, setOpen] = useDialogOpen(control);
+  useEffect(() => { if (open && control) void load(); }, [open]);
   const [workflows, setWorkflows] = useState<WorkflowDetail[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
@@ -29,7 +31,7 @@ function TaskEntry({ cid, taskId, actorId }: { cid: string | null; taskId: strin
     if (!cid || busy) return;
     setBusy(true); setError("");
     try {
-      const q = new URLSearchParams({ limit: "50" }); if (next) q.set("cursor", next);
+      const q = new URLSearchParams({ limit: "50", visibility: "all" }); if (next) q.set("cursor", next);
       const page = await workflowRequest("WorkflowList", workflowPaths.collection(cid) + `?${q}`, { actorId });
       if (page.workflows.some((w) => w.container_id !== cid) || (next && page.next_cursor === next)) throw new Error("The workflow list changed. Retry before continuing.");
       setWorkflows((old) => [...new Map([...(next ? old : []), ...page.workflows].map((w) => [w.id, w])).values()]);
@@ -38,7 +40,7 @@ function TaskEntry({ cid, taskId, actorId }: { cid: string | null; taskId: strin
     finally { setBusy(false); }
   }
   const href = (id: string, adding = true) => `/workflows/${encodeURIComponent(id)}?${new URLSearchParams({ cid: cid ?? "", ...(adding ? { addTask: taskId } : {}) })}`;
-  return <><Button onClick={() => { setOpen(true); void load(); }}>Workflow membership</Button>
+  return <>{!control && <Button onClick={() => { setOpen(true); void load(); }}>Workflow membership</Button>}
     {open && <Dialog title="Workflow membership" size="lg" onClose={() => setOpen(false)} footer={<Button onClick={() => setOpen(false)}>Close</Button>}>
       {busy && <p role="status">Checking task membership…</p>}{error && <p role="alert">{error} <Button onClick={() => void load(cursor)}>Retry workflows</Button></p>}
       {member ? <p>This task already belongs to <Link to={href(member.id, false)}>{member.title}</Link>. It cannot be added to a second workflow.</p> : <>

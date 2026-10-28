@@ -10,6 +10,7 @@ import { sendWorkflowOperation, useWorkflowOperation } from "./workflowOperation
 import { WorkflowOperationNotice } from "./WorkflowOperationNotice";
 import { workflowTaskHref } from "./WorkflowReadViews";
 import { WorkflowImportReview, importAcceptances, missingImportReview, type ImportReviews } from "./WorkflowImportReview";
+import { useDialogOpen, type DialogControl } from "./workflowDialogs";
 
 export type ImportChoice = WorkflowTaskChoice;
 const SEARCH_LIMIT = 5;
@@ -88,7 +89,7 @@ export function WorkflowImportImpact({ preview, selected, onChange, cid, release
 }) {
   const missing = preview.required_task_ids.filter((id) => !selected.includes(id));
   const groupCount = new Set([...preview.selected_task_ids, ...preview.required_task_ids]).size;
-  return <section aria-label="Import impact"><h3>Review the complete task group</h3>
+  return <section className="wf-impact" aria-label="Import impact"><h3>Review the complete task group</h3>
     <p>{groupCount} {groupCount === 1 ? "task" : "tasks"} in the connected group. Threads, results and assignments stay with their tasks. {releaseIds.length ? "Selected tasks may start when ready after saving. Human holds, prerequisites and turn rules still apply." : "No work starts from this save; holds remain in place."}</p>
     <ul>{preview.task_impacts?.map((t) => <li key={t.id}><Link to={workflowTaskHref(cid, t.id)}>{t.title}</Link>
       <p>{t.eligible ? t.preparation_state === "draft" ? "Draft" : "Prepared" : "Cannot be added"}{t.start_hold && " · Awaiting release"}</p>
@@ -107,10 +108,10 @@ export function WorkflowImportImpact({ preview, selected, onChange, cid, release
   </section>;
 }
 
-export function WorkflowImport({ detail, scope, verified, stale, initialTaskId, onSaved }: {
-  detail: WorkflowDetail; scope: DraftScope; verified: boolean; stale: boolean; initialTaskId?: string; onSaved: (result: WorkflowDetail) => void;
+export function WorkflowImport({ detail, scope, verified, stale, initialTaskId, onSaved, control }: {
+  detail: WorkflowDetail; scope: DraftScope; verified: boolean; stale: boolean; initialTaskId?: string; onSaved: (result: WorkflowDetail) => void; control?: DialogControl;
 }) {
-  const [open, setOpen] = useState(!!initialTaskId);
+  const [open, setOpen] = useDialogOpen(control, !!initialTaskId);
   const [selected, setSelected] = useWorkflowForm<string[]>(scope, `import:${detail.id}`, initialTaskId ? [initialTaskId] : []);
   const [releaseIds, setReleaseIds] = useWorkflowForm<string[]>(scope, `import-release:${detail.id}`, []);
   const [reviews, setReviews] = useState<ImportReviews>({});
@@ -151,7 +152,7 @@ export function WorkflowImport({ detail, scope, verified, stale, initialTaskId, 
     if (result.state === "saved" && result.result) { setSelected([]); setReleaseIds([]); setOpen(false); onSaved(result.result); }
     else if (result.state === "refused") setPreview(null);
   }
-  return <><Button disabled={stale || !!actionReason(detail, "import", verified)} onClick={() => setOpen(true)}>Add existing tasks</Button>
+  return <>{!control && <Button disabled={stale || !!actionReason(detail, "import", verified)} onClick={() => setOpen(true)}>Add existing tasks</Button>}
     {open && <Dialog title="Add existing tasks" size="lg" className="wf-page" onClose={() => { if (!frozen) setOpen(false); }}
       footer={<><Button disabled={frozen} onClick={() => setOpen(false)}>Keep draft and close</Button><Button disabled={blocked} variant="primary" onClick={() => void save()}>Confirm addition</Button></>}>
       <fieldset className="wf-form-body" disabled={frozen}>

@@ -3183,7 +3183,6 @@ function TaskDetail({
           inspector / narrow: title · ONE meta line · gate · description (3 lines) */}
       <div className="td-main">
         <WorkflowTaskReturn taskId={t.id} />
-        <WorkflowTaskEntry taskId={t.id} />
         <GoalChain taskId={t.id} />
         <h1 className="td-title v2-t-display" title={full ? undefined : t.title}>
           {t.title}
@@ -3456,6 +3455,7 @@ export function TaskDetailPane({
   const runs = useTaskRuns(t ? t.id : null);
   const cancelRef = useRef<(() => void) | null>(null);
   const [unassignOpen, setUnassignOpen] = useState(false);
+  const [workflowEntryOpen, setWorkflowEntryOpen] = useState(false);
   // "Make recurring…": a routine pre-filled as a COPY of this task (the task is never changed)
   const recurGate = useMakeRecurringGate();
   const [recurOpen, setRecurOpen] = useState(false);
@@ -3550,7 +3550,8 @@ export function TaskDetailPane({
           ? { label: "Pair in terminal", icon: "play", hint: aiAssignee.alias, disabled: true, disabledReason: noHuman }
           : { label: "Pair in terminal", icon: "play", disabled: true, disabledReason: "No agent assigned — assign an agent to pair in a terminal" },
     ];
-    if (member) menu.push({ label: "Open workflow task controls", icon: "tasks", href: workflowMemberHref(member.detail, t.id) });
+    if (!blockLegacy) menu.push({ label: "Workflow membership…", icon: "tasks", onSelect: () => setWorkflowEntryOpen(true) });
+    if (member) menu.push({ label: member.detail.hidden ? "View hidden workflow" : "Open workflow task controls", icon: "tasks", href: workflowMemberHref(member.detail, t.id) });
     const recurItem = makeRecurringItem(recurGate, () => setRecurOpen(true), t);
     if (recurItem) menu.push("separator", recurItem);
     // TG-50: readiness + unassign (the server refuses root / finished tasks)
@@ -3655,6 +3656,7 @@ export function TaskDetailPane({
           }
         />
       ) : null}
+      {t && <WorkflowTaskEntry taskId={t.id} control={{ open: workflowEntryOpen, onOpenChange: setWorkflowEntryOpen }} />}
       {t && thread ? (
         <TaskDetail
           key={t.id}
