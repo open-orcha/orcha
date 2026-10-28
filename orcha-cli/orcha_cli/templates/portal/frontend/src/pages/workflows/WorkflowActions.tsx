@@ -129,6 +129,14 @@ export function WorkflowActions({ detail, scope, verified, stale, onSaved, reque
         </>}
         {action === "finish" && <>
           <p>{preview.progress.accepted} of {preview.progress.total} tasks accepted. {preview.progress.objectives_accepted} of {preview.progress.objectives_total} objectives accepted.</p>
+          {preview.semantics_version === 2 && <div className="wf-impact" aria-label="Loops and limits">
+            <div className="wf-impact-h"><span>Loops and limits</span><span>agent turns {preview.turns_used ?? 0} of {preview.turn_allowance ?? 40}</span></div>
+            {(preview.repeat_groups ?? []).map((g) => <div key={g.id} className="wf-impact-row"><span className="t">{g.state === "exited" ? `Loop “${g.name}” exited after round ${g.current_round} of ${g.max_rounds}`
+              : g.state === "stopped" ? `Loop “${g.name}” was stopped at round ${g.current_round} of ${g.max_rounds}` : `Loop “${g.name}” has not exited · round ${g.current_round} of ${g.max_rounds} · ${LOOP_ENDINGS[g.state] ?? "running"}`}</span>
+              <span className="wf-muted">{g.state === "exited" ? "done" : g.state === "stopped" ? "stopped" : "blocks Finish"}</span></div>)}
+            {!(preview.repeat_groups ?? []).length && <div className="wf-impact-row"><span className="t">This workflow has no loops.</span></div>}
+          </div>}
+          {preview.tasks.some((t) => t.route_state === "not_selected") && <p className="wf-muted">Not selected on the path this workflow took: {preview.tasks.filter((t) => t.route_state === "not_selected").map((t) => t.title).join(", ")}. A Not selected step never counts toward Finish. Changing the scope needs an owner review and fresh goal acceptance; it cannot be done by marking work as unselected.</p>}
           <p>Goal: {preview.goal}</p><p>{preview.goal_accepted_revision === preview.goal_revision ? "Current goal accepted." : "The current goal still needs acceptance with saved evidence."}</p>
 
           <ul>{preview.completion.blockers.map((b, i) => <li key={i}>{b.message}{b.task_id && <> <WorkflowTaskLink cid={scope.project} taskId={b.task_id}>Open task</WorkflowTaskLink></>}</li>)}</ul>
@@ -155,8 +163,6 @@ export function WorkflowActions({ detail, scope, verified, stale, onSaved, reque
           {preview.goal_accepted_revision !== preview.goal_revision && <details><summary>Review current goal</summary>
             <WorkflowAcceptance detail={preview} scope={scope} verified={verified} stale={stale} onSaved={(result) => { onSaved(result); setPreview(null); }} /></details>}
           {preview.completion.can_finish && <p>All {preview.progress.total} required tasks and {preview.progress.objectives_total} objectives are accepted.</p>}
-          {(preview.repeat_groups ?? []).map((g) => <p key={g.id}>{g.name}: {LOOP_ENDINGS[g.state] ?? "still open"} after round {g.current_round} of {g.max_rounds}.</p>)}
-          {preview.tasks.some((t) => t.route_state === "not_selected") && <p>Not needed on the path this workflow took: {preview.tasks.filter((t) => t.route_state === "not_selected").map((t) => t.title).join(", ")}. They do not count toward Finish.</p>}
           <p>Finishing makes this workflow read-only. Your project stays open. Only its verified human owner can finish it; task autonomy never finishes a workflow.</p>
         </>}
       </>}

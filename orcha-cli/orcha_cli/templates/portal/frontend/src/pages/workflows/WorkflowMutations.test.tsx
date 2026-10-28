@@ -134,6 +134,8 @@ it("finish says how each loop ended and which steps were not needed", async () =
   vi.stubGlobal("fetch", vi.fn(async (url: string) => jsonResponse(url.endsWith("/completion-check") ? { can_finish: true, blockers: [] } : detail)));
   render(<MemoryRouter><WorkflowActions detail={detail} scope={scope()} verified stale={false} onSaved={vi.fn()} /></MemoryRouter>);
   fireEvent.click(screen.getByRole("button", { name: "Finish checklist" }));
-  expect(await screen.findByText("Draft and review: the loop ended after round 2 of 3.")).toBeVisible();
-  expect(screen.getByText("Not needed on the path this workflow took: Build iOS. They do not count toward Finish.")).toBeVisible();
+  expect(await screen.findByText("Loop “Draft and review” exited after round 2 of 3")).toBeVisible();
+  expect(screen.getByText("done")).toBeVisible();
+  expect(screen.getByText("agent turns 0 of 40")).toBeVisible();
+  expect(screen.getByText(/Not selected on the path this workflow took: Build iOS\. A Not selected step never counts toward Finish\./)).toBeVisible();
 });
