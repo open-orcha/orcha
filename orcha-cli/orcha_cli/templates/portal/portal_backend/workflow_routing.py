@@ -20,6 +20,15 @@ def flexible_enabled():
     return os.environ.get(FLAG, "").strip().lower() in {"1", "true", "on", "yes"}
 
 
+def capability():
+    """The flexible-workflow fields of a Capability."""
+    on = flexible_enabled()
+    return {
+        "flexible_workflows": on,
+        "semantics_versions_supported": [1, 2] if on else [1],
+    }
+
+
 def wants_flow(draft):
     return bool(
         draft.get("repeat_groups")

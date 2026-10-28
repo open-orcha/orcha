@@ -3181,6 +3181,18 @@
             ],
             "title": "Reason",
             "default": "integration_required"
+          },
+          "flexible_workflows": {
+            "type": "boolean",
+            "title": "Flexible Workflows",
+            "default": false
+          },
+          "semantics_versions_supported": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "title": "Semantics Versions Supported"
           }
         },
         "type": "object",
@@ -4709,6 +4721,73 @@
         "title": "RepeatGroup",
         "description": "A bounded repeat-until loop: members repeat until the review step reports\n`exit_outcome`, at most `max_rounds` rounds before the owner decides."
       },
+      "RepeatGroupView": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "member_tasks": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Member Tasks"
+          },
+          "review_task": {
+            "type": "string",
+            "title": "Review Task"
+          },
+          "exit_outcome": {
+            "type": "string",
+            "title": "Exit Outcome"
+          },
+          "max_rounds": {
+            "type": "integer",
+            "title": "Max Rounds"
+          },
+          "escalation_owner_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Escalation Owner Id"
+          },
+          "stall_rule": {
+            "type": "string",
+            "title": "Stall Rule"
+          },
+          "current_round": {
+            "type": "integer",
+            "title": "Current Round"
+          },
+          "state": {
+            "type": "string",
+            "title": "State"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "member_tasks",
+          "review_task",
+          "exit_outcome",
+          "max_rounds",
+          "stall_rule",
+          "current_round",
+          "state"
+        ],
+        "title": "RepeatGroupView"
+      },
       "RetryTask": {
         "properties": {
           "expected_revision": {
@@ -5947,6 +6026,37 @@
             },
             "type": "object",
             "title": "Created Task Ids"
+          },
+          "semantics_version": {
+            "type": "integer",
+            "enum": [
+              1,
+              2
+            ],
+            "title": "Semantics Version",
+            "default": 1
+          },
+          "definition_version": {
+            "type": "integer",
+            "title": "Definition Version",
+            "default": 0
+          },
+          "turn_allowance": {
+            "type": "integer",
+            "title": "Turn Allowance",
+            "default": 40
+          },
+          "turns_used": {
+            "type": "integer",
+            "title": "Turns Used",
+            "default": 0
+          },
+          "repeat_groups": {
+            "items": {
+              "$ref": "#/components/schemas/RepeatGroupView"
+            },
+            "type": "array",
+            "title": "Repeat Groups"
           }
         },
         "type": "object",
@@ -6272,6 +6382,37 @@
             },
             "type": "object",
             "title": "Created Task Ids"
+          },
+          "semantics_version": {
+            "type": "integer",
+            "enum": [
+              1,
+              2
+            ],
+            "title": "Semantics Version",
+            "default": 1
+          },
+          "definition_version": {
+            "type": "integer",
+            "title": "Definition Version",
+            "default": 0
+          },
+          "turn_allowance": {
+            "type": "integer",
+            "title": "Turn Allowance",
+            "default": 40
+          },
+          "turns_used": {
+            "type": "integer",
+            "title": "Turns Used",
+            "default": 0
+          },
+          "repeat_groups": {
+            "items": {
+              "$ref": "#/components/schemas/RepeatGroupView"
+            },
+            "type": "array",
+            "title": "Repeat Groups"
           },
           "impact": {
             "$ref": "#/components/schemas/Impact"
@@ -6664,6 +6805,71 @@
                 "type": "null"
               }
             ]
+          },
+          "outcomes": {
+            "items": {
+              "$ref": "#/components/schemas/StepOutcome"
+            },
+            "type": "array",
+            "title": "Outcomes"
+          },
+          "routes": {
+            "items": {
+              "$ref": "#/components/schemas/StepRoute"
+            },
+            "type": "array",
+            "title": "Routes"
+          },
+          "route_state": {
+            "anyOf": [
+              {
+                "type": "string",
+                "const": "not_selected"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Route State"
+          },
+          "awaiting_loop_decision": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "limit_reached",
+                  "stalled",
+                  "missing_outcome",
+                  "ask_owner"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Awaiting Loop Decision"
+          },
+          "repeat_group_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repeat Group Id"
+          },
+          "round": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Round"
           }
         },
         "type": "object",

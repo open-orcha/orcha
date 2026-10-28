@@ -18,6 +18,7 @@ from portal_backend.identity_routes import (
     _proxy_trusted,
 )
 from portal_backend.schemas import workflows as model
+from portal_backend import workflow_routing as routing
 from portal_backend import workflow_service as service
 from portal_backend.workflow_graph import conflict, validate_graph
 from portal_backend.worker_auth import require_work_lane
@@ -140,17 +141,18 @@ def read_context(cur, request, wid):
 def workflow_capability(cid: str, request: Request):
     with db_cursor(readonly=True) as (_, cur):
         require_member_read(cur, request, cid)
+        flexible = routing.capability()
         if not service.WORKFLOWS_INTEGRATED:
-            return model.Capability()
+            return model.Capability(**flexible)
         try:
             resolve_actor(cur, request, cid)
-            return model.Capability(workflow_human_write=True, reason=None)
+            return model.Capability(workflow_human_write=True, reason=None, **flexible)
         except Exception as exc:
             from fastapi import HTTPException
 
             if not isinstance(exc, HTTPException):
                 raise
-            return model.Capability(reason=exc.detail["code"])
+            return model.Capability(reason=exc.detail["code"], **flexible)
 
 
 @app.get("/api/containers/{cid}/workflows", response_model=model.WorkflowList)

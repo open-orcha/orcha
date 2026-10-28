@@ -1,5 +1,5 @@
 // Generated from FastAPI OpenAPI slices. DO NOT EDIT.
-// Workflow source SHA-256: 2bc8a20d66c4c963c56226335a0790aee31d23ccc6961dd3e2677425805f7d61
+// Workflow source SHA-256: 33f2e0219dc7b1aca57f112305cef54644a9aa5d43d934bfc25a86898700e638
 // Evidence GET source SHA-256: f2a794298f992bd3ff3955fa5d6aefc30a97e373794a3c1e9d03c8f46796853e
 // Regenerate with tools/generate-workflow-contract.mjs and both source files.
 
@@ -77,6 +77,8 @@ export type Capability = {
   "workflow_read"?: boolean;
   "workflow_human_write"?: boolean;
   "reason"?: string | null;
+  "flexible_workflows"?: boolean;
+  "semantics_versions_supported"?: Array<number>;
 };
 
 export type CompletionCheck = {
@@ -341,6 +343,19 @@ export type RepeatGroup = {
   "stall_rule"?: "findings_and_artifact" | "off";
 };
 
+export type RepeatGroupView = {
+  "id": string;
+  "name": string;
+  "member_tasks": Array<string>;
+  "review_task": string;
+  "exit_outcome": string;
+  "max_rounds": number;
+  "escalation_owner_id"?: string | null;
+  "stall_rule": string;
+  "current_round": number;
+  "state": string;
+};
+
 export type RetryTask = {
   "expected_revision": number;
   "idempotency_key": string;
@@ -547,6 +562,11 @@ export type WorkflowDetail = {
   "hidden_reason"?: string | null;
   "evidence_capability"?: IntegrationCapability;
   "created_task_ids"?: Record<string, string>;
+  "semantics_version"?: 1 | 2;
+  "definition_version"?: number;
+  "turn_allowance"?: number;
+  "turns_used"?: number;
+  "repeat_groups"?: Array<RepeatGroupView>;
 };
 
 export type WorkflowDraft = {
@@ -596,6 +616,11 @@ export type WorkflowImpact = {
   "hidden_reason"?: string | null;
   "evidence_capability"?: IntegrationCapability;
   "created_task_ids"?: Record<string, string>;
+  "semantics_version"?: 1 | 2;
+  "definition_version"?: number;
+  "turn_allowance"?: number;
+  "turns_used"?: number;
+  "repeat_groups"?: Array<RepeatGroupView>;
   "impact": Impact;
 };
 
@@ -646,6 +671,12 @@ export type WorkflowTask = {
   "current_evidence_set_id"?: string | null;
   "evidence_state"?: string | null;
   "acceptance"?: TaskAcceptance | null;
+  "outcomes"?: Array<StepOutcome>;
+  "routes"?: Array<StepRoute>;
+  "route_state"?: "not_selected" | null;
+  "awaiting_loop_decision"?: "limit_reached" | "stalled" | "missing_outcome" | "ask_owner" | null;
+  "repeat_group_id"?: string | null;
+  "round"?: number | null;
 };
 
 export type WorkflowTaskChoice = {
@@ -746,6 +777,7 @@ export type WorkflowModels = {
   Receipt: Receipt;
   ReleaseTasks: ReleaseTasks;
   RepeatGroup: RepeatGroup;
+  RepeatGroupView: RepeatGroupView;
   RetryTask: RetryTask;
   ReviewHistory: ReviewHistory;
   ReviewRound: ReviewRound;
@@ -1189,6 +1221,15 @@ export const workflowSchemas = {
             "type": "null"
           }
         ]
+      },
+      "flexible_workflows": {
+        "type": "boolean"
+      },
+      "semantics_versions_supported": {
+        "items": {
+          "type": "integer"
+        },
+        "type": "array"
       }
     },
     "type": "object"
@@ -2494,6 +2535,62 @@ export const workflowSchemas = {
       "exit_outcome"
     ]
   },
+  "RepeatGroupView": {
+    "properties": {
+      "id": {
+        "type": "string"
+      },
+      "name": {
+        "type": "string"
+      },
+      "member_tasks": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "review_task": {
+        "type": "string"
+      },
+      "exit_outcome": {
+        "type": "string"
+      },
+      "max_rounds": {
+        "type": "integer"
+      },
+      "escalation_owner_id": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "stall_rule": {
+        "type": "string"
+      },
+      "current_round": {
+        "type": "integer"
+      },
+      "state": {
+        "type": "string"
+      }
+    },
+    "type": "object",
+    "required": [
+      "id",
+      "name",
+      "member_tasks",
+      "review_task",
+      "exit_outcome",
+      "max_rounds",
+      "stall_rule",
+      "current_round",
+      "state"
+    ]
+  },
   "RetryTask": {
     "properties": {
       "expected_revision": {
@@ -3554,6 +3651,28 @@ export const workflowSchemas = {
           "type": "string"
         },
         "type": "object"
+      },
+      "semantics_version": {
+        "type": "integer",
+        "enum": [
+          1,
+          2
+        ]
+      },
+      "definition_version": {
+        "type": "integer"
+      },
+      "turn_allowance": {
+        "type": "integer"
+      },
+      "turns_used": {
+        "type": "integer"
+      },
+      "repeat_groups": {
+        "items": {
+          "$ref": "#/components/schemas/RepeatGroupView"
+        },
+        "type": "array"
       }
     },
     "type": "object",
@@ -3834,6 +3953,28 @@ export const workflowSchemas = {
           "type": "string"
         },
         "type": "object"
+      },
+      "semantics_version": {
+        "type": "integer",
+        "enum": [
+          1,
+          2
+        ]
+      },
+      "definition_version": {
+        "type": "integer"
+      },
+      "turn_allowance": {
+        "type": "integer"
+      },
+      "turns_used": {
+        "type": "integer"
+      },
+      "repeat_groups": {
+        "items": {
+          "$ref": "#/components/schemas/RepeatGroupView"
+        },
+        "type": "array"
       },
       "impact": {
         "$ref": "#/components/schemas/Impact"
@@ -4177,6 +4318,65 @@ export const workflowSchemas = {
         "anyOf": [
           {
             "$ref": "#/components/schemas/TaskAcceptance"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "outcomes": {
+        "items": {
+          "$ref": "#/components/schemas/StepOutcome"
+        },
+        "type": "array"
+      },
+      "routes": {
+        "items": {
+          "$ref": "#/components/schemas/StepRoute"
+        },
+        "type": "array"
+      },
+      "route_state": {
+        "anyOf": [
+          {
+            "type": "string",
+            "const": "not_selected"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "awaiting_loop_decision": {
+        "anyOf": [
+          {
+            "type": "string",
+            "enum": [
+              "limit_reached",
+              "stalled",
+              "missing_outcome",
+              "ask_owner"
+            ]
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "repeat_group_id": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "round": {
+        "anyOf": [
+          {
+            "type": "integer"
           },
           {
             "type": "null"

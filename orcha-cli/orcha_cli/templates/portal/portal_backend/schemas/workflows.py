@@ -30,6 +30,10 @@ class Capability(BaseModel):
     workflow_read: bool = True
     workflow_human_write: bool = False
     reason: str | None = "integration_required"
+    # Outcomes, next-step rules and repeat groups (semantics version 2) are behind the
+    # server switch; clients hide that authoring when this is false.
+    flexible_workflows: bool = False
+    semantics_versions_supported: list[int] = Field(default_factory=lambda: [1])
 
 
 class IntegrationCapability(BaseModel):
@@ -380,6 +384,15 @@ class WorkflowTask(BaseModel):
     current_evidence_set_id: str | None = None
     evidence_state: str | None = None
     acceptance: TaskAcceptance | None = None
+    # Semantics version 2 only; empty or null on version-1 workflows.
+    outcomes: list[StepOutcome] = Field(default_factory=list)
+    routes: list[StepRoute] = Field(default_factory=list)
+    route_state: Literal["not_selected"] | None = None
+    awaiting_loop_decision: (
+        Literal["limit_reached", "stalled", "missing_outcome", "ask_owner"] | None
+    ) = None
+    repeat_group_id: str | None = None
+    round: int | None = None
 
 
 class Progress(BaseModel):
@@ -434,6 +447,19 @@ class Activity(BaseModel):
     created_at: datetime
 
 
+class RepeatGroupView(BaseModel):
+    id: str
+    name: str
+    member_tasks: list[str]
+    review_task: str
+    exit_outcome: str
+    max_rounds: int
+    escalation_owner_id: str | None = None
+    stall_rule: str
+    current_round: int
+    state: str
+
+
 class WorkflowDetail(BaseModel):
     id: str
     container_id: str
@@ -473,6 +499,11 @@ class WorkflowDetail(BaseModel):
         default_factory=IntegrationCapability
     )
     created_task_ids: dict[str, str] = Field(default_factory=dict)
+    semantics_version: Literal[1, 2] = 1
+    definition_version: int = 0
+    turn_allowance: int = 40
+    turns_used: int = 0
+    repeat_groups: list[RepeatGroupView] = Field(default_factory=list)
 
 
 class VisibilityCheck(BaseModel):

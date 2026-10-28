@@ -359,3 +359,80 @@ def test_owner_raises_the_limit_and_the_loop_continues(setup_workflow, flexible)
         row = cur.fetchone()
         inputs = json.loads(row["inputs"]) if isinstance(row["inputs"], str) else row["inputs"]
         assert row["trigger_kind"] == "owner_raise_limit" and inputs["owner_note"] == "One more try"
+
+
+def test_detail_shows_the_flow_rounds_and_allowance(setup_workflow, flexible):
+    execute = setup_workflow[-1]
+    w = prepare_and_start(setup_workflow, execute("create", loop_draft(setup_workflow[2])))
+    assert w["semantics_version"] == 2 and w["definition_version"] == 1
+    assert (w["turn_allowance"], w["turns_used"]) == (40, 0)
+    assert w["capability"]["flexible_workflows"] is True
+    assert w["capability"]["semantics_versions_supported"] == [1, 2]
+    [group] = w["repeat_groups"]
+    assert (group["current_round"], group["state"], group["max_rounds"]) == (1, "open", 3)
+    ids = {t["title"]: t["id"] for t in w["tasks"]}
+    write, review = ids["Write the launch post"], ids["Review the post"]
+    byid = {t["id"]: t for t in w["tasks"]}
+    assert [o["name"] for o in byid[review]["outcomes"]] == ["Approved", "Changes requested"]
+    assert {r["destination"] for r in byid[review]["routes"]} == {"exit_group", "return"}
+    assert byid[write]["repeat_group_id"] == group["id"] and byid[write]["round"] == 1
+    assert byid[ids["Publish"]]["repeat_group_id"] is None
+    assert byid[ids["Publish"]]["round"] is None
+    w = finish(setup_workflow, w, write)
+    w = finish(setup_workflow, w, review, "Changes requested", ["Too long"])
+    assert w["repeat_groups"][0]["current_round"] == 2
+    assert {t["id"]: t["round"] for t in w["tasks"]}[write] == 2
+    assert w["turns_used"] == 2
+
+
+def test_version_one_detail_has_no_flow(setup_workflow, monkeypatch):
+    monkeypatch.delenv(workflow_routing.FLAG, raising=False)
+    execute = setup_workflow[-1]
+    draft = loop_draft(setup_workflow[2])
+    draft.pop("repeat_groups")
+    for t in draft["tasks"]:
+        t.pop("outcomes", None), t.pop("routes", None)
+    w = execute("create", draft)
+    assert w["semantics_version"] == 1 and w["repeat_groups"] == []
+    assert w["capability"]["flexible_workflows"] is False
+    assert w["capability"]["semantics_versions_supported"] == [1]
+    assert all(t["outcomes"] == [] and t["round"] is None for t in w["tasks"])
+
+
+def test_owner_accepts_anyway_at_the_limit_and_dependents_proceed(setup_workflow, flexible):
+    execute = setup_workflow[-1]
+    draft = loop_draft(setup_workflow[2])
+    draft["repeat_groups"][0]["max_rounds"] = 1
+    w = prepare_and_start(setup_workflow, execute("create", draft))
+    ids = {t["title"]: t["id"] for t in w["tasks"]}
+    write, review = ids["Write the launch post"], ids["Review the post"]
+    w = finish(setup_workflow, w, write)
+    w = finish(setup_workflow, w, review, "Changes requested", ["Still too long"])
+    w = execute("loop_decision", {"kind": "accept_override", "task_id": review}, w["id"])
+    byid = {t["id"]: t for t in w["tasks"]}
+    assert byid[ids["Publish"]]["can_start"]
+    assert byid[review]["awaiting_loop_decision"] is None
+    assert w["repeat_groups"][0]["state"] == "exited"
+    with db_cursor(readonly=True) as (_, cur):
+        cur.execute(
+            "SELECT chosen,original_outcome FROM workflow_owner_decisions WHERE workflow_id=%s",
+            (w["id"],),
+        )
+        assert tuple(dict(cur.fetchone()).values()) == ("accept_override", "Changes requested")
+
+
+def test_owner_stops_the_loop_and_later_steps_are_not_needed(setup_workflow, flexible):
+    execute = setup_workflow[-1]
+    draft = loop_draft(setup_workflow[2])
+    draft["repeat_groups"][0]["max_rounds"] = 1
+    w = prepare_and_start(setup_workflow, execute("create", draft))
+    ids = {t["title"]: t["id"] for t in w["tasks"]}
+    write, review = ids["Write the launch post"], ids["Review the post"]
+    w = finish(setup_workflow, w, write)
+    w = finish(setup_workflow, w, review, "Changes requested", ["Still too long"])
+    w = execute("loop_decision", {"kind": "stop", "task_id": review}, w["id"])
+    byid = {t["id"]: t for t in w["tasks"]}
+    assert byid[ids["Publish"]]["route_state"] == "not_selected"
+    assert not byid[ids["Publish"]]["can_start"]
+    assert w["repeat_groups"][0]["state"] == "stopped"
+    assert "loop_decision_pending" not in {b["code"] for b in w["completion"]["blockers"]}

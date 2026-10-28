@@ -538,6 +538,10 @@ class WorkflowService:
                 (w["container_id"],),
             )
         }
+        outcomes, routes, groups = (
+            routing.load_flow(self, wid) if w.get("semantics_version") == 2 else ({}, {}, [])
+        )
+        group_of = {m: g for g in groups for m in g["member_tasks"]}
         for tid, task in s["tasks"].items():
             executions = executions_by_task[tid]
             live = next((e for e in executions if e["state"] in LIVE_EXECUTIONS), None)
@@ -577,6 +581,10 @@ class WorkflowService:
             )
             row["evidence_state"] = last["evidence_state"] if last else None
             row["acceptance"] = s["acceptances"].get(tid)
+            row["outcomes"] = outcomes.get(tid, [])
+            row["routes"] = routes.get(tid, [])
+            row["repeat_group_id"] = group_of[tid]["id"] if tid in group_of else None
+            row["round"] = group_of[tid]["current_round"] if tid in group_of else None
             terminal = task["status"] in {"completed", "cancelled"}
             started = not never_started(tid)
             current = next(
@@ -951,7 +959,9 @@ class WorkflowService:
                 "workflow_read": True,
                 "workflow_human_write": can_write,
                 "reason": reason,
+                **routing.capability(),
             },
+            repeat_groups=groups,
             available_actions=workflow_actions,
             progress=s["progress"],
             completion=s["completion"],
