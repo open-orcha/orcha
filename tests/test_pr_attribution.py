@@ -53,8 +53,9 @@ def test_migration_042_exists_and_is_next_sequential():
     # agent-run API keys (container_provider_keys.use_for_agents).
     # 074 moves approval authority to tasks; 075-077 add workflows, durable
     # evidence and worker controls; 078 freezes evidence supplier attribution;
-    # 079 distinguishes evidence reviewed on import from owner-supplied work.
-    # 080 adds workflow visibility; 081 adds explicit review handoffs.
+    # 079 distinguishes evidence reviewed on import from owner-supplied work;
+    # 080 adds reversible workflow hide/restore (workflows.hidden_at, GH #350).
+    # 081 adds explicit review handoffs.
     # Keep this pin moving with the chain tip so gaps/dupes still fail loudly.
     assert numbers[-1] == 81, f"081 must be the latest migration, saw {numbers[-1]:03d}"
 
