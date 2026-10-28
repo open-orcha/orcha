@@ -173,3 +173,79 @@ async def test_author_reassignment_cannot_take_independent_review_turn(client):
         cur.execute("INSERT INTO agent_tasks(agent_id,task_id,assignment_status) VALUES (%s,%s,'assigned')", (p.ann,p.tasks['review']))
     result=await p.reserve(p.ann,'review',expect=409)
     assert result['detail']['code']=='independent_review_required'
+
+
+async def owner_action(p, key, action):
+    detail = await p.detail(p.wid)
+    task = next(t for t in detail['tasks'] if t['id'] == p.tasks[key])
+    return await p.call('POST', f"/api/tasks/{task['id']}/{action}",
+                        p.mutation(detail, expected_work_revision=task['work_revision']))
+
+
+@pytest.mark.parametrize('side', ['source', 'review'])
+@pytest.mark.parametrize('exit_kind', ['stop', 'lost'])
+async def test_interrupted_round_requires_owner_retry_and_a_new_clean_round(client, side, exit_kind):
+    p = Project(client)
+    await p.start('serial', [('design', p.ann, []), ('review', p.bob, []), ('later', p.bob, [])])
+    source = await launch(p, p.ann, 'design')
+    h = await handoff(p, source)
+    run, aid, key = source, p.ann, 'design'
+    if side == 'review':
+        await stopped(p, p.ann, source)
+        run = await launch(p, p.bob, 'review')
+        aid, key = p.bob, 'review'
+        await verdict(p, run, h, 'clean')
+    await owner_action(p, key, 'stop')
+    # Interrupted handoffs cannot release capacity without proof or owner recovery.
+    await p.reserve(p.bob, 'later', expect=409)
+    if exit_kind == 'lost':
+        from portal_backend import sql
+        with db_cursor() as (_, cur):
+            cur.execute('UPDATE workflow_executions SET first_stop_at=%s,last_runner_contact_at=%s WHERE run_id=%s',
+                        (sql.ago(7200), sql.ago(7200), run['run_id']))
+        await owner_action(p, key, 'release-lost-worker')
+    else:
+        await stopped(p, aid, run)
+    history = (await client.get(f'/api/workflows/{p.wid}/review-handoffs')).json()['handoffs']
+    assert history[-1]['phase'] == 'cancelled'
+    detail = await p.detail(p.wid)
+    for task in detail['tasks']:
+        if task['id'] in (p.tasks['design'], p.tasks['review']):
+            assert task['awaiting_owner_decision']
+            assert next(a for a in task['available_actions'] if a['action'] == 'retry')['enabled']
+    for k in ('design', 'review'):
+        await owner_action(p, k, 'retry')
+    correction = await launch(p, p.ann, 'design')
+    premature = await client.post(f"/api/tasks/{p.tasks['design']}/done", json={
+        'agent_id': p.ann, 'result': 'Retry must not waive CLEAN'},
+        headers={'X-Orcha-Run-Token': correction['token']})
+    assert premature.status_code == 409
+    assert premature.json()['detail']['code'] == 'clean_review_required'
+    h2 = await handoff(p, correction, 'Revised work after interrupted review')
+    await stopped(p, p.ann, correction)
+    reviewer = await launch(p, p.bob, 'review')
+    await verdict(p, reviewer, h2, 'clean')
+    await stopped(p, p.bob, reviewer)
+    tasks = (await p.detail(p.wid))['tasks']
+    assert all(t['status'] == 'needs_verification' for t in tasks if t['id'] in (p.tasks['design'], p.tasks['review']))
+
+
+async def test_cancelled_reviewer_offers_retry_without_reviving_it_or_waiving_clean(client):
+    p = Project(client)
+    await p.start('serial', [('design', p.ann, []), ('review', p.bob, [])])
+    source = await launch(p, p.ann, 'design')
+    await handoff(p, source)
+    await stopped(p, p.ann, source)
+    await p.call('POST', f"/api/tasks/{p.tasks['review']}/cancel",
+                 {'actor_agent_id': p.owner, 'reason': 'Owner cancels reviewer'})
+    detail = await p.detail(p.wid)
+    source_task = next(t for t in detail['tasks'] if t['id'] == p.tasks['design'])
+    assert source_task['awaiting_owner_decision']
+    assert next(a for a in source_task['available_actions'] if a['action'] == 'retry')['enabled']
+    await owner_action(p, 'design', 'retry')
+    correction = await launch(p, p.ann, 'design')
+    await handoff(p, correction, expect=409)
+    assert next(t for t in (await p.detail(p.wid))['tasks'] if t['id'] == p.tasks['review'])['status'] == 'cancelled'
+    premature = await client.post(f"/api/tasks/{p.tasks['design']}/done", json={
+        'agent_id': p.ann, 'result': 'No independent review yet'}, headers={'X-Orcha-Run-Token': correction['token']})
+    assert premature.status_code == 409 and premature.json()['detail']['code'] == 'clean_review_required'

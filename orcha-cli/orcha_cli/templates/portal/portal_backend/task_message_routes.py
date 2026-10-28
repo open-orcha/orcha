@@ -39,8 +39,8 @@ def post_message(tid: str, body: TaskMessage, request: Request):
     with db_cursor() as (conn, cur):
         t = _require_task(cur, tid)
         # Serialize with cancellation and other notices before deciding delivery.
-        cur.execute("SELECT status FROM tasks WHERE id=%s" + sql.for_update(), (tid,))
-        t["status"] = cur.fetchone()["status"]
+        cur.execute("SELECT status,result FROM tasks WHERE id=%s" + sql.for_update(), (tid,))
+        t.update(cur.fetchone())
         # Per-project identity: a trusted proxy login IS the author (403 non-member) —
         # a browser-lane post is attributed to the verified member, never to a
         # client-chosen id (and never anonymously: the trusted lane always attributes).
@@ -77,9 +77,9 @@ def post_message(tid: str, body: TaskMessage, request: Request):
                 raise HTTPException(403, "System status must be anonymous and have no attachments")
             if t["status"] in ("completed", "cancelled"):
                 return {"task_id": tid, "message_id": None, "suppressed": True}
-            cur.execute("SELECT id FROM task_messages WHERE task_id=%s AND author_id IS NULL AND body=%s ORDER BY created_at DESC LIMIT 1", (tid, body.body))
+            cur.execute("SELECT id,body FROM task_messages WHERE task_id=%s AND author_id IS NULL ORDER BY created_at DESC,id DESC LIMIT 1", (tid,))
             previous = cur.fetchone()
-            if previous:
+            if previous and previous["body"] == body.body:
                 return {"task_id": tid, "message_id": str(previous["id"]), "deduplicated": True}
         # #301: re-validate any staged attachment refs against disk (re-deriving size/type) so
         # the JSONB only ever holds real, this-task files — never client-fabricated paths.
@@ -122,6 +122,18 @@ def post_message(tid: str, body: TaskMessage, request: Request):
         cur.execute("SELECT agent_id FROM agent_tasks WHERE task_id=%s AND assignment_status <> 'done'", (tid,))
         notified = 0
         recipients = cur.fetchall()
+        # Legacy /done closes the assignment before human verification. Deliver
+        # feedback to that exact submitter, not every replaced historical assignee.
+        if t["status"] == "needs_verification":
+            result = t.get("result") or {}
+            if isinstance(result, str):
+                result = json.loads(result)
+            submitter = result.get("by_agent_id") if isinstance(result, dict) else None
+            if submitter and all(str(r["agent_id"]) != str(submitter) for r in recipients):
+                cur.execute("SELECT agent_id FROM agent_tasks WHERE task_id=%s AND agent_id=%s", (tid, submitter))
+                submitted_assignment = cur.fetchone()
+                if submitted_assignment:
+                    recipients.append(submitted_assignment)
         if body.system_notice or t["status"] in ("completed", "cancelled"):
             recipients = []
         for row in recipients:

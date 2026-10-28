@@ -21,6 +21,52 @@ def active_handoff(cur, wid):
     return {k: str(v) if isinstance(v, UUID) else v for k,v in row.items()} if row else None
 
 
+def interrupt_handoff(svc, w, reason, task_id=None):
+    """End an interrupted round without releasing a worker or waiving CLEAN.
+
+    Surviving work needs an explicit owner Retry. Existing holds, evidence and
+    executions remain intact; an unconfirmed worker still owns its slot.
+    """
+    h = active_handoff(svc.cur, w['id'])
+    if not h or (task_id and task_id not in (h['source_task_id'], h['review_task_id'])):
+        return
+    svc.cur.execute("UPDATE workflow_review_handoffs SET phase='cancelled' WHERE id=%s", (h['id'],))
+    for tid in (h['source_task_id'], h['review_task_id']):
+        svc.cur.execute("""UPDATE tasks SET status='not_ready',
+            awaiting_owner_decision=COALESCE(awaiting_owner_decision,'worker_released'),
+            owner_decision_at=COALESCE(owner_decision_at,%s)
+            WHERE id=%s AND status NOT IN ('completed','cancelled')""", (sql.utcnow(), tid))
+    from portal_backend.agent_status import log_event
+    log_event(svc.cur, w['container_id'], 'system', None, 'task', h['source_task_id'],
+              'review_handoff_interrupted', {'handoff_id': h['id'], 'reason': reason})
+
+
+def reconcile_handoff(svc, w):
+    h = active_handoff(svc.cur, w['id'])
+    if not h:
+        return
+    if w['status'] in {'cancelled', 'completed'}:
+        interrupt_handoff(svc, w, 'workflow_terminal')
+        return
+    for side in ('source', 'review'):
+        t = svc.task(w['id'], h[side + '_task_id'])
+        if t['status'] in {'completed', 'cancelled'} or t['work_revision'] != h[side + '_work_revision']:
+            interrupt_handoff(svc, w, 'task_changed')
+            return
+        # Check the current turn too: correction may already have a new execution.
+        e = svc.live_turn(t['id'])
+        if e and (e['first_stop_at'] or e['state'] == 'stopping'):
+            interrupt_handoff(svc, w, 'worker_stopping')
+            return
+    for field in ('source_execution_id', 'review_execution_id'):
+        if h[field]:
+            e = svc.one('SELECT * FROM workflow_executions WHERE id=%s', (h[field],))
+            if e and (e['first_stop_at'] or e['state'] in {'released_lost','aborted'} or
+                      (e['state'] == 'released' and e['release_reason'] != 'review_handoff')):
+                interrupt_handoff(svc, w, 'worker_released')
+                return
+
+
 def require_independent_reviewer(svc, source_task_id, source_execution_id, reviewer_id):
     source = svc.one('SELECT claimant_id FROM workflow_executions WHERE id=%s', (source_execution_id,))
     assigned = svc.one("SELECT 1 AS n FROM agent_tasks WHERE task_id=%s AND agent_id=%s AND assignment_status<>'done'",
@@ -143,16 +189,19 @@ def after_stopped(svc, w, task, execution):
     if not (source_side or review_side):
         return
     if w['status'] not in {'active', 'paused'} or task['status'] == 'cancelled':
-        svc.cur.execute("UPDATE workflow_review_handoffs SET phase='cancelled' WHERE id=%s", (h['id'],))
+        interrupt_handoff(svc, w, 'task_or_workflow_terminal')
         return
     source = svc.task(w['id'], h['source_task_id'], h['source_work_revision'])
     review = svc.task(w['id'], h['review_task_id'], h['review_work_revision'])
     if source['status'] in {'completed','cancelled'} or review['status'] in {'completed','cancelled'}:
-        svc.cur.execute("UPDATE workflow_review_handoffs SET phase='cancelled' WHERE id=%s", (h['id'],))
+        interrupt_handoff(svc, w, 'task_or_workflow_terminal')
         return
     current = svc.one('SELECT * FROM workflow_executions WHERE id=%s', (execution['id'],))
-    if not current['worker_stopped_at'] or current['state'] not in {'running','recovery_needed'} or current['first_stop_at']:
-        return  # Stop/cancel/lost-worker recovery never impersonates a review handoff.
+    if current['first_stop_at']:
+        interrupt_handoff(svc, w, 'worker_stopped')
+        return
+    if not current['worker_stopped_at'] or current['state'] not in {'running','recovery_needed'}:
+        return
     saved_reference(svc, task, execution['id'])
     fence_execution(svc.cur, current)
     svc.cur.execute("UPDATE workflow_executions SET state='released',released_at=%s,release_reason='review_handoff' WHERE id=%s", (sql.utcnow(), execution['id']))

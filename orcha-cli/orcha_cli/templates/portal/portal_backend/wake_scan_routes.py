@@ -90,6 +90,12 @@ def wake_scan(
         # Agent runs on an API key (migration 071): the sealed key per agent runtime whose
         # provider key is opted in (use_for_agents); None = leave the worker on its subscription.
         agent_key_blobs = agent_keys_enc(cur, cid)
+        agents = list_wake_agents(cur, cid, cooldown)
+        if not browser and container["status"] == "active" and wakes_enabled:
+            from portal_backend.stale_wake_events import stale_pending_events, reconcile_events
+            for agent in agents:
+                obsolete = stale_pending_events(cur, str(agent["id"]), agent["delivered_ts"])
+                reconcile_events(cur, str(agent["id"]), cid, list(obsolete)[:200], dry_run=False)
         candidates = [
             build_wake_candidate(
                 cur,
@@ -108,7 +114,7 @@ def wake_scan(
                 resolve_model=_compatibility["resolve_model"],
                 resolve_model_runtime=_compatibility["resolve_model_runtime"],
             )
-            for agent in list_wake_agents(cur, cid, cooldown)
+            for agent in agents
         ]
         # Budget hard stop (budget_routes): a paused agent keeps its candidate but loses
         # should_wake, so the daemon starts no NEW run. Never touches in-flight work.

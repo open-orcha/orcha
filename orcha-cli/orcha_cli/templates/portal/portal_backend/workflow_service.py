@@ -1176,7 +1176,7 @@ class WorkflowService:
 
     def reconcile(self, wid):
         require_capability()
-        self.lock(wid)
+        w = self.lock(wid)
         # The host records worker termination before its follow-up
         # confirm-stopped call. If that follow-up is lost, retain the exclusive
         # turn but make the recovery state and owner attention durable. A quiet
@@ -1191,11 +1191,8 @@ class WorkflowService:
                    )""",
             (wid,),
         )
-        self.cur.execute("""UPDATE workflow_review_handoffs SET phase='cancelled'
-            WHERE workflow_id=%s AND phase IN ('source_stopping','review','review_stopping','correction')
-            AND (EXISTS (SELECT 1 FROM workflows w WHERE w.id=workflow_id AND w.status='cancelled')
-                 OR EXISTS (SELECT 1 FROM tasks t WHERE t.id=source_task_id AND t.status='cancelled')
-                 OR EXISTS (SELECT 1 FROM tasks t WHERE t.id=review_task_id AND t.status='cancelled'))""", (wid,))
+        from portal_backend.workflow_review_handoff import reconcile_handoff
+        reconcile_handoff(self, w)
         s = self.snapshot(wid)
         for tid, task in s["tasks"].items():
             state = stored_status(
@@ -2414,6 +2411,9 @@ class WorkflowService:
         )
 
     def _release_execution(self, e, reason, lost=False):
+        from portal_backend.workflow_review_handoff import interrupt_handoff
+        w = self.one('SELECT * FROM workflows WHERE id=%s', (e['workflow_id'],))
+        interrupt_handoff(self, w, reason, e['task_id'])
         self.cur.execute(
             "UPDATE workflow_executions SET state=%s,released_at=%s,release_reason=%s,generation_revoked_at=COALESCE(generation_revoked_at,%s) WHERE id=%s",
             (
@@ -2426,6 +2426,8 @@ class WorkflowService:
         )
 
     def _stop(self, w, t, actor, origin, reason):
+        from portal_backend.workflow_review_handoff import interrupt_handoff
+        interrupt_handoff(self, w, origin, t['id'])
         e = self.live_turn(t["id"], lock=True)
         if not e:
             return

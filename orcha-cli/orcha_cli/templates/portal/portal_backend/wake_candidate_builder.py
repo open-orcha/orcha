@@ -156,7 +156,7 @@ def build_wake_candidate(
         directive_bucket=_DRAIN_DIRECTIVE,
     )
 
-    # Obsolete rows are reconciled only by the bounded, audited recovery operation.
+    # Remaining obsolete rows wait for a bounded, audited daemon or explicit recovery batch.
     handled_event_ids = [eid for eid in handled_event_ids if eid not in obsolete]
     delivery_handled_event_ids = [eid for eid in delivery_handled_event_ids if eid not in obsolete]
 
