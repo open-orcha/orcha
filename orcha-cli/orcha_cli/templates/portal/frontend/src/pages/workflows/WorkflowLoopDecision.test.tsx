@@ -1,6 +1,8 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
+import { MemoryRouter } from "react-router-dom";
 import { WorkflowLoopDecision } from "./WorkflowLoopDecision";
+import { WorkflowTaskInspector } from "./WorkflowTaskInspector";
 import { exampleTask, exampleWorkflow, jsonResponse } from "./workflowTestFixtures";
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
@@ -29,4 +31,29 @@ it("tells people other than the owner who decides", () => {
   render(<WorkflowLoopDecision detail={detail} task={task} scope={{ origin: "o", project: detail.container_id, identity: "someone-else" }} stale={false} agents={[]} onSaved={vi.fn()} />);
   expect(screen.getByText(/The workflow owner decides what happens next/)).toBeVisible();
   expect(screen.queryByRole("button")).toBeNull();
+});
+
+it("shows a refused decision's save status once, in the decision section", async () => {
+  const detail = exampleWorkflow({ repeat_groups: [group], tasks: [task] });
+  const scope = { origin: "https://orcha.example", project: detail.container_id, identity: detail.owner_human_id };
+  vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ detail: { code: "revision_conflict", message: "The workflow changed. Refresh and decide again." } }, 409)));
+  render(<WorkflowLoopDecision detail={detail} task={task} scope={scope} stale={false} agents={[]} onSaved={vi.fn()} />);
+  fireEvent.click(screen.getByLabelText(/Stop the loop/));
+  fireEvent.click(screen.getByRole("button", { name: "Stop the loop" }));
+  expect(await screen.findByText("The workflow changed. Refresh and decide again.")).toBeVisible();
+  expect(screen.getAllByLabelText("Save status")).toHaveLength(1);
+});
+
+it("shows a loop decision's save status once in the task inspector", async () => {
+  const detail = exampleWorkflow({ repeat_groups: [group], tasks: [task] });
+  const scope = { origin: "https://orcha.example", project: detail.container_id, identity: detail.owner_human_id };
+  vi.stubGlobal("fetch", vi.fn(async (url: string) => String(url).endsWith("/decisions")
+    ? jsonResponse({ detail: { code: "revision_conflict", message: "The workflow changed. Refresh and decide again." } }, 409)
+    : jsonResponse({ detail: { code: "not_found", message: "Not found" } }, 404)));
+  render(<MemoryRouter><WorkflowTaskInspector detail={detail} task={task} cid={detail.container_id} scope={scope} verified stale={false} agents={[]}
+    actorName={(id) => id} onSaved={vi.fn()} onClose={vi.fn()} onExpand={vi.fn()} request={null} onRequest={vi.fn()} reviewRequest={null} /></MemoryRouter>);
+  fireEvent.click(screen.getByLabelText(/Stop the loop/));
+  fireEvent.click(screen.getByRole("button", { name: "Stop the loop" }));
+  expect(await screen.findByText("The workflow changed. Refresh and decide again.")).toBeVisible();
+  expect(screen.getAllByLabelText("Save status")).toHaveLength(1);
 });

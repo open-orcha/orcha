@@ -90,6 +90,6 @@ export function WorkflowLoopDecision({ detail, task, scope, stale, agents, onSav
     </fieldset>
     {invalid && kind && <p>{invalid}</p>}
     <Button variant={kind === "stop" ? "danger" : "primary"} disabled={stale || unresolved || !!invalid} onClick={() => void send()}>{kind ? LABELS[kind] : "Decide"}</Button>
-    <WorkflowOperationNotice scope={scope} slot={slot} onSaved={onSaved} canRetry={async () => operation?.operation === "loop_decision" && !stale} />
+    {operation?.operation === "loop_decision" && <WorkflowOperationNotice scope={scope} slot={slot} onSaved={onSaved} canRetry={async () => !stale} />}
   </section>;
 }

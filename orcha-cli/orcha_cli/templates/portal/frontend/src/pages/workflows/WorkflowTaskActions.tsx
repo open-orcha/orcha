@@ -215,7 +215,8 @@ export function WorkflowTaskActions({ detail, task, scope, verified, stale, agen
       </div>
       {unavailable.length > 0 && <details className="wf-notavail-wrap"><summary className="wf-muted">Not available now ({unavailable.length})</summary>
         <dl className="wf-notavail">{unavailable.map((key) => <div key={key}><dt>{label(key)}</dt><dd>{taskReason(detail, task, key, verified)}</dd></div>)}</dl></details>}
-      {!action && notice}
+      {/* A loop decision's save status shows in its own "Decision needed" section. */}
+      {!action && operation?.operation !== "loop_decision" && notice}
       {action && <Dialog title={label(action)} description={<>{task.title}</>} onClose={dismiss} size="lg" className="wf-page"
         footer={<><Button disabled={busy || unresolved} onClick={done}>Close</Button>{confirmButton}</>}>{notice}{form}</Dialog>}
     </>;
