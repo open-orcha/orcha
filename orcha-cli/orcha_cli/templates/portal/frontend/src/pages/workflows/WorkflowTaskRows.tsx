@@ -22,8 +22,9 @@ export interface WorkflowTaskRowProps {
   menuItems: (MenuItemSpec | "separator")[];
   /** Dependencies list: "Depends on · Needed by" replaces the state sub-line. */
   subline?: ReactNode;
-  /** Repeat group the step belongs to (semantics version 2), from `repeat_groups`. */
-  loop?: { name: string; round: number; max: number } | null;
+  /** Repeat group the step belongs to (semantics version 2), from `repeat_groups`. `edge` places the
+   * row in the bracket drawn around consecutive member rows (issue #362: loops are a bracket, not a back-edge). */
+  loop?: { name: string; round: number; max: number; exit?: string; edge?: "first" | "middle" | "last" | "only" } | null;
 }
 
 export const WorkflowTaskRow = forwardRef<HTMLElement, WorkflowTaskRowProps>(function WorkflowTaskRow({ task, selected, onSelect, assignees, actorName, menuItems, subline, loop }, ref) {
@@ -35,12 +36,12 @@ export const WorkflowTaskRow = forwardRef<HTMLElement, WorkflowTaskRowProps>(fun
   const sub = subline ?? (withdrawn ? `Withdrawn by ${task.withdrawn_by ? actorName(task.withdrawn_by) : "Name unavailable"}`
     : task.display_state.release_available_at ? `Release lost worker becomes available at ${formatServerTime(task.display_state.release_available_at)}`
     : [task.display_state.label, task.blockers[0]?.message].filter(Boolean).join(" · "));
-  return <Row ref={(el) => { if (el) el.id = `workflow-task-${task.id}`; if (typeof ref === "function") ref(el); else if (ref) ref.current = el; }} id={`workflow-task-${task.id}`} className="wf-row is-two" selected={selected} dim={withdrawn || notSelected} onActivate={onSelect} title={task.title}>
+  return <Row ref={(el) => { if (el) el.id = `workflow-task-${task.id}`; if (typeof ref === "function") ref(el); else if (ref) ref.current = el; }} id={`workflow-task-${task.id}`} className={`wf-row is-two${loop ? ` wf-loop is-loop-${loop.edge ?? "only"}` : ""}`} selected={selected} dim={withdrawn || notSelected} onActivate={onSelect} title={task.title}>
     <span className="wf-st"><StatusIcon status={task.status} label={task.display_state.label} /></span>
     <span className="wf-title"><span>{task.title}</span><span className="wf-sub">{sub}</span></span>
     <span className="wf-chips">
       <Chip title={task.autonomy === "on" ? "Task autonomy ON: the agent approves its own plan and finished work" : "Task autonomy OFF: plan and finished work need approval"}>{task.autonomy === "on" ? "Autonomy ON" : "Autonomy OFF"}</Chip>
-      {loop ? <Chip title={`Repeat group: ${loop.name}`}>{`Round ${loop.round} of ${loop.max}`}</Chip> : null}
+      {loop ? <Chip title={`Repeat group: ${loop.name}${loop.exit ? `. ${loop.exit}` : ""}`}>{`Round ${loop.round} of ${loop.max}`}</Chip> : null}
       {task.awaiting_loop_decision ? <Chip dot="warn" title={task.display_state.label}>Decision needed</Chip> : null}
       {warning ? <Chip dot="warn" title={warning}>Warning</Chip> : null}
     </span>

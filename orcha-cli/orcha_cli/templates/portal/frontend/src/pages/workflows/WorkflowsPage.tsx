@@ -212,11 +212,15 @@ function WorkflowScreen() {
     })),
   ];
   const taskRows = (dependencies: boolean) => <WorkflowTaskRows label={dependencies ? "Workflow tasks and dependencies" : "Workflow tasks"}>
-    {detail!.tasks.filter((t) => !dependencies || !taskSearch || t.title.toLowerCase().includes(taskSearch.toLowerCase())).map((t) => {
+    {detail!.tasks.filter((t) => !dependencies || !taskSearch || t.title.toLowerCase().includes(taskSearch.toLowerCase())).map((t, i, shown) => {
       const names = (ids: string[]) => ids.map((id) => detail!.tasks.find((p) => p.id === id)?.title ?? "Prerequisite unavailable").join(", ");
       const dependents = detail!.tasks.filter((other) => other.depends_on.includes(t.id)).map((o) => o.id);
       const group = t.repeat_group_id ? detail!.repeat_groups?.find((g) => g.id === t.repeat_group_id) : undefined;
-      const loop = group ? { name: group.name, round: t.round ?? group.current_round, max: group.max_rounds } : null;
+      const inGroup = (other?: WorkflowDetail["tasks"][number]) => !!other && other.repeat_group_id === t.repeat_group_id;
+      const edge: "first" | "middle" | "last" | "only" = inGroup(shown[i - 1]) ? (inGroup(shown[i + 1]) ? "middle" : "last") : (inGroup(shown[i + 1]) ? "first" : "only");
+      const reviewer = group && detail!.tasks.find((r) => r.id === group.review_task)?.title;
+      const loop = group ? { name: group.name, round: t.round ?? group.current_round, max: group.max_rounds, edge,
+        exit: reviewer ? `Ends when ${reviewer} reports “${group.exit_outcome}”.` : undefined } : null;
       return <WorkflowTaskRow key={t.id} loop={loop} task={t} selected={selectedId === t.id} onSelect={() => { setSelectedId(t.id); setTaskRequest(null); }} actorName={actorName}
         assignees={t.assignee_ids.map((id) => ({ id, alias: actorName(id), kind: snap?.agents.find((a) => a.id === id)?.kind ?? "ai" }))} menuItems={rowMenu(t)}
         subline={dependencies ? `Depends on: ${t.depends_on.length ? names(t.depends_on) : "none"} · Needed by: ${dependents.length ? names(dependents) : "none"}` : undefined} />;
