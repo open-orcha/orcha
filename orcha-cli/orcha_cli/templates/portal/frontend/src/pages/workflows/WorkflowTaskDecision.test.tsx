@@ -1,8 +1,8 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { WorkflowTaskDecision } from "./WorkflowTaskDecision";
 import { exampleTask, exampleWorkflow, jsonResponse, writeCapability } from "./workflowTestFixtures";
-import type { WorkflowTaskEvidence } from "./workflowContract.generated";
+import type { WorkflowTask, WorkflowTaskEvidence } from "./workflowContract.generated";
 const scope = () => ({ origin: "https://orcha.example", project: "project", identity: crypto.randomUUID() });
 const task = exampleTask({ status: "needs_verification", current_evidence_set_id: "evidence", evidence_state: "saved", available_actions: ["accept", "reject"].map((action) => ({ action, enabled: true })) });
 const detail = exampleWorkflow({ tasks: [task], capability: writeCapability, evidence_capability: { available: true } });
@@ -125,4 +125,51 @@ it("refuses outside-result acceptance when immutable supplier attribution is mis
   expect(screen.getByText(/supplier attribution is unavailable/)).toBeVisible();
   expect(screen.getByRole("button", { name: "Review decision" })).toBeDisabled();
   expect(screen.queryByRole("button", { name: "Confirm accept result" })).toBeNull(); expect(writes).toEqual([]);
+});
+describe("a step that declares outcomes", () => {
+  const routes = [{ outcome: "Approved", destination: "exit_group" as const, destination_task: null }, { outcome: "Changes requested", destination: "return" as const, destination_task: "write" }];
+  const outcomes = [{ name: "Approved", kind: "success" as const }, { name: "Changes requested", kind: "changes" as const }];
+  const writeTask = exampleTask({ id: "write", title: "Write the post" });
+  function setup(reported: WorkflowTask["reported_outcome"]) {
+    const review = { ...task, outcomes, routes, reported_outcome: reported };
+    const current = exampleWorkflow({ tasks: [review, writeTask], capability: writeCapability, evidence_capability: { available: true } });
+    const writes: [string, Record<string, unknown>][] = []; const saved = vi.fn();
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.endsWith("/outcome/preview")) return jsonResponse({ task_id: "build", outcome: JSON.parse(String(init?.body)).outcome, destination: "return",
+        destination_task_id: "write", repeats: ["write", "build"], message: "Write the post runs again for round 2 of 3." });
+      if (init?.method === "POST") writes.push([url, JSON.parse(String(init.body))]);
+      if (url.endsWith("/evidence")) return jsonResponse(evidence());
+      return jsonResponse(url.endsWith("/outcome") ? { ...current, revision: 8 } : current);
+    }));
+    render(<WorkflowTaskDecision detail={current} task={review} scope={scope()} verified stale={false} onSaved={saved} />);
+    return { writes, saved };
+  }
+  it("asks for an outcome when none was reported, previews its rule, then reports and accepts", async () => {
+    const { writes, saved } = setup(null);
+    expect(screen.getByText(/This step should report an outcome, and none was reported/)).toBeVisible();
+    await selectEvidence();
+    expect(screen.getByText(/Choose this step’s outcome before accepting/)).toBeVisible();
+    expect(screen.getByRole("button", { name: "Review decision" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("radio", { name: /Changes requested/ }));
+    fireEvent.change(screen.getByLabelText(/Findings for the next round/), { target: { value: "Too long\n\nNo title" } });
+    fireEvent.click(screen.getByRole("button", { name: "Review decision" }));
+    expect(await screen.findByText(/Records the outcome “Changes requested”, then accepts\. Write the post runs again/)).toBeVisible();
+    expect(screen.getByText("Runs again: Write the post, Build Android.")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Confirm accept result" }));
+    await waitFor(() => expect(saved).toHaveBeenCalledOnce());
+    expect(writes.map(([url]) => url)).toEqual(["/api/tasks/build/outcome", "/api/tasks/build/accept"]);
+    expect(writes[0][1]).toMatchObject({ expected_revision: 7, expected_work_revision: 3, outcome: "Changes requested", findings: [{ text: "Too long" }, { text: "No title" }] });
+    expect(writes[1][1]).toMatchObject({ expected_revision: 8, expected_work_revision: 3 });
+  });
+  it("accepts with the step's own report without sending it again", async () => {
+    const { writes, saved } = setup({ outcome: "Approved", findings: [{ text: "Good" }], note: "", reporter_kind: "ai", applied: false });
+    expect(screen.getByText(/The step reported “Approved”/)).toBeVisible();
+    expect(screen.getByRole("radio", { name: /Approved/ })).toBeChecked();
+    expect(screen.getByText(/Then the loop ends\./)).toBeVisible();
+    await selectEvidence(); fireEvent.click(screen.getByRole("button", { name: "Review decision" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Confirm accept result" }));
+    await waitFor(() => expect(saved).toHaveBeenCalledOnce());
+    expect(writes.map(([url]) => url)).toEqual(["/api/tasks/build/accept"]);
+    expect(writes[0][1]).toMatchObject({ expected_revision: 7 });
+  });
 });

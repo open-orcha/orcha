@@ -2,14 +2,20 @@ import { useState } from "react";
 import { Button } from "../../components/primitives/Button";
 import { availableActionReason, workflowPaths, workflowRequest } from "./workflowApi";
 import { evidenceReference, evidenceSupplier, evidenceUsable, WorkflowEvidencePanel, type EvidenceSupplier } from "./WorkflowEvidence";
-import type { EvidenceReference, WorkflowDetail, WorkflowTask } from "./workflowContract.generated";
+import type { EvidenceReference, RoutingPreview, StepRoute, WorkflowDetail, WorkflowTask } from "./workflowContract.generated";
 import type { DraftScope } from "./workflowDraft";
 import { useWorkflowForm } from "./workflowFormState";
 import { sendWorkflowOperation, useWorkflowOperation } from "./workflowOperations";
 import { WorkflowOperationNotice } from "./WorkflowOperationNotice";
 
+const ROUTE_LABELS: Record<StepRoute["destination"], string> = {
+  next: "the next steps proceed", step: "goes to", return: "goes back to", ask_owner: "the owner decides what happens next",
+  exit_group: "the loop ends", stop: "the workflow stops here",
+};
+
 /** Plan approval and result acceptance are different decisions. This form only
- * accepts/rejects the exact submitted result, using the workflow receipt route. */
+ * accepts/rejects the exact submitted result, using the workflow receipt route. A step that
+ * declares outcomes (version 2) also records its outcome; acceptance applies that outcome's rule. */
 export function WorkflowTaskDecision({ detail, task, scope, verified, stale, onSaved }: {
   detail: WorkflowDetail; task: WorkflowTask; scope: DraftScope; verified: boolean; stale: boolean;
   onSaved: (detail: WorkflowDetail) => void;
@@ -19,7 +25,12 @@ export function WorkflowTaskDecision({ detail, task, scope, verified, stale, onS
   const [evidence, setEvidence] = useState<EvidenceReference | null>(null);
   const [supplier, setSupplier] = useState<EvidenceSupplier | null>(null);
   const [supplierRequired, setSupplierRequired] = useState(false);
-  const [preview, setPreview] = useState<{ detail: WorkflowDetail; basis: string } | null>(null);
+  const reported = task.reported_outcome ?? null;
+  const outcomes = task.outcomes ?? [];
+  const reportedFindings = (reported?.findings ?? []).map((f) => f.text).join("\n");
+  const [outcome, setOutcome] = useState(reported?.outcome ?? "");
+  const [findings, setFindings] = useState(reportedFindings);
+  const [preview, setPreview] = useState<{ detail: WorkflowDetail; basis: string; route: RoutingPreview | null } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const slot = `workflow:${detail.id}`;
@@ -32,12 +43,16 @@ export function WorkflowTaskDecision({ detail, task, scope, verified, stale, onS
       ? "This task is no longer in this workflow. Refresh before continuing."
       : availableActionReason(current.capability, target.available_actions, verb, verified);
   };
-  const basis = JSON.stringify([detail.revision, task.work_revision, action, reason, evidence]);
+  const routed = action === "accept" && outcomes.length > 0;
+  const findingList = findings.split("\n").map((f) => f.trim()).filter(Boolean).slice(0, 50).map((text) => ({ text }));
+  const needsReport = routed && (!reported || reported.outcome !== outcome || findings.trim() !== reportedFindings.trim());
+  const basis = JSON.stringify([detail.revision, task.work_revision, action, reason, evidence, routed ? [outcome, findings] : null]);
   const current = preview?.basis === basis ? preview.detail : null;
   const invalid = permission(detail) || (action === "accept"
     ? !detail.evidence_capability?.available || !evidence || evidence.evidence_set_id !== task.current_evidence_set_id
       ? "Read and select the current saved evidence before accepting."
-      : supplierRequired && !supplier ? "Result supplier attribution is unavailable. This outside result cannot be accepted safely." : null
+      : supplierRequired && !supplier ? "Result supplier attribution is unavailable. This outside result cannot be accepted safely."
+      : routed && !outcomes.some((o) => o.name === outcome) ? "Choose this step’s outcome before accepting. Its rule decides what happens next." : null
     : !reason.trim() ? "Explain what needs to change before requesting changes." : null);
 
   async function review() {
@@ -67,15 +82,28 @@ export function WorkflowTaskDecision({ detail, task, scope, verified, stale, onS
           throw new Error("Result supplier attribution is unavailable. This outside result cannot be accepted safely.");
         }
       }
-      setPreview({ detail: latest, basis });
+      const route = routed ? await workflowRequest("RoutingPreview", `/api/tasks/${encodeURIComponent(task.id)}/outcome/preview`,
+        { method: "POST", body: { outcome, expected_work_revision: task.work_revision }, actorId: scope.identity }) : null;
+      setPreview({ detail: latest, basis, route });
     } catch (e) { setError(e instanceof Error ? e.message : "The result could not be checked. Your feedback is kept."); }
     finally { setBusy(false); }
   }
   async function confirm() {
     if (!current || invalid || stale || unresolved || busy || permission(current)) return;
+    let base = current;
+    if (needsReport) {
+      // The outcome is recorded first; acceptance then applies its rule against the new revision.
+      const report = await sendWorkflowOperation(scope, slot, { operation: "report_outcome", expectedWorkflowId: detail.id,
+        url: `/api/tasks/${encodeURIComponent(task.id)}/outcome`, body: {
+          expected_revision: current.revision, expected_work_revision: task.work_revision, outcome, findings: findingList,
+          note: reason.trim() || reported?.note || "",
+        } });
+      if (report.state !== "saved" || !report.result) { setPreview(null); return; }
+      base = report.result;
+    }
     const result = await sendWorkflowOperation(scope, slot, { operation: action, expectedWorkflowId: detail.id,
       url: `/api/tasks/${encodeURIComponent(task.id)}/${action}`, body: {
-        expected_revision: current.revision, expected_work_revision: task.work_revision, reason: reason.trim(),
+        expected_revision: base.revision, expected_work_revision: task.work_revision, reason: reason.trim(),
         ...(action === "accept" ? { evidence } : {}),
       } });
     setPreview(null);
@@ -101,6 +129,17 @@ export function WorkflowTaskDecision({ detail, task, scope, verified, stale, onS
       <label className="wf-choice"><input type="radio" name={`decision-${task.id}`} checked={action === "reject"} onChange={() => setAction("reject")} />Request changes</label>
       <label>{action === "reject" ? "What needs to change" : "Review note (optional)"}<textarea maxLength={4000} value={reason} onChange={(e) => setReason(e.target.value)} /></label>
     </fieldset>
+    {routed && <fieldset disabled={busy || unresolved || stale}><legend>Outcome</legend>
+      <p>{reported ? `${reported.reporter_kind === "human" ? "A person" : "The step"} reported “${reported.outcome}”. Change it here if the result says otherwise.`
+        : "This step should report an outcome, and none was reported. Choose the one this result reached."}</p>
+      {outcomes.map((o) => {
+        const rule = task.routes?.find((r) => r.outcome === o.name);
+        const to = rule?.destination_task ? detail.tasks.find((t) => t.id === rule.destination_task)?.title : null;
+        return <label key={o.name} className="wf-choice"><input type="radio" name={`outcome-${task.id}`} checked={outcome === o.name} onChange={() => setOutcome(o.name)} />
+          <span><strong>{o.name}</strong> <span className="wf-muted">Then {rule ? ROUTE_LABELS[rule.destination] : ROUTE_LABELS.next}{to ? ` ${to}` : ""}.</span></span></label>;
+      })}
+      <label>Findings for the next round (one per line)<textarea maxLength={4000} value={findings} onChange={(e) => setFindings(e.target.value)} /></label>
+    </fieldset>}
     {action === "accept" && supplierRequired && supplier && <p>Result supplied by {supplier.alias} ({supplier.kind === "human" ? "person" : "agent"}). {supplier.id === scope.identity
       ? "You supplied this outside result; accepting your own result is allowed and will be recorded."
       : "The supplier and acceptor will be recorded separately."}</p>}
@@ -109,6 +148,7 @@ export function WorkflowTaskDecision({ detail, task, scope, verified, stale, onS
     {current && <>
       <p>{action === "accept" ? `Accept work revision ${task.work_revision} with ${evidence?.items.length} exact saved file versions. Holds and worker shutdown rules remain in effect.`
         : "Your feedback is recorded against this result. The owner decides what happens next; this does not restart the agent. A running worker must still stop."}</p>
+      {preview?.route && <RoutePreview route={preview.route} detail={current} reporting={needsReport} />}
       <Button variant={action === "reject" ? "danger" : "primary"} disabled={busy || stale || unresolved || !!invalid || !!permission(current)} onClick={() => void confirm()}>
         {action === "accept" ? "Confirm accept result" : "Confirm request changes"}
       </Button>
@@ -116,8 +156,21 @@ export function WorkflowTaskDecision({ detail, task, scope, verified, stale, onS
     </div></div>
     <WorkflowOperationNotice scope={scope} slot={slot} onSaved={onSaved} canRetry={async () => {
       const verb = operation?.operation;
-      if (!operation || (verb !== "accept" && verb !== "reject") || operation.url !== `/api/tasks/${encodeURIComponent(task.id)}/${verb}` || stale) return false;
-      return !permission(await workflowRequest("WorkflowDetail", workflowPaths.detail(detail.id), { actorId: scope.identity }), verb);
+      const path = verb === "report_outcome" ? "outcome" : verb;
+      if (!operation || (verb !== "accept" && verb !== "reject" && verb !== "report_outcome") || operation.url !== `/api/tasks/${encodeURIComponent(task.id)}/${path}` || stale) return false;
+      return !permission(await workflowRequest("WorkflowDetail", workflowPaths.detail(detail.id), { actorId: scope.identity }), verb === "reject" ? "reject" : "accept");
     }} />
   </section>;
+}
+
+/** What accepting with this outcome does next, from the server's read-only routing preview. */
+function RoutePreview({ route, detail, reporting }: { route: RoutingPreview; detail: WorkflowDetail; reporting: boolean }) {
+  const titles = (ids?: string[]) => (ids ?? []).map((id) => detail.tasks.find((t) => t.id === id)?.title ?? "a removed step").join(", ");
+  return <div className="wf-route-preview" aria-label="What happens next">
+    <p>{reporting ? `Records the outcome “${route.outcome}”, then accepts. ` : ""}{route.message}</p>
+    {!!route.repeats?.length && <p>Runs again: {titles(route.repeats)}.</p>}
+    {!!route.stale?.length && <p>Later steps to redo on the new work: {titles(route.stale)}.</p>}
+    {!!route.not_selected?.length && <p>Not needed on this path: {titles(route.not_selected)}.</p>}
+    {route.blocked_by === "limit" && <p>The loop is at its round limit, so the owner decides instead.</p>}
+  </div>;
 }
