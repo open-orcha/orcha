@@ -104,10 +104,12 @@ it("start review lists each loop, the rules that change the route and the agent-
   render(<MemoryRouter><WorkflowActions detail={detail} scope={scope()} verified stale={false} onSaved={vi.fn()} /></MemoryRouter>);
   fireEvent.click(screen.getByRole("button", { name: "Review start" }));
   const route = await screen.findByRole("region", { name: "Expected route" });
-  expect(within(route).getByText(/Build iOS, Build Android repeat until Build Android reports “Approved”\. Up to 3 rounds; at the limit the owner decides\./)).toBeVisible();
+  expect(within(route).getByText("2 Build iOS → 1 Build Android, repeated until Build Android reports “Approved”, at most 3 rounds")).toBeVisible();
+  expect(within(route).getByText("Loop")).toBeVisible();
   expect(within(route).queryByText(/same findings/)).toBeNull();
-  expect(within(route).getByText("Build Android: if “Changes”, goes back to Build iOS.")).toBeVisible();
-  expect(within(route).getByText(/Agent-turn allowance for this run: 30 \(4 used\)/)).toBeVisible();
+  expect(within(route).getByText("Build Android: “Changes” ↺ Build iOS, a new round")).toBeVisible();
+  expect(within(route).getByText(/the last round still asking for changes or the agent-turn allowance used up → waits for the owner/)).toBeVisible();
+  expect(within(route).getByText(/Rounds: 3 including the first · Agent-turn allowance for this run: 30 \(4 used\)/)).toBeVisible();
 });
 it("start review shows no route section for a simple workflow", async () => {
   const detail = exampleWorkflow({ capability: writeCapability, available_actions: [{ action: "start", enabled: true }] });

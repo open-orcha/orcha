@@ -338,3 +338,4 @@
 .wf-impact-row { display: flex; align-items: center; gap: 10px; padding: 7px 12px; font-size: var(--v2-fs-body); border-top: 1px solid var(--v2-border-subtle); }
 .wf-impact-row:first-of-type { border-top: 0; }
 .wf-impact-row .t { flex: 1; min-width: 0; white-space: normal; overflow-wrap: anywhere; color: var(--v2-text); }
+.wf-route-summary .wf-impact { margin-block: 12px 0; }
