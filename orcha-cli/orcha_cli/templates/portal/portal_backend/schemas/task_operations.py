@@ -9,6 +9,7 @@ from portal_backend.limits import MAX_FEEDBACK_LEN, MAX_PAYLOAD_LEN
 
 
 class TaskMessage(BaseModel):
+    system_notice: bool = Field(default=False, description="Non-waking, deduplicated system status; anonymous daemon only.")
     author_agent_id: Optional[str] = None
     body: str = Field(..., max_length=MAX_PAYLOAD_LEN)
     # #301: optional attachment refs the client staged via POST .../attachments (uploaded

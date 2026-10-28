@@ -160,4 +160,8 @@ def _render_workflow(workflow) -> Optional[str]:
             if not isinstance(result, str):
                 result = json.dumps(result, ensure_ascii=False)
             lines.append(f"   Result: {_clip(result, 1500)}")
+    lines.append("If unfinished work needs another workflow task to review it, use the explicit "
+                 "review-handoff API from your current worker, then exit for runner-confirmed "
+                 "handoff. Read docs/workflow-review-handoffs.md. Never mark unfinished work done "
+                 "to release the serial turn; CLEAN still requires human verification.")
     return "\n".join(lines)

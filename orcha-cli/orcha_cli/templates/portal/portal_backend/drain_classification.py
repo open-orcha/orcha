@@ -84,12 +84,14 @@ def _drain_class(cur, event_name: str, payload: Optional[dict], target_id=None) 
     if event_name in _NON_WAKING_EVENTS or event_name == "conversation_turn":
         return {"bucket": _DRAIN_NON_WAKING, "task_id": None}
     if event_name == "task_message":
+        if _drain_task_status(cur, payload.get("task_id")) in (None, "completed", "cancelled"):
+            return {"bucket": _DRAIN_FYI, "task_id": None}
         return {"bucket": _DRAIN_TASK_BOUND, "task_id": payload.get("task_id")}
     if event_name == "prompt":
         return {"bucket": _DRAIN_TASKLESS_ACTIONABLE, "task_id": None}
     if event_name == "request_answered":
         otid = payload.get("originating_task_id")
-        if otid and _drain_task_status(cur, otid) is not None:
+        if otid and _drain_task_status(cur, otid) not in (None, "completed", "cancelled"):
             return {"bucket": _DRAIN_TASK_BOUND, "task_id": str(otid)}
         return {"bucket": _DRAIN_TASKLESS_ACTIONABLE, "task_id": None}
     if event_name == "request_created":
@@ -142,6 +144,8 @@ def _drain_class(cur, event_name: str, payload: Optional[dict], target_id=None) 
             "task_id": str(tid),
         }  # assigned+targeted readiness → claim
     if event_name == "task_verified":
+        if _drain_task_status(cur, payload.get("task_id")) in ("completed", "cancelled"):
+            return {"bucket": _DRAIN_FYI, "task_id": None}
         if payload.get("approved") is False:
             return {
                 "bucket": _DRAIN_DIRECTIVE,

@@ -1,4 +1,4 @@
-"""Expose the notifier's read-only wake discovery scan."""
+"""Expose wake discovery and bounded obsolete-event maintenance for the notifier."""
 
 from fastapi import HTTPException, Query, Request
 
@@ -35,7 +35,11 @@ def wake_scan(
     cooldown: float = Query(default=15.0, ge=0),
     min_idle: float = Query(default=30.0, ge=0),
 ):
-    """Epic A: the notifier daemon's read-only scan — who needs an out-of-band wake.
+    """Epic A: discover who needs an out-of-band wake and reconcile obsolete rows.
+
+    Active daemon polls may acknowledge at most 200 currently obsolete events per
+    agent under locks, with an audit and no delivery-cursor jump. Browser calls are
+    read-only previews. Live requests, human prompts and parked work stay pending.
 
     The wake DECISION lives here (server-side, single source of truth, testable via
     the API), so the host-side daemon stays a thin transport executor and the
@@ -66,7 +70,7 @@ def wake_scan(
         # container a host-side daemon actually serves (containers.last_wake_scan_at —
         # the project switcher's honest wakes-capability signal). Only the daemon calls
         # this endpoint on a cadence. Throttled to one write/15s (and committed alone,
-        # before the read work below) so the scan stays effectively read-only.
+        # before discovery and bounded obsolete-event reconciliation below).
         if not browser:
             cur.execute(
                 """UPDATE containers SET last_wake_scan_at = now()
@@ -90,6 +94,13 @@ def wake_scan(
         # Agent runs on an API key (migration 071): the sealed key per agent runtime whose
         # provider key is opted in (use_for_agents); None = leave the worker on its subscription.
         agent_key_blobs = agent_keys_enc(cur, cid)
+        agents = list_wake_agents(cur, cid, cooldown)
+        if not browser and container["status"] == "active" and wakes_enabled:
+            from portal_backend.stale_wake_events import stale_pending_events, reconcile_events
+            for agent in agents:
+                obsolete = stale_pending_events(cur, str(agent["id"]), agent["delivered_ts"])
+                if obsolete:
+                    reconcile_events(cur, str(agent["id"]), cid, list(obsolete)[:200], dry_run=False)
         candidates = [
             build_wake_candidate(
                 cur,
@@ -108,7 +119,7 @@ def wake_scan(
                 resolve_model=_compatibility["resolve_model"],
                 resolve_model_runtime=_compatibility["resolve_model_runtime"],
             )
-            for agent in list_wake_agents(cur, cid, cooldown)
+            for agent in agents
         ]
         # Budget hard stop (budget_routes): a paused agent keeps its candidate but loses
         # should_wake, so the daemon starts no NEW run. Never touches in-flight work.

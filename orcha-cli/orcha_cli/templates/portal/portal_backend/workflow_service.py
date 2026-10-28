@@ -345,6 +345,11 @@ class WorkflowService:
         availability = {
             tid: self.hooks.availability(self.cur, t) for tid, t in tasks.items()
         }
+        from portal_backend.workflow_review_handoff import active_handoff
+        handoff = active_handoff(self.cur, wid)
+        if handoff:
+            w['review_handoff_target'] = (handoff['review_task_id'] if handoff['phase'] == 'review'
+                else handoff['source_task_id'] if handoff['phase'] == 'correction' else 'waiting_for_stop')
         eligibility = workflow_eligibility(
             w, tasks, deps, acceptances, executions, outside, availability
         )
@@ -586,6 +591,12 @@ class WorkflowService:
             review = next(
                 (r for r in s["review_rounds"] if r["review_task_id"] == tid), None
             )
+            # A CLEAN handoff releases the worker slot before human acceptance.
+            # Show the same exact stopped execution that op_accept permits.
+            handoff_review = None
+            if last and task['status'] == 'needs_verification' and last.get('release_reason') == 'review_handoff':
+                handoff_review = self.one("SELECT id FROM workflow_review_handoffs WHERE phase='clean' AND (source_execution_id=%s OR review_execution_id=%s)", (last['id'],last['id']))
+            verification_turn = live or (last if handoff_review else None)
             row["available_actions"] = [
                 action(
                     "prepare",
@@ -777,24 +788,25 @@ class WorkflowService:
                     "task_approval",
                     "open",
                     first(
+                        (bool(handoff_review) and not human, "human_approval_required"),
                         (task["status"] != "needs_verification", "not_awaiting_review"),
                         (
-                            not live
-                            or live["work_revision"] != task["work_revision"]
-                            or not live["current_evidence_set_id"],
+                            not verification_turn
+                            or verification_turn["work_revision"] != task["work_revision"]
+                            or not verification_turn["current_evidence_set_id"],
                             "evidence_version_stale",
                         ),
                         (
-                            bool(live) and live["evidence_state"] == "missing",
+                            bool(verification_turn) and verification_turn["evidence_state"] == "missing",
                             "evidence_missing",
                         ),
                         (
-                            bool(live) and live["evidence_state"] != "saved",
+                            bool(verification_turn) and verification_turn["evidence_state"] != "saved",
                             "evidence_not_saved",
                         ),
                         (
-                            bool(live)
-                            and live["source_kind"] == "evidence_review"
+                            bool(verification_turn)
+                            and verification_turn["source_kind"] == "evidence_review"
                             and not human,
                             "human_approval_required",
                         ),
@@ -1062,6 +1074,11 @@ class WorkflowService:
             t["status"] = stored_status(
                 t, deps, sim, s["acceptances"], s["outside_evidence"]
             )
+        from portal_backend.workflow_review_handoff import active_handoff
+        handoff = active_handoff(self.cur, wid)
+        if handoff:
+            sim_w['review_handoff_target'] = (handoff['review_task_id'] if handoff['phase'] == 'review'
+                else handoff['source_task_id'] if handoff['phase'] == 'correction' else 'waiting_for_stop')
         eligibility = workflow_eligibility(
             sim_w,
             sim,
@@ -1159,7 +1176,7 @@ class WorkflowService:
 
     def reconcile(self, wid):
         require_capability()
-        self.lock(wid)
+        w = self.lock(wid)
         # The host records worker termination before its follow-up
         # confirm-stopped call. If that follow-up is lost, retain the exclusive
         # turn but make the recovery state and owner attention durable. A quiet
@@ -1174,6 +1191,8 @@ class WorkflowService:
                    )""",
             (wid,),
         )
+        from portal_backend.workflow_review_handoff import reconcile_handoff
+        reconcile_handoff(self, w)
         s = self.snapshot(wid)
         for tid, task in s["tasks"].items():
             state = stored_status(
@@ -2066,6 +2085,8 @@ class WorkflowService:
                 "The task cannot take a turn yet.",
                 blockers=choice["blockers"],
             )
+        from portal_backend.workflow_review_handoff import guard_review_claim
+        guard_review_claim(self, w['id'], tid, p['id'])
         assigned = p["kind"] == "ai" and self.one(
             "SELECT 1 AS n FROM agent_tasks WHERE task_id=%s AND agent_id=%s AND assignment_status<>'done'",
             (tid, p["id"]),
@@ -2205,6 +2226,8 @@ class WorkflowService:
         ):
             conflict("stale_generation", "This worker no longer owns the task turn.")
         self.active(w, allow_paused=True)
+        from portal_backend.workflow_review_handoff import require_clean
+        require_clean(self, task)
         # Capture adapter has already bound the exact pending/saved set to this execution.
         if (
             not reference.get("evidence_set_id")
@@ -2320,7 +2343,11 @@ class WorkflowService:
         t = self.task(w["id"], tid, b["expected_work_revision"])
         if t["status"] != "needs_verification":
             conflict("not_awaiting_review", "This task is not awaiting review.")
-        e = self.live_turn(tid, lock=True)
+        from portal_backend.workflow_review_handoff import require_clean, acceptance_turn
+        h = require_clean(self, t)
+        if h and p['kind'] != 'human':
+            conflict('human_approval_required', 'A person verifies the finished review loop.', status=403)
+        e = self.live_turn(tid, lock=True) or acceptance_turn(self, t)
         if (
             not e
             or e["work_revision"] != t["work_revision"]
@@ -2384,6 +2411,9 @@ class WorkflowService:
         )
 
     def _release_execution(self, e, reason, lost=False):
+        from portal_backend.workflow_review_handoff import interrupt_handoff
+        w = self.one('SELECT * FROM workflows WHERE id=%s', (e['workflow_id'],))
+        interrupt_handoff(self, w, reason, e['task_id'])
         self.cur.execute(
             "UPDATE workflow_executions SET state=%s,released_at=%s,release_reason=%s,generation_revoked_at=COALESCE(generation_revoked_at,%s) WHERE id=%s",
             (
@@ -2396,6 +2426,8 @@ class WorkflowService:
         )
 
     def _stop(self, w, t, actor, origin, reason):
+        from portal_backend.workflow_review_handoff import interrupt_handoff
+        interrupt_handoff(self, w, origin, t['id'])
         e = self.live_turn(t["id"], lock=True)
         if not e:
             return

@@ -40,6 +40,13 @@ def cancel_task(tid: str, body: TaskCancel, request: Request):
         raise HTTPException(400, "actor_agent_id is not a valid UUID")
     with db_cursor() as (conn, cur):
         t = _require_task(cur, tid)
+        workflow_service = None
+        if t.get('workflow_id'):
+            from portal_backend.workflow_service import WorkflowService
+            from portal_backend.workflow_worker_routes import runtime_hooks_factory
+            workflow_service = WorkflowService(cur, runtime_hooks_factory())
+            workflow = workflow_service.lock(str(t['workflow_id']))
+            t = _require_task(cur, tid)
         # Per-project identity: a trusted proxy login IS the actor (403 non-member).
         body.actor_agent_id = _trusted_actor(
             cur, request, str(t["container_id"]), body.actor_agent_id
@@ -161,6 +168,10 @@ def cancel_task(tid: str, body: TaskCancel, request: Request):
         _recalibrate_task_owners(
             cur, t["container_id"], tid, t["title"], verification_pending=False
         )
+        if workflow_service:
+            from portal_backend.workflow_service import WorkflowActor
+            workflow_service._stop(workflow, t, WorkflowActor(body.actor_agent_id, True), 'task_cancel', reason)
+            workflow_service.reconcile(str(t['workflow_id']))
         conn.commit()
     return {
         "task_id": tid,

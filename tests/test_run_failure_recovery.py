@@ -127,7 +127,7 @@ async def test_restart_requeues_only_unfinished_owned_work_once(client, containe
     aid = (await make_agent("Builder"))["agent_id"]
     task = await make_task("Recover me", "Reviewed", assignee_alias="Builder")
     tid = task["id"]
-    db.execute("UPDATE tasks SET status=%s WHERE id=%s", ("completed" if terminal else "in_progress", tid))
+    db.execute("UPDATE tasks SET status=%s WHERE id=%s", ("in_progress", tid))
     if not assigned:
         db.execute("DELETE FROM agent_tasks WHERE task_id=%s", (tid,))
     # Simulate the original directive having been delivered before the daemon died.
@@ -135,6 +135,8 @@ async def test_restart_requeues_only_unfinished_owned_work_once(client, containe
     await client.post(f"/api/agents/{aid}/events/ack-handled", json={"event_ids": c["handled_event_ids"]})
     started = await client.post(f"/api/agents/{aid}/runs", json={"task_id": tid, "pid": 2000000})
     rid = started.json()["run_id"]
+    if terminal:
+        db.execute("UPDATE tasks SET status='completed' WHERE id=%s", (tid,))
     if stop:
         db.execute("UPDATE worker_runs SET stop_requested_at=now() WHERE run_id=%s", (rid,))
     body = {"status": "killed", "exit_code": -1, "kill_reason": json.dumps({"cause": "host_process_missing_after_notifier_restart"})}

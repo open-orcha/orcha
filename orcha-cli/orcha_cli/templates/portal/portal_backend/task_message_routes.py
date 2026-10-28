@@ -5,6 +5,7 @@ from typing import Any, Optional
 
 from fastapi import HTTPException, Request
 
+from portal_backend import sql
 from portal_backend.agent_status import bump_agent, log_event
 from portal_backend.application import app
 from portal_backend.attachment_references import (
@@ -37,6 +38,9 @@ def post_message(tid: str, body: TaskMessage, request: Request):
         raise HTTPException(400, "author_agent_id is not a valid UUID")
     with db_cursor() as (conn, cur):
         t = _require_task(cur, tid)
+        # Serialize with cancellation and other notices before deciding delivery.
+        cur.execute("SELECT status,result FROM tasks WHERE id=%s" + sql.for_update(), (tid,))
+        t.update(cur.fetchone())
         # Per-project identity: a trusted proxy login IS the author (403 non-member) —
         # a browser-lane post is attributed to the verified member, never to a
         # client-chosen id (and never anonymously: the trusted lane always attributes).
@@ -68,6 +72,15 @@ def post_message(tid: str, body: TaskMessage, request: Request):
                     "author agent isn't a member of this task's container — cannot post",
                 )
             author_kind = arow["kind"]
+        if body.system_notice:
+            if body.author_agent_id or body.attachments:
+                raise HTTPException(403, "System status must be anonymous and have no attachments")
+            if t["status"] in ("completed", "cancelled"):
+                return {"task_id": tid, "message_id": None, "suppressed": True}
+            cur.execute("SELECT id,body FROM task_messages WHERE task_id=%s AND author_id IS NULL ORDER BY created_at DESC,id DESC LIMIT 1", (tid,))
+            previous = cur.fetchone()
+            if previous and previous["body"] == body.body:
+                return {"task_id": tid, "message_id": str(previous["id"]), "deduplicated": True}
         # #301: re-validate any staged attachment refs against disk (re-deriving size/type) so
         # the JSONB only ever holds real, this-task files — never client-fabricated paths.
         llm_key = _container_llm_key(cur, str(t["container_id"]))
@@ -106,9 +119,24 @@ def post_message(tid: str, body: TaskMessage, request: Request):
         # Previously this emitted no agent_events, so a teammate's note silently stranded
         # until they happened to look. Publish a targeted `task_message` event to every
         # assignee except the author so the daemon/listen loop wakes them out-of-band.
-        cur.execute("SELECT agent_id FROM agent_tasks WHERE task_id=%s", (tid,))
+        cur.execute("SELECT agent_id FROM agent_tasks WHERE task_id=%s AND assignment_status <> 'done'", (tid,))
         notified = 0
-        for row in cur.fetchall():
+        recipients = cur.fetchall()
+        # Legacy /done closes the assignment before human verification. Deliver
+        # feedback to that exact submitter, not every replaced historical assignee.
+        if t["status"] == "needs_verification":
+            result = t.get("result") or {}
+            if isinstance(result, str):
+                result = json.loads(result)
+            submitter = result.get("by_agent_id") if isinstance(result, dict) else None
+            if submitter and all(str(r["agent_id"]) != str(submitter) for r in recipients):
+                cur.execute("SELECT agent_id FROM agent_tasks WHERE task_id=%s AND agent_id=%s", (tid, submitter))
+                submitted_assignment = cur.fetchone()
+                if submitted_assignment:
+                    recipients.append(submitted_assignment)
+        if body.system_notice or t["status"] in ("completed", "cancelled"):
+            recipients = []
+        for row in recipients:
             target = str(row["agent_id"])
             if target == body.author_agent_id:
                 continue  # don't wake yourself for your own message

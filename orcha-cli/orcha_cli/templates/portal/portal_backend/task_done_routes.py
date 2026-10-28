@@ -124,6 +124,12 @@ def mark_done(
                 (execution["id"], execution["generation"]),
             )
             sequence = cur.fetchone()["n"]
+            # Refuse unfinished handoff work before publishing immutable files:
+            # rolling SQL back cannot undo a file allocated at that version.
+            from portal_backend.workflow_review_handoff import require_clean
+            service = WorkflowService(cur, IntegratedWorkflowHooks())
+            service.lock(str(t['workflow_id']))
+            require_clean(service, t)
             reference = capture_workflow_submission(
                 cur,
                 str(execution["run_id"]),

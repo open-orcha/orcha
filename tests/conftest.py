@@ -69,6 +69,7 @@ APP_TABLES = [
     "agents", "containers",
     # mig 063 — FK'd to agents/containers, so listed last (the CASCADE lock order)
     "notification_prefs", "notification_pref_defaults",
+    "workflow_review_handoffs",
     "container_task_graph_guard", "workflows", "workflow_objectives",
     "workflow_executions", "workflow_task_acceptances", "task_outside_evidence",
     "workflow_review_rounds", "workflow_operation_receipts", "workflow_history",

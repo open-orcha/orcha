@@ -9,6 +9,7 @@ from portal_backend.drain_classification import (
     _is_cross_task_drain_row,
 )
 from portal_backend.event_policy import _NON_WAKING_EVENTS, _WORK_NON_WAKING_EVENTS
+from portal_backend.stale_wake_events import stale_pending_events
 from portal_backend.model_policy import resolve_reasoning_effort
 from portal_backend.self_wake_selection import select_due_self_wake
 from portal_backend.wake_context import (
@@ -60,9 +61,10 @@ def build_wake_candidate(
     auto_tasks = [tid for tid in ready if not parking.parked(tid)]
     parked = set(ready) - set(auto_tasks)
     parked_rows = False
-    held_event_ids = set()
+    obsolete = stale_pending_events(cur, aid, delivered_ts)
+    held_event_ids = set(obsolete)
     if pending:
-        held_event_ids, parked_tasks, pending, newest = parked_pending_events(
+        parked_event_ids, parked_tasks, pending, newest = parked_pending_events(
             cur,
             aid,
             delivered_ts,
@@ -71,8 +73,10 @@ def build_wake_candidate(
             task_bound_bucket=_DRAIN_TASK_BOUND,
             directive_bucket=_DRAIN_DIRECTIVE,
             is_parked=parking.parked,
+            skip_event_ids=held_event_ids,
         )
-        if parked_tasks:
+        held_event_ids |= parked_event_ids
+        if held_event_ids:
             parked |= parked_tasks
             parked_rows = True
             latest, latest_payload = newest or (None, None)
@@ -152,6 +156,10 @@ def build_wake_candidate(
         directive_bucket=_DRAIN_DIRECTIVE,
     )
 
+    # Remaining obsolete rows wait for a bounded, audited daemon or explicit recovery batch.
+    handled_event_ids = [eid for eid in handled_event_ids if eid not in obsolete]
+    delivery_handled_event_ids = [eid for eid in delivery_handled_event_ids if eid not in obsolete]
+
     auto_interval = agent["auto_wake_interval_secs"]
     wake_enabled = agent["wake_enabled"]
     in_cooldown = bool(agent["in_cooldown"])
@@ -199,7 +207,9 @@ def build_wake_candidate(
         )
 
     resolved_model = resolve_model(agent["model"])
-    launch_task_id = context_task_id or (auto_tasks[0] if auto_tasks else wake_task_id)
+    launch_task_id = context_task_id
+    if wake_task_id and _drain_task_status(cur, wake_task_id) in (None, "completed", "cancelled"):
+        wake_task_id = None
     workflow_launch = {}
     task_autonomy = "off"
     task_autonomy_revision = 1

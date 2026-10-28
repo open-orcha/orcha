@@ -81,7 +81,9 @@ def refuse_legacy_workflow_run(cur, task_id, aid):
     agent = cur.fetchone()
     lock_container_graph(cur, str(agent["container_id"]))
     if task_id:
-        cur.execute("SELECT workflow_id FROM tasks WHERE id=%s", (task_id,))
+        cur.execute("SELECT workflow_id,status FROM tasks WHERE id=%s", (task_id,))
         task = cur.fetchone()
+        if task and task["status"] in {"completed", "cancelled"}:
+            conflict("terminal_task", "Finished or cancelled work cannot launch a worker.")
         if task and task["workflow_id"]:
             conflict("workflow_reservation_required", "Use the workflow runner reservation before launching a worker.")

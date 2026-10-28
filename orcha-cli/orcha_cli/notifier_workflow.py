@@ -93,6 +93,7 @@ def announce_refusal(api_base, candidate, post_json, *, quiet=False, log=None):
     # assignee message, i.e. its plan, and the real plan would then wait for approval.
     post_json(f"{api_base}/api/tasks/{task_id}/messages", {
         "body": f"Orcha could not start this task automatically: {reason}. {fix}",
+        "system_notice": True,
     })
     return True
 

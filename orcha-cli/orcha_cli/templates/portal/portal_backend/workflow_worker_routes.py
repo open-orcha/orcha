@@ -120,7 +120,14 @@ def confirm_worker_stopped(aid: str, rid: str, body: WorkflowStopObserved, reque
             (e["id"],),
         )
         current_execution = cur.fetchone()
+        from portal_backend.workflow_review_handoff import after_stopped
+        after_stopped(svc, w, current_task, current_execution)
+        cur.execute("SELECT state FROM workflow_executions WHERE id=%s", (e["id"],))
+        result["state"] = cur.fetchone()["state"]
+        cur.execute("SELECT id FROM workflow_review_handoffs WHERE source_task_id=%s OR review_task_id=%s LIMIT 1", (task['id'],task['id']))
+        has_handoff = cur.fetchone() is not None
         if (
+            not has_handoff and
             current_task["status"] == "needs_verification"
             and current_task.get("autonomy") == "on"
             and current_execution["evidence_state"] == "saved"
@@ -190,3 +197,69 @@ async def workflow_worker_contact(request: Request, call_next):
             except HTTPException as exc:
                 return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
     return await call_next(request)
+
+
+from pydantic import BaseModel, Field
+from typing import Literal
+
+
+class ReviewHandoffRequest(BaseModel):
+    review_task_id: str
+    expected_work_revision: int
+    result: str = Field(..., min_length=1, max_length=20000)
+
+
+class ReviewHandoffVerdict(BaseModel):
+    handoff_id: str
+    verdict: Literal['clean', 'changes_requested']
+    result: str = Field(..., min_length=1, max_length=20000)
+
+
+def _handoff_worker(cur, request, aid, rid):
+    _lane(cur, request, aid)
+    token = request.headers.get('X-Orcha-Run-Token')
+    task = require_current_generation(cur, aid, token)
+    binding = token_execution(cur, token)
+    if str(binding['run_id']) != str(rid):
+        conflict('wrong_reserved_task', 'Use the current worker for this task.', status=403)
+    w, _, e = lock_run(cur, rid)
+    if str(e['run_id']) != str(rid) or str(e['task_id']) != str(task['id']) or str(e['claimant_id']) != str(aid):
+        conflict('wrong_reserved_task', 'Use the current worker for this task.', status=403)
+    svc = WorkflowService(cur, runtime_hooks_factory())
+    e = svc.one('SELECT * FROM workflow_executions WHERE id=%s', (e['id'],))
+    return svc, w, task, e
+
+
+@app.post('/api/agents/{aid}/runs/{rid}/review-handoff')
+def handoff_review(aid: str, rid: str, body: ReviewHandoffRequest, request: Request):
+    from portal_backend.workflow_review_handoff import request_review
+    require_capability()
+    with db_cursor() as (_, cur):
+        svc,w,task,e = _handoff_worker(cur,request,aid,rid)
+        if task['work_revision'] != body.expected_work_revision:
+            conflict('work_revision_changed', 'Refresh the current task before handing off.')
+        review = svc.task(w['id'],body.review_task_id)
+        return request_review(svc,w,task,e,review,body.result)
+
+
+@app.post('/api/agents/{aid}/runs/{rid}/review-verdict')
+def handoff_verdict(aid: str, rid: str, body: ReviewHandoffVerdict, request: Request):
+    from portal_backend.workflow_review_handoff import record_verdict
+    require_capability()
+    with db_cursor() as (_, cur):
+        svc,w,task,e = _handoff_worker(cur,request,aid,rid)
+        return record_verdict(svc,w,task,e,body.handoff_id,body.verdict,body.result)
+
+
+@app.get('/api/workflows/{wid}/review-handoffs')
+def review_handoffs(wid: str, request: Request):
+    from portal_backend.workflow_evidence_service import evidence_reference
+    with db_cursor(readonly=True) as (_, cur):
+        svc = WorkflowService(cur,runtime_hooks_factory())
+        w = svc.workflow(wid)
+        require_member_read(cur,request,str(w['container_id']))
+        rows = svc.rows('SELECT * FROM workflow_review_handoffs WHERE workflow_id=%s ORDER BY created_at,id', (wid,))
+        for row in rows:
+            e = svc.one('SELECT current_evidence_set_id FROM workflow_executions WHERE id=%s', (row['source_execution_id'],))
+            row['reviewed_evidence'] = evidence_reference(cur,e['current_evidence_set_id']) if e and e['current_evidence_set_id'] else None
+        return {'handoffs': rows}
