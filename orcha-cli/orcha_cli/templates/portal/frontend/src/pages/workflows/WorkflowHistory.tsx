@@ -10,19 +10,33 @@ function eventLabel(event: string) {
     workflow_objective_accepted: "Objective accepted", workflow_task_accepted: "Task result accepted", workflow_finished: "Workflow finished", workflow_cancelled: "Workflow cancelled",
     workflow_started: "Workflow started", workflow_paused: "New starts paused", workflow_resumed: "Workflow resumed", workflow_outside_result_submitted: "Outside result saved",
     workflow_evidence_replaced: "Missing evidence replaced", workflow_task_released: "Task holds released", workflow_task_held: "Task put on hold",
-    workflow_task_stopped: "Worker stop requested", workflow_lost_worker_released: "Worker released without stop confirmation" };
+    workflow_task_stopped: "Worker stop requested", workflow_lost_worker_released: "Worker released without stop confirmation",
+    workflow_outcome_reported: "Outcome reported", workflow_route_applied: "Next step decided", workflow_outcome_missing: "Accepted without an outcome",
+    workflow_loop_decided: "Owner decided how the loop continues", workflow_flow_changed: "Outcomes and loops changed" };
   return labels[event] ?? event.replace(/^workflow_/, "").replaceAll("_", " ");
 }
 /** §4.9 stale bar / warn banner: one warn-toned strip with an alert glyph. */
 function HistoryBar({ children }: { children: ReactNode }) {
   return <div className="wf-tl-bar"><Icon name="alert" cls="v2-ico" /><div className="wf-tl-bar-text">{children}</div></div>;
 }
+const LOOP_PAUSES: Record<string, string> = { limit_reached: "The loop reached its round limit. Waiting for the owner.",
+  stalled: "The loop stalled: the same findings came back on unchanged work. Waiting for the owner.", ask_owner: "Waiting for the owner to choose what happens next." };
+const LOOP_DECISIONS: Record<string, string> = { raise_limit: "Allowed more rounds.", reassign_continue: "Reassigned the step and ran another round.",
+  accept_override: "Accepted the work as it is and ended the loop.", resume_stalled: "Resumed the loop with guidance.", pick_outcome: "Chose the outcome.", stop: "Stopped the loop." };
 /** Body lines under an activity entry: same-person, supplier, reason, warning (warn) — in that order. */
 function activityNotes(entry: Activity): ReactNode[] {
   const notes: ReactNode[] = [];
   if (entry.event === "workflow_task_accepted" && entry.detail.same_person_supplier === true) notes.push(<span key="same" className="wf-tl-note">Owner-supplied result, accepted by the same person.</span>);
   if (entry.event === "workflow_task_accepted" && typeof entry.detail.supplier_alias === "string") notes.push(<span key="supplier" className="wf-tl-note">Submitted by {entry.detail.supplier_alias} (verified).</span>);
-  if (typeof entry.detail.reason === "string") notes.push(<span key="reason" className="wf-tl-note">{entry.detail.reason}</span>);
+  if (entry.event === "workflow_outcome_reported" || entry.event === "workflow_route_applied") {
+    const findings = typeof entry.detail.findings === "number" && entry.detail.findings > 0 ? ` ${entry.detail.findings} ${entry.detail.findings === 1 ? "finding" : "findings"}.` : "";
+    notes.push(<span key="outcome" className="wf-tl-note">“{String(entry.detail.outcome)}”: {String(entry.detail.route ?? "")}{findings}</span>);
+  }
+  if (entry.event === "workflow_route_applied" && typeof entry.detail.result === "string" && LOOP_PAUSES[entry.detail.result])
+    notes.push(<span key="pause" className="wf-tl-note is-warn"><Icon name="alert" cls="v2-ico" />{LOOP_PAUSES[entry.detail.result]}</span>);
+  if (entry.event === "workflow_outcome_missing") notes.push(<span key="missing" className="wf-tl-note is-warn"><Icon name="alert" cls="v2-ico" />This step declares outcomes but none was reported. The owner picks one before the workflow continues.</span>);
+  if (entry.event === "workflow_loop_decided") notes.push(<span key="decided" className="wf-tl-note">{LOOP_DECISIONS[String(entry.detail.chosen)] ?? String(entry.detail.chosen)}{typeof entry.detail.original_outcome === "string" && entry.detail.original_outcome ? ` The reported outcome “${entry.detail.original_outcome}” is kept in the record.` : ""}</span>);
+  if (typeof entry.detail.reason === "string" && entry.detail.reason) notes.push(<span key="reason" className="wf-tl-note">{entry.detail.reason}</span>);
   if (typeof entry.detail.warning === "string") notes.push(<span key="warning" className="wf-tl-note is-warn"><Icon name="alert" cls="v2-ico" />{entry.detail.warning}</span>);
   return notes;
 }

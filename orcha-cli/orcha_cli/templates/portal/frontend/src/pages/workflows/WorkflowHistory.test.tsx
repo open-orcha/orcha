@@ -41,6 +41,19 @@ it("shows immutable supplier and same-person acceptance in Activity", async () =
   expect(screen.getByText("Submitted by Kedar (verified).")).toBeVisible();
 });
 
+it("tells the loop's story in Activity: outcomes, the route taken, a stall and the owner's decision", async () => {
+  const rows = [
+    { ...activity, id: "r1", event: "workflow_outcome_reported", detail: { outcome: "Changes", findings: 2, route: "Sends the work back to Build iOS for round 2 of Draft and review." } },
+    { ...activity, id: "r2", event: "workflow_route_applied", detail: { outcome: "Changes", result: "stalled", route: "Sends the work back to Build iOS for round 3 of Draft and review." } },
+    { ...activity, id: "r3", event: "workflow_loop_decided", detail: { subject: "stalled", chosen: "accept_override", original_outcome: "Changes" } },
+  ];
+  vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ activity: rows, next_before_at: null, next_before_id: null })));
+  render(<MemoryRouter><WorkflowActivity detail={exampleWorkflow({ activity: [] })} /></MemoryRouter>);
+  expect(await screen.findByText("“Changes”: Sends the work back to Build iOS for round 2 of Draft and review. 2 findings.")).toBeVisible();
+  expect(screen.getByText(/Next step decided/)).toBeVisible();
+  expect(screen.getByText("The loop stalled: the same findings came back on unchanged work. Waiting for the owner.")).toBeVisible();
+  expect(screen.getByText("Accepted the work as it is and ended the loop. The reported outcome “Changes” is kept in the record.")).toBeVisible();
+});
 it("does not unlock owner resolution with a selected name or an unavailable integration", () => {
   const detail = exampleWorkflow({ capability: writeCapability, tasks: [exampleTask({ available_actions: [{ action: "resolve_loop", enabled: true }] })] });
   const fetch = vi.fn(); vi.stubGlobal("fetch", fetch);
