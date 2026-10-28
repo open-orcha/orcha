@@ -14,13 +14,17 @@ it("shows the round, the rule that ends it, what it must address and the earlier
     this_round: { trigger: "return", outcome: "Changes requested", findings: [{ text: "Too long", severity: "major" }], note: "Cut it in half", owner_note: null },
     earlier_rounds: [{ round: 1, ended: "return", findings: [{ text: "Too long" }] }] } }); }));
   render(<WorkflowRoundContext detail={exampleWorkflow({ semantics_version: 2, tasks: [write, review] })} task={review} />);
-  expect(await screen.findByText(/round 2 of 3\. It ends when this step reports “Approved”/)).toBeVisible();
-  expect(screen.getByText("Sent back by the review with “Changes requested”.")).toBeVisible();
-  expect(screen.getByText("major: Too long")).toBeVisible();
-  expect(screen.getByText("Reviewer note: Cut it in half")).toBeVisible();
+  expect(await screen.findByText("2 of 3 in “Draft and review”")).toBeVisible();
+  expect(screen.getByText("This step reports “Approved”")).toBeVisible();
+  expect(screen.getByText("Changes requested", { selector: "b" }).closest("dd")).toHaveTextContent("Round 1 review reported Changes requested (rule: Changes requested ↺ Write the post).");
+  const received = screen.getByRole("region", { name: "Received this round" });
+  expect(received).toHaveTextContent("F1major: Too long");
+  expect(received).toHaveTextContent("Reviewer note: Cut it in half");
+  expect(received).toHaveTextContent("Reason for return: Changes requested, round 1.");
   expect(screen.getByText("Round 1, sent back: Too long")).toBeInTheDocument();
-  expect(screen.getByText("“Changes requested”: goes back to Write the post for another round.")).toBeVisible();
-  expect(screen.getByText("“Approved”: the loop ends.")).toBeVisible();
+  const next = screen.getByRole("region", { name: "What happens next" });
+  expect(next).toHaveTextContent("Changes requested↺goes back to Write the post for another round");
+  expect(next).toHaveTextContent("Approved→the loop ends");
   expect(urls).toEqual(["/api/tasks/review/round-context"]);
 });
 it("reads nothing for a version-one step", () => {

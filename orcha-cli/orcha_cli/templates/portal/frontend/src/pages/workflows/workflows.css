@@ -322,3 +322,6 @@
 .wf-ownerbar { display: flex; align-items: center; gap: 10px; padding: 10px var(--v2-panel-px); border-bottom: 1px solid var(--v2-border-subtle, var(--v2-border)); background: color-mix(in srgb, var(--v2-warn, #d29922) 9%, transparent); font-size: var(--v2-fs-body); color: var(--v2-text); }
 .wf-ownerbar .v2-btn { margin-left: auto; }
 @media (max-width: 720px) { .wf-grid2, .wf-compare { grid-template-columns: 1fr; } .wf-route, .wf-route.is-edit { grid-template-columns: 1fr; } .wf-route .arr { display: none; } }
+.wf-evi { border: 1px solid var(--v2-border); border-radius: var(--v2-radius-card); padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; }
+.wf-route.is-read { grid-template-columns: max-content 18px minmax(0, 1fr); }
+.wf-earlier { margin: 6px 0 0; padding-left: 18px; color: var(--v2-text-2); font-size: var(--v2-fs-body); }

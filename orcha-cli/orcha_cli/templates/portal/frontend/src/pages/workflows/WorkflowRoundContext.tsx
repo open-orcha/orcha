@@ -1,10 +1,11 @@
 /**
- * Round context in the task inspector (issue #362 screen 3, frames x02, x03): the outcomes the
+ * Round context in the task inspector (issue #362 screen 4, frame x03: Round / Why it runs / Waiting on, "Received this round"): the outcomes the
  * step can report and what each leads to, and for a repeat-group member its round, the rule that
  * ends the loop, what this round must address and the earlier rounds. Read from the same
  * server view the step's worker gets in its prompt.
  */
 import { useEffect, useState } from "react";
+import { Badge, Section } from "../../components/primitives";
 import { workflowRequest } from "./workflowApi";
 import type { RoundContext, WorkflowDetail, WorkflowTask } from "./workflowContract.generated";
 
@@ -12,6 +13,7 @@ const TRIGGERS: Record<string, string> = {
   initial: "First round", return: "Sent back by the review", owner_raise_limit: "The owner allowed more rounds",
   owner_reassign: "The owner reassigned the step", owner_resume: "The owner resumed the loop with guidance",
 };
+const TONE = { success: "ok", changes: "warn", failure: "danger", custom: "neutral" } as const;
 const ENDINGS: Record<string, string> = {
   return: "sent back", limit: "stopped at the round limit", stall: "stalled", exit: "loop ended", ask_owner: "waited for the owner",
   stopped: "stopped", accepted_override: "accepted by the owner",
@@ -44,21 +46,34 @@ export function WorkflowRoundContext({ detail, task }: { detail: WorkflowDetail;
       ask_owner: "the owner decides", exit_group: "the loop ends", stop: "the workflow stops here" }[r.destination];
   };
   const round = group?.this_round;
+  const back = task.routes?.find((r) => r.outcome === round?.outcome);
+  const why = !round || round.trigger === "initial" || !round.trigger ? "First round of the loop."
+    : round.trigger === "return" ? <>Round {group!.round - 1} review reported <b>{round.outcome}</b>{back ? ` (rule: ${round.outcome} ${back.destination === "return" ? "↺" : "→"} ${back.destination_task ? title(back.destination_task) : "the next step"})` : ""}.</>
+    : `${TRIGGERS[round.trigger] ?? "This round"}.`;
+  const received = !!round && (!!round.findings?.length || !!round.note || !!round.owner_note);
   return <div className="wf-round-context">
-    {group && <>
-      <p><strong>{group.name}</strong>: round {group.round} of {group.max_rounds}. It ends when {group.is_review_step ? "this step" : group.review_step ?? "the review step"} reports “{group.exit_outcome}”.</p>
-      {round && <>
-        <p>{TRIGGERS[round.trigger ?? ""] ?? "This round"}{round.outcome ? ` with “${round.outcome}”` : ""}.</p>
-        {!!round.findings?.length && <><p>This round must address:</p><ul>{round.findings.map((f, i) => <li key={i}>{f.severity ? `${f.severity}: ` : ""}{f.text}</li>)}</ul></>}
-        {round.note && <p>Reviewer note: {round.note}</p>}
-        {round.owner_note && <p>Owner guidance: {round.owner_note}</p>}
-      </>}
-      {!!group.earlier_rounds?.length && <details><summary>Earlier rounds ({group.earlier_rounds.length})</summary><ul>
-        {group.earlier_rounds.map((r) => <li key={r.round}>Round {r.round}{r.ended ? `, ${ENDINGS[r.ended] ?? r.ended}` : ""}{r.findings?.length ? `: ${r.findings.map((f) => f.text).join("; ")}` : ""}</li>)}
-      </ul></details>}
-    </>}
-    {context.outcomes && context.outcomes.length > 0 && <><p>Outcomes this step can report:</p><ul>
-      {context.outcomes.map((o) => <li key={o.name}>“{o.name}”: {rule(o.name)}.</li>)}
-    </ul></>}
+    {group && <Section>
+      <dl className="wf-kv">
+        <dt>Round</dt><dd>{group.round} of {group.max_rounds} in “{group.name}”</dd>
+        <dt>Ends when</dt><dd>{group.is_review_step ? "This step" : group.review_step ?? "The review step"} reports “{group.exit_outcome}”</dd>
+        <dt>Why it runs</dt><dd>{why}</dd>
+        <dt>Waiting on</dt><dd>{task.blockers[0]?.message ?? task.display_state.label}</dd>
+      </dl>
+    </Section>}
+    {group && received && <Section title="Received this round">
+      <div className="wf-evi">
+        {round!.findings?.map((f, i) => <div key={i} className="wf-finding"><code>F{i + 1}</code><span>{f.severity ? `${f.severity}: ` : ""}{f.text}</span></div>)}
+        {round!.note && <div className="wf-finding"><code>Note</code><span>Reviewer note: {round!.note}</span></div>}
+        {round!.owner_note && <div className="wf-finding"><code>Owner</code><span>Owner guidance: {round!.owner_note}</span></div>}
+        <div className="wf-muted">The reviewer’s original words are kept with the findings.{round!.outcome ? ` Reason for return: ${round!.outcome}, round ${group.round - 1}.` : ""}</div>
+      </div>
+    </Section>}
+    {group && !!group.earlier_rounds?.length && <Section><details><summary>Earlier rounds ({group.earlier_rounds.length})</summary><ul className="wf-earlier">
+      {group.earlier_rounds.map((r) => <li key={r.round}>Round {r.round}{r.ended ? `, ${ENDINGS[r.ended] ?? r.ended}` : ""}{r.findings?.length ? `: ${r.findings.map((f) => f.text).join("; ")}` : ""}</li>)}
+    </ul></details></Section>}
+    {context.outcomes && context.outcomes.length > 0 && <Section title="What happens next"><div className="wf-impact wf-rules">
+      {context.outcomes.map((o) => { const r = task.routes?.find((x) => x.outcome === o.name);
+        return <div key={o.name} className="wf-route is-read"><Badge tone={TONE[o.kind as keyof typeof TONE] ?? "neutral"}>{o.name}</Badge><span className="arr" aria-hidden="true">{r?.destination === "return" ? "↺" : "→"}</span><span className="dest">{rule(o.name)}</span></div>; })}
+    </div></Section>}
   </div>;
 }

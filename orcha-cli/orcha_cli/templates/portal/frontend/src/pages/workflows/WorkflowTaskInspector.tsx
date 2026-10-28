@@ -58,9 +58,7 @@ export function WorkflowTaskInspector({ detail, task, cid, scope, verified, stal
           {task.display_state.release_available_at && <li>If the worker stays silent, Release lost worker becomes available at <time dateTime={task.display_state.release_available_at}>{formatServerTime(task.display_state.release_available_at)}</time>. Refresh to check availability.</li>}
         </ul>
       </Section>
-      {detail.semantics_version === 2 && ((task.outcomes ?? []).length > 0 || task.repeat_group_id) && <Section title={task.round ? `Round ${task.round}` : "Outcomes"}>
-        <WorkflowRoundContext detail={detail} task={task} />
-      </Section>}
+      {detail.semantics_version === 2 && ((task.outcomes ?? []).length > 0 || task.repeat_group_id) && <WorkflowRoundContext detail={detail} task={task} />}
       {task.awaiting_loop_decision && <Section title="Decision needed">
         <WorkflowLoopDecision detail={detail} task={task} scope={scope} stale={stale} agents={agents} onSaved={onSaved} />
       </Section>}
