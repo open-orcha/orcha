@@ -12,8 +12,14 @@ export function toWireDraft(draft: WorkflowDraft): WireDraft {
   return { title: draft.name.trim(), goal: draft.goal.trim(), execution_mode: draft.mode,
     objectives: draft.objectives.map((o) => ({ title: o.title.trim(), criteria: o.criteria.trim() })),
     tasks: draft.tasks.map((t) => ({ client_key: t.key, title: t.title.trim(), definition_of_done: t.doneWhen.trim(),
-      description: t.description.trim(), assignee_id: t.assignee || null, depends_on: t.dependsOn, priority: 100 })),
-    existing_task_ids: draft.existingTaskIds ?? [], import_acceptances: {} };
+      description: t.description.trim(), assignee_id: t.assignee || null, depends_on: t.dependsOn, priority: 100,
+      ...(t.outcomes?.length ? {
+        outcomes: t.outcomes.map((o) => ({ name: o.name.trim(), kind: o.kind })),
+        routes: t.outcomes.map((o) => ({ outcome: o.name.trim(), destination: o.destination, destination_task: o.destinationTask ?? null })),
+      } : {}) })),
+    existing_task_ids: draft.existingTaskIds ?? [], import_acceptances: {},
+    ...(draft.repeatGroups?.length ? { repeat_groups: draft.repeatGroups.map((g) => ({ name: g.name.trim(), member_tasks: g.members, review_task: g.review,
+      exit_outcome: g.exitOutcome, max_rounds: g.maxRounds })) } : {}) };
 }
 
 export function WorkflowDraftSave({ draft, scope, unavailableReason, onSaved, onImportChange }: {

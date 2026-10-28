@@ -8,7 +8,13 @@ export interface DraftTask {
   assignee: string;
   dependsOn: string[];
   autonomy: false;
+  /** Version 2 only: results this step may report and the rule each one follows. */
+  outcomes?: DraftOutcome[];
 }
+
+export type RouteDestination = "next" | "step" | "return" | "ask_owner" | "exit_group" | "stop";
+export interface DraftOutcome { name: string; kind: "success" | "changes" | "failure" | "custom"; destination: RouteDestination; destinationTask?: string }
+export interface DraftRepeatGroup { key: string; name: string; members: string[]; review: string; exitOutcome: string; maxRounds: number }
 
 export interface WorkflowDraft {
   name: string;
@@ -17,6 +23,16 @@ export interface WorkflowDraft {
   tasks: DraftTask[];
   objectives: { key: string; title: string; criteria: string }[];
   existingTaskIds?: string[];
+  /** Version 2 only: bounded repeat-until loops. */
+  repeatGroups?: DraftRepeatGroup[];
+}
+
+/** Tasks that `key` depends on, directly or through other draft tasks. */
+export function draftAncestors(tasks: DraftTask[], key: string): string[] {
+  const seen = new Set<string>();
+  const visit = (k: string) => (tasks.find((t) => t.key === k)?.dependsOn ?? []).forEach((d) => { if (!seen.has(d)) { seen.add(d); visit(d); } });
+  visit(key);
+  return [...seen];
 }
 
 export function emptyDraft(): WorkflowDraft {
@@ -58,8 +74,18 @@ export function draftProblems(draft: WorkflowDraft): DraftProblem[] {
   for (const objective of draft.objectives) {
     if (!objective.title.trim() || !objective.criteria.trim()) result.push({ key: objective.key, message: "Give each objective a title and completion criteria, or remove it." });
   }
+  for (const group of draft.repeatGroups ?? []) {
+    const review = draft.tasks.find((t) => t.key === group.review);
+    if (!group.name.trim()) result.push({ key: group.key, message: "Name each feedback loop." });
+    if (group.members.length < 2) result.push({ key: group.key, message: `${group.name.trim() || "A feedback loop"} needs at least two steps.` });
+    else if (!review || !group.members.includes(group.review)) result.push({ key: group.key, message: `${group.name.trim() || "A feedback loop"} needs a review step that is one of its steps.` });
+    else if (!(review.outcomes ?? []).some((o) => o.name.trim() === group.exitOutcome)) result.push({ key: group.key, message: `${group.name.trim() || "A feedback loop"} ends on an outcome its review step does not have.` });
+  }
   for (const task of draft.tasks) {
     const name = draftTaskName(task, draft.tasks);
+    const names = (task.outcomes ?? []).map((o) => o.name.trim());
+    if (names.some((n) => !n) || new Set(names).size !== names.length) result.push({ key: task.key, message: `${name}: give each outcome a different name.` });
+    if ((task.outcomes ?? []).some((o) => (o.destination === "step" || o.destination === "return") && !o.destinationTask)) result.push({ key: task.key, message: `${name}: choose where each outcome goes.` });
     if (!task.title.trim()) result.push({ key: task.key, message: `Name task ${draft.tasks.indexOf(task) + 1}.` });
     if (task.dependsOn.length > 3 || new Set(task.dependsOn).size !== task.dependsOn.length) {
       result.push({ key: task.key, message: `${name} needs no more than three different dependencies.` });

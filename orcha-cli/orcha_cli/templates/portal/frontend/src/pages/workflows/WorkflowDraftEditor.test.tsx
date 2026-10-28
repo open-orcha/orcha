@@ -1,7 +1,8 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WorkflowDraftEditor } from "./WorkflowDraftEditor";
-import { discardDraft, type DraftScope } from "./workflowDraft";
+import { discardDraft, draftProblems, readDraft, type DraftScope } from "./workflowDraft";
+import { toWireDraft } from "./WorkflowDraftSave";
 
 const scopes: DraftScope[] = [];
 afterEach(() => { cleanup(); scopes.forEach(discardDraft); scopes.length = 0; vi.restoreAllMocks(); });
@@ -105,5 +106,55 @@ describe("local workflow preparation", () => {
     expect(within(screen.getByRole("group", { name: "Selected existing tasks" })).getByRole("checkbox", { name: /Build target 0/ })).toBeChecked();
     await waitFor(() => expect(urls.length).toBeGreaterThanOrEqual(2));
     expect(urls.every((url) => url.includes("workflow-task-search") && new URL(url, "https://orcha.example").searchParams.get("limit") === "5")).toBe(true);
+  });
+});
+
+describe("flexible workflow authoring", () => {
+  it("adds outcomes, next-step rules and a feedback loop to the saved draft", () => {
+    const s = scope();
+    render(<WorkflowDraftEditor scope={s} saveUnavailableReason={reason} flexible />);
+    add("Write the post"); add("Review the post"); pick(2, "Write the post");
+    fireEvent.click(task(2).getByRole("button", { name: "Add outcome" }));
+    fireEvent.click(task(2).getByRole("button", { name: "Add outcome" }));
+    const [first, second] = task(2).getAllByLabelText("Outcome name");
+    fireEvent.change(first, { target: { value: "Approved" } }); fireEvent.change(second, { target: { value: "Changes requested" } });
+    const [thenFirst, thenSecond] = task(2).getAllByLabelText("Then");
+    fireEvent.change(thenFirst, { target: { value: "exit_group" } });
+    const back = within(thenSecond as HTMLElement).getByRole("option", { name: "Send back to Write the post (loop)" }) as HTMLOptionElement;
+    fireEvent.change(thenSecond, { target: { value: back.value } });
+    expect(task(1).queryByRole("option", { name: /Send back to/ })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Add feedback loop" }));
+    const loop = within(screen.getByRole("group", { name: "Loop 1" }));
+    fireEvent.change(loop.getByLabelText("Loop name"), { target: { value: "Draft and review" } });
+    fireEvent.click(loop.getByRole("checkbox", { name: "Write the post" })); fireEvent.click(loop.getByRole("checkbox", { name: "Review the post" }));
+    fireEvent.change(loop.getByLabelText("Review step"), { target: { value: (loop.getByRole("option", { name: "Review the post" }) as HTMLOptionElement).value } });
+    fireEvent.change(loop.getByLabelText("Ends when the review reports"), { target: { value: "Approved" } });
+    const draft = readDraft(s);
+    expect(draftProblems(draft).filter((p) => p.key !== "name" && p.key !== "goal")).toEqual([]);
+    const [write, review] = draft.tasks;
+    expect(toWireDraft(draft)).toMatchObject({
+      tasks: [{ client_key: write.key }, { client_key: review.key, outcomes: [{ name: "Approved", kind: "success" }, { name: "Changes requested", kind: "changes" }],
+        routes: [{ outcome: "Approved", destination: "exit_group", destination_task: null }, { outcome: "Changes requested", destination: "return", destination_task: write.key }] }],
+      repeat_groups: [{ name: "Draft and review", member_tasks: [write.key, review.key], review_task: review.key, exit_outcome: "Approved", max_rounds: 3 }],
+    });
+    expect(toWireDraft(draft).tasks?.[0]).not.toHaveProperty("outcomes");
+  });
+
+  it("flags a loop that ends on an outcome its review step lacks, and hides authoring when the server lacks it", () => {
+    const s = scope();
+    render(<WorkflowDraftEditor scope={s} saveUnavailableReason={reason} flexible />);
+    add("Write"); add("Review"); pick(2, "Write");
+    fireEvent.click(screen.getByRole("button", { name: "Add feedback loop" }));
+    const loop = within(screen.getByRole("group", { name: "Loop 1" }));
+    fireEvent.change(loop.getByLabelText("Loop name"), { target: { value: "Edit loop" } });
+    fireEvent.click(loop.getByRole("checkbox", { name: "Write" })); fireEvent.click(loop.getByRole("checkbox", { name: "Review" }));
+    fireEvent.change(loop.getByLabelText("Review step"), { target: { value: (loop.getByRole("option", { name: "Review" }) as HTMLOptionElement).value } });
+    expect(loop.getByText("Add outcomes to Review first.")).toBeVisible();
+    expect(draftProblems(readDraft(s)).map((p) => p.message)).toContain("Edit loop ends on an outcome its review step does not have.");
+    cleanup();
+    render(<WorkflowDraftEditor scope={scope("Other")} saveUnavailableReason={reason} />);
+    add("Write");
+    expect(screen.queryByRole("button", { name: "Add outcome" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Add feedback loop" })).toBeNull();
   });
 });

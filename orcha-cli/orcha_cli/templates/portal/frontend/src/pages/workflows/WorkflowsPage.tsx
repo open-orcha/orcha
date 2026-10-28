@@ -194,7 +194,7 @@ function WorkflowScreen() {
       {availability === "unsupported" && <p role="status">This Orcha server doesn’t support Workflows yet. Your existing tasks are still available.</p>}
       {error && <p role="alert" className="wf-notice">{error}</p>}
       {availability === "ready" && writeReason && <p className="wf-notice">{writeReason}</p>}
-      {cid && verified && <WorkflowDraftEditor scope={scope} saveUnavailableReason={stale || availability !== "ready" ? "Check the current connection before saving. Your draft is kept." : writeReason}
+      {cid && verified && <WorkflowDraftEditor scope={scope} flexible={capability?.flexible_workflows === true} saveUnavailableReason={stale || availability !== "ready" ? "Check the current connection before saving. Your draft is kept." : writeReason}
         agents={aiAgents} initialTaskId={initialTaskId} ownerName={actorName(scope.identity)} onSaved={(result) => navigate(href(result.id), { state: navigationState })} />}
       {!verified && <p>Choose a current human member of this project before preparing a workflow draft.</p>}
     </div></Shell>;

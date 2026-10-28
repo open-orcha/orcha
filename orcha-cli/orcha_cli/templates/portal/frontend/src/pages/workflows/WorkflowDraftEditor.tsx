@@ -3,6 +3,7 @@ import { Button } from "../../components/primitives/Button";
 import { Segmented } from "../../components/primitives";
 import { WorkflowGraph } from "./WorkflowGraph";
 import { WorkflowTaskDraftFields } from "./WorkflowTaskDraftFields";
+import { WorkflowLoopFields } from "./WorkflowFlowDraftFields";
 import { Dialog, ConfirmDialog } from "../../components/primitives/Dialog";
 import { discardDraft, draftTaskName, emptyDraft, keepDraft, newDraftTask, readDraft,
   type DraftScope, type DraftTask, type WorkflowDraft } from "./workflowDraft";
@@ -12,12 +13,14 @@ import type { WorkflowDetail } from "./workflowContract.generated";
 import { WorkflowImportChoices, type ImportChoice } from "./WorkflowImport";
 import "./workflows.css";
 
-interface Props { scope: DraftScope; saveUnavailableReason: string | null; agents?: { id: string; alias: string }[]; initialTaskId?: string; ownerName?: string; onSaved?: (detail: WorkflowDetail) => void }
+interface Props { scope: DraftScope; saveUnavailableReason: string | null; agents?: { id: string; alias: string }[]; initialTaskId?: string; ownerName?: string; onSaved?: (detail: WorkflowDetail) => void;
+  /** The server's `flexible_workflows` capability: outcomes, next-step rules and feedback loops. */
+  flexible?: boolean }
 export function WorkflowDraftEditor(props: Props) {
   return <ScopedDraftEditor key={JSON.stringify(props.scope)} {...props} />;
 }
 
-function ScopedDraftEditor({ scope, saveUnavailableReason, agents = [], initialTaskId, ownerName, onSaved }: Props) {
+function ScopedDraftEditor({ scope, saveUnavailableReason, agents = [], initialTaskId, ownerName, onSaved, flexible = false }: Props) {
   const [draft, setDraft] = useState(() => readDraft(scope));
   const [existingTasks, setExistingTasks] = useState<ImportChoice[]>([]);
   const [graph, setGraph] = useState(false);
@@ -64,12 +67,14 @@ function ScopedDraftEditor({ scope, saveUnavailableReason, agents = [], initialT
       <div className={graph && selected ? "wf-draft-graph has-selection" : "wf-draft-graph"}>{graph && <WorkflowGraph tasks={draft.tasks.map((t) => ({ id: t.key, title: draftTaskName(t, draft.tasks), status: "pending", label: "Draft", assignee: agents.find((a) => a.id === t.assignee)?.alias ?? "Unassigned", dependsOn: t.dependsOn, draft: true }))} selected={selected} onSelect={setSelected}
         onAdd={() => { const task = newDraftTask(); change({ ...draft, tasks: [...draft.tasks, task] }); setSelected(task.key); }}
         onAfter={(id) => { const task = { ...newDraftTask(), dependsOn: [id] }; change({ ...draft, tasks: [...draft.tasks, task] }); setSelected(task.key); }} disabledReason={draft.tasks.length >= 200 ? "The draft already has 200 tasks." : null} />}</div>
-      {draft.tasks.filter((t) => !graph || t.key === selected).map((task) => <WorkflowTaskDraftFields key={task.key} task={task} tasks={draft.tasks} agents={agents}
+      {draft.tasks.filter((t) => !graph || t.key === selected).map((task) => <WorkflowTaskDraftFields key={task.key} task={task} tasks={draft.tasks} agents={agents} flexible={flexible}
         existing={(draft.existingTaskIds ?? []).map((id) => ({ id, title: existingTasks.find((t) => t.id === id)?.title ?? "Selected existing task" }))}
         onChange={(patch) => update(task, patch)} removeLabel={`Remove task ${draft.tasks.indexOf(task) + 1}`}
-        onRemove={() => { change({ ...draft, tasks: draft.tasks.filter((t) => t.key !== task.key) }); setSelected(null); }} />)}
+        onRemove={() => { change({ ...draft, tasks: draft.tasks.filter((t) => t.key !== task.key).map((t) => ({ ...t, outcomes: t.outcomes?.map((o) => o.destinationTask === task.key ? { ...o, destination: "next", destinationTask: undefined } : o) })),
+          repeatGroups: draft.repeatGroups?.map((g) => ({ ...g, members: g.members.filter((k) => k !== task.key), ...(g.review === task.key ? { review: "", exitOutcome: "" } : {}) })) }); setSelected(null); }} />)}
       <Button icon="plus" disabled={draft.tasks.length >= 200} onClick={() => { const task = newDraftTask(); change({ ...draft, tasks: [...draft.tasks, task] }); setSelected(task.key); }}>Add task summary</Button>
     </section>
+    {flexible && <WorkflowLoopFields groups={draft.repeatGroups ?? []} tasks={draft.tasks} onChange={(repeatGroups) => change({ ...draft, repeatGroups })} />}
     <Button onClick={() => setImportOpen(true)}>Add existing tasks…</Button>
     {(draft.existingTaskIds ?? []).length > 0 && <p>{draft.existingTaskIds!.length} existing tasks selected.</p>}
     {importOpen && <Dialog title="Add existing tasks" className="wf-page" onClose={() => setImportOpen(false)} footer={<Button onClick={() => setImportOpen(false)}>Keep selections</Button>}>
