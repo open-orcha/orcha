@@ -203,3 +203,30 @@ def test_validate_flow_is_pure_and_keeps_prerequisites_acyclic():
     stray = [{**groups[0], "member_tasks": ["a", "c"], "review_task": "a"}]
     with pytest.raises(HTTPException):
         validate_flow(set(deps), deps, outcomes, routes, stray)
+
+
+def test_readiness_skips_unselected_branches_and_waits_on_loop_decisions():
+    from portal_backend.workflow_scheduling import stored_status, waiting_on
+
+    def task(tid, status="completed", **extra):
+        return {"id": tid, "status": status, "work_revision": 1,
+                "preparation_state": "prepared", **extra}
+
+    acc = {
+        tid: {"work_revision": 1, "evidence_valid": True, "actor_kind": "human"}
+        for tid in ("a", "b")
+    }
+    deps = {"join": ["a", "c"], "c": ["b"], "after": ["b"]}
+    tasks = {
+        "a": task("a"),
+        "b": task("b", awaiting_loop_decision="limit_reached"),
+        "c": task("c", "not_ready", route_state="not_selected"),
+        "join": task("join", "pending"),
+        "after": task("after", "pending"),
+    }
+    # The unselected branch is skipped because another prerequisite was selected.
+    assert waiting_on(tasks["join"], deps, tasks, acc) == []
+    assert stored_status(tasks["join"], deps, tasks, acc) == "ready"
+    # An accepted step whose loop waits for the owner holds its dependents.
+    assert waiting_on(tasks["after"], deps, tasks, acc) == ["b"]
+    assert stored_status(tasks["after"], deps, tasks, acc) == "pending"

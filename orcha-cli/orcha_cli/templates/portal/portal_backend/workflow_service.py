@@ -300,6 +300,16 @@ class WorkflowService:
         w["owner_live"] = bool(
             owner and owner["kind"] == "human" and owner["member_role"] != "viewer"
         )
+        w["flexible_enabled"] = routing.flexible_enabled()
+        w["paused_group_tasks"] = {}
+        if w.get("semantics_version", 1) == 2:
+            for g in self.rows(
+                "SELECT g.name,g.state,m.task_id,a.alias FROM workflow_repeat_groups g JOIN workflow_repeat_group_members m ON m.group_id=g.id LEFT JOIN agents a ON a.id=g.escalation_owner_id WHERE g.workflow_id=%s AND g.state IN ('limit_reached','stalled','awaiting_owner')",
+                (wid,),
+            ):
+                w["paused_group_tasks"][g["task_id"]] = (
+                    f"The loop {g['name']} is waiting for {g['alias'] or 'the owner'} to decide."
+                )
         tasks = {
             t["id"]: t
             for t in self.rows(

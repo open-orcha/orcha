@@ -75,6 +75,21 @@ def accepted(task, acceptances):
     )
 
 
+def satisfied(task, acceptances):
+    """A prerequisite lets its dependents proceed: accepted, and no loop decision is
+    pending on its outcome (limit, stall, missing outcome, ask the owner)."""
+    return accepted(task, acceptances) and not task.get("awaiting_loop_decision")
+
+
+def waiting_on(task, dependencies, tasks, acceptances):
+    """Prerequisites a task still waits for. A prerequisite an earlier outcome did not
+    select is skipped while another prerequisite is still selected (a branch that joins
+    back); a task whose prerequisites were all unselected is itself marked unselected."""
+    prerequisites = [p for p in dependencies.get(task["id"], ()) if p in tasks]
+    selected = [p for p in prerequisites if tasks[p].get("route_state") != "not_selected"]
+    return [p for p in (selected or prerequisites) if not satisfied(tasks[p], acceptances)]
+
+
 def stored_status(task, dependencies, tasks, acceptances, outside_evidence=None):
     """Recompute waiting states without dropping ANY hold or owner decision.
 
@@ -95,13 +110,7 @@ def stored_status(task, dependencies, tasks, acceptances, outside_evidence=None)
         or task.get("awaiting_owner_decision")
     ):
         return "not_ready"
-    return (
-        "ready"
-        if all(
-            accepted(tasks[p], acceptances) for p in dependencies.get(task["id"], ())
-        )
-        else "pending"
-    )
+    return "pending" if waiting_on(task, dependencies, tasks, acceptances) else "ready"
 
 
 def _base_blockers(
@@ -161,13 +170,29 @@ def _base_blockers(
     prerequisites = dependencies.get(task["id"], ())
     if len(prerequisites) > 3 or any(p not in tasks for p in prerequisites):
         add("invalid_graph", "The prerequisite graph needs repair.")
-    elif any(not accepted(tasks[p], acceptances) for p in prerequisites):
+    elif waiting_on(task, dependencies, tasks, acceptances):
         names = [
-            tasks[p]["title"]
-            for p in prerequisites
-            if not accepted(tasks[p], acceptances)
+            tasks[p]["title"] for p in waiting_on(task, dependencies, tasks, acceptances)
         ]
         add("prerequisites", "Waiting for " + ", ".join(names) + ".")
+    if task.get("route_state") == "not_selected":
+        add("not_selected", "An earlier step's outcome did not select this step.")
+    if workflow.get("semantics_version", 1) == 2:
+        if not workflow.get("flexible_enabled", True):
+            add(
+                "flexible_unsupported",
+                "This workflow uses outcomes and loops, which are turned off on this server.",
+            )
+        paused = workflow.get("paused_group_tasks", {}).get(task["id"])
+        if paused:
+            add("group_paused", paused)
+        if source_kind == "worker" and workflow.get("turns_used", 0) >= workflow.get(
+            "turn_allowance", 40
+        ):
+            add(
+                "allowance_exhausted",
+                "This run used its turn allowance; the owner can raise it.",
+            )
     if any(
         e["task_id"] == task["id"] and e["state"] in LIVE_EXECUTIONS for e in executions
     ):
@@ -372,7 +397,11 @@ def task_display(
 def progress_and_completion(
     workflow, tasks, acceptances, executions, objectives, review_rounds
 ):
-    counted = [t for t in tasks.values() if not t.get("withdrawn_at")]
+    counted = [
+        t
+        for t in tasks.values()
+        if not t.get("withdrawn_at") and t.get("route_state") != "not_selected"
+    ]
     n = sum(accepted(t, acceptances) for t in counted)
     total = len(counted)
     objectives_done = sum(
@@ -395,6 +424,8 @@ def progress_and_completion(
             "tasks_unaccepted",
             "Every required task must have its current work accepted.",
         )
+    if any(t.get("awaiting_loop_decision") for t in counted):
+        add("loop_decision_pending", "Decide what happens next for the waiting loop or outcome.")
     if objectives_done != len(objectives):
         add("objectives_unaccepted", "Accept every current objective and its evidence.")
     if (
@@ -422,7 +453,7 @@ def progress_and_completion(
             "accepted": n,
             "total": total,
             "percent": n * 100 // total if total else None,
-            "withdrawn": len(tasks) - total,
+            "withdrawn": sum(1 for t in tasks.values() if t.get("withdrawn_at")),
             "objectives_accepted": objectives_done,
             "objectives_total": len(objectives),
         },
