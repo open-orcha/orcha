@@ -52,7 +52,7 @@ JSON_ALIASES = frozenset({
     "active_run", "assignees", "attachments", "close_decision", "current_task", "message_summary",
     "plan_decision", "plan_message", "previous_plan_decision", "reassigned", "reviewer", "running_run",
     "runs",
-    "task_link", "waiting_on",
+    "origin_task", "task_link", "waiting_on",
 })
 
 # Boolean EXPRESSION columns (COALESCE(r.wake_enabled, true), CASE ... END) lose the declared
