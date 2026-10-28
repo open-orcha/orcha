@@ -643,3 +643,174 @@ def test_adding_a_step_after_start_records_an_edit(setup_workflow, flexible):
         w["id"],
     )
     assert definition_reasons(w["id"]) == [(1, "start"), (2, "edit")]
+
+
+def branch_draft(worker):
+    """Triage branches to Fix or Document; Close waits on whichever ran."""
+    step = lambda key, title, deps=(), **extra: {  # noqa: E731
+        "client_key": key,
+        "title": title,
+        "definition_of_done": "Done",
+        "assignee_id": worker,
+        "depends_on": list(deps),
+        **extra,
+    }
+    return {
+        "title": "Support ticket",
+        "goal": "A handled ticket",
+        "tasks": [
+            step(
+                "triage",
+                "Triage",
+                outcomes=[{"name": "Bug", "kind": "custom"}, {"name": "Question", "kind": "custom"}],
+                routes=[
+                    {"outcome": "Bug", "destination": "step", "destination_task": "fix"},
+                    {"outcome": "Question", "destination": "step", "destination_task": "docs"},
+                ],
+            ),
+            step("fix", "Fix", ["triage"]),
+            step("docs", "Document", ["triage"]),
+            step("close", "Close", ["fix", "docs"]),
+        ],
+    }
+
+
+def test_branch_runs_one_path_and_the_join_waits_only_for_it(setup_workflow, flexible):
+    execute = setup_workflow[-1]
+    w = prepare_and_start(setup_workflow, execute("create", branch_draft(setup_workflow[2])))
+    ids = {t["title"]: t["id"] for t in w["tasks"]}
+    w = finish(setup_workflow, w, ids["Triage"], "Bug")
+    byid = {t["id"]: t for t in w["tasks"]}
+    assert byid[ids["Document"]]["route_state"] == "not_selected"
+    assert "not_selected" in {b["code"] for b in byid[ids["Document"]]["blockers"]}
+    assert byid[ids["Fix"]]["can_start"] and not byid[ids["Close"]]["can_start"]
+    w = finish(setup_workflow, w, ids["Fix"])
+    byid = {t["id"]: t for t in w["tasks"]}
+    assert byid[ids["Close"]]["can_start"]
+    w = finish(setup_workflow, w, ids["Close"])
+    # The unselected step does not hold up the finish; only the goal is left.
+    assert {b["code"] for b in w["completion"]["blockers"]} == {"goal_unaccepted"}
+
+
+def test_branch_that_selects_nothing_downstream_skips_the_join(setup_workflow, flexible):
+    execute = setup_workflow[-1]
+    draft = branch_draft(setup_workflow[2])
+    draft["tasks"][3]["depends_on"] = ["docs"]
+    w = prepare_and_start(setup_workflow, execute("create", draft))
+    ids = {t["title"]: t["id"] for t in w["tasks"]}
+    w = finish(setup_workflow, w, ids["Triage"], "Bug")
+    byid = {t["id"]: t for t in w["tasks"]}
+    assert byid[ids["Close"]]["route_state"] == "not_selected"
+
+
+def test_same_findings_on_changed_work_do_not_stall(setup_workflow, flexible):
+    execute = setup_workflow[-1]
+    w = prepare_and_start(setup_workflow, execute("create", loop_draft(setup_workflow[2])))
+    write, review, publish = loop_ids(w)
+    for _ in range(2):
+        w = finish(setup_workflow, w, write)
+        w = finish(setup_workflow, w, review, "Changes requested", ["Too long"])
+    with db_cursor(readonly=True) as (_, cur):
+        cur.execute("SELECT state,current_round FROM workflow_repeat_groups WHERE workflow_id=%s", (w["id"],))
+        assert dict(cur.fetchone()) == {"state": "open", "current_round": 3}
+
+
+def test_same_findings_on_unchanged_work_stall_the_loop(setup_workflow, flexible, monkeypatch):
+    execute = setup_workflow[-1]
+    hooks = setup_workflow[4]
+    save = hooks.save
+
+    def same_file(task, **kwargs):
+        ref = save(task, **kwargs)
+        for r in (ref, hooks.evidence[ref["evidence_set_id"]][2]):
+            for item in r["items"]:
+                item["deliverable_id"] = "post-" + str(task["id"])
+        return ref
+
+    monkeypatch.setattr(hooks, "save", same_file)
+    w = prepare_and_start(setup_workflow, execute("create", loop_draft(setup_workflow[2])))
+    write, review, publish = loop_ids(w)
+    for _ in range(2):
+        w = finish(setup_workflow, w, write)
+        w = finish(setup_workflow, w, review, "Changes requested", ["Too long"])
+    with db_cursor(readonly=True) as (_, cur):
+        cur.execute("SELECT state,current_round FROM workflow_repeat_groups WHERE workflow_id=%s", (w["id"],))
+        g = cur.fetchone()
+        cur.execute("SELECT awaiting_loop_decision FROM tasks WHERE id=%s", (review,))
+        waiting = cur.fetchone()["awaiting_loop_decision"]
+    assert (g["state"], g["current_round"], waiting) == ("stalled", 2, "stalled")
+    # The owner resumes with a note: round 3 starts and carries it.
+    w = execute("loop_decision", {"kind": "resume_stalled", "task_id": review, "note": "Cut the intro"}, w["id"])
+    byid = {t["id"]: t for t in w["tasks"]}
+    assert byid[write]["can_start"] and byid[write]["round"] == 3
+    with db_cursor(readonly=True) as (_, cur):
+        cur.execute("SELECT subject_kind,chosen FROM workflow_owner_decisions WHERE workflow_id=%s", (w["id"],))
+        assert [(r["subject_kind"], r["chosen"]) for r in cur.fetchall()] == [("stalled", "resume_stalled")]
+
+
+def test_accepting_without_an_outcome_waits_for_the_owner_to_pick_one(setup_workflow, flexible):
+    execute = setup_workflow[-1]
+    w = prepare_and_start(setup_workflow, execute("create", loop_draft(setup_workflow[2])))
+    write, review, publish = loop_ids(w)
+    w = finish(setup_workflow, w, write)
+    w = finish(setup_workflow, w, review)
+    byid = {t["id"]: t for t in w["tasks"]}
+    assert byid[review]["awaiting_loop_decision"] == "missing_outcome"
+    assert not byid[publish]["can_start"]
+    assert code(execute, "loop_decision", {"kind": "raise_limit", "task_id": review, "new_max_rounds": 5}, w["id"]) == "decision_not_available"
+    w = execute("loop_decision", {"kind": "pick_outcome", "task_id": review, "outcome": "Approved"}, w["id"])
+    byid = {t["id"]: t for t in w["tasks"]}
+    assert byid[review]["awaiting_loop_decision"] is None
+    assert byid[publish]["can_start"]
+
+
+def test_outcome_reports_are_fenced_to_the_current_work_and_worker(setup_workflow, flexible):
+    from portal_backend import workflow_service as ws
+
+    execute = setup_workflow[-1]
+    worker = setup_workflow[2]
+    w = prepare_and_start(setup_workflow, execute("create", loop_draft(worker)))
+    write, review, publish = loop_ids(w)
+    w = finish(setup_workflow, w, write)
+    e, ref = submit_result(setup_workflow, w, review)
+    old_revision = {t["id"]: t for t in w["tasks"]}[review]["work_revision"]
+    # An AI that does not hold the step's turn cannot report for it.
+    from test_workflows import uid
+
+    other_ai = uid()
+    with db_cursor() as (_, cur):
+        cur.execute(
+            "INSERT INTO agents(id,container_id,alias,role,kind,member_role) VALUES (%s,%s,'Helper','test','ai','member')",
+            (other_ai, setup_workflow[0]),
+        )
+    assert code(
+        execute,
+        "report_outcome",
+        {"outcome": "Approved"},
+        w["id"],
+        review,
+        acting=ws.WorkflowActor(other_ai, True, True),
+    ) == "reporter_ineligible"
+    execute("report_outcome", {"outcome": "Changes requested", "findings": [{"text": "Too long"}]}, w["id"], review)
+    execute("accept", {"evidence": ref}, w["id"], review)
+    # Round 2 bumped the review's work revision: a late report for round 1 is refused.
+    assert code(
+        execute,
+        "report_outcome",
+        {"outcome": "Approved", "expected_work_revision": old_revision},
+        w["id"],
+        review,
+    ) == "work_revision_changed"
+
+
+def test_switching_off_pauses_version_two_runs(setup_workflow, flexible, monkeypatch):
+    execute = setup_workflow[-1]
+    w = prepare_and_start(setup_workflow, execute("create", loop_draft(setup_workflow[2])))
+    monkeypatch.delenv(workflow_routing.FLAG, raising=False)
+    from portal_backend import workflow_service as ws
+
+    with db_cursor(readonly=True) as (_, cur):
+        d = ws.WorkflowService(cur, setup_workflow[4]).detail(w["id"], setup_workflow[1])
+    write = {t["id"]: t for t in d["tasks"]}[loop_ids(d)[0]]
+    assert not write["can_start"]
+    assert "flexible_unsupported" in {b["code"] for b in write["blockers"]}
