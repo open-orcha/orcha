@@ -83,11 +83,6 @@
 .wf-row.v2-row::before { display: none; }
 .wf-row.v2-row:hover { background: var(--v2-hover); }
 .wf-row.v2-row.is-selected { background: var(--v2-selected); }
-/* Repeat group bracket (issue #362 x03): a bar down the left of consecutive member rows. */
-.wf-row.v2-row.wf-loop { box-shadow: inset 3px 0 0 var(--v2-accent); border-radius: 0; }
-.wf-row.v2-row.is-loop-first { border-top-left-radius: 6px; }
-.wf-row.v2-row.is-loop-last { border-bottom-left-radius: 6px; }
-.wf-row.v2-row.is-loop-only { border-radius: 6px 0 0 6px; }
 .wf-row .wf-st { flex: none; display: inline-flex; }
 .wf-row .wf-title { flex: 0 1 auto; min-width: 120px; max-width: 46%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--v2-text); font-weight: var(--v2-fw-book, 450); }
 .wf-row .wf-goal { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--v2-text-3); font-size: var(--v2-fs-meta); }

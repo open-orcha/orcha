@@ -22,9 +22,9 @@ export interface WorkflowTaskRowProps {
   menuItems: (MenuItemSpec | "separator")[];
   /** Dependencies list: "Depends on · Needed by" replaces the state sub-line. */
   subline?: ReactNode;
-  /** Repeat group the step belongs to (semantics version 2), from `repeat_groups`. `edge` places the
-   * row in the bracket drawn around consecutive member rows (issue #362: loops are a bracket, not a back-edge). */
-  loop?: { name: string; round: number; max: number; exit?: string; edge?: "first" | "middle" | "last" | "only" } | null;
+  /** Round of the repeat group the step belongs to (semantics version 2); the group header row
+   * (`WorkflowLoopGroup`) carries the name, limit and exit rule (issue #362 x03). */
+  loop?: { round: number } | null;
 }
 
 export const WorkflowTaskRow = forwardRef<HTMLElement, WorkflowTaskRowProps>(function WorkflowTaskRow({ task, selected, onSelect, assignees, actorName, menuItems, subline, loop }, ref) {
@@ -35,13 +35,12 @@ export const WorkflowTaskRow = forwardRef<HTMLElement, WorkflowTaskRowProps>(fun
   const warning = task.display_state.list_warning ? task.display_state.warning || "Released without stop confirmation: the worker may still be running outside Orcha." : null;
   const sub = subline ?? (withdrawn ? `Withdrawn by ${task.withdrawn_by ? actorName(task.withdrawn_by) : "Name unavailable"}`
     : task.display_state.release_available_at ? `Release lost worker becomes available at ${formatServerTime(task.display_state.release_available_at)}`
-    : [task.display_state.label, task.blockers[0]?.message].filter(Boolean).join(" · "));
-  return <Row ref={(el) => { if (el) el.id = `workflow-task-${task.id}`; if (typeof ref === "function") ref(el); else if (ref) ref.current = el; }} id={`workflow-task-${task.id}`} className={`wf-row is-two${loop ? ` wf-loop is-loop-${loop.edge ?? "only"}` : ""}`} selected={selected} dim={withdrawn || notSelected} onActivate={onSelect} title={task.title}>
+    : [loop ? `Round ${loop.round}` : null, task.display_state.label, task.blockers[0]?.message].filter(Boolean).join(" · "));
+  return <Row ref={(el) => { if (el) el.id = `workflow-task-${task.id}`; if (typeof ref === "function") ref(el); else if (ref) ref.current = el; }} id={`workflow-task-${task.id}`} className={`wf-row is-two${notSelected ? " wf-notsel" : ""}`} selected={selected} dim={withdrawn} onActivate={onSelect} title={task.title}>
     <span className="wf-st"><StatusIcon status={task.status} label={task.display_state.label} /></span>
     <span className="wf-title"><span>{task.title}</span><span className="wf-sub">{sub}</span></span>
     <span className="wf-chips">
       <Chip title={task.autonomy === "on" ? "Task autonomy ON: the agent approves its own plan and finished work" : "Task autonomy OFF: plan and finished work need approval"}>{task.autonomy === "on" ? "Autonomy ON" : "Autonomy OFF"}</Chip>
-      {loop ? <Chip title={`Repeat group: ${loop.name}${loop.exit ? `. ${loop.exit}` : ""}`}>{`Round ${loop.round} of ${loop.max}`}</Chip> : null}
       {task.awaiting_loop_decision ? <Chip dot="warn" title={task.display_state.label}>Decision needed</Chip> : null}
       {warning ? <Chip dot="warn" title={warning}>Warning</Chip> : null}
     </span>
@@ -54,6 +53,32 @@ export const WorkflowTaskRow = forwardRef<HTMLElement, WorkflowTaskRowProps>(fun
     </span>}
   </Row>;
 });
+
+const PAUSED = new Set(["limit_reached", "stalled", "awaiting_owner"]);
+const GROUP_STATE: Record<string, string> = { limit_reached: "Round limit reached", stalled: "Stalled", awaiting_owner: "Waiting for the owner", exited: "Finished", stopped: "Stopped" };
+
+/** A repeat group drawn as a bracket around its consecutive rows, with a header in words (issue #362
+ * x03 callout 1): name, round of the limit, round dots, the exit rule and who decides at the limit. */
+export function WorkflowLoopGroup({ group, reviewTitle, ownerName, children }: {
+  group: { name: string; current_round: number; max_rounds: number; exit_outcome: string; state: string };
+  reviewTitle?: string; ownerName?: string; children: ReactNode;
+}) {
+  const round = Math.max(1, group.current_round);
+  const paused = PAUSED.has(group.state);
+  const ended = group.state === "exited" || group.state === "stopped";
+  const of = `Round ${round} of ${group.max_rounds}`;
+  return <div className="wf-loop" role="group" aria-label={`${group.name}, ${of.toLowerCase()}`}>
+    <div className="wf-loop-h">
+      <b>{group.name}</b><span aria-hidden="true">·</span><span>{of}</span>
+      <span className="wf-rounds" role="img" aria-label={of}>{Array.from({ length: group.max_rounds }, (_, i) => i + 1).map((n) =>
+        <i key={n} className={`wf-rnd${n < round || (n === round && ended) ? " is-done" : n === round ? (paused ? " is-stop" : " is-now") : ""}`} />)}</span>
+      {reviewTitle && <><span aria-hidden="true">·</span><span>exits when {reviewTitle} reports {group.exit_outcome}</span></>}
+      <span aria-hidden="true">·</span><span>then asks {ownerName ?? "the owner"}</span>
+      {GROUP_STATE[group.state] && <Chip size="sm" dot={paused ? "warn" : undefined}>{GROUP_STATE[group.state]}</Chip>}
+    </div>
+    {children}
+  </div>;
+}
 
 export function WorkflowTaskRows({ label, children }: { label: string; children: ReactNode }) {
   return <List label={label} className="wf-rows">{children}</List>;

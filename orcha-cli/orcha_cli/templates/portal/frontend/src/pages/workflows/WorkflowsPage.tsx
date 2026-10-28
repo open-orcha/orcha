@@ -17,7 +17,7 @@ import { WorkflowResolveReview, WorkflowReviewEditor } from "./WorkflowReviewEdi
 import { WorkflowActivity, WorkflowReviewHistory } from "./WorkflowHistory";
 import { WorkflowHeader } from "./WorkflowHeader";
 import { WorkflowRail } from "./WorkflowRail";
-import { WorkflowTaskRow, WorkflowTaskRows } from "./WorkflowTaskRows";
+import { WorkflowLoopGroup, WorkflowTaskRow, WorkflowTaskRows } from "./WorkflowTaskRows";
 import { WorkflowTaskInspector } from "./WorkflowTaskInspector";
 import { WorkflowHide } from "./WorkflowHide";
 import { TASK_ACTION_KEYS, taskActionLabel, taskReason, type TaskActionRequest } from "./WorkflowTaskActions";
@@ -211,21 +211,30 @@ function WorkflowScreen() {
       onSelect: () => { setSelectedId(task.id); setTaskRequest({ taskId: task.id, action: key, seq: ++requestSeq.current }); },
     })),
   ];
-  const taskRows = (dependencies: boolean) => <WorkflowTaskRows label={dependencies ? "Workflow tasks and dependencies" : "Workflow tasks"}>
-    {detail!.tasks.filter((t) => !dependencies || !taskSearch || t.title.toLowerCase().includes(taskSearch.toLowerCase())).map((t, i, shown) => {
+  const taskRows = (dependencies: boolean) => {
+    const shown = detail!.tasks.filter((t) => !dependencies || !taskSearch || t.title.toLowerCase().includes(taskSearch.toLowerCase()));
+    const row = (t: WorkflowDetail["tasks"][number]) => {
       const names = (ids: string[]) => ids.map((id) => detail!.tasks.find((p) => p.id === id)?.title ?? "Prerequisite unavailable").join(", ");
       const dependents = detail!.tasks.filter((other) => other.depends_on.includes(t.id)).map((o) => o.id);
       const group = t.repeat_group_id ? detail!.repeat_groups?.find((g) => g.id === t.repeat_group_id) : undefined;
-      const inGroup = (other?: WorkflowDetail["tasks"][number]) => !!other && other.repeat_group_id === t.repeat_group_id;
-      const edge: "first" | "middle" | "last" | "only" = inGroup(shown[i - 1]) ? (inGroup(shown[i + 1]) ? "middle" : "last") : (inGroup(shown[i + 1]) ? "first" : "only");
-      const reviewer = group && detail!.tasks.find((r) => r.id === group.review_task)?.title;
-      const loop = group ? { name: group.name, round: t.round ?? group.current_round, max: group.max_rounds, edge,
-        exit: reviewer ? `Ends when ${reviewer} reports “${group.exit_outcome}”.` : undefined } : null;
-      return <WorkflowTaskRow key={t.id} loop={loop} task={t} selected={selectedId === t.id} onSelect={() => { setSelectedId(t.id); setTaskRequest(null); }} actorName={actorName}
+      return <WorkflowTaskRow key={t.id} loop={group ? { round: t.round ?? group.current_round } : null} task={t} selected={selectedId === t.id} onSelect={() => { setSelectedId(t.id); setTaskRequest(null); }} actorName={actorName}
         assignees={t.assignee_ids.map((id) => ({ id, alias: actorName(id), kind: snap?.agents.find((a) => a.id === id)?.kind ?? "ai" }))} menuItems={rowMenu(t)}
         subline={dependencies ? `Depends on: ${t.depends_on.length ? names(t.depends_on) : "none"} · Needed by: ${dependents.length ? names(dependents) : "none"}` : undefined} />;
-    })}
-  </WorkflowTaskRows>;
+    };
+    // Consecutive members of one repeat group share a bracket (issue #362 x03); everything else is a plain row.
+    const runs: { group?: NonNullable<WorkflowDetail["repeat_groups"]>[number]; tasks: typeof shown }[] = [];
+    for (const t of shown) {
+      const group = t.repeat_group_id ? detail!.repeat_groups?.find((g) => g.id === t.repeat_group_id) : undefined;
+      const last = runs[runs.length - 1];
+      if (group && last?.group?.id === group.id) last.tasks.push(t); else runs.push({ group, tasks: [t] });
+    }
+    return <WorkflowTaskRows label={dependencies ? "Workflow tasks and dependencies" : "Workflow tasks"}>
+      {runs.map((run, i) => run.group
+        ? <WorkflowLoopGroup key={`${run.group.id}-${i}`} group={run.group} reviewTitle={detail!.tasks.find((r) => r.id === run.group!.review_task)?.title}
+          ownerName={actorName(run.group.escalation_owner_id ?? detail!.owner_human_id)}>{run.tasks.map(row)}</WorkflowLoopGroup>
+        : run.tasks.map(row))}
+    </WorkflowTaskRows>;
+  };
   const inspector = detail && selectedTask && cid ? <WorkflowTaskInspector key={selectedTask.id} detail={detail} task={selectedTask} cid={cid} scope={scope} verified={verified} stale={stale}
     agents={aiAgents} actorName={actorName} onSaved={saved} onExpand={() => openTask(selectedTask.id)} request={taskRequest?.taskId === selectedTask.id && taskRequest.action !== "review" ? { action: taskRequest.action, seq: taskRequest.seq } : null}
     reviewRequest={taskRequest?.taskId === selectedTask.id && taskRequest.action === "review" ? taskRequest.seq : null} onRequest={(action) => setTaskRequest({ taskId: selectedTask.id, action, seq: ++requestSeq.current })}
