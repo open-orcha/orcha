@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, expect, it, vi } from "vitest";
-import { WorkflowActions } from "./WorkflowActions";
+import { loopFinish, WorkflowActions } from "./WorkflowActions";
 import { WorkflowTaskActions } from "./WorkflowTaskActions";
 import { exampleImpact, exampleTask, exampleWorkflow, jsonResponse, writeCapability } from "./workflowTestFixtures";
 const scope = () => ({ origin: "https://orcha.example", project: "project", identity: crypto.randomUUID() });
@@ -89,4 +89,16 @@ it("checks each hold selection, preserves the reason after a conflict and does n
   expect(await screen.findByLabelText("Reason")).toHaveValue("Ready for review");
   expect(screen.getByRole("checkbox", { name: "Release start hold" })).toBeChecked();
   expect(fetch.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(1);
+});
+
+it("says a loop blocks Finish only when the server's completion check would (x11)", () => {
+  const loop = { id: "g1", name: "Draft and review", member_tasks: ["write", "review"], review_task: "review", exit_outcome: "Approved", max_rounds: 5, stall_rule: "findings_and_artifact", current_round: 0, state: "open" };
+  const write = exampleTask({ id: "write", status: "pending", work_revision: 1, acceptance: null });
+  const review = exampleTask({ id: "review", status: "pending", work_revision: 1, acceptance: null });
+  const preview = (tasks: ReturnType<typeof exampleTask>[], can_finish: boolean) => exampleWorkflow({ semantics_version: 2, repeat_groups: [loop], tasks, completion: { can_finish, blockers: [] } });
+  expect(loopFinish(preview([{ ...write, route_state: "not_selected" }, { ...review, route_state: "not_selected" }], true), loop)).toBe("not on this path");
+  expect(loopFinish(preview([write, review], false), loop)).toBe("blocks Finish");
+  expect(loopFinish(preview([write, { ...review, status: "completed", awaiting_loop_decision: "limit_reached" }], true), loop)).toBe("blocks Finish");
+  expect(loopFinish(preview([write, review], true), loop)).toBe("does not block Finish");
+  expect(loopFinish(preview([write, review], false), { ...loop, state: "exited" })).toBe("done");
 });

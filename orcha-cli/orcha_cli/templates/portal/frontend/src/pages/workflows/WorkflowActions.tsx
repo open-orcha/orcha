@@ -21,6 +21,17 @@ export interface WorkflowActionRequest { action: WorkflowAction; seq: number }
 const labels: Record<Action, string> = { start: "Review start", pause: "Pause new starts", resume: "Resume workflow", cancel: "Cancel workflow", finish: "Finish checklist" };
 const confirmation: Record<Action, string> = { start: "Start selected tasks", pause: "Pause new starts", resume: "Resume workflow", cancel: "Cancel workflow", finish: "Finish workflow" };
 
+/** What a loop means for Finish, from the same facts the server's completion check reads: only steps
+ * still on the path count, a waiting decision always blocks, and nothing blocks once Finish is allowed. */
+export function loopFinish(preview: WorkflowDetail, g: NonNullable<WorkflowDetail["repeat_groups"]>[number]) {
+  if (g.state === "exited") return "done";
+  if (g.state === "stopped") return "stopped";
+  const counted = preview.tasks.filter((t) => g.member_tasks.includes(t.id) && !t.withdrawn_at && t.route_state !== "not_selected");
+  if (!counted.length) return "not on this path";
+  if (counted.some((t) => t.awaiting_loop_decision)) return "blocks Finish";
+  const open = counted.some((t) => t.status !== "completed" || t.acceptance?.work_revision !== t.work_revision);
+  return open && preview.completion.can_finish !== true ? "blocks Finish" : "does not block Finish";
+}
 const LOOP_ENDINGS: Record<string, string> = { exited: "the loop ended", stopped: "the loop was stopped", limit_reached: "waiting at its round limit",
   stalled: "waiting after a stall", awaiting_owner: "waiting for the owner" };
 
@@ -132,8 +143,8 @@ export function WorkflowActions({ detail, scope, verified, stale, onSaved, reque
           {preview.semantics_version === 2 && <div className="wf-impact" aria-label="Loops and limits">
             <div className="wf-impact-h"><span>Loops and limits</span><span>agent turns {preview.turns_used ?? 0} of {preview.turn_allowance ?? 40}</span></div>
             {(preview.repeat_groups ?? []).map((g) => <div key={g.id} className="wf-impact-row"><span className="t">{g.state === "exited" ? `Loop “${g.name}” exited after round ${g.current_round} of ${g.max_rounds}`
-              : g.state === "stopped" ? `Loop “${g.name}” was stopped at round ${g.current_round} of ${g.max_rounds}` : `Loop “${g.name}” has not exited · round ${g.current_round} of ${g.max_rounds} · ${LOOP_ENDINGS[g.state] ?? "running"}`}</span>
-              <span className="wf-muted">{g.state === "exited" ? "done" : g.state === "stopped" ? "stopped" : "blocks Finish"}</span></div>)}
+              : g.state === "stopped" ? `Loop “${g.name}” was stopped at round ${g.current_round} of ${g.max_rounds}` : g.current_round < 1 ? `Loop “${g.name}” has not started · up to ${g.max_rounds} rounds` : `Loop “${g.name}” has not exited · round ${g.current_round} of ${g.max_rounds} · ${LOOP_ENDINGS[g.state] ?? "running"}`}</span>
+              <span className="wf-muted">{loopFinish(preview, g)}</span></div>)}
             {!(preview.repeat_groups ?? []).length && <div className="wf-impact-row"><span className="t">This workflow has no loops.</span></div>}
           </div>}
           {preview.tasks.some((t) => t.route_state === "not_selected") && <p className="wf-muted">Not selected on the path this workflow took: {preview.tasks.filter((t) => t.route_state === "not_selected").map((t) => t.title).join(", ")}. A Not selected step never counts toward Finish. Changing the scope needs an owner review and fresh goal acceptance; it cannot be done by marking work as unselected.</p>}
