@@ -2130,7 +2130,14 @@ class WorkflowService:
             conflict(
                 "round_limit", "The limit cannot be below the current review round."
             )
-        for field in ("title", "goal", "execution_mode", "task_limit", "round_limit"):
+        for field in (
+            "title",
+            "goal",
+            "execution_mode",
+            "task_limit",
+            "round_limit",
+            "turn_allowance",
+        ):
             if b.get(field) is not None:
                 self.cur.execute(
                     f"UPDATE workflows SET {field}=%s WHERE id=%s", (b[field], w["id"])

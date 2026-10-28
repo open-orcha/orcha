@@ -320,3 +320,7 @@ def test_turn_allowance_counts_worker_turns_and_blocks_when_used(setup_workflow,
         assert cur.fetchone()["turns_used"] == 1
     review = next(t for t in w["tasks"] if t["title"] == "Review the post")
     assert "allowance_exhausted" in {b["code"] for b in review["blockers"]}
+    # The owner raises the allowance and the review can take its turn.
+    w = execute("patch", {"turn_allowance": 5}, w["id"])
+    review = next(t for t in w["tasks"] if t["title"] == "Review the post")
+    assert "allowance_exhausted" not in {b["code"] for b in review["blockers"]}

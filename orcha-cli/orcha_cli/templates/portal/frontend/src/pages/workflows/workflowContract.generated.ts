@@ -1,5 +1,5 @@
 // Generated from FastAPI OpenAPI slices. DO NOT EDIT.
-// Workflow source SHA-256: a3fae6acd911fee8d0b0a19103f47a4a168af856458c02e4ebe1b6aee632e5ca
+// Workflow source SHA-256: 826c026d39b7453c589a7aa655c4c06cab62eb823a9f6dff560eb0a4d25cbada
 // Evidence GET source SHA-256: f2a794298f992bd3ff3955fa5d6aefc30a97e373794a3c1e9d03c8f46796853e
 // Regenerate with tools/generate-workflow-contract.mjs and both source files.
 
@@ -602,6 +602,7 @@ export type WorkflowPatch = {
   "execution_mode"?: "serial" | "parallel" | null;
   "task_limit"?: number | null;
   "round_limit"?: number | null;
+  "turn_allowance"?: number | null;
 };
 
 export type WorkflowTask = {
@@ -3871,6 +3872,18 @@ export const workflowSchemas = {
         "anyOf": [
           {
             "type": "integer",
+            "minimum": 1
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "turn_allowance": {
+        "anyOf": [
+          {
+            "type": "integer",
+            "maximum": 1000,
             "minimum": 1
           },
           {

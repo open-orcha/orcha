@@ -6280,6 +6280,19 @@
               }
             ],
             "title": "Round Limit"
+          },
+          "turn_allowance": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 1000.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Turn Allowance"
           }
         },
         "additionalProperties": false,

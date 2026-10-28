@@ -167,6 +167,7 @@ class WorkflowPatch(Mutation):
     execution_mode: Literal["serial", "parallel"] | None = None
     task_limit: int | None = Field(default=None, ge=1)
     round_limit: int | None = Field(default=None, ge=1)
+    turn_allowance: int | None = Field(default=None, ge=1, le=1000)
 
 
 class TaskBatch(Mutation):
