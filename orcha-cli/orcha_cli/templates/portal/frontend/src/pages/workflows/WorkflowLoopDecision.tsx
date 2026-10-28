@@ -42,7 +42,7 @@ const list = (items: (string | number)[]) => items.length < 2 ? items.join("") :
 const same = (text: string) => text.split(/\s+/).join(" ").toLowerCase().trim();
 
 /** The round context of the waiting step: earlier rounds' findings, read when the dialog opens. */
-function useRounds(task: WorkflowTask, open: boolean) {
+export function useRounds(task: WorkflowTask, open: boolean) {
   const [context, setContext] = useState<RoundContext | null>(null);
   useEffect(() => {
     if (!open || !task.repeat_group_id) return;

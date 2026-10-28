@@ -14,7 +14,7 @@ const TRIGGERS: Record<string, string> = {
   owner_reassign: "The owner reassigned the step", owner_resume: "The owner resumed the loop with guidance",
 };
 const TONE = { success: "ok", changes: "warn", failure: "danger", custom: "neutral" } as const;
-const ENDINGS: Record<string, string> = {
+export const ENDINGS: Record<string, string> = {
   return: "sent back", limit: "stopped at the round limit", stall: "stalled", exit: "loop ended", ask_owner: "waited for the owner",
   stopped: "stopped", accepted_override: "accepted by the owner",
 };

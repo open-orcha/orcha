@@ -2,7 +2,9 @@ import { useEffect, useState, type ReactNode } from "react";
 import { Avatar, Badge, Button, Chip, EmptyState, IconButton, Timeline, TimelineCard, TimelineEvent, type Tone } from "../../components/primitives";
 import { Icon } from "../../components/ui";
 import { WorkflowApiError, workflowPaths, workflowRequest } from "./workflowApi";
-import type { Activity, ActivityPage, ReviewHistory, WorkflowDetail } from "./workflowContract.generated";
+import type { Activity, ActivityPage, RepeatGroupView, ReviewHistory, WorkflowDetail } from "./workflowContract.generated";
+import { useRounds } from "./WorkflowLoopDecision";
+import { ENDINGS } from "./WorkflowRoundContext";
 import { WorkflowTaskLink } from "./WorkflowTaskReturn";
 
 function eventLabel(event: string) {
@@ -111,6 +113,28 @@ function ReviewRoundCard({ detail, round, renderActions }: { detail: WorkflowDet
     {!round.resolved_by_owner && round.outcome !== "accepted" && renderActions && <div className="wf-round-actions">{renderActions(round.review_task_id)}</div>}
   </TimelineCard>;
 }
+/** #362 loop rounds: one card per round of a feedback loop, with the review's outcome and findings. */
+function LoopRounds({ detail, group }: { detail: WorkflowDetail; group: RepeatGroupView }) {
+  const review = detail.tasks.find((t) => t.id === group.review_task);
+  const context = useRounds(review ?? { id: group.review_task, repeat_group_id: group.id } as WorkflowDetail["tasks"][number], !!review);
+  if (!review) return null;
+  const g = context?.group;
+  // Round N's inputs hold round N-1's findings; the latest review's findings are on its reported outcome.
+  const rounds = Array.from({ length: Math.max(group.current_round, 1) }, (_, i) => i + 1).map((n) => {
+    const later = n + 1 === g?.round ? g.this_round : g?.earlier_rounds?.find((r) => r.round === n + 1);
+    const ended = g?.earlier_rounds?.find((r) => r.round === n)?.ended;
+    const latest = n === group.current_round ? review.reported_outcome : null;
+    return { n, findings: latest?.findings ?? later?.findings ?? [], outcome: latest?.outcome ?? (later ? (later as { outcome?: string | null }).outcome : null), ended };
+  });
+  return <TimelineCard className="wf-round" label={group.name}>
+    <div className="wf-round-h"><h4><Icon name="refresh" cls="v2-ico" /> {group.name}</h4><Badge tone="neutral">Round {group.current_round} of {group.max_rounds}</Badge></div>
+    <p className="wf-muted">Exits when {review.title} reports {group.exit_outcome.replaceAll("_", " ")}.</p>
+    <ol className="wf-earlier">{rounds.map((r) => <li key={r.n}><strong>Round {r.n}</strong>
+      {r.outcome ? <> · <Badge tone={outcomeTone(r.outcome === group.exit_outcome ? "accepted" : "changes_requested")}>{r.outcome.replaceAll("_", " ")}</Badge></> : r.n === group.current_round ? <span className="wf-muted"> · in progress</span> : null}
+      {r.ended && <span className="wf-muted"> · {ENDINGS[r.ended] ?? r.ended}</span>}
+      {r.findings.length > 0 && <ul>{r.findings.map((f, i) => <li key={i}>{f.text}</li>)}</ul>}</li>)}</ol>
+  </TimelineCard>;
+}
 export function WorkflowReviewHistory({ detail, renderActions }: { detail: WorkflowDetail; renderActions?: (taskId: string) => ReactNode }) {
   // "used" follows the server's own rule for the limit: the highest recorded round number (workflow_service round_limit checks).
   const used = detail.review_rounds && Math.max(0, ...detail.review_rounds.map((round) => round.round_number));
@@ -118,6 +142,8 @@ export function WorkflowReviewHistory({ detail, renderActions }: { detail: Workf
     <div className="wf-tl-head"><h3>Review history</h3></div>
     <p className="wf-tl-intro">Each correction and review uses a fresh task. Accepting a report does not resolve its findings or finish this workflow.
       <span className="wf-muted"> Round limit {detail.round_limit}{used !== undefined && <> · used {used}</>}.</span></p>
+    {detail.semantics_version === 2 && !!detail.repeat_groups?.length && <Timeline label="Feedback loop rounds" className="wf-tl">
+      {detail.repeat_groups.map((g) => <LoopRounds key={g.id} detail={detail} group={g} />)}</Timeline>}
     {detail.review_rounds === undefined ? <EmptyState compact title="Review history is unavailable on this server version." />
       : detail.review_rounds.length === 0 ? <EmptyState compact title="No review rounds recorded yet." />
       : <Timeline label="Review rounds" className="wf-tl">{detail.review_rounds.map((round) => <ReviewRoundCard key={round.id} detail={detail} round={round} renderActions={renderActions} />)}</Timeline>}
