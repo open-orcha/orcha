@@ -306,3 +306,17 @@ def test_round_limit_asks_the_owner_instead_of_starting_another_round(setup_work
         assert cur.fetchone()["state"] == "limit_reached"
         cur.execute("SELECT awaiting_loop_decision FROM tasks WHERE id=%s", (review,))
         assert cur.fetchone()["awaiting_loop_decision"] == "limit_reached"
+
+
+def test_turn_allowance_counts_worker_turns_and_blocks_when_used(setup_workflow, flexible):
+    execute = setup_workflow[-1]
+    w = prepare_and_start(
+        setup_workflow, execute("create", loop_draft(setup_workflow[2], turn_allowance=1))
+    )
+    write = next(t["id"] for t in w["tasks"] if t["title"] == "Write the launch post")
+    w = finish(setup_workflow, w, write)
+    with db_cursor(readonly=True) as (_, cur):
+        cur.execute("SELECT turns_used FROM workflows WHERE id=%s", (w["id"],))
+        assert cur.fetchone()["turns_used"] == 1
+    review = next(t for t in w["tasks"] if t["title"] == "Review the post")
+    assert "allowance_exhausted" in {b["code"] for b in review["blockers"]}

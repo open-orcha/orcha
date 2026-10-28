@@ -2275,6 +2275,11 @@ class WorkflowService:
                 "reserved" if run_id else "awaiting_review",
             ),
         )
+        if choice["source_kind"] == "worker" and w.get("semantics_version", 1) == 2:
+            # The run's turn allowance counts worker turns only (reviews do not).
+            self.cur.execute(
+                "UPDATE workflows SET turns_used=turns_used+1 WHERE id=%s", (w["id"],)
+            )
         execution = self.one("SELECT * FROM workflow_executions WHERE id=%s", (eid,))
         if not run_id:
             evidence = s["outside_evidence"][tid]
