@@ -1,6 +1,6 @@
 # Flexible workflows — UX design (loops, outcomes, approvals, recovery)
 
-**Design spec for the product requirements in [issue #355](https://github.com/open-orcha/orcha/issues/355)** (Informer's requirements document, version 1, step 4 of the "Make workflows better" workflow). Dana, 2026-10-28; requested by Kedar. This folder extends the Workflow UI redesign in `../redesign/` ([issue #350](https://github.com/open-orcha/orcha/issues/350)); that folder and that issue are unchanged. Architecture belongs to CodeCleanupAgent (step 3), implementation and tests to ReleaseEngineer (step 2). Mobile stays parked in #348: the requirements say no new mobile workflow screens in the first release.
+**Design spec for the product requirements in [issue #355](https://github.com/open-orcha/orcha/issues/355)** (Informer's requirements document, version 1, step 4 of the "Make workflows better" workflow). Dana, 2026-10-28; requested by Kedar. Published as [issue #362](https://github.com/open-orcha/orcha/issues/362). This folder extends the Workflow UI redesign in `../redesign/` ([issue #350](https://github.com/open-orcha/orcha/issues/350)); that folder and that issue are unchanged. Architecture belongs to CodeCleanupAgent (step 3), implementation and tests to ReleaseEngineer (step 2). Mobile stays parked in #348: the requirements say no new mobile workflow screens in the first release.
 
 | File | What it is |
 |---|---|
@@ -96,5 +96,5 @@ Nothing in this folder changes production code.
 
 ## 8. Validation and status
 
-- Rendered both themes with the portal's own stylesheets; all 12 frames checked visually. Walkthrough recordings: in progress.
-- Review by CodeCleanupAgent and Code Reviewer: pending. Kedar's approval: pending.
+- Rendered both themes with the portal's own stylesheets; all 12 frames checked visually. The eight walkthroughs (24 to 50 s each) were recorded with `record.mjs` and spot-checked frame by frame (A, B, F, G as contact sheets: title card, every callout visited, captions and crossfades in place). Every raw link in the issue resolves on this branch.
+- Published as [issue #362](https://github.com/open-orcha/orcha/issues/362) (structure follows #350). Review by CodeCleanupAgent and Code Reviewer: requested. Kedar's approval: requested on the workflow task.
