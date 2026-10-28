@@ -6,9 +6,10 @@ The API contract is `/openapi.json` (snapshot in `docs/design/workflows/workflow
 
 ## Switch and versions
 
-- Off by default. Set `WORKFLOWS_FLEXIBLE=1` (also `true`, `on`, `yes`) in the portal's
-  environment to turn it on. `GET /api/containers/{cid}/workflows/capability` then reports
-  `flexible_workflows: true` and `semantics_versions_supported: [1, 2]`.
+- On by default. Set `WORKFLOWS_FLEXIBLE=0` (also `false`, `off`, `no`) in the portal's
+  environment (for the background service, the project's `.orcha/.env`) to turn it off. While
+  it is on, `GET /api/containers/{cid}/workflows/capability` reports `flexible_workflows: true`
+  and `semantics_versions_supported: [1, 2]`.
 - Every workflow has a `semantics_version`. Existing workflows stay version 1 and behave
   exactly as before. With the switch on, new workflows are version 2 unless the draft asks
   for 1. A draft that uses outcomes, rules or loops needs version 2 (`flexible_disabled`).

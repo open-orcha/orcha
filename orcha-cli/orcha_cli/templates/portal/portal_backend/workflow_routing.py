@@ -16,8 +16,9 @@ FLAG = "WORKFLOWS_FLEXIBLE"
 
 
 def flexible_enabled():
-    """The server switch. Off hides version-2 authoring and pauses version-2 runs."""
-    return os.environ.get(FLAG, "").strip().lower() in {"1", "true", "on", "yes"}
+    """The server switch, on unless WORKFLOWS_FLEXIBLE is 0/false/off/no. Off hides version-2
+    authoring and pauses version-2 runs."""
+    return os.environ.get(FLAG, "").strip().lower() not in {"0", "false", "off", "no"}
 
 
 def capability():

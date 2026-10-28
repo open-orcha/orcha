@@ -1384,7 +1384,7 @@ async def test_local_workflow_claim_allows_local_and_lan_but_rejects_invalid_mem
         )
     monkeypatch.delenv("ORCHA_TRUST_PROXY_USER", raising=False)
     monkeypatch.delenv("ORCHA_BIND", raising=False)
-    monkeypatch.delenv("WORKFLOWS_FLEXIBLE", raising=False)
+    monkeypatch.setenv("WORKFLOWS_FLEXIBLE", "0")
     local = {}
 
     for actor_id, reason in [
