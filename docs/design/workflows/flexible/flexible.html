@@ -609,6 +609,39 @@
 <span class="note" style="left:270px;top:104px">1</span><span class="note" style="left:270px;top:160px">2</span><span class="note" style="left:660px;top:250px">3</span><span class="note" style="left:660px;top:560px">4</span>
 </div></div>
 
+<!-- ============================ G1 · Recovery: restart mid-route, uncertain publish, live worker reconciled ============================ -->
+<div class="frame-wrap"><div class="frame-h"><b>G1 · Recovery — after a restart: one next attempt, an uncertain publish that asks before retrying, a live worker reconciled</b><span>Walkthrough G · proposed: recovery records with receipts and worker reconciliation</span></div>
+<div class="frame" id="x10" data-tab="workflows" style="--v2-content-h: 838px;">
+<div class="v2-app"><div class="v2-frame-main"><div class="v2-main main" data-v2-surface="panel"><main class="v2-content content is-flush" tabindex="-1">
+<div class="wf-page">
+  <header class="wf-head"><h1 class="wf-head-title">Recipe App launch post</h1><div class="wf-head-meta"><span class="v2-si-wrap has-label"><svg class="v2-si v2-si-c-paused" width="14" height="14"><use href="#si-attention"/></svg><span class="v2-si-label">Needs a decision</span></span><span>·</span><span>Kedar</span><span>·</span><span class="wf-prog is-lg"><span class="wf-prog-bar"><i style="width:75%"></i></span><span>3/4 steps · approved v4</span></span></div><p class="wf-head-goal">Publish a launch post that a first-time reader can follow to try the Recipe App.</p><div class="wf-head-actions"><button type="button" class="v2-btn v2-btn-primary v2-btn-md"><span class="v2-btn-label">Resolve…</span></button><button type="button" class="v2-iconbtn v2-iconbtn-circle"><svg class="v2-ico"><use href="#i-more"/></svg></button></div></header>
+  <div class="wf-ownerbar"><svg class="v2-ico" style="width:14px;height:14px;color:var(--v2-warn,#d29922)"><use href="#i-flag"/></svg><span><b>Orcha restarted 6 minutes ago.</b> It picked up where the saved history ends. One step needs you: “Publish the post” may have published but no receipt was saved. Nothing was retried automatically.</span><button type="button" class="v2-btn v2-btn-primary v2-btn-sm"><span class="v2-btn-label">Resolve…</span></button></div>
+  <div class="wf-tabs-row"><div class="v2-tabs" role="tablist"><button type="button" class="v2-tab" role="tab"><span class="v2-tab-label">Steps</span><span class="v2-count">4</span></button><button type="button" class="v2-tab" role="tab"><span class="v2-tab-label">Route</span></button><button type="button" class="v2-tab" role="tab"><span class="v2-tab-label">Review history</span></button><button type="button" class="v2-tab is-selected" role="tab"><span class="v2-tab-label">Activity</span></button></div></div>
+  <div class="wf-body"><div class="wf-main" style="flex-direction:column;overflow:auto">
+    <ul class="wf-tl" style="padding-top:8px">
+      <li><span class="dot is-ok"></span><div><div>Publish approval · <b>Approved v4</b> by Kedar · permits publishing v4 · policy v2</div><div class="who">Kedar · 41 min ago</div></div></li>
+      <li><span class="dot is-ok"></span><div><div>Route chosen and saved: Approved → Publish the post · attempt 1 scheduled</div><div class="who">Orcha · 41 min ago · saved before the step was started, so the restart created no second attempt</div></div></li>
+      <li><span class="dot is-now"></span><div><div>Publish the post · attempt 1 · Publisher started · publish request sent with action id pub-7f3a…</div><div class="who">Publisher · 38 min ago</div></div></li>
+      <li><span class="dot is-warn"></span><div><div>Orcha restarted · reconciling: Writer’s worker from round 4 was still alive and is kept (not duplicated); Publisher’s worker did not answer</div><div class="who">Orcha · 6 min ago</div></div></li>
+      <li><span class="dot is-warn"></span><div><div><b>Publish the post · uncertain.</b> The request may have reached the blog, but no receipt was saved. Waiting for you before any retry.</div><div class="who">Orcha · 6 min ago</div></div></li>
+    </ul>
+  </div></div>
+</div>
+</main></div></div></div>
+<div class="v2-overlay" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;"><div class="v2-dialog v2-dialog-lg" role="dialog" aria-modal="true" style="width:720px;max-width:94%;">
+  <div class="v2-dialog-h"><h2 class="v2-dialog-title">Did “Publish the post” go through?</h2><div class="v2-dialog-desc">Attempt 1 · action id pub-7f3a… · sent 38 min ago · no receipt saved before the restart. Retrying blindly could publish twice.</div></div>
+  <div class="v2-dialog-b">
+    <div class="wf-impact" style="margin-bottom:12px"><div class="wf-impact-h"><span>What Orcha checked</span><span>just now</span></div><div class="wf-impact-row"><span class="t">Asked the blog for action id pub-7f3a…</span><span class="v2-badge v2-tone-warn">No answer yet</span></div><div class="wf-impact-row"><span class="t">Publisher’s worker</span><span class="v2-badge v2-tone-neutral">Not running · released</span></div><div class="wf-impact-row"><span class="t">Approved version v4 · still current</span><span class="v2-badge v2-tone-ok">Unchanged</span></div></div>
+    <label class="wf-choice"><input type="radio" name="d10" class="v2-checkbox v2-check-dot" checked><span>Check again in 5 minutes<small>Orcha asks the blog for the same action id. If it finds the post, the step is marked published with that receipt.</small></span></label>
+    <label class="wf-choice"><input type="radio" name="d10" class="v2-checkbox v2-check-dot"><span>I checked: it is published<small>Paste the link. Recorded as a receipt confirmed by you.</small></span></label>
+    <label class="wf-choice"><input type="radio" name="d10" class="v2-checkbox v2-check-dot"><span>I checked: it is not published, retry with the same action id<small>Attempt 2 reuses pub-7f3a… so the blog can refuse a duplicate.</small></span></label>
+    <label class="wf-choice"><input type="radio" name="d10" class="v2-checkbox v2-check-dot"><span>Stop here<small>Keeps the approval and all history. Nothing is published by Orcha.</small></span></label>
+  </div>
+  <div class="v2-dialog-f"><button type="button" class="v2-btn v2-btn-secondary v2-btn-md"><span class="v2-btn-label">Not now</span></button><button type="button" class="v2-btn v2-btn-primary v2-btn-md"><span class="v2-btn-label">Check again in 5 minutes</span></button></div>
+</div></div>
+<span class="note" style="left:270px;top:180px">1</span><span class="note" style="left:270px;top:330px">2</span><span class="note" style="left:376px;top:300px">3</span><span class="note" style="left:376px;top:420px">4</span>
+</div></div>
+
 </div>
 </body>
 </html>
