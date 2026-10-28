@@ -642,6 +642,37 @@
 <span class="note" style="left:270px;top:180px">1</span><span class="note" style="left:270px;top:330px">2</span><span class="note" style="left:376px;top:300px">3</span><span class="note" style="left:376px;top:420px">4</span>
 </div></div>
 
+<!-- ============================ H1 · Status and finish: plain-language status per step; Finish blocked with reasons ============================ -->
+<div class="frame-wrap"><div class="frame-h"><b>H1 · Status and finish — every step says who, which round, which version and why it waits; Finish is blocked with plain reasons</b><span>Walkthrough H · extends #350 frame 06</span></div>
+<div class="frame" id="x11" data-tab="workflows" style="--v2-content-h: 838px;">
+<div class="v2-app"><div class="v2-frame-main"><div class="v2-main main" data-v2-surface="panel"><main class="v2-content content is-flush" tabindex="-1">
+<div class="wf-page">
+  <header class="wf-head"><h1 class="wf-head-title">Recipe search feature</h1><div class="wf-head-meta"><span class="v2-si-wrap has-label"><svg class="v2-si v2-si-c-progress" width="14" height="14"><use href="#si-progress"/></svg><span class="v2-si-label">Active</span></span><span>·</span><span>Kedar</span><span>·</span><span class="wf-prog is-lg"><span class="wf-prog-bar"><i style="width:60%"></i></span><span>3/5 steps · round 2 of 4 · 31 of 60 agent turns used</span></span></div><p class="wf-head-goal">Let a cook find recipes by ingredient, with results that load in under a second.</p><div class="wf-head-actions"><button type="button" class="v2-btn v2-btn-primary v2-btn-md"><svg class="v2-ico v2-btn-ico"><use href="#i-flag"/></svg><span class="v2-btn-label">Finish checklist</span></button><button type="button" class="v2-iconbtn v2-iconbtn-circle"><svg class="v2-ico"><use href="#i-more"/></svg></button></div></header>
+  <div class="wf-tabs-row"><div class="v2-tabs" role="tablist"><button type="button" class="v2-tab is-selected" role="tab"><span class="v2-tab-label">Steps</span><span class="v2-count">5</span></button><button type="button" class="v2-tab" role="tab"><span class="v2-tab-label">Route</span></button><button type="button" class="v2-tab" role="tab"><span class="v2-tab-label">Review history</span><span class="v2-count">2</span></button><button type="button" class="v2-tab" role="tab"><span class="v2-tab-label">Activity</span></button></div></div>
+  <div class="wf-list"><div class="wf-rows"><div class="wf-loop"><div class="wf-loop-h"><b>Build until tests pass</b><span>·</span><span>Round 2 of 4</span><span class="wf-rounds"><i class="wf-rnd is-done"></i><i class="wf-rnd is-now"></i><i class="wf-rnd"></i><i class="wf-rnd"></i></span><span>·</span><span>exits when Test reports Pass · then Release approval</span></div>
+    <div class="v2-row wf-row is-two" role="option" tabindex="0"><span class="wf-st"><svg class="v2-si v2-si-c-done" width="14" height="14"><use href="#si-done"/></svg></span><span class="wf-title"><span>Requirements</span><span class="wf-sub">Round 2 · accepted by Kedar · version 3 (v2 superseded after finding R1)</span></span></div>
+    <div class="v2-row wf-row is-two" role="option" tabindex="0"><span class="wf-st"><svg class="v2-si v2-si-c-done" width="14" height="14"><use href="#si-done"/></svg></span><span class="wf-title"><span>Design</span><span class="wf-sub">Round 2 · accepted by Kedar · version 2 · built on Requirements v3</span></span></div>
+    <div class="v2-row wf-row is-two" role="option" tabindex="0"><span class="wf-st"><svg class="v2-si v2-si-c-progress" width="14" height="14"><use href="#si-progress"/></svg></span><span class="wf-title"><span>Build</span><span class="wf-sub">Round 2 · running · Builder · attempt 2 (attempt 1 failed: test container timed out; reason passed on)</span></span></div>
+    <div class="v2-row wf-row is-two" role="option" tabindex="0"><span class="wf-st"><svg class="v2-si v2-si-c-todo" width="14" height="14"><use href="#si-dashed"/></svg></span><span class="wf-title"><span>Test</span><span class="wf-sub">Round 2 · waits for Build v2 · Tester reports Pass, Build defect or Requirements defect</span></span></div></div>
+    <div class="v2-row wf-row is-two wf-gate-row" role="option" tabindex="0"><span class="wf-st"><svg class="v2-si v2-si-c-todo" width="14" height="14"><use href="#si-dashed"/></svg></span><span class="wf-title"><span>Release approval</span><span class="wf-sub">Gate · Kedar · not reached · policy Release approval v1</span></span></div>
+  </div></div>
+</div>
+</main></div></div></div>
+<div class="v2-overlay" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;"><div class="v2-dialog v2-dialog-lg" role="dialog" aria-modal="true" style="width:680px;max-width:94%;">
+  <div class="v2-dialog-h"><h2 class="v2-dialog-title">Finish checklist — Recipe search feature</h2><div class="v2-dialog-desc">Finish is a human decision and cannot happen yet. Each line says what is missing.</div></div>
+  <div class="v2-dialog-b"><ul class="wf-check">
+    <li><svg class="v2-si v2-si-c-done" width="14" height="14"><use href="#si-done"/></svg><span class="t">Requirements v3 and Design v2 accepted (current round)</span><span class="m">done</span></li>
+    <li><svg class="v2-si v2-si-c-blocked" width="14" height="14"><use href="#si-blocked"/></svg><span class="t">Loop “Build until tests pass” has not exited · round 2 of 4 running</span><span class="m">blocks Finish</span></li>
+    <li><svg class="v2-si v2-si-c-blocked" width="14" height="14"><use href="#si-blocked"/></svg><span class="t">Builder’s worker is still running · stop or let it finish first</span><span class="m">blocks Finish</span></li>
+    <li><svg class="v2-si v2-si-c-blocked" width="14" height="14"><use href="#si-blocked"/></svg><span class="t">Release approval not given · gate not reached</span><span class="m">blocks Finish</span></li>
+    <li><svg class="v2-si v2-si-c-todo" width="14" height="14"><use href="#si-todo"/></svg><span class="t">Objective “Search under one second” · evidence not yet accepted</span><span class="m">open</span></li>
+    <li><svg class="v2-si v2-si-c-todo" width="14" height="14"><use href="#si-todo"/></svg><span class="t">Goal acceptance · after the steps above</span><span class="m">open</span></li>
+  </ul><p class="wf-muted" style="margin:12px 0 0">A Not selected step never appears here. Changing the scope (for example dropping Test) needs an owner review and fresh goal acceptance; it cannot be done by marking work as unselected.</p></div>
+  <div class="v2-dialog-f"><button type="button" class="v2-btn v2-btn-secondary v2-btn-md"><span class="v2-btn-label">Close</span></button><button type="button" class="v2-btn v2-btn-primary v2-btn-md" disabled aria-disabled="true"><span class="v2-btn-label">Finish workflow</span></button></div>
+</div></div>
+<span class="note" style="left:270px;top:236px">1</span><span class="note" style="left:270px;top:330px">2</span><span class="note" style="left:396px;top:296px">3</span><span class="note" style="left:396px;top:470px">4</span>
+</div></div>
+
 </div>
 </body>
 </html>
