@@ -13,7 +13,9 @@ export const ROUTE_LABELS: Record<StepRoute["destination"], string> = {
 
 const ARROWS: Record<StepRoute["destination"], string> = { next: "→", step: "→", return: "↺", ask_owner: "→", exit_group: "→", stop: "■" };
 
-export function WorkflowRouteSummary({ detail }: { detail: WorkflowDetail }) {
+/** The route rows alone (#362 x02 first panel, and the Route tab in x07): each loop, every
+ * outcome rule that changes the route, and what stops and asks the owner. */
+export function WorkflowRoutePanel({ detail, heading = "Expected route" }: { detail: WorkflowDetail; heading?: string }) {
   if (detail.semantics_version !== 2) return null;
   const title = (id?: string | null) => detail.tasks.find((t) => t.id === id)?.title ?? "a removed step";
   const groups = detail.repeat_groups ?? [];
@@ -22,11 +24,9 @@ export function WorkflowRouteSummary({ detail }: { detail: WorkflowDetail }) {
   const rules = steps.flatMap((t) => (t.routes ?? [])
     .filter((r) => r.destination !== "next").map((r) => ({ task: t, route: r })));
   const stops = rules.filter(({ route }) => route.destination === "ask_owner" || route.destination === "stop");
-  const allowance = detail.turn_allowance ?? 40;
-  const most = groups.length ? Math.max(...groups.map((g) => g.max_rounds)) : 0;
-  return <section className="wf-route-summary" aria-label="Expected route">
+  return <>
     <div className="wf-impact">
-      <div className="wf-impact-h"><span>Expected route</span><span>{steps.length} {steps.length === 1 ? "step" : "steps"} · {groups.length} repeat {groups.length === 1 ? "group" : "groups"}</span></div>
+      <div className="wf-impact-h"><span>{heading}</span><span>{steps.length} {steps.length === 1 ? "step" : "steps"} · {groups.length} repeat {groups.length === 1 ? "group" : "groups"}</span></div>
       {!groups.length && !rules.length && <div className="wf-impact-row"><span className="t">Steps run in prerequisite order. No step changes the route.</span></div>}
       {groups.map((g) => <div key={g.id} className="wf-impact-row"><span className="t">{g.member_tasks.map((id) => `${number(id) || ""} ${title(id)}`.trim()).join(" → ")}, repeated until {title(g.review_task)} reports “{g.exit_outcome}”, at most {g.max_rounds} {g.max_rounds === 1 ? "round" : "rounds"}{g.stall_rule !== "off" ? "; pauses if a round brings back the same findings on unchanged work" : ""}</span><Badge tone="accent">Loop</Badge></div>)}
       {rules.filter(({ route }) => route.destination !== "ask_owner" && route.destination !== "stop").map(({ task, route }) => <div key={`${task.id}:${route.outcome}`} className="wf-impact-row">
@@ -35,6 +35,16 @@ export function WorkflowRouteSummary({ detail }: { detail: WorkflowDetail }) {
       <div className="wf-impact-row"><span className="t">{[...stops.map(({ task, route }) => `${task.title} reporting “${route.outcome}”`),
         ...(groups.length ? ["the last round still asking for changes"] : []), ...(groups.some((g) => g.stall_rule !== "off") ? ["a stalled loop"] : []), "the agent-turn allowance used up"].join(", ").replace(/, ([^,]*)$/, " or $1")} → waits for the owner; no new attempt starts</span><Badge tone="warn">Stops and asks</Badge></div>
     </div>
+  </>;
+}
+
+export function WorkflowRouteSummary({ detail }: { detail: WorkflowDetail }) {
+  if (detail.semantics_version !== 2) return null;
+  const groups = detail.repeat_groups ?? [];
+  const allowance = detail.turn_allowance ?? 40;
+  const most = groups.length ? Math.max(...groups.map((g) => g.max_rounds)) : 0;
+  return <section className="wf-route-summary" aria-label="Expected route">
+    <WorkflowRoutePanel detail={detail} />
     <div className="wf-impact">
       <div className="wf-impact-h"><span>Limits</span><span>bounded automated work</span></div>
       <div className="wf-impact-row"><span className="t">{groups.length ? `Rounds: ${most} including the first · ` : ""}Agent-turn allowance for this run: {allowance} ({detail.turns_used ?? 0} used). When it runs out, no new agent turn starts until the owner raises it, reassigns, changes the scope or stops.</span></div>

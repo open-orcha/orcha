@@ -18,7 +18,7 @@ import { WorkflowActivity, WorkflowReviewHistory } from "./WorkflowHistory";
 import { WorkflowHeader } from "./WorkflowHeader";
 import { WorkflowRail } from "./WorkflowRail";
 import { WorkflowLoopDecision, WorkflowOwnerBar } from "./WorkflowLoopDecision";
-import { pathDecider } from "./WorkflowRouteSummary";
+import { pathDecider, WorkflowRoutePanel } from "./WorkflowRouteSummary";
 import { WorkflowLoopGroup, WorkflowTaskRow, WorkflowTaskRows } from "./WorkflowTaskRows";
 import { WorkflowTaskInspector } from "./WorkflowTaskInspector";
 import { WorkflowHide } from "./WorkflowHide";
@@ -293,6 +293,7 @@ function WorkflowScreen() {
             ? <EmptyState title="No tasks yet" body="Add new tasks or add existing tasks from the workflow menu." /> : taskRows(false)}
             {detail.progress.withdrawn > 0 && <p className="wf-muted wf-foot">{detail.progress.withdrawn} {detail.progress.withdrawn === 1 ? "task" : "tasks"} withdrawn from scope. Withdrawn tasks do not count as accepted.</p>}</div>} inspector={inspector} />}
           {tab === "dependencies" && <SplitPane storageKey="orcha:v2:workflowInspector" list={<div className="wf-list">
+            {flexible && <div className="wf-route-summary wf-tab-pad"><WorkflowRoutePanel detail={detail} heading="Outcome routes" /></div>}
             {graphMode && <WorkflowGraph tasks={detail.tasks.filter((t) => !taskSearch || t.title.toLowerCase().includes(taskSearch.toLowerCase())).map((t) => ({ id: t.id, title: t.title, status: t.status, label: t.display_state.label, assignee: t.assignee_ids.map(actorName).join(", "), dependsOn: t.depends_on }))}
               selected={selectedId} onSelect={(id) => { setSelectedId(id || null); setTaskRequest(null); }}
               disabledReason={stale ? "Refresh before making changes." : unresolved ? "Wait for the current save to finish." : actionReason(detail, "add_tasks", verified)}
