@@ -682,6 +682,7 @@ def test_branch_runs_one_path_and_the_join_waits_only_for_it(setup_workflow, fle
     w = finish(setup_workflow, w, ids["Triage"], "Bug")
     byid = {t["id"]: t for t in w["tasks"]}
     assert byid[ids["Document"]]["route_state"] == "not_selected"
+    assert byid[ids["Document"]]["display_state"]["label"] == "Not selected"
     assert "not_selected" in {b["code"] for b in byid[ids["Document"]]["blockers"]}
     assert byid[ids["Fix"]]["can_start"] and not byid[ids["Close"]]["can_start"]
     w = finish(setup_workflow, w, ids["Fix"])
@@ -756,6 +757,7 @@ def test_accepting_without_an_outcome_waits_for_the_owner_to_pick_one(setup_work
     w = finish(setup_workflow, w, review)
     byid = {t["id"]: t for t in w["tasks"]}
     assert byid[review]["awaiting_loop_decision"] == "missing_outcome"
+    assert byid[review]["display_state"]["label"] == "Accepted · no outcome reported, waiting for the owner"
     assert not byid[publish]["can_start"]
     assert code(execute, "loop_decision", {"kind": "raise_limit", "task_id": review, "new_max_rounds": 5}, w["id"]) == "decision_not_available"
     w = execute("loop_decision", {"kind": "pick_outcome", "task_id": review, "outcome": "Approved"}, w["id"])

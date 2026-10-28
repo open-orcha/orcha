@@ -215,7 +215,9 @@ function WorkflowScreen() {
     {detail!.tasks.filter((t) => !dependencies || !taskSearch || t.title.toLowerCase().includes(taskSearch.toLowerCase())).map((t) => {
       const names = (ids: string[]) => ids.map((id) => detail!.tasks.find((p) => p.id === id)?.title ?? "Prerequisite unavailable").join(", ");
       const dependents = detail!.tasks.filter((other) => other.depends_on.includes(t.id)).map((o) => o.id);
-      return <WorkflowTaskRow key={t.id} task={t} selected={selectedId === t.id} onSelect={() => { setSelectedId(t.id); setTaskRequest(null); }} actorName={actorName}
+      const group = t.repeat_group_id ? detail!.repeat_groups?.find((g) => g.id === t.repeat_group_id) : undefined;
+      const loop = group ? { name: group.name, round: t.round ?? group.current_round, max: group.max_rounds } : null;
+      return <WorkflowTaskRow key={t.id} loop={loop} task={t} selected={selectedId === t.id} onSelect={() => { setSelectedId(t.id); setTaskRequest(null); }} actorName={actorName}
         assignees={t.assignee_ids.map((id) => ({ id, alias: actorName(id), kind: snap?.agents.find((a) => a.id === id)?.kind ?? "ai" }))} menuItems={rowMenu(t)}
         subline={dependencies ? `Depends on: ${t.depends_on.length ? names(t.depends_on) : "none"} · Needed by: ${dependents.length ? names(dependents) : "none"}` : undefined} />;
     })}

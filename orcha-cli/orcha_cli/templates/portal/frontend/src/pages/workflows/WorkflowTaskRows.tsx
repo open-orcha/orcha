@@ -22,21 +22,26 @@ export interface WorkflowTaskRowProps {
   menuItems: (MenuItemSpec | "separator")[];
   /** Dependencies list: "Depends on · Needed by" replaces the state sub-line. */
   subline?: ReactNode;
+  /** Repeat group the step belongs to (semantics version 2), from `repeat_groups`. */
+  loop?: { name: string; round: number; max: number } | null;
 }
 
-export const WorkflowTaskRow = forwardRef<HTMLElement, WorkflowTaskRowProps>(function WorkflowTaskRow({ task, selected, onSelect, assignees, actorName, menuItems, subline }, ref) {
+export const WorkflowTaskRow = forwardRef<HTMLElement, WorkflowTaskRowProps>(function WorkflowTaskRow({ task, selected, onSelect, assignees, actorName, menuItems, subline, loop }, ref) {
   const menuRef = useRef<HTMLButtonElement | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const withdrawn = !!task.withdrawn_at;
+  const notSelected = task.route_state === "not_selected";
   const warning = task.display_state.list_warning ? task.display_state.warning || "Released without stop confirmation: the worker may still be running outside Orcha." : null;
   const sub = subline ?? (withdrawn ? `Withdrawn by ${task.withdrawn_by ? actorName(task.withdrawn_by) : "Name unavailable"}`
     : task.display_state.release_available_at ? `Release lost worker becomes available at ${formatServerTime(task.display_state.release_available_at)}`
     : [task.display_state.label, task.blockers[0]?.message].filter(Boolean).join(" · "));
-  return <Row ref={(el) => { if (el) el.id = `workflow-task-${task.id}`; if (typeof ref === "function") ref(el); else if (ref) ref.current = el; }} id={`workflow-task-${task.id}`} className="wf-row is-two" selected={selected} dim={withdrawn} onActivate={onSelect} title={task.title}>
+  return <Row ref={(el) => { if (el) el.id = `workflow-task-${task.id}`; if (typeof ref === "function") ref(el); else if (ref) ref.current = el; }} id={`workflow-task-${task.id}`} className="wf-row is-two" selected={selected} dim={withdrawn || notSelected} onActivate={onSelect} title={task.title}>
     <span className="wf-st"><StatusIcon status={task.status} label={task.display_state.label} /></span>
     <span className="wf-title"><span>{task.title}</span><span className="wf-sub">{sub}</span></span>
     <span className="wf-chips">
       <Chip title={task.autonomy === "on" ? "Task autonomy ON: the agent approves its own plan and finished work" : "Task autonomy OFF: plan and finished work need approval"}>{task.autonomy === "on" ? "Autonomy ON" : "Autonomy OFF"}</Chip>
+      {loop ? <Chip title={`Repeat group: ${loop.name}`}>{`Round ${loop.round} of ${loop.max}`}</Chip> : null}
+      {task.awaiting_loop_decision ? <Chip dot="warn" title={task.display_state.label}>Decision needed</Chip> : null}
       {warning ? <Chip dot="warn" title={warning}>Warning</Chip> : null}
     </span>
     <span className="wf-who">{assignees.length === 0 ? <span className="wf-noone" role="img" aria-label="Unassigned" title="Unassigned" />

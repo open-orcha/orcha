@@ -18,6 +18,14 @@ STOP_WARNING = (
 )
 
 
+
+LOOP_WAIT_LABELS = {
+    "limit_reached": "Accepted · round limit reached, waiting for the owner",
+    "stalled": "Accepted · loop stalled, waiting for the owner",
+    "missing_outcome": "Accepted · no outcome reported, waiting for the owner",
+    "ask_owner": "Accepted · waiting for the owner to choose what happens next",
+}
+
 def _time(value):
     if value is None:
         return None
@@ -343,6 +351,11 @@ def task_display(
             label = "Prepared · awaiting release"
         if task.get("human_hold_by"):
             label += " · on hold by " + names.get(task["human_hold_by"], "the owner")
+    # Semantics version 2: a skipped branch and a loop waiting on its owner.
+    if task.get("route_state") == "not_selected":
+        label = "Not selected"
+    elif task.get("awaiting_loop_decision") in LOOP_WAIT_LABELS:
+        label = LOOP_WAIT_LABELS[task["awaiting_loop_decision"]]
     if evidence:
         label = (
             "Outside result awaiting review"
