@@ -13,13 +13,18 @@ export function formatServerTime(value: string): string {
   return Number.isNaN(date.getTime()) ? "an unavailable time" : date.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "long" });
 }
 
-/** The first blocker's message, unless it only repeats the state label ("Waiting for Review" twice). */
+/** The first blocker that says more than the state label ("Waiting for Review" twice is skipped, a
+ * second blocker behind it still shows), without its trailing period: sub-lines carry none (#362 x03). */
 function blockerUnlessRepeated(task: WorkflowTask): string | undefined {
-  const message = task.blockers[0]?.message;
-  if (!message) return undefined;
-  const same = (text: string) => text.trim().replace(/\.$/, "").toLowerCase();
-  return same(message) === same(task.display_state.label) ? undefined : message;
+  const bare = (text: string) => text.trim().replace(/\.$/, "");
+  const label = bare(task.display_state.label).toLowerCase();
+  const blocker = task.blockers.find((b) => b.message && bare(b.message).toLowerCase() !== label);
+  return blocker ? bare(blocker.message) : undefined;
 }
+
+/** A header separator drawn inside the span of the text that follows it, so a wrapped header never
+ * ends a line with a stranded dot. */
+const Sep = () => <span className="wf-sep" aria-hidden="true">·</span>;
 
 export interface WorkflowTaskRowProps {
   task: WorkflowTask;
@@ -79,11 +84,11 @@ export function WorkflowLoopGroup({ group, reviewTitle, ownerName, children }: {
   const of = round < 1 ? `Not started · up to ${group.max_rounds} rounds` : `Round ${round} of ${group.max_rounds}`;
   return <div className="wf-loop" role="group" aria-label={`${group.name}, ${of.toLowerCase()}`}>
     <div className="wf-loop-h">
-      <Icon name="refresh" cls="v2-ico wf-loop-ico" /><b>{group.name}</b><span aria-hidden="true">·</span><span>{of}</span>
+      <Icon name="refresh" cls="v2-ico wf-loop-ico" /><b>{group.name}</b><span><Sep />{of}</span>
       <span className="wf-rounds" role="img" aria-label={of}>{Array.from({ length: group.max_rounds }, (_, i) => i + 1).map((n) =>
         <i key={n} className={`wf-rnd${n < round || (n === round && ended) ? " is-done" : n === round ? (paused ? " is-stop" : " is-now") : ""}`} />)}</span>
-      {reviewTitle && <><span aria-hidden="true">·</span><span>exits when {reviewTitle} reports {group.exit_outcome}</span></>}
-      <span aria-hidden="true">·</span><span>then asks {ownerName ?? "the owner"}</span>
+      {reviewTitle && <span><Sep />exits when {reviewTitle} reports {group.exit_outcome}</span>}
+      <span><Sep />then asks {ownerName ?? "the owner"}</span>
       {GROUP_STATE[group.state] && <Chip size="sm" dot={paused ? "warn" : undefined}>{GROUP_STATE[group.state]}</Chip>}
     </div>
     {children}

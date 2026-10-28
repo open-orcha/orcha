@@ -61,5 +61,21 @@ it("does not repeat the state label when the first blocker says the same thing",
   cleanup();
   row({ display_state: { label: "Not ready", release_available: false, release_available_at: null, warning: null, list_warning: false },
     blockers: [{ code: "prerequisites", message: "Waiting for Research.", task_id: "t1" }] });
-  expect(screen.getByText("Not ready · Waiting for Research.")).toBeVisible();
+  expect(screen.getByText("Not ready · Waiting for Research")).toBeVisible();
+  cleanup();
+  row({ display_state: { label: "Waiting for Write the launch post", release_available: false, release_available_at: null, warning: null, list_warning: false },
+    blockers: [{ code: "prerequisites", message: "Waiting for Write the launch post.", task_id: "t1" }, { code: "unassigned", message: "Needs an assignee.", task_id: null }] }, { round: 2 });
+  expect(screen.getByText("Round 2 · Waiting for Write the launch post · Needs an assignee")).toBeVisible();
+});
+
+it("keeps every header separator with the text that follows it, so a wrapped header never ends on a dot", () => {
+  render(<WorkflowTaskRows label="Workflow tasks"><WorkflowLoopGroup group={group()} reviewTitle="Review the post" ownerName="Kedar">
+    <WorkflowTaskRow task={exampleTask({})} selected={false} onSelect={() => {}} assignees={[]} actorName={() => "Someone"} menuItems={[]} loop={{ round: 2 }} />
+  </WorkflowLoopGroup></WorkflowTaskRows>);
+  const seps = document.querySelectorAll(".wf-loop-h .wf-sep");
+  expect(seps).toHaveLength(3);
+  for (const sep of seps) {
+    expect(sep.nextSibling?.nodeType).toBe(Node.TEXT_NODE);
+    expect(sep.parentElement?.textContent?.replace("·", "").trim()).not.toBe("");
+  }
 });

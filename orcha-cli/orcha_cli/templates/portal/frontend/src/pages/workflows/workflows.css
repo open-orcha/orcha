@@ -307,6 +307,7 @@
 .wf-loop { margin: 2px 0 6px 18px; border-left: 2px solid var(--v2-accent); padding-left: 8px; border-radius: 2px; }
 .wf-loop-h { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 6px 4px 4px; font-size: var(--v2-fs-meta); color: var(--v2-text-2); }
 .wf-loop-h b { color: var(--v2-text); font-weight: 600; }
+.wf-sep { margin-right: 8px; }
 .wf-loop-ico { width: 13px; height: 13px; color: var(--v2-accent); flex: none; }
 .wf-rounds { display: inline-flex; gap: 4px; align-items: center; }
 .wf-rnd { width: 9px; height: 9px; border-radius: 50%; border: 1px solid var(--v2-border-strong); display: inline-block; }
