@@ -1,0 +1,19 @@
+sequenceDiagram
+  participant S as Scheduler (reconcile)
+  participant G as workflow_gates.py
+  participant REQ as requests (existing)
+  participant A as Approver (human)
+  participant API as gate decision route
+  S->>G: gate step's prerequisites accepted (artifact version V)
+  G->>REQ: create request to eligible approvers, expires_at = due_at, payload = policy summary + what approval permits
+  REQ-->>A: portal "Needs your input", push, reminder at reminder_hours, escalation at due_at (existing sweep)
+  A->>API: POST /api/workflows/{wid}/gates/{tid}/decision {decision, artifact: V, edits?, idempotency_key}
+  API->>G: eligibility: approver in policy version, not producer when no_self_review, V is current, gate round open
+  alt approve and policy satisfied (one_of, or all eligible for V)
+    G->>G: gate accepted for V · downstream ready · close request
+  else approve_with_edits
+    G->>G: record conditional approval · route = return to producer (new round with edits as input) · gate reopens for V+1
+  else decline
+    G->>G: close gate round · take the gate's declared decline route (stop or ask owner)
+  end
+  Note over G: Deadline never approves. A later message on the closed round is shown, not applied. A new artifact version marks earlier decisions stale.

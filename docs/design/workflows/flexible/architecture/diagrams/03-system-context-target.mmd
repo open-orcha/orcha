@@ -1,0 +1,29 @@
+flowchart LR
+  subgraph People
+    P[Portal · 10 changed screens + Approval policies page]
+  end
+  subgraph API["FastAPI portal_backend"]
+    R[workflow_routes.py + new routes: outcome, decisions, gates, policies, actions]
+    S[workflow_service.py + workflow_routing.py + workflow_groups.py + workflow_gates.py]
+    SCH[workflow_scheduling.py · routes, groups, gates, allowance]
+    G[workflow_graph.py · route and group validation]
+    I[workflow_integration.py · gate ≠ acceptance]
+    E[workflow_evidence_service.py · unchanged]
+    REQ[requests + overdue sweep · reused for gate conversations]
+    WS[wake_scan_queries.py · startable step instances]
+  end
+  subgraph Host
+    N[notifier · adopts continue-reserve at the cap]
+    W[worker · reports outcome, declares actions]
+  end
+  DB[(DB · migrations 081–085 / sqlite 011–015)]
+  P --> R --> S --> DB
+  S --> SCH
+  S --> G
+  S --> I
+  S --> E
+  S --> REQ
+  N --> WS --> SCH
+  W -- POST tasks/{tid}/outcome · actions --> R
+  classDef new fill:#e8f0fe,stroke:#1a56db,color:#111
+  class R,S,SCH,G,I,REQ,WS,N,W,DB new

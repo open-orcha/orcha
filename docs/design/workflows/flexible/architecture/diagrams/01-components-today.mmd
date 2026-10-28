@@ -1,0 +1,37 @@
+flowchart LR
+  subgraph Human["People"]
+    P[Portal · React pages/workflows/*]
+    D[Desktop app · same portal]
+  end
+  subgraph API["FastAPI portal_backend"]
+    R[workflow_routes.py · human routes]
+    WR[workflow_worker_routes.py · reserve / activate / stop / continue]
+    S[workflow_service.py · WorkflowService transactions]
+    SCH[workflow_scheduling.py · one readiness predicate]
+    G[workflow_graph.py · acyclic, ≤3 prerequisites]
+    I[workflow_integration.py · hooks: approval, evidence, stops]
+    E[workflow_evidence_service.py · immutable evidence sets]
+    WS[wake_scan_queries.py · offers only startable tasks]
+  end
+  subgraph Host["Host process (one per project)"]
+    N[notifier · notifier_workflow.py]
+    B[workflow_bootstrap.py · activate then exec]
+    W[headless agent worker · claude -p / codex]
+  end
+  DB[(Postgres or SQLite · migrations 074–080)]
+  P --> R
+  D --> R
+  R --> S
+  WR --> S
+  S --> SCH
+  S --> G
+  S --> I
+  I --> E
+  S --> DB
+  N -- GET wake-scan --> WS
+  WS --> SCH
+  N -- POST runs/reserve --> WR
+  N -- spawn --> B
+  B -- POST runs/{rid}/activate --> WR
+  B -- exec --> W
+  W -- /next, /done, evidence, thread posts · X-Orcha-Run-Token --> API

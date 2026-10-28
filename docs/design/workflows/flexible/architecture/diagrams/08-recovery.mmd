@@ -1,0 +1,16 @@
+flowchart TD
+  A[orcha up / API restart] --> B[reconcile every active workflow]
+  B --> C{execution state}
+  C -- running, run ended, stop not confirmed --> D[recovery_needed · existing 30-min lost-release rule]
+  C -- running, worker alive --> E[keep the turn · no duplicate · existing behaviour]
+  C -- reserved, permit unconsumed --> F[abort launch · existing]
+  B --> G{declared actions without receipt?}
+  G -- yes --> H[action state = uncertain · workflow paused_reason = uncertain_action · owner decision sheet x10]
+  H --> H1[check again: re-query tool by action_key]
+  H --> H2[owner confirms published: receipt saved by person]
+  H --> H3[retry with the same action_key]
+  H --> H4[stop]
+  B --> I{route_decision resolved but not applied?}
+  I -- yes --> J[apply once · idempotent by report_id]
+  B --> K[gates: reopen requests whose due_at passed without decision · never approve]
+  B --> L[notices with receipts · pauses and holds untouched]

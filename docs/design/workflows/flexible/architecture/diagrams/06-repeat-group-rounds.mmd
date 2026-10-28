@@ -1,0 +1,21 @@
+stateDiagram-v2
+  [*] --> Round1 : Start releases group members
+  Round1 --> AtReview : review step accepted with an outcome
+  state AtReview <<choice>>
+  AtReview --> Exited : outcome = exit outcome → leaves group (gate or next step)
+  AtReview --> ReturnCheck : outcome routes to a return
+  AtReview --> OwnerAsk : outcome routes to ask_owner / missing outcome
+  state ReturnCheck <<choice>>
+  ReturnCheck --> Stalled : same findings + unchanged artifact as previous round
+  ReturnCheck --> LimitReached : round_number == max_rounds
+  ReturnCheck --> RoundN : else → new round, work_revision bumped on repeat set
+  RoundN --> AtReview
+  Stalled --> RoundN : owner resumes with guidance (note becomes round input)
+  Stalled --> Stopped : owner stops
+  LimitReached --> RoundN : owner raises the limit (used count kept) or reassigns + 1 round
+  LimitReached --> Exited : owner accepts as-is (override recorded beside original outcome)
+  LimitReached --> Stopped : owner stops
+  OwnerAsk --> RoundN : owner picks an outcome that returns
+  OwnerAsk --> Exited : owner picks the exit outcome
+  Exited --> [*]
+  Stopped --> [*]

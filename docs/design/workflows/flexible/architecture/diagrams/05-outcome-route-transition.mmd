@@ -1,0 +1,19 @@
+sequenceDiagram
+  participant W as Worker (assigned reporter)
+  participant API as workflow_routes / service
+  participant DB as DB (one transaction)
+  participant H as Human (autonomy OFF)
+  W->>API: POST /api/tasks/{tid}/outcome {outcome, findings, note, evidence_set, generation, preview:true}
+  API->>DB: lock graph → workflow → task → execution · check generation and work_revision
+  API-->>W: routing preview {destination, repeats[], stale[], renew[], kept[], rounds_remaining}
+  W->>API: same body, preview:false (idempotency_key)
+  API->>DB: INSERT outcome_report · INSERT route_decision(resolved) · task → needs_verification (OFF) or completed (ON)
+  alt task autonomy ON
+    API->>DB: record acceptance · APPLY route (see below) · audit
+  else task autonomy OFF
+    API-->>H: "Accept" shows outcome + route preview
+    H->>API: POST /api/tasks/{tid}/accept {evidence}
+    API->>DB: record acceptance · APPLY route · audit
+  end
+  Note over API,DB: APPLY route = next step ready (forward) · mark siblings not_selected (branch) · new group round + bump work_revision of return target and its dependents up to the review point (return) · open gate request (gate) · set awaiting_owner_decision (ask_owner, limit, stall) · all in the same transaction
+  API->>DB: notices (task_ready / workflow_attention) with receipts
