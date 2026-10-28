@@ -436,3 +436,50 @@ def test_owner_stops_the_loop_and_later_steps_are_not_needed(setup_workflow, fle
     assert not byid[ids["Publish"]]["can_start"]
     assert w["repeat_groups"][0]["state"] == "stopped"
     assert "loop_decision_pending" not in {b["code"] for b in w["completion"]["blockers"]}
+
+
+def test_round_two_prompt_carries_the_findings_and_the_rule(setup_workflow, flexible):
+    from orcha_cli.notifier_protocol import _render_workflow
+    from portal_backend.workflow_prompt import workflow_for_prompt
+
+    execute = setup_workflow[-1]
+    w = prepare_and_start(setup_workflow, execute("create", loop_draft(setup_workflow[2])))
+    ids = {t["title"]: t["id"] for t in w["tasks"]}
+    write, review = ids["Write the launch post"], ids["Review the post"]
+
+    def prompt(tid):
+        with db_cursor(readonly=True) as (_, cur):
+            cur.execute("SELECT * FROM tasks WHERE id=%s", (tid,))
+            context = workflow_for_prompt(cur, dict(cur.fetchone()))
+        return context, _render_workflow(context)
+
+    context, text = prompt(review)
+    assert [o["name"] for o in context["round_context"]["outcomes"]] == ["Approved", "Changes requested"]
+    assert "report exactly one outcome: 'Approved', 'Changes requested'" in text
+    assert f"/api/tasks/{review}/outcome" in text
+    assert "round 1 of at most 3" in text and "Address this feedback" not in text
+    w = finish(setup_workflow, w, write)
+    w = finish(setup_workflow, w, review, "Changes requested", ["Too long", "No call to action"])
+    context, text = prompt(write)
+    group = context["round_context"]["group"]
+    assert (group["round"], group["is_review_step"]) == (2, False)
+    assert [f["text"] for f in group["this_round"]["findings"]] == ["Too long", "No call to action"]
+    assert "round 2 of at most 3" in text
+    assert "outcome was 'Changes requested'" in text and "   - No call to action" in text
+    assert "Round 1 ended (return)" in text
+    assert "report exactly one outcome" not in text  # Write declares no outcomes
+
+
+def test_version_one_prompt_has_no_round_context(setup_workflow, monkeypatch):
+    from portal_backend.workflow_prompt import workflow_for_prompt
+
+    monkeypatch.delenv(workflow_routing.FLAG, raising=False)
+    execute = setup_workflow[-1]
+    draft = loop_draft(setup_workflow[2])
+    draft.pop("repeat_groups")
+    for t in draft["tasks"]:
+        t.pop("outcomes", None), t.pop("routes", None)
+    w = execute("create", draft)
+    with db_cursor(readonly=True) as (_, cur):
+        cur.execute("SELECT * FROM tasks WHERE id=%s", (w["tasks"][0]["id"],))
+        assert "round_context" not in workflow_for_prompt(cur, dict(cur.fetchone()))

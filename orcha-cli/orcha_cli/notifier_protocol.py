@@ -138,6 +138,38 @@ def _render_resume_context(protocol: Optional[dict]) -> Optional[str]:
             "Check that first. If it is still not ready, schedule another self-wake and exit.")
 
 
+def _round_lines(context):
+    """Flexible workflows: the step's outcomes and, in a repeat group, this round's feedback."""
+    if not context:
+        return []
+    lines = []
+    names = [o["name"] for o in context.get("outcomes") or []]
+    if names:
+        lines.append("Before you mark this step done, report exactly one outcome: "
+                     + ", ".join(f"'{n}'" for n in names)
+                     + f" (POST /api/tasks/{context.get('task_id')}/outcome with outcome, findings and note). "
+                     "The outcome decides what happens next.")
+    group = context.get("group")
+    if group:
+        lines.append(f"This step is in the repeat group '{group['name']}', round {group['round']} "
+                     f"of at most {group['max_rounds']}. The loop ends when "
+                     f"'{group['review_step']}' reports '{group['exit_outcome']}'.")
+        this = group.get("this_round") or {}
+        if group["round"] > 1:
+            lines.append(f"This round was started because the outcome was "
+                         f"'{this.get('outcome') or 'an owner decision'}'. Address this feedback:")
+            for f in this.get("findings") or []:
+                lines.append(f"   - {f['text']}")
+            if this.get("note"):
+                lines.append(f"   Reviewer note: {_clip(this['note'], 1500)}")
+            if this.get("owner_note"):
+                lines.append(f"   Owner note: {_clip(this['owner_note'], 1500)}")
+        for r in group.get("earlier_rounds") or []:
+            texts = "; ".join(f["text"] for f in r.get("findings") or []) or "no findings"
+            lines.append(f"   Round {r['round']} ended ({r['ended'] or 'open'}): {_clip(texts, 600)}")
+    return lines
+
+
 def _render_workflow(workflow) -> Optional[str]:
     """The server scopes this list to the task, not the waking agent."""
     if not workflow:
@@ -160,6 +192,7 @@ def _render_workflow(workflow) -> Optional[str]:
             if not isinstance(result, str):
                 result = json.dumps(result, ensure_ascii=False)
             lines.append(f"   Result: {_clip(result, 1500)}")
+    lines.extend(_round_lines(workflow.get("round_context")))
     lines.append("If unfinished work needs another workflow task to review it, use the explicit "
                  "review-handoff API from your current worker, then exit for runner-confirmed "
                  "handoff. Read docs/workflow-review-handoffs.md. Never mark unfinished work done "
