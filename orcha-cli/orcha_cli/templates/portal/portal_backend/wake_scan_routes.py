@@ -1,4 +1,4 @@
-"""Expose the notifier's read-only wake discovery scan."""
+"""Expose wake discovery and bounded obsolete-event maintenance for the notifier."""
 
 from fastapi import HTTPException, Query, Request
 
@@ -35,7 +35,11 @@ def wake_scan(
     cooldown: float = Query(default=15.0, ge=0),
     min_idle: float = Query(default=30.0, ge=0),
 ):
-    """Epic A: the notifier daemon's read-only scan — who needs an out-of-band wake.
+    """Epic A: discover who needs an out-of-band wake and reconcile obsolete rows.
+
+    Active daemon polls may acknowledge at most 200 currently obsolete events per
+    agent under locks, with an audit and no delivery-cursor jump. Browser calls are
+    read-only previews. Live requests, human prompts and parked work stay pending.
 
     The wake DECISION lives here (server-side, single source of truth, testable via
     the API), so the host-side daemon stays a thin transport executor and the
@@ -66,7 +70,7 @@ def wake_scan(
         # container a host-side daemon actually serves (containers.last_wake_scan_at —
         # the project switcher's honest wakes-capability signal). Only the daemon calls
         # this endpoint on a cadence. Throttled to one write/15s (and committed alone,
-        # before the read work below) so the scan stays effectively read-only.
+        # before discovery and bounded obsolete-event reconciliation below).
         if not browser:
             cur.execute(
                 """UPDATE containers SET last_wake_scan_at = now()
