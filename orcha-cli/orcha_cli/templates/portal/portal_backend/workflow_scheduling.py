@@ -172,6 +172,9 @@ def _base_blockers(
         e["task_id"] == task["id"] and e["state"] in LIVE_EXECUTIONS for e in executions
     ):
         add("reservation_live", "The previous turn has not been released.")
+    handoff_target = workflow.get("review_handoff_target")
+    if handoff_target and str(task['id']) != str(handoff_target):
+        add('review_handoff', 'Waiting for the current review or correction turn.')
     if workflow.get("limit_reached"):
         add("limit_reached", "Limit reached — no new starts.")
     if source_kind == "worker":

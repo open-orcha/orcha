@@ -54,8 +54,9 @@ def test_migration_042_exists_and_is_next_sequential():
     # 074 moves approval authority to tasks; 075-077 add workflows, durable
     # evidence and worker controls; 078 freezes evidence supplier attribution;
     # 079 distinguishes evidence reviewed on import from owner-supplied work.
+    # 080 adds workflow visibility; 081 adds explicit review handoffs.
     # Keep this pin moving with the chain tip so gaps/dupes still fail loudly.
-    assert numbers[-1] == 79, f"079 must be the latest migration, saw {numbers[-1]:03d}"
+    assert numbers[-1] == 81, f"081 must be the latest migration, saw {numbers[-1]:03d}"
 
 
 def test_agents_git_email_column_applied(db):
