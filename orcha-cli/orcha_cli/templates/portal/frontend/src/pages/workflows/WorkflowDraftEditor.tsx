@@ -69,6 +69,7 @@ function ScopedDraftEditor({ scope, saveUnavailableReason, agents = [], initialT
         onAfter={(id) => { const task = { ...newDraftTask(), dependsOn: [id] }; change({ ...draft, tasks: [...draft.tasks, task] }); setSelected(task.key); }} disabledReason={draft.tasks.length >= 200 ? "The draft already has 200 tasks." : null} />}</div>
       {draft.tasks.filter((t) => !graph || t.key === selected).map((task) => <WorkflowTaskDraftFields key={task.key} task={task} tasks={draft.tasks} agents={agents} flexible={flexible} ownerName={ownerName}
         reviewLoop={draft.repeatGroups?.find((g) => g.review === task.key)?.name.trim() || (draft.repeatGroups?.some((g) => g.review === task.key) ? "this loop" : undefined)}
+        loopMembers={draft.repeatGroups?.find((g) => g.review === task.key)?.members}
         existing={(draft.existingTaskIds ?? []).map((id) => ({ id, title: existingTasks.find((t) => t.id === id)?.title ?? "Selected existing task" }))}
         onChange={(patch) => update(task, patch)} removeLabel={`Remove task ${draft.tasks.indexOf(task) + 1}`}
         onRemove={() => { change({ ...draft, tasks: draft.tasks.filter((t) => t.key !== task.key).map((t) => ({ ...t, outcomes: t.outcomes?.map((o) => o.destinationTask === task.key ? { ...o, destination: "next", destinationTask: undefined } : o) })),

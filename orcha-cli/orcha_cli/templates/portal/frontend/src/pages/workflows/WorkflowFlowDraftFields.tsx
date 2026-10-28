@@ -5,7 +5,7 @@
  */
 import { Badge } from "../../components/primitives/Badge";
 import { Button } from "../../components/primitives/Button";
-import { draftAncestors, draftTaskName, type DraftOutcome, type DraftRepeatGroup, type DraftTask, type RouteDestination } from "./workflowDraft";
+import { draftTaskName, type DraftOutcome, type DraftRepeatGroup, type DraftTask, type RouteDestination } from "./workflowDraft";
 
 const KINDS: { key: DraftOutcome["kind"]; label: string }[] = [
   { key: "success", label: "Success" }, { key: "changes", label: "Needs changes" }, { key: "failure", label: "Failed" }, { key: "custom", label: "Other" },
@@ -17,16 +17,19 @@ const MOVE: Record<RouteDestination, string> = {
 };
 
 /** Outcomes and their next-step rules for one draft step. */
-export function WorkflowOutcomeFields({ task, tasks, ownerName, onChange }: { task: DraftTask; tasks: DraftTask[]; ownerName?: string; onChange: (outcomes: DraftOutcome[]) => void }) {
+export function WorkflowOutcomeFields({ task, tasks, ownerName, loopMembers, onChange }: {
+  task: DraftTask; tasks: DraftTask[]; ownerName?: string; loopMembers?: string[]; onChange: (outcomes: DraftOutcome[]) => void;
+}) {
   const outcomes = task.outcomes ?? [];
   const dependents = tasks.filter((t) => t.dependsOn.includes(task.key));
-  const earlier = draftAncestors(tasks, task.key).map((key) => tasks.find((t) => t.key === key)).filter((t): t is DraftTask => !!t);
+  // Only a loop's review step can send work back (to another step of its loop) or end the loop.
+  const loop = loopMembers ? tasks.filter((t) => t.key !== task.key && loopMembers.includes(t.key)) : [];
   const owner = ownerName ? `Ask the owner (${ownerName})` : "Ask the owner";
   const choices: { value: string; label: string }[] = [
     { value: "next", label: "The next steps proceed" },
     ...dependents.map((t) => ({ value: `step:${t.key}`, label: `Go to ${draftTaskName(t, tasks)} only` })),
-    ...earlier.map((t) => ({ value: `return:${t.key}`, label: `Send back to ${draftTaskName(t, tasks)} (loop)` })),
-    { value: "exit_group", label: "End the feedback loop" },
+    ...loop.map((t) => ({ value: `return:${t.key}`, label: `Send back to ${draftTaskName(t, tasks)} (loop)` })),
+    ...(loopMembers ? [{ value: "exit_group", label: "End the feedback loop" }] : []),
     { value: "ask_owner", label: owner },
     { value: "stop", label: "Stop: later steps are not needed" },
   ];
@@ -52,12 +55,14 @@ export function WorkflowOutcomeFields({ task, tasks, ownerName, onChange }: { ta
           <select className="wf-sel dest" aria-label="Then" value={value} onChange={(e) => {
             const [destination, key] = e.target.value.split(":");
             set(i, { destination: destination as RouteDestination, destinationTask: key });
-          }}>{choices.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}</select>
+          }}>{!choices.some((c) => c.value === value) && <option value={value} disabled>Choose where this goes…</option>}
+            {choices.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}</select>
           <span className="wf-muted">{MOVE[o.destination]}</span>
           <Button size="sm" variant="ghost" onClick={() => onChange(outcomes.filter((_, j) => j !== i))}>Remove outcome {i + 1}</Button>
         </div>;
       })}</div>
       <span className="wf-muted">Every outcome needs one destination or “ask the owner”. Two rules for one outcome are refused when you review the draft.</span>
+      {!loopMembers && <span className="wf-muted">To send work back or end a loop, make this step a feedback loop’s review point first.</span>}
     </div>}
   </div>;
 }

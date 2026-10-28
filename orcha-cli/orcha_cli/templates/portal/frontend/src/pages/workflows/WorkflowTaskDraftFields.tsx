@@ -3,10 +3,11 @@ import { dependencyReason, draftTaskName, type DraftTask } from "./workflowDraft
 import { WorkflowOutcomeFields } from "./WorkflowFlowDraftFields";
 
 /** One draft and one dependency validator serve cards and graph authoring. */
-export function WorkflowTaskDraftFields({ task, tasks, existing = [], agents, onChange, onRemove, removeLabel, flexible = false, ownerName, reviewLoop }: {
+export function WorkflowTaskDraftFields({ task, tasks, existing = [], agents, onChange, onRemove, removeLabel, flexible = false, ownerName, reviewLoop, loopMembers }: {
   task: DraftTask; tasks: DraftTask[]; existing?: { id: string; title: string }[]; flexible?: boolean;
-  /** Owner shown on "ask the owner" rules; the loop this step is the review point of (x01 callout 2). */
-  ownerName?: string; reviewLoop?: string;
+  /** Owner shown on "ask the owner" rules; the loop this step is the review point of (x01 callout 2)
+   * and that loop's steps, the only places its outcomes can send work back to. */
+  ownerName?: string; reviewLoop?: string; loopMembers?: string[];
   agents: { id: string; alias: string }[]; onChange: (patch: Partial<DraftTask>) => void;
   onRemove: () => void; removeLabel: string;
 }) {
@@ -33,7 +34,7 @@ export function WorkflowTaskDraftFields({ task, tasks, existing = [], agents, on
       <MenuButton menuLabel="Choose prerequisite" label="Add prerequisite" items={candidates.filter((c) => !task.dependsOn.includes(c.id)).map((c) => ({ label: c.title, disabled: !!c.reason, disabledReason: c.reason ?? undefined, onSelect: () => onChange({ dependsOn: [...task.dependsOn, c.id] }) }))} />
       {!candidates.length && <p className="wf-muted">Add another task to choose a prerequisite.</p>}
     </div>
-    {flexible && <WorkflowOutcomeFields task={task} tasks={tasks} ownerName={ownerName} onChange={(outcomes) => onChange({ outcomes })} />}
+    {flexible && <WorkflowOutcomeFields task={task} tasks={tasks} ownerName={ownerName} loopMembers={loopMembers} onChange={(outcomes) => onChange({ outcomes })} />}
     <details><summary>Instructions</summary><label>Instructions<textarea maxLength={4000} rows={3} value={task.description} onChange={(e) => onChange({ description: e.target.value })} /></label></details>
     <Button variant="ghost" disabled={dependents.length > 0} title={dependents.length ? "Change dependents first" : undefined} onClick={onRemove}>{removeLabel}</Button>
     {dependents.length > 0 && <p>Remove or change dependencies in {dependents.map((t) => draftTaskName(t, tasks)).join(", ")} before removing this task.</p>}

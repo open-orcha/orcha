@@ -118,17 +118,20 @@ describe("flexible workflow authoring", () => {
     fireEvent.click(task(2).getByRole("button", { name: "Add outcome" }));
     const [first, second] = task(2).getAllByLabelText("Outcome name");
     fireEvent.change(first, { target: { value: "Approved" } }); fireEvent.change(second, { target: { value: "Changes requested" } });
-    const [thenFirst, thenSecond] = task(2).getAllByLabelText("Then");
-    fireEvent.change(thenFirst, { target: { value: "exit_group" } });
-    const back = within(thenSecond as HTMLElement).getByRole("option", { name: "Send back to Write the post (loop)" }) as HTMLOptionElement;
-    fireEvent.change(thenSecond, { target: { value: back.value } });
-    expect(task(1).queryByRole("option", { name: /Send back to/ })).toBeNull();
+    // Sending work back and ending a loop are offered only once the step is a loop's review point.
+    expect(task(2).queryByRole("option", { name: /Send back to|End the feedback loop/ })).toBeNull();
+    expect(task(2).getByText(/make this step a feedback loop’s review point first/)).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Add feedback loop" }));
     const loop = within(screen.getByRole("group", { name: "Loop 1" }));
     fireEvent.change(loop.getByLabelText("Loop name"), { target: { value: "Draft and review" } });
     fireEvent.click(loop.getByRole("checkbox", { name: "Write the post" })); fireEvent.click(loop.getByRole("checkbox", { name: "Review the post" }));
     fireEvent.change(loop.getByLabelText("Review point"), { target: { value: (loop.getByRole("option", { name: "Review the post" }) as HTMLOptionElement).value } });
     fireEvent.change(loop.getByLabelText("Leave the group when"), { target: { value: "Approved" } });
+    const [thenFirst, thenSecond] = task(2).getAllByLabelText("Then");
+    fireEvent.change(thenFirst, { target: { value: "exit_group" } });
+    const back = within(thenSecond as HTMLElement).getByRole("option", { name: "Send back to Write the post (loop)" }) as HTMLOptionElement;
+    fireEvent.change(thenSecond, { target: { value: back.value } });
+    expect(task(1).queryByRole("option", { name: /Send back to/ })).toBeNull();
     const draft = readDraft(s);
     expect(draftProblems(draft).filter((p) => p.key !== "name" && p.key !== "goal")).toEqual([]);
     const [write, review] = draft.tasks;
@@ -138,6 +141,23 @@ describe("flexible workflow authoring", () => {
       repeat_groups: [{ name: "Draft and review", member_tasks: [write.key, review.key], review_task: review.key, exit_outcome: "Approved", max_rounds: 5 }],
     });
     expect(toWireDraft(draft).tasks?.[0]).not.toHaveProperty("outcomes");
+  });
+
+  it("flags a rule left pointing at a step that no longer waits for it, and outcome names that differ only by case", () => {
+    const s = scope();
+    render(<WorkflowDraftEditor scope={s} saveUnavailableReason={reason} flexible />);
+    add("Write"); add("Publish"); pick(2, "Write");
+    fireEvent.click(task(1).getByRole("button", { name: "Add outcome" }));
+    fireEvent.change(task(1).getByLabelText("Outcome name"), { target: { value: "Ready" } });
+    const branch = within(task(1).getByLabelText("Then") as HTMLElement).getByRole("option", { name: "Go to Publish only" }) as HTMLOptionElement;
+    fireEvent.change(task(1).getByLabelText("Then"), { target: { value: branch.value } });
+    expect(draftProblems(readDraft(s)).filter((p) => p.key !== "name" && p.key !== "goal")).toEqual([]);
+    fireEvent.click(task(2).getByRole("button", { name: "Remove prerequisite Write" }));
+    expect(draftProblems(readDraft(s)).map((p) => p.message)).toContain("Write: “Ready” goes to a step that no longer waits for this one. Choose where it goes.");
+    expect((task(1).getByLabelText("Then") as HTMLSelectElement).selectedOptions[0].textContent).toBe("Choose where this goes…");
+    fireEvent.click(task(1).getByRole("button", { name: "Add outcome" }));
+    fireEvent.change(task(1).getAllByLabelText("Outcome name")[1], { target: { value: "ready " } });
+    expect(draftProblems(readDraft(s)).map((p) => p.message)).toContain("Write: give each outcome a different name.");
   });
 
   it("flags a loop that ends on an outcome its review step lacks, and hides authoring when the server lacks it", () => {

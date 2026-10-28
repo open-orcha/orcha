@@ -27,14 +27,6 @@ export interface WorkflowDraft {
   repeatGroups?: DraftRepeatGroup[];
 }
 
-/** Tasks that `key` depends on, directly or through other draft tasks. */
-export function draftAncestors(tasks: DraftTask[], key: string): string[] {
-  const seen = new Set<string>();
-  const visit = (k: string) => (tasks.find((t) => t.key === k)?.dependsOn ?? []).forEach((d) => { if (!seen.has(d)) { seen.add(d); visit(d); } });
-  visit(key);
-  return [...seen];
-}
-
 export function emptyDraft(): WorkflowDraft {
   return { name: "", goal: "", mode: "serial", tasks: [], objectives: [] };
 }
@@ -83,9 +75,23 @@ export function draftProblems(draft: WorkflowDraft): DraftProblem[] {
   }
   for (const task of draft.tasks) {
     const name = draftTaskName(task, draft.tasks);
-    const names = (task.outcomes ?? []).map((o) => o.name.trim());
+    // Outcome names compare without case, as the server does.
+    const names = (task.outcomes ?? []).map((o) => o.name.trim().toLowerCase());
     if (names.some((n) => !n) || new Set(names).size !== names.length) result.push({ key: task.key, message: `${name}: give each outcome a different name.` });
     if ((task.outcomes ?? []).some((o) => (o.destination === "step" || o.destination === "return") && !o.destinationTask)) result.push({ key: task.key, message: `${name}: choose where each outcome goes.` });
+    // Rules left pointing at a step after a prerequisite or loop change (the server's branch_not_dependent / return_outside_group).
+    const loop = (draft.repeatGroups ?? []).find((g) => g.review === task.key);
+    for (const o of task.outcomes ?? []) {
+      const label = o.name.trim() || "An outcome";
+      if (o.destination === "step" && o.destinationTask && !draft.tasks.some((t) => t.key === o.destinationTask && t.dependsOn.includes(task.key))) {
+        result.push({ key: task.key, message: `${name}: “${label}” goes to a step that no longer waits for this one. Choose where it goes.` });
+      }
+      if ((o.destination === "return" || o.destination === "exit_group") && !loop) {
+        result.push({ key: task.key, message: `${name}: only a feedback loop’s review step can send work back or end the loop. Choose where “${label}” goes.` });
+      } else if (o.destination === "return" && o.destinationTask && (o.destinationTask === task.key || !loop!.members.includes(o.destinationTask))) {
+        result.push({ key: task.key, message: `${name}: “${label}” sends work back to a step outside its loop. Choose where it goes.` });
+      }
+    }
     if (!task.title.trim()) result.push({ key: task.key, message: `Name task ${draft.tasks.indexOf(task) + 1}.` });
     if (task.dependsOn.length > 3 || new Set(task.dependsOn).size !== task.dependsOn.length) {
       result.push({ key: task.key, message: `${name} needs no more than three different dependencies.` });
