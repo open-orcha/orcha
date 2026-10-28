@@ -76,6 +76,44 @@ class ImportAcceptance(Input):
     evidence: EvidenceBasis
 
 
+OutcomeName = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=40)
+]
+RouteDestination = Literal["next", "step", "return", "ask_owner", "exit_group", "stop"]
+
+
+class StepOutcome(Input):
+    """A result a step may report (semantics version 2). Outcomes are optional: a step
+    without any behaves like a version-1 step and simply lets its dependents proceed."""
+
+    name: OutcomeName
+    kind: Literal["success", "changes", "failure", "custom"] = "custom"
+
+
+class StepRoute(Input):
+    """What happens next for one outcome. `step` is a branch to one direct dependent,
+    `return` starts a new round of the reporter's repeat group at an earlier member."""
+
+    outcome: OutcomeName
+    destination: RouteDestination
+    destination_task: str | None = None
+
+
+class RepeatGroup(Input):
+    """A bounded repeat-until loop: members repeat until the review step reports
+    `exit_outcome`, at most `max_rounds` rounds before the owner decides."""
+
+    name: Annotated[
+        str, StringConstraints(strip_whitespace=True, min_length=1, max_length=80)
+    ]
+    member_tasks: list[str] = Field(min_length=2, max_length=10)
+    review_task: str
+    exit_outcome: OutcomeName
+    max_rounds: int = Field(default=5, ge=1, le=20)
+    escalation_owner_id: str | None = None
+    stall_rule: Literal["findings_and_artifact", "off"] = "findings_and_artifact"
+
+
 class NewTask(Input):
     client_key: Key
     title: Name
@@ -84,6 +122,8 @@ class NewTask(Input):
     assignee_id: str | None = None
     priority: int = 100
     depends_on: list[str] = Field(default_factory=list, max_length=3)
+    outcomes: list[StepOutcome] = Field(default_factory=list, max_length=8)
+    routes: list[StepRoute] = Field(default_factory=list, max_length=8)
 
 
 class NewObjective(Input):
@@ -99,6 +139,11 @@ class WorkflowDraft(Input):
     tasks: list[NewTask] = Field(default_factory=list, max_length=200)
     existing_task_ids: list[str] = Field(default_factory=list, max_length=200)
     import_acceptances: dict[str, ImportAcceptance] = Field(default_factory=dict)
+    # Version 2 (outcomes, routes, repeat groups) needs the server's flexible_workflows
+    # capability; unset means "the newest this server supports".
+    semantics_version: Literal[1, 2] | None = None
+    repeat_groups: list[RepeatGroup] = Field(default_factory=list, max_length=5)
+    turn_allowance: int = Field(default=40, ge=1, le=1000)
 
 
 class WorkflowCreate(WorkflowDraft):
