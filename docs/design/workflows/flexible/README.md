@@ -6,8 +6,9 @@
 |---|---|
 | `flexible.html` | Static mockup gallery built on the portal's real `v2-tokens.css`, `v2-primitives.css`, `v2-shell.css` and the live shell chrome, exactly like `../redesign/redesign.html`. Open in a browser; `?theme=light`, `?frame=x03`, `?notes=off`. Sample data is a fictional Recipe App team (Kedar, Priya; agents Writer, Reviewer, Planner, Builder, Tester). Not an app. |
 | `renders/x*-dark.png`, `renders/x*-light.png` | One PNG per frame per theme, 1440 × 900. |
-| `walkthroughs/` | One short animated walkthrough per use case (GIF for the issue, MP4 on the branch), recorded from the gallery with `record.mjs`. |
+| `walkthroughs/wt-A.gif` … `wt-H.gif`, `wt-*.mp4` | One animated walkthrough per use case A–H (dark theme): a title card, then the cursor visits every spec callout of the frame while a caption bar explains it; multi-frame use cases crossfade between frames. GIF (960 wide, for the issue) and MP4 (1440 × 900, sharper). |
 | `render.mjs` | Re-renders every frame (`PUPPETEER_DIR=<dir with puppeteer-core> node render.mjs`). |
+| `record.mjs` | Re-records the walkthroughs from the gallery (`PUPPETEER_DIR=<dir> node record.mjs [--only A,C] [--theme light]`; needs ffmpeg). The captions are the script's step list, so the GIF text and this spec share one source. |
 
 Status legend used below: **existing** = behaviour PR #340 already has; **proposed** = needs the API additions in §7. Everything "proposed" is drawn as unavailable on a server that does not report the capability, the same rule the redesign uses for Hide.
 
@@ -23,6 +24,8 @@ Principles carried over from #350 plus three new ones:
 4. **Limits are visible before Start and at the limit.** The Start review lists routes, limits, approvers and anything incomplete; a reached limit or stall is an owner decision, never a silent round 6.
 
 ## 2. Use cases and walkthroughs
+
+Each row is one recording in `walkthroughs/` (`wt-A.gif` and `wt-A.mp4` for row A, and so on). The frames column names the still renders the recording is made of.
 
 | | Walkthrough | Frames | What the viewer sees |
 |---|---|---|---|
