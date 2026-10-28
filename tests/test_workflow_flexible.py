@@ -16,6 +16,7 @@ from test_workflows import (  # noqa: F401 (fixture re-export)
     create,
     prepare_and_start,
     setup_workflow,
+    submit_result,
 )
 
 
@@ -230,3 +231,78 @@ def test_readiness_skips_unselected_branches_and_waits_on_loop_decisions():
     # An accepted step whose loop waits for the owner holds its dependents.
     assert waiting_on(tasks["after"], deps, tasks, acc) == ["b"]
     assert stored_status(tasks["after"], deps, tasks, acc) == "pending"
+
+
+def finish(fixture, w, tid, outcome=None, findings=()):
+    """Worker submits; optionally reports an outcome; the owner accepts."""
+    from portal_backend import workflow_service as ws
+
+    execute = fixture[-1]
+    e, ref = submit_result(fixture, w, tid)
+    if outcome:
+        execute(
+            "report_outcome",
+            {"outcome": outcome, "findings": [{"text": f} for f in findings]},
+            w["id"],
+            tid,
+        )
+    execute("accept", {"evidence": ref}, w["id"], tid)
+    with db_cursor() as (_, cur):
+        ws.WorkflowService(cur, fixture[4]).release_confirmed(
+            e["id"], e["generation"], "process exit"
+        )
+    with db_cursor(readonly=True) as (_, cur):
+        return ws.WorkflowService(cur, fixture[4]).detail(w["id"], fixture[1])
+
+
+def test_changes_requested_starts_round_two_on_the_same_steps(setup_workflow, flexible):
+    execute = setup_workflow[-1]
+    w = prepare_and_start(setup_workflow, execute("create", loop_draft(setup_workflow[2])))
+    ids = {t["title"]: t["id"] for t in w["tasks"]}
+    write, review, publish = (ids[k] for k in ("Write the launch post", "Review the post", "Publish"))
+    before = {t["id"]: t["work_revision"] for t in w["tasks"]}
+    w = finish(setup_workflow, w, write)
+    w = finish(setup_workflow, w, review, "changes requested", ["Too long"])
+    byid = {t["id"]: t for t in w["tasks"]}
+    assert byid[write]["work_revision"] == before[write] + 1
+    assert byid[review]["work_revision"] == before[review] + 1
+    assert byid[write]["can_start"] and not byid[publish]["can_start"]
+    with db_cursor(readonly=True) as (_, cur):
+        cur.execute(
+            "SELECT round_number,trigger_kind,end_reason,inputs FROM workflow_group_rounds r JOIN workflow_repeat_groups g ON g.id=r.group_id WHERE g.workflow_id=%s ORDER BY round_number",
+            (w["id"],),
+        )
+        rounds = cur.fetchall()
+    assert [(r["round_number"], r["trigger_kind"], r["end_reason"]) for r in rounds] == [
+        (1, "initial", "return"), (2, "return", None)
+    ]
+    inputs = rounds[1]["inputs"]
+    inputs = json.loads(inputs) if isinstance(inputs, str) else inputs
+    assert [f["text"] for f in inputs["findings"]] == ["Too long"]
+    # Round 2 approves: the loop ends and Publish can start.
+    w = finish(setup_workflow, w, write)
+    w = finish(setup_workflow, w, review, "Approved")
+    byid = {t["id"]: t for t in w["tasks"]}
+    assert byid[publish]["can_start"]
+
+
+def test_round_limit_asks_the_owner_instead_of_starting_another_round(setup_workflow, flexible):
+    execute = setup_workflow[-1]
+    draft = loop_draft(setup_workflow[2])
+    draft["repeat_groups"][0]["max_rounds"] = 1
+    w = prepare_and_start(setup_workflow, execute("create", draft))
+    ids = {t["title"]: t["id"] for t in w["tasks"]}
+    write, review = ids["Write the launch post"], ids["Review the post"]
+    before = {t["id"]: t["work_revision"] for t in w["tasks"]}
+    w = finish(setup_workflow, w, write)
+    w = finish(setup_workflow, w, review, "Changes requested", ["Still too long"])
+    byid = {t["id"]: t for t in w["tasks"]}
+    assert byid[review]["status"] == "completed"
+    assert byid[write]["work_revision"] == before[write]
+    assert not byid[ids["Publish"]]["can_start"]
+    assert "loop_decision_pending" in {b["code"] for b in w["completion"]["blockers"]}
+    with db_cursor(readonly=True) as (_, cur):
+        cur.execute("SELECT state FROM workflow_repeat_groups WHERE workflow_id=%s", (w["id"],))
+        assert cur.fetchone()["state"] == "limit_reached"
+        cur.execute("SELECT awaiting_loop_decision FROM tasks WHERE id=%s", (review,))
+        assert cur.fetchone()["awaiting_loop_decision"] == "limit_reached"

@@ -722,6 +722,106 @@
         "x-workflow-operation": "hold"
       }
     },
+    "/api/tasks/{tid}/outcome": {
+      "post": {
+        "summary": "Workflow Task Report Outcome",
+        "operationId": "workflow_task_report_outcome_api_tasks__tid__outcome_post",
+        "parameters": [
+          {
+            "name": "tid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OutcomeReport"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowDetail"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "x-workflow-operation": "report_outcome"
+      }
+    },
+    "/api/tasks/{tid}/outcome/preview": {
+      "post": {
+        "summary": "Preview Task Outcome",
+        "description": "Where an outcome would lead, before it is reported or accepted.",
+        "operationId": "preview_task_outcome_api_tasks__tid__outcome_preview_post",
+        "parameters": [
+          {
+            "name": "tid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OutcomeChoice"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoutingPreview"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/tasks/{tid}/prepare": {
       "post": {
         "summary": "Workflow Task Prepare",
@@ -3230,6 +3330,51 @@
         ],
         "title": "EvidenceReference"
       },
+      "Finding": {
+        "properties": {
+          "id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 80
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Id"
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 4000,
+            "minLength": 1,
+            "title": "Text"
+          },
+          "severity": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "blocker",
+                  "major",
+                  "minor",
+                  "note"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Severity"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "text"
+        ],
+        "title": "Finding"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -3954,6 +4099,84 @@
         ],
         "title": "ObjectiveEdit"
       },
+      "OutcomeChoice": {
+        "properties": {
+          "outcome": {
+            "type": "string",
+            "maxLength": 40,
+            "minLength": 1,
+            "title": "Outcome"
+          },
+          "expected_work_revision": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Expected Work Revision"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "outcome",
+          "expected_work_revision"
+        ],
+        "title": "OutcomeChoice"
+      },
+      "OutcomeReport": {
+        "properties": {
+          "expected_revision": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Expected Revision"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Idempotency Key"
+          },
+          "reason": {
+            "type": "string",
+            "maxLength": 4000,
+            "title": "Reason",
+            "default": ""
+          },
+          "expected_work_revision": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Expected Work Revision"
+          },
+          "outcome": {
+            "type": "string",
+            "maxLength": 40,
+            "minLength": 1,
+            "title": "Outcome"
+          },
+          "findings": {
+            "items": {
+              "$ref": "#/components/schemas/Finding"
+            },
+            "type": "array",
+            "maxItems": 50,
+            "title": "Findings"
+          },
+          "note": {
+            "type": "string",
+            "maxLength": 4000,
+            "title": "Note",
+            "default": ""
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "expected_revision",
+          "idempotency_key",
+          "expected_work_revision",
+          "outcome"
+        ],
+        "title": "OutcomeReport",
+        "description": "The step's declared result. The route it selects is applied when the work is\naccepted under the step's own approval rule, never by the report itself."
+      },
       "OutsideResult": {
         "properties": {
           "expected_revision": {
@@ -4578,6 +4801,126 @@
           "outcome"
         ],
         "title": "ReviewRound"
+      },
+      "RoutingPreview": {
+        "properties": {
+          "task_id": {
+            "type": "string",
+            "title": "Task Id"
+          },
+          "outcome": {
+            "type": "string",
+            "title": "Outcome"
+          },
+          "destination": {
+            "type": "string",
+            "enum": [
+              "next",
+              "step",
+              "return",
+              "ask_owner",
+              "exit_group",
+              "stop"
+            ],
+            "title": "Destination"
+          },
+          "destination_task_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Destination Task Id"
+          },
+          "group": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Group"
+          },
+          "round": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Round"
+          },
+          "rounds_remaining": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rounds Remaining"
+          },
+          "repeats": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Repeats"
+          },
+          "kept": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Kept"
+          },
+          "stale": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Stale"
+          },
+          "not_selected": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Not Selected"
+          },
+          "blocked_by": {
+            "anyOf": [
+              {
+                "type": "string",
+                "const": "limit"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Blocked By"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          }
+        },
+        "type": "object",
+        "required": [
+          "task_id",
+          "outcome",
+          "destination",
+          "message"
+        ],
+        "title": "RoutingPreview"
       },
       "StepOutcome": {
         "properties": {

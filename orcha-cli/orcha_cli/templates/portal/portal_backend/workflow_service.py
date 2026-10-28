@@ -2519,6 +2519,278 @@ class WorkflowService:
             },
             tid,
         )
+        self._apply_route(w, self.task(w["id"], tid), p)
+
+    # ---- Flexible workflows (semantics version 2): outcomes and routes ----------
+
+    def op_report_outcome(self, w, actor, b, tid):
+        self.active(w, allow_paused=True)
+        if w.get("semantics_version", 1) != 2:
+            conflict(
+                "flexible_disabled",
+                "This workflow does not use outcomes.",
+                status=422,
+            )
+        p = self.actor(actor, w["container_id"])
+        t = self.task(w["id"], tid, b["expected_work_revision"])
+        e = self.live_turn(tid)
+        if p["kind"] != "human" and (not e or e["claimant_id"] != p["id"]):
+            conflict(
+                "reporter_ineligible",
+                "Only the step's current worker or a person can report its outcome.",
+                status=403,
+            )
+        if t["status"] not in {"in_progress", "needs_verification"}:
+            conflict(
+                "not_reportable",
+                "Report an outcome while the step is running or awaiting review.",
+            )
+        preview = routing.resolve(
+            self.snapshot(w["id"]), routing.load_flow(self, w["id"]), tid, b["outcome"]
+        )
+        prior = self.one(
+            "SELECT r.id,d.applied_at FROM workflow_outcome_reports r LEFT JOIN workflow_route_decisions d ON d.report_id=r.id WHERE r.task_id=%s AND r.work_revision=%s",
+            (tid, t["work_revision"]),
+        )
+        if prior and prior["applied_at"]:
+            conflict("route_applied", "This result's next step was already applied.")
+        if prior:
+            self.cur.execute(
+                "DELETE FROM workflow_outcome_reports WHERE id=%s", (prior["id"],)
+            )
+        report_id = _id()
+        self.cur.execute(
+            "INSERT INTO workflow_outcome_reports(id,workflow_id,task_id,work_revision,generation,reporter_id,reporter_kind,outcome_name,findings,note,evidence_set_id) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+            (
+                report_id,
+                w["id"],
+                tid,
+                t["work_revision"],
+                e["generation"] if e else None,
+                p["id"],
+                p["kind"],
+                preview["outcome"],
+                _json(b.get("findings", [])),
+                b.get("note") or None,
+                e["current_evidence_set_id"] if e else None,
+            ),
+        )
+        group = self.one(
+            "SELECT id FROM workflow_repeat_groups WHERE review_task_id=%s", (tid,)
+        )
+        self.cur.execute(
+            "INSERT INTO workflow_route_decisions(id,workflow_id,report_id,destination_kind,destination_task_id,group_id,preview) VALUES (%s,%s,%s,%s,%s,%s,%s)",
+            (
+                _id(),
+                w["id"],
+                report_id,
+                preview["destination"],
+                preview["destination_task_id"],
+                group["id"] if group else None,
+                _json(preview),
+            ),
+        )
+        self.audit(
+            w,
+            p,
+            "workflow_outcome_reported",
+            {
+                "outcome": preview["outcome"],
+                "work_revision": t["work_revision"],
+                "findings": len(b.get("findings", [])),
+                "route": preview["message"],
+            },
+            tid,
+        )
+
+    def routing_preview(self, tid, outcome, expected_work_revision):
+        t = self.one("SELECT workflow_id FROM tasks WHERE id=%s", (tid,))
+        if not t or not t["workflow_id"]:
+            conflict("workflow_task_required", "A workflow task is required.", status=404)
+        task = self.task(t["workflow_id"], tid, expected_work_revision)
+        return routing.resolve(
+            self.snapshot(task["workflow_id"]),
+            routing.load_flow(self, task["workflow_id"]),
+            tid,
+            outcome,
+        )
+
+    def _apply_route(self, w, t, p):
+        """Apply the route an accepted step's outcome selected, once (D4)."""
+        if w.get("semantics_version", 1) != 2:
+            return
+        d = self.one(
+            "SELECT d.*,r.outcome_name,r.findings,r.note FROM workflow_route_decisions d JOIN workflow_outcome_reports r ON r.id=d.report_id WHERE r.task_id=%s AND r.work_revision=%s",
+            (t["id"], t["work_revision"]),
+        )
+        if not d:
+            if self.one(
+                "SELECT 1 AS present FROM workflow_step_outcomes WHERE task_id=%s LIMIT 1",
+                (t["id"],),
+            ):
+                self.cur.execute(
+                    "UPDATE tasks SET awaiting_loop_decision='missing_outcome' WHERE id=%s",
+                    (t["id"],),
+                )
+                self.audit(w, p, "workflow_outcome_missing", {}, t["id"])
+            return
+        if d["applied_at"]:
+            return
+        flow = routing.load_flow(self, w["id"])
+        preview = routing.resolve(self.snapshot(w["id"]), flow, t["id"], d["outcome_name"])
+        result = self._route(w, t, p, preview, flow, d)
+        self.cur.execute(
+            "UPDATE workflow_route_decisions SET applied_at=%s,result=%s,preview=%s WHERE id=%s",
+            (sql.utcnow(), result, _json(preview), d["id"]),
+        )
+        self.audit(
+            w,
+            p,
+            "workflow_route_applied",
+            {"outcome": d["outcome_name"], "result": result, "route": preview["message"]},
+            t["id"],
+        )
+
+    def _route(self, w, t, p, preview, flow, d):
+        for tid in preview["not_selected"]:
+            self.cur.execute(
+                "UPDATE tasks SET route_state='not_selected' WHERE id=%s", (tid,)
+            )
+        kind = preview["destination"]
+        group = next((g for g in flow[2] if g["review_task"] == t["id"]), None)
+        if kind == "ask_owner":
+            self._loop_wait(t, group, "ask_owner", "awaiting_owner")
+            return "ask_owner"
+        if group and kind in {"exit_group", "stop", "next", "step"}:
+            state = "stopped" if kind == "stop" else "exited"
+            self._end_round(group, "stopped" if kind == "stop" else "exit")
+            self.cur.execute(
+                "UPDATE workflow_repeat_groups SET state=%s WHERE id=%s",
+                (state, group["id"]),
+            )
+        if kind != "return":
+            return kind
+        if preview["blocked_by"] == "limit":
+            self._end_round(group, "limit")
+            self._loop_wait(t, group, "limit_reached", "limit_reached")
+            return "limit_reached"
+        stall = self._stall(group, d)
+        if stall:
+            self._end_round(group, "stall", stall)
+            self._loop_wait(t, group, "stalled", "stalled")
+            return "stalled"
+        self._repeat(w, t, group, preview, d)
+        return "new_round"
+
+    def _loop_wait(self, t, group, decision, state):
+        self.cur.execute(
+            "UPDATE tasks SET awaiting_loop_decision=%s WHERE id=%s", (decision, t["id"])
+        )
+        if group:
+            self.cur.execute(
+                "UPDATE workflow_repeat_groups SET state=%s WHERE id=%s",
+                (state, group["id"]),
+            )
+
+    def _end_round(self, group, reason, stall=None):
+        self.cur.execute(
+            "UPDATE workflow_group_rounds SET end_reason=%s,ended_at=%s,stall=%s WHERE group_id=%s AND round_number=%s AND ended_at IS NULL",
+            (
+                reason,
+                sql.utcnow(),
+                _json(stall) if stall else None,
+                group["id"],
+                group["current_round"],
+            ),
+        )
+
+    def _stall(self, group, d):
+        """Same findings and unchanged reviewed work as the previous round's review."""
+        if group["stall_rule"] == "off" or (group["current_round"] or 0) < 2:
+            return None
+        previous = self.one(
+            "SELECT r.findings,r.work_revision FROM workflow_outcome_reports r JOIN workflow_step_instances i ON i.task_id=r.task_id AND i.work_revision=r.work_revision JOIN workflow_group_rounds g ON g.id=i.group_round_id WHERE r.task_id=%s AND g.group_id=%s AND g.round_number=%s",
+            (group["review_task"], group["id"], group["current_round"] - 1),
+        )
+        if not previous:
+            return None
+
+        def texts(findings):
+            findings = json.loads(findings) if isinstance(findings, str) else findings
+            return sorted(" ".join(f["text"].casefold().split()) for f in findings or [])
+
+        if not texts(d["findings"]) or texts(d["findings"]) != texts(previous["findings"]):
+            return None
+        artifacts = []
+        for rnd in (group["current_round"] - 1, group["current_round"]):
+            artifacts.append(
+                sorted(
+                    (i["deliverable_id"], i["deliverable_version"])
+                    for a in self.rows(
+                        "SELECT a.evidence_items FROM workflow_task_acceptances a JOIN workflow_step_instances i ON i.task_id=a.task_id AND i.work_revision=a.work_revision JOIN workflow_group_rounds g ON g.id=i.group_round_id WHERE g.group_id=%s AND g.round_number=%s AND a.task_id<>%s",
+                        (group["id"], rnd, group["review_task"]),
+                    )
+                    for i in (
+                        json.loads(a["evidence_items"])
+                        if isinstance(a["evidence_items"], str)
+                        else a["evidence_items"]
+                    )
+                )
+            )
+        if artifacts[0] != artifacts[1]:
+            return None
+        return {
+            "compared_rounds": [group["current_round"] - 1, group["current_round"]],
+            "unchanged_findings": texts(d["findings"]),
+            "artifact_unchanged": True,
+            "method": "finding text and file versions",
+        }
+
+    def _reopen(self, tid):
+        latest = self.one(
+            "SELECT agent_id FROM agent_tasks WHERE task_id=%s ORDER BY assigned_at DESC, agent_id DESC LIMIT 1",
+            (tid,),
+        )
+        if latest:
+            self.cur.execute(
+                "UPDATE agent_tasks SET assignment_status='assigned' WHERE task_id=%s AND agent_id=%s",
+                (tid, latest["agent_id"]),
+            )
+        self.cur.execute(
+            "UPDATE tasks SET status='not_ready',work_revision=work_revision+1,awaiting_owner_decision=NULL,owner_decision_at=NULL,awaiting_loop_decision=NULL,completed_at=NULL WHERE id=%s",
+            (tid,),
+        )
+
+    def _repeat(self, w, t, group, preview, d, trigger="return", note=None):
+        """Start the next round: the repeat set gets new work revisions (D3), so their
+        old acceptances go stale on their own; later steps that already used the old
+        work are stopped and reopened too."""
+        self._end_round(group, "return")
+        for tid in preview["stale"]:
+            e = self.live_turn(tid, lock=True)
+            if e:
+                self._release_execution(e, "stale_round")
+        for tid in list(preview["repeats"]) + list(preview["stale"]):
+            self._reopen(tid)
+        findings = d["findings"]
+        findings = json.loads(findings) if isinstance(findings, str) else findings
+        self._start_round(
+            w,
+            group,
+            trigger,
+            preview["repeats"],
+            {
+                "outcome": d["outcome_name"],
+                "findings": findings or [],
+                "note": d.get("note"),
+                "owner_note": note,
+                "from_task_id": t["id"],
+                "to_task_id": preview["destination_task_id"],
+            },
+            return_from=t["id"],
+            return_to=preview["destination_task_id"],
+            reason=d["outcome_name"],
+        )
 
     def _release_execution(self, e, reason, lost=False):
         from portal_backend.workflow_review_handoff import interrupt_handoff
@@ -2632,9 +2904,12 @@ class WorkflowService:
                 (e["id"],),
             )
         else:
+            # A turn on an older work revision (a loop already started the next round)
+            # ends without asking the owner anything.
             if (
                 t["status"] not in {"completed", "cancelled"}
                 and not t["awaiting_owner_decision"]
+                and e["work_revision"] == t["work_revision"]
             ):
                 self.cur.execute(
                     "UPDATE tasks SET status='not_ready',awaiting_owner_decision='worker_released',owner_decision_at=%s WHERE id=%s",

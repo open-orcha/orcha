@@ -10,7 +10,7 @@ import json
 import os
 from uuid import uuid4
 
-from portal_backend.workflow_graph import conflict, validate_flow
+from portal_backend.workflow_graph import conflict, descendants, validate_flow
 
 FLAG = "WORKFLOWS_FLEXIBLE"
 
@@ -264,3 +264,115 @@ def record_definition_version(svc, w, actor_id, reason, body):
         "UPDATE workflows SET definition_version=%s WHERE id=%s", (version, w["id"])
     )
     return version
+
+
+STARTED = {"in_progress", "needs_verification", "completed"}
+
+
+def propagate_unselected(seed, tasks, dependencies):
+    """Steps left without any selected prerequisite are not selected either."""
+    out = set(seed)
+    changed = True
+    while changed:
+        changed = False
+        for tid, prerequisites in dependencies.items():
+            if tid in out or not prerequisites:
+                continue
+            if all(
+                p in out or tasks.get(p, {}).get("route_state") == "not_selected"
+                for p in prerequisites
+            ):
+                out.add(tid)
+                changed = True
+    return out
+
+
+def resolve(snapshot, flow, tid, outcome):
+    """Where an outcome leads, and what that does to the rest of the plan. Pure: the
+    same answer feeds the reporter's preview, the Accept dialog and the apply step."""
+    outcomes, routes, groups = flow
+    tasks, deps = snapshot["tasks"], snapshot["dependencies"]
+    declared = {o["name"].casefold(): o["name"] for o in outcomes.get(tid, [])}
+    name = declared.get(outcome.strip().casefold())
+    if not name:
+        conflict(
+            "unknown_outcome",
+            "Choose one of this step's outcomes.",
+            status=422,
+            outcomes=list(declared.values()),
+        )
+    rule = next(r for r in routes[tid] if r["outcome"].casefold() == name.casefold())
+    kind, target = rule["destination"], rule.get("destination_task")
+    branches = {r["destination_task"] for r in routes.get(tid, []) if r["destination"] == "step"}
+    seed = branches - {target}
+    if kind == "stop":
+        seed |= descendants(tid, deps)
+    unselected = {
+        t
+        for t in propagate_unselected(seed, tasks, deps)
+        if tasks[t]["status"] not in STARTED and tasks[t].get("route_state") != "not_selected"
+    }
+    group = next((g for g in groups if g["review_task"] == tid), None)
+    out = {
+        "task_id": tid,
+        "outcome": name,
+        "destination": kind,
+        "destination_task_id": target,
+        "group": group["name"] if group else None,
+        "round": group.get("current_round") if group else None,
+        "rounds_remaining": max(group["max_rounds"] - (group.get("current_round") or 0), 0)
+        if group
+        else None,
+        "repeats": [],
+        "kept": [],
+        "stale": [],
+        "not_selected": sorted(unselected),
+        "blocked_by": None,
+    }
+    if kind == "return":
+        below = descendants(target, deps)
+        repeats = [
+            m
+            for m in group["member_tasks"]
+            if m == target or (m in below and (m == tid or tid in descendants(m, deps)))
+        ]
+        out["repeats"] = repeats
+        out["kept"] = [m for m in group["member_tasks"] if m not in repeats]
+        members = set(group["member_tasks"])
+        out["stale"] = sorted(
+            {
+                d
+                for r in repeats
+                for d in descendants(r, deps)
+                if d not in members and tasks[d]["status"] in STARTED
+            }
+        )
+        if (group.get("current_round") or 0) >= group["max_rounds"]:
+            out["blocked_by"] = "limit"
+    out["message"] = describe(out, tasks)
+    return out
+
+
+def describe(preview, tasks):
+    def title(tid):
+        return tasks[tid]["title"] if tid in tasks else "a step"
+
+    kind = preview["destination"]
+    if kind == "return":
+        if preview["blocked_by"] == "limit":
+            return (
+                f"The loop {preview['group']} reached its round limit; the owner decides what happens next."
+            )
+        return (
+            f"Sends the work back to {title(preview['destination_task_id'])} for round "
+            f"{(preview['round'] or 0) + 1} of {preview['group']}."
+        )
+    if kind == "step":
+        return f"Continues with {title(preview['destination_task_id'])}."
+    if kind == "exit_group":
+        return f"Ends the loop {preview['group']} and continues."
+    if kind == "ask_owner":
+        return "Asks the owner what happens next."
+    if kind == "stop":
+        return "Stops this path; the steps after it will not run."
+    return "Continues with the next steps."

@@ -105,6 +105,7 @@ def stored_status(task, dependencies, tasks, acceptances, outside_evidence=None)
         return task["status"]
     if (
         task.get("preparation_state") != "prepared"
+        or task.get("route_state") == "not_selected"
         or task.get("start_hold")
         or task.get("human_hold_by")
         or task.get("awaiting_owner_decision")

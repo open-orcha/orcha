@@ -239,6 +239,42 @@ class ReviewRound(Mutation):
     next_review: NewTask | None = None
 
 
+class Finding(Input):
+    id: str | None = Field(default=None, max_length=80)
+    text: Text
+    severity: Literal["blocker", "major", "minor", "note"] | None = None
+
+
+class OutcomeChoice(Input):
+    outcome: OutcomeName
+    expected_work_revision: int = Field(ge=1)
+
+
+class OutcomeReport(TaskMutation):
+    """The step's declared result. The route it selects is applied when the work is
+    accepted under the step's own approval rule, never by the report itself."""
+
+    outcome: OutcomeName
+    findings: list[Finding] = Field(default_factory=list, max_length=50)
+    note: str = Field(default="", max_length=4000)
+
+
+class RoutingPreview(BaseModel):
+    task_id: str
+    outcome: str
+    destination: RouteDestination
+    destination_task_id: str | None = None
+    group: str | None = None
+    round: int | None = None
+    rounds_remaining: int | None = None
+    repeats: list[str] = Field(default_factory=list)
+    kept: list[str] = Field(default_factory=list)
+    stale: list[str] = Field(default_factory=list)
+    not_selected: list[str] = Field(default_factory=list)
+    blocked_by: Literal["limit"] | None = None
+    message: str
+
+
 class MoveTasks(Mutation):
     task_ids: list[str] = Field(min_length=1)
     destination_workflow_id: str | None = None

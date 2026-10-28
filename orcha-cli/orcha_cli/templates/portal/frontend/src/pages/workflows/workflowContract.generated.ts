@@ -1,5 +1,5 @@
 // Generated from FastAPI OpenAPI slices. DO NOT EDIT.
-// Workflow source SHA-256: d02d098f50e21551dd25a4529e8b3f7c5361dd6efa6e133977b0ac8315481974
+// Workflow source SHA-256: a3fae6acd911fee8d0b0a19103f47a4a168af856458c02e4ebe1b6aee632e5ca
 // Evidence GET source SHA-256: f2a794298f992bd3ff3955fa5d6aefc30a97e373794a3c1e9d03c8f46796853e
 // Regenerate with tools/generate-workflow-contract.mjs and both source files.
 
@@ -116,6 +116,12 @@ export type EvidenceItem = {
 export type EvidenceReference = {
   "evidence_set_id": string;
   "items": Array<EvidenceItem>;
+};
+
+export type Finding = {
+  "id"?: string | null;
+  "text": string;
+  "severity"?: "blocker" | "major" | "minor" | "note" | null;
 };
 
 export type HTTPValidationError = {
@@ -243,6 +249,21 @@ export type ObjectiveEdit = {
   "criteria": string;
 };
 
+export type OutcomeChoice = {
+  "outcome": string;
+  "expected_work_revision": number;
+};
+
+export type OutcomeReport = {
+  "expected_revision": number;
+  "idempotency_key": string;
+  "reason"?: string;
+  "expected_work_revision": number;
+  "outcome": string;
+  "findings"?: Array<Finding>;
+  "note"?: string;
+};
+
 export type OutsideResult = {
   "expected_revision": number;
   "idempotency_key": string;
@@ -342,6 +363,22 @@ export type ReviewRound = {
   "outcome": "changes_requested" | "accepted" | "inconclusive";
   "correction"?: NewTask | null;
   "next_review"?: NewTask | null;
+};
+
+export type RoutingPreview = {
+  "task_id": string;
+  "outcome": string;
+  "destination": "next" | "step" | "return" | "ask_owner" | "exit_group" | "stop";
+  "destination_task_id"?: string | null;
+  "group"?: string | null;
+  "round"?: number | null;
+  "rounds_remaining"?: number | null;
+  "repeats"?: Array<string>;
+  "kept"?: Array<string>;
+  "stale"?: Array<string>;
+  "not_selected"?: Array<string>;
+  "blocked_by"?: "limit" | null;
+  "message": string;
 };
 
 export type StepOutcome = {
@@ -671,6 +708,7 @@ export type WorkflowModels = {
   EvidenceBasis: EvidenceBasis;
   EvidenceItem: EvidenceItem;
   EvidenceReference: EvidenceReference;
+  Finding: Finding;
   HTTPValidationError: HTTPValidationError;
   Impact: Impact;
   ImpactTask: ImpactTask;
@@ -685,6 +723,8 @@ export type WorkflowModels = {
   NewTask: NewTask;
   Objective: Objective;
   ObjectiveEdit: ObjectiveEdit;
+  OutcomeChoice: OutcomeChoice;
+  OutcomeReport: OutcomeReport;
   OutsideResult: OutsideResult;
   PrepareTask: PrepareTask;
   Preview: Preview;
@@ -695,6 +735,7 @@ export type WorkflowModels = {
   RetryTask: RetryTask;
   ReviewHistory: ReviewHistory;
   ReviewRound: ReviewRound;
+  RoutingPreview: RoutingPreview;
   StepOutcome: StepOutcome;
   StepRoute: StepRoute;
   TaskAcceptance: TaskAcceptance;
@@ -1300,6 +1341,47 @@ export const workflowSchemas = {
     "required": [
       "evidence_set_id",
       "items"
+    ]
+  },
+  "Finding": {
+    "properties": {
+      "id": {
+        "anyOf": [
+          {
+            "type": "string",
+            "maxLength": 80
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "text": {
+        "type": "string",
+        "maxLength": 4000,
+        "minLength": 1
+      },
+      "severity": {
+        "anyOf": [
+          {
+            "type": "string",
+            "enum": [
+              "blocker",
+              "major",
+              "minor",
+              "note"
+            ]
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "additionalProperties": false,
+    "type": "object",
+    "required": [
+      "text"
     ]
   },
   "HTTPValidationError": {
@@ -1921,6 +2003,70 @@ export const workflowSchemas = {
       "criteria"
     ]
   },
+  "OutcomeChoice": {
+    "properties": {
+      "outcome": {
+        "type": "string",
+        "maxLength": 40,
+        "minLength": 1
+      },
+      "expected_work_revision": {
+        "type": "integer",
+        "minimum": 1
+      }
+    },
+    "additionalProperties": false,
+    "type": "object",
+    "required": [
+      "outcome",
+      "expected_work_revision"
+    ]
+  },
+  "OutcomeReport": {
+    "properties": {
+      "expected_revision": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "idempotency_key": {
+        "type": "string",
+        "maxLength": 200,
+        "minLength": 1
+      },
+      "reason": {
+        "type": "string",
+        "maxLength": 4000
+      },
+      "expected_work_revision": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "outcome": {
+        "type": "string",
+        "maxLength": 40,
+        "minLength": 1
+      },
+      "findings": {
+        "items": {
+          "$ref": "#/components/schemas/Finding"
+        },
+        "type": "array",
+        "maxItems": 50
+      },
+      "note": {
+        "type": "string",
+        "maxLength": 4000
+      }
+    },
+    "additionalProperties": false,
+    "type": "object",
+    "required": [
+      "expected_revision",
+      "idempotency_key",
+      "expected_work_revision",
+      "outcome"
+    ]
+  },
   "OutsideResult": {
     "properties": {
       "expected_revision": {
@@ -2460,6 +2606,112 @@ export const workflowSchemas = {
       "reviewed_task_id",
       "reviewed_artifact",
       "outcome"
+    ]
+  },
+  "RoutingPreview": {
+    "properties": {
+      "task_id": {
+        "type": "string"
+      },
+      "outcome": {
+        "type": "string"
+      },
+      "destination": {
+        "type": "string",
+        "enum": [
+          "next",
+          "step",
+          "return",
+          "ask_owner",
+          "exit_group",
+          "stop"
+        ]
+      },
+      "destination_task_id": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "group": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "round": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "rounds_remaining": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "repeats": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "kept": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "stale": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "not_selected": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "blocked_by": {
+        "anyOf": [
+          {
+            "type": "string",
+            "const": "limit"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "message": {
+        "type": "string"
+      }
+    },
+    "type": "object",
+    "required": [
+      "task_id",
+      "outcome",
+      "destination",
+      "message"
     ]
   },
   "StepOutcome": {
@@ -4260,6 +4512,17 @@ export const workflowRoutes = [
     "method": "post",
     "operation": "hold",
     "body": "TaskMutation"
+  },
+  {
+    "path": "/api/tasks/{tid}/outcome",
+    "method": "post",
+    "operation": "report_outcome",
+    "body": "OutcomeReport"
+  },
+  {
+    "path": "/api/tasks/{tid}/outcome/preview",
+    "method": "post",
+    "body": "OutcomeChoice"
   },
   {
     "path": "/api/tasks/{tid}/prepare",

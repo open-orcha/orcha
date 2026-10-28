@@ -475,13 +475,28 @@ for path, operation, body_model in [
     ("external-result", "external_result", model.OutsideResult),
     ("accept", "accept", model.AcceptTask),
     ("reject", "reject", model.TaskMutation),
+    ("outcome", "report_outcome", model.OutcomeReport),
 ]:
     _task_action(
         "/api/tasks/{tid}/" + path,
         operation,
         body_model,
-        allow_agent=operation == "accept",
+        allow_agent=operation in {"accept", "report_outcome"},
     )
+
+
+@app.post("/api/tasks/{tid}/outcome/preview", response_model=model.RoutingPreview)
+def preview_task_outcome(tid: str, body: model.OutcomeChoice, request: Request):
+    """Where an outcome would lead, before it is reported or accepted."""
+    with db_cursor(readonly=True) as (_, cur):
+        svc = service.WorkflowService(cur, HOOKS)
+        t = svc.one("SELECT workflow_id,container_id FROM tasks WHERE id=%s", (tid,))
+        if not t or not t["workflow_id"]:
+            conflict(
+                "workflow_task_required", "A workflow task is required.", status=404
+            )
+        resolve_actor(cur, request, t["container_id"], allow_agent=True)
+        return svc.routing_preview(tid, body.outcome, body.expected_work_revision)
 
 
 @app.put(
