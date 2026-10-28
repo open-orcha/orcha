@@ -155,6 +155,8 @@ def setup_project_repository(base_cwd, services: Any) -> tuple[bool, str]:
                 f"After creating a repository in {base_cwd}, Git still did not treat "
                 "the project folder as its own repository; nothing else was changed."
             )
+    # The folder is its own repository from here on: keep Orcha's runtime state out of it.
+    _worktree_base.ensure_runtime_ignored(base_cwd, run_git)  # GH #366
     code, tree = run_git(["hash-object", "-t", "tree", "-w", os.devnull], cwd=base_cwd)
     code2, head_ref = run_git(["symbolic-ref", "-q", "HEAD"], cwd=base_cwd)
     if code != 0 or code2 != 0 or not tree.strip() or not head_ref.strip():
