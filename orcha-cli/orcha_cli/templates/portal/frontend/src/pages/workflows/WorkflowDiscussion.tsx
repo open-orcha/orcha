@@ -1,3 +1,4 @@
+import { TaskMessageDelivery } from "../tasks/TaskMessageDelivery";
 import { useEffect, useRef, useState } from "react";
 import { getJSON, sendJSON } from "../../api/client";
 import { Button, Timeline, TimelineComment } from "../../components/primitives";
@@ -16,6 +17,7 @@ export function WorkflowDiscussion({ taskId, scope, locked = false }: { taskId: 
   const [page, setPage] = useState<Page | null>(null);
   const [busy, setBusy] = useState(false);
   const [sending, setSending] = useState(false);
+  const [messagesSent, setMessagesSent] = useState({ taskId: taskId, count: 0 });
   const [error, setError] = useState("");
   const alive = useRef(true);
   const url = `/api/tasks/${encodeURIComponent(taskId)}/messages`;
@@ -45,7 +47,7 @@ export function WorkflowDiscussion({ taskId, scope, locked = false }: { taskId: 
     try {
       await sendJSON("POST", url, { author_agent_id: scope.identity, body: text });
       if (!alive.current) return;
-      setPending(null); setDraft("");
+      setPending(null); setDraft(""); setMessagesSent((old) => ({ taskId: taskId, count: old.taskId === taskId ? old.count + 1 : 1 }));
       // Refresh does not retry the write.
       const next = await getJSON<Page>(`${url}?limit=30`);
       if (alive.current && next.task_id === taskId) setPage(next);
@@ -61,6 +63,7 @@ export function WorkflowDiscussion({ taskId, scope, locked = false }: { taskId: 
     {busy && <p role="status">Loading discussion…</p>}{error && <p role="alert">{error}</p>}
     <Timeline label="Discussion messages">{page?.messages.map((m) => <TimelineComment key={m.message_id} author={m.author_alias ?? "System"} at={m.created_at}><Linkified text={m.body} /></TimelineComment>)}</Timeline>
     {page && !page.messages.length && <p>No messages yet.</p>}
+    <TaskMessageDelivery key={taskId} taskId={taskId} sent={messagesSent.taskId === taskId ? messagesSent.count : 0} />
     <label>Message<textarea maxLength={4000} value={draft} disabled={sending || !!pending || locked || !authority.human} onChange={(e) => setDraft(e.target.value)} /></label>
     <p className="wf-muted">Discussion messages do not approve plans or accept finished work.</p>
     <Button variant="primary" disabled={sending || !!pending || locked || !authority.human || !draft.trim()} onClick={() => void send()}>Send message</Button>

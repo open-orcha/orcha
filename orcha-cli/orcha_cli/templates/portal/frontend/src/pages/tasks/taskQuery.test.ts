@@ -58,9 +58,9 @@ describe("groupTasks", () => {
     const g = groupTasks([T("a", "completed", 1), T("b", "needs_verification", 1), T("c", "mystery", 1), T("d", "failed", 1)], "status");
     expect(g.map((x) => x.label)).toEqual(["Needs verification", "Failed", "Completed", "Other"]);
   });
-  it("gives a held (not_ready) task its own On hold group, ahead of the finished ones", () => {
+  it("gives a held (not_ready) task its own Not ready group, ahead of the finished ones", () => {
     const g = groupTasks([T("a", "completed", 1), T("b", "not_ready", 1), T("c", "pending", 1)], "status");
-    expect(g.map((x) => x.label)).toEqual(["Pending", "On hold", "Completed"]);
+    expect(g.map((x) => x.label)).toEqual(["Pending", "Not ready", "Completed"]);
   });
   it("sorts a held task with the not-started work, not after every finished task", () => {
     const list = [T("done", "completed", 1), T("held", "not_ready", 1), T("live", "in_progress", 1)];
@@ -117,7 +117,7 @@ describe("counts + status filter options", () => {
   it("hides empty buckets (and Other) unless selected", () => {
     const opts = statusFilterOptions({ ready: 2, completed: 1 }, ["failed"]).map((o) => o.k);
     expect(opts).toEqual(["ready", "failed", "completed"]);
-    expect(statusFilterOptions({ not_ready: 1 }, []).map((o) => o.label)).toEqual(["On hold"]);
+    expect(statusFilterOptions({ not_ready: 1 }, []).map((o) => o.label)).toEqual(["Not ready"]);
     expect(statusFilterOptions({ other: 1 }, []).map((o) => o.label)).toEqual(["Other"]);
   });
 });

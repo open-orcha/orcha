@@ -41,6 +41,7 @@ beforeEach(() => {
       agents: [{ id: "kedar", alias: "Kedar", kind: "human", status: "idle", member_role: humanRole }, { id: "andrew", alias: "Andrew", kind: "ai", status: "working", autonomy_override: "full" }],
       tasks: [{ id: "build", title: "Build Android", status: taskStatus, autonomy: taskAutonomy, autonomy_revision: 1, priority: 100, assignees: ["Andrew"], created_by_agent_id: "kedar", created_at: "2026-10-25T10:00:00Z", definition_of_done: "Pairing checks pass", result: "Build checks passed", message_summary: { count: 0, last: null }, plan_message: planBody ? { body: planBody, author_alias: "Andrew", at: "2026-10-25T10:00:00Z" } : null }], requests: [],
     });
+    if (url.endsWith("/messages/delivery")) return jsonResponse({ task_id: "build", state: "deferred_until_eligible", reason: "Waiting", task_href: "/tasks?task=build", recipients: [{ agent_id: "andrew", alias: "Andrew", state: "deferred_until_eligible", reason: "The workflow is waiting for its owner.", direct_chat_href: "/agents?agent=Andrew&tab=conversation" }] });
     if (url.endsWith("/messages")) return jsonResponse({ messages: [] });
     if (url.endsWith("/runs")) return jsonResponse([{ run_id: "run", status: "running", agent: "Andrew", started_at: "2026-10-25T10:00:00Z" }]);
     return jsonResponse({});
@@ -175,4 +176,17 @@ it("preserves a standalone rejection draft through membership refresh without su
   await screen.findByRole("region", { name: "Verification" });
   expect(document.querySelector("#rt-build")).toHaveValue("Need the pairing checks");
   expect(writes).toEqual([]);
+});
+
+
+it("shows message guidance beside the task composer and refreshes it after saving", async () => {
+  extensions.identityTrusted = () => false;
+  page();
+  await screen.findByText(/The workflow is waiting for its owner/);
+  expect(screen.getByRole("link", { name: "Open Andrew’s direct chat" })).toHaveAttribute("href", "/agents?agent=Andrew&tab=conversation");
+  fireEvent.change(screen.getByRole("textbox", { name: "Task thread comment" }), { target: { value: "What is waiting?" } });
+  fireEvent.click(screen.getByRole("button", { name: "Post comment" }));
+  await screen.findByText("Message saved. Saving does not mean the agent has answered.");
+  expect(writes).toEqual(["/api/tasks/build/messages"]);
+  await waitFor(() => expect(vi.mocked(fetch).mock.calls.filter(([url]) => String(url).endsWith("/messages/delivery")).length).toBeGreaterThanOrEqual(2));
 });

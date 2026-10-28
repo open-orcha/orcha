@@ -24,6 +24,7 @@ from portal_backend.identity_routes import trusted_actor as _trusted_actor
 from portal_backend.push_outbox import push_plan_approval as _push_plan_approval
 from portal_backend.provider_keys import container_llm_key as _container_llm_key
 from portal_backend.schemas.task_operations import TaskMessage
+from portal_backend.task_message_delivery import message_recipients
 from portal_backend.result_notifications import answered_result_for_message, lock_result_requests
 from portal_backend.task_autonomy_service import record_approval
 from portal_backend.task_approval_policy import ApprovalPhase
@@ -119,21 +120,8 @@ def post_message(tid: str, body: TaskMessage, request: Request):
         # Previously this emitted no agent_events, so a teammate's note silently stranded
         # until they happened to look. Publish a targeted `task_message` event to every
         # assignee except the author so the daemon/listen loop wakes them out-of-band.
-        cur.execute("SELECT agent_id FROM agent_tasks WHERE task_id=%s AND assignment_status <> 'done'", (tid,))
         notified = 0
-        recipients = cur.fetchall()
-        # Legacy /done closes the assignment before human verification. Deliver
-        # feedback to that exact submitter, not every replaced historical assignee.
-        if t["status"] == "needs_verification":
-            result = t.get("result") or {}
-            if isinstance(result, str):
-                result = json.loads(result)
-            submitter = result.get("by_agent_id") if isinstance(result, dict) else None
-            if submitter and all(str(r["agent_id"]) != str(submitter) for r in recipients):
-                cur.execute("SELECT agent_id FROM agent_tasks WHERE task_id=%s AND agent_id=%s", (tid, submitter))
-                submitted_assignment = cur.fetchone()
-                if submitted_assignment:
-                    recipients.append(submitted_assignment)
+        recipients = message_recipients(cur, t)
         if body.system_notice or t["status"] in ("completed", "cancelled"):
             recipients = []
         for row in recipients:

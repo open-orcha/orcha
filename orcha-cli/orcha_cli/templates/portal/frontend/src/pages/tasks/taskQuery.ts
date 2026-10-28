@@ -23,7 +23,7 @@ export const GROUP_ORDER: { k: string; label: string }[] = [
   { k: "in_progress", label: "In progress" },
   { k: "ready", label: "Ready" },
   { k: "pending", label: "Pending" },
-  { k: "not_ready", label: "On hold" }, // held by its owner or a Workflow; not started
+  { k: "not_ready", label: "Not ready" }, // holds, drafts and workflow owner decisions
   { k: "blocked", label: "Blocked" },
   { k: "failed", label: "Failed" },
   { k: "completed", label: "Completed" },
@@ -268,7 +268,7 @@ export type ScopeKey = "all" | "active" | "backlog" | "done";
 export const SCOPES: { k: ScopeKey; label: string; statuses: string[]; hint: string }[] = [
   { k: "all", label: "All tasks", statuses: [], hint: "Every task in this project" },
   { k: "active", label: "Active", statuses: ["needs_verification", "in_progress", "blocked", "failed"], hint: "Needs verification, in progress, blocked or failed" },
-  { k: "backlog", label: "Backlog", statuses: ["ready", "pending", "not_ready"], hint: "Ready, pending or on hold (not started)" },
+  { k: "backlog", label: "Backlog", statuses: ["ready", "pending", "not_ready"], hint: "Ready, pending or not ready (not started)" },
   { k: "done", label: "Done", statuses: ["completed", "cancelled"], hint: "Completed or cancelled" },
 ];
 

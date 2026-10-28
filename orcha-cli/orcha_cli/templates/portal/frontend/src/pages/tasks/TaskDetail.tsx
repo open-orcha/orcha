@@ -1,3 +1,4 @@
+import { TaskMessageDelivery } from "./TaskMessageDelivery";
 /**
  * Task detail (V2 "Linear issue" layout, directives D5/D8/D10/D12) — owner:
  * tasks-detail. Rendered by TasksPage as the split inspector, the narrow
@@ -1491,6 +1492,7 @@ function ThreadCard({
   const actor = useActor();
   const toast = useToast();
   const [shown, setShown] = useState(THREAD_SHOWN);
+  const [messagesSent, setMessagesSent] = useState({ taskId: t.id, count: 0 });
   // an unsent comment survives a project switch / navigation (per task,
   // this browser tab only); cleared once it posts
   const draftKey = TASK_DRAFT_PREFIX + t.id;
@@ -1605,6 +1607,7 @@ function ThreadCard({
       });
       if (r.ok) {
         toast("Comment posted", "ok");
+        setMessagesSent((old) => ({ taskId: t.id, count: old.taskId === t.id ? old.count + 1 : 1 }));
         void refresh();
       } else {
         setText((current) => current.trim() ? current : v);
@@ -1771,6 +1774,7 @@ function ThreadCard({
           if (!locked && files?.length) uploadFiles(files);
         }}
       >
+        <TaskMessageDelivery key={t.id} taskId={t.id} sent={messagesSent.taskId === t.id ? messagesSent.count : 0} />
         <Composer
           id="reply"
           attachButtonId="attachBtn"

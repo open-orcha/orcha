@@ -13,7 +13,7 @@ describe("statusMeta", () => {
   it("run / task states that rendered raw", () => {
     expect(statusMeta("rate_limited").l).toBe("Rate limited");
     expect(statusMeta("orphaned")).toEqual({ l: "Orphaned", c: "s-bad" });
-    expect(statusMeta("not_ready").l).toBe("On hold");
+    expect(statusMeta("not_ready").l).toBe("Not ready");
   });
   it("unmapped keys still pass through raw (StatusIcon contract); empty stays 'unknown'", () => {
     expect(statusMeta("some_new_state")).toEqual({ l: "some_new_state", c: "s-idle" });

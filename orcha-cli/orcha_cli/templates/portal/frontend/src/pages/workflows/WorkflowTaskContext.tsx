@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { getJSON, type ApiError } from "../../api/client";
 import { Button } from "../../components/primitives/Button";
@@ -19,18 +19,30 @@ const Context = createContext<Index | null>(null);
  * task snapshot does not project membership yet, so never infer it from a URL
  * hint, stored task status, assignee, or an incomplete first page. */
 export function WorkflowTaskProvider({ children }: { children: ReactNode }) {
-  const { cid, identityTrusted, identityPending } = useSnapshot();
+  const { cid, snap, identityTrusted, identityPending } = useSnapshot();
+  const taskStatuses = JSON.stringify((snap?.tasks ?? []).map((t) => [t.id, t.status]).sort());
   const authority = useActingAuthority();
   const actorId = !identityPending ? authority.human?.id ?? null : null;
   const scope = JSON.stringify([window.location.origin, cid, actorId, identityTrusted, identityPending]);
-  return <MembershipIndex scope={scope} cid={cid} actorId={actorId}>{children}</MembershipIndex>;
+  return <MembershipIndex scope={scope} cid={cid} actorId={actorId} taskStatuses={taskStatuses}>{children}</MembershipIndex>;
 }
 
-function MembershipIndex({ scope, cid, actorId, children }: { scope: string; cid: string | null; actorId: string | null; children: ReactNode }) {
+function MembershipIndex({ scope, cid, actorId, taskStatuses, children }: { taskStatuses: string; scope: string; cid: string | null; actorId: string | null; children: ReactNode }) {
   const [stored, setValue] = useState<Omit<Index, "refresh"> & { scope: string }>({ scope, state: "loading", members: new Map(), error: "" });
   const value = stored.scope === scope ? stored : { scope, state: "loading" as const, members: new Map<string, Membership>(), error: "" };
   const [retry, setRetry] = useState(0);
   const refresh = () => setRetry((n) => n + 1);
+  // Refresh one bounded paginated index after snapshot status changes. Coalesce
+  // bursts, not one read per task; no dependency on our own loaded index.
+  const checkedStatuses = useRef(taskStatuses);
+  useEffect(() => {
+    if (checkedStatuses.current === taskStatuses) return;
+    const timer = setTimeout(() => {
+      checkedStatuses.current = taskStatuses;
+      refresh();
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [taskStatuses]);
   useEffect(() => {
     window.addEventListener("focus", refresh);
     return () => window.removeEventListener("focus", refresh);
@@ -101,8 +113,13 @@ export function workflowMemberHref(detail: WorkflowDetail, taskId?: string) {
 export function WorkflowTaskStatus({ taskId, fallback, showLabel = false, className, size }: {
   taskId: string; fallback: string; showLabel?: boolean; className?: string; size?: number;
 }) {
-  const { member, stale } = useTaskWorkflow(taskId);
-  if (!member || member.detail.hidden) return <StatusIcon status={fallback} showLabel={showLabel} className={className} size={size} />;
+  const { index, member, stale } = useTaskWorkflow(taskId);
+  if (!member || member.detail.hidden) {
+    const ordinary = !member && (index?.state === "ready" || index?.state === "unsupported");
+    const label = fallback !== "not_ready" ? undefined : ordinary ? "On hold"
+      : index?.state === "loading" ? "Not ready · checking workflow" : "Not ready";
+    return <StatusIcon status={fallback} label={label} showLabel={showLabel} className={className} size={size} />;
+  }
   const listWarning = member.task.display_state.list_warning === true;
   const warningText = member.task.display_state.warning || "Released without stop confirmation: the worker may still be running outside Orcha.";
   const label = `${member.task.display_state.label}${stale ? " (last loaded)" : ""}${listWarning ? ` · ${warningText}` : ""}`;

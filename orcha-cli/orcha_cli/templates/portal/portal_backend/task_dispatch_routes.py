@@ -28,7 +28,7 @@ def _deps_unmet(cur, tid: str) -> bool:
     return cur.fetchone() is not None
 
 
-@app.post("/api/tasks/{tid}/readiness", status_code=200)
+@app.post("/api/tasks/{tid}/readiness", status_code=200, responses={409: {"description": "Workflow tasks must use workflow controls; root and active/finished tasks cannot change readiness."}})
 def set_task_readiness(tid: str, body: TaskReadiness, request: Request):
     """#326 (B3): flip a task between 'not_ready' (HELD — design-gated, excluded from the
     ready-queue + not self-claimable via /orcha-next) and dispatchable.
@@ -36,7 +36,7 @@ def set_task_readiness(tid: str, body: TaskReadiness, request: Request):
     HUMAN-AUTHORITY gated (Orcha#30 / #327: an AI cannot yet flip readiness). Allowed transitions:
       ready=false  HOLD:    'ready' or 'pending' -> 'not_ready'  (idempotent if already not_ready)
       ready=true   RELEASE: 'not_ready' -> 'ready' (or 'pending' if its deps aren't satisfied)
-    Refused (409) for the root task and for in_progress / terminal states (completed,
+    Refused (409) for workflow tasks (use workflow controls), the root task and for in_progress / terminal states (completed,
     needs_verification, cancelled) — you don't hold work someone is building, nor resurrect a
     finished/cancelled task. started_at clears on a hold so a later release claims it cleanly."""
     if not _valid_uuid(tid):
@@ -49,6 +49,8 @@ def set_task_readiness(tid: str, body: TaskReadiness, request: Request):
         _require_kind(
             cur, body.actor_agent_id, ("human",)
         )  # Orcha#30 / #327: human-only flip
+        if t.get("workflow_id"):
+            raise HTTPException(409, "This task belongs to a workflow. Manage holds from its workflow controls.")
         if t["is_root"]:
             raise HTTPException(409, "the root task has no readiness to flip")
         cur_status = t["status"]

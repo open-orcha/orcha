@@ -30,7 +30,12 @@ def test_roster_renders_status_pill_per_task():
     badge = (FRONTEND / "components" / "primitives" / "Badge.tsx").read_text()
     row = view[view.index("export function TaskRow"):]
     row = row[: row.index("\n}\n")]
-    assert "<StatusIcon status={t.status}" in row, "task row doesn't render a per-row status indicator"
+    assert "<WorkflowTaskStatus taskId={t.id} fallback={t.status}" in row, "task row doesn't render a per-row status indicator"
+    # Workflow labels override the shared fallback; ordinary/unknown task states
+    # still use the same glyph taxonomy through WorkflowTaskStatus.
+    context = (FRONTEND / "pages" / "workflows" / "WorkflowTaskContext.tsx").read_text()
+    assert "<StatusIcon status={fallback}" in context
+    assert "member.task.display_state.label" in context
     # the indicator is the ONE D8 taxonomy: exact STAT label + a glyph shape per status
     assert "statusMeta(status).l" in icon and "statusShape(status)" in icon, \
         "StatusIcon doesn't reuse the shared status taxonomy (label + glyph)"

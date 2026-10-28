@@ -5,11 +5,12 @@ import { WorkflowTaskInspector, WorkflowTaskProvider, WorkflowTaskStatus, useTas
 import { exampleTask, exampleWorkflow, jsonResponse, workflowSpec, writeCapability } from "./workflowTestFixtures";
 
 let identity = "kedar";
+let snapshotStatus = "not_ready";
 vi.mock("../../state/SnapshotProvider", () => ({
-  useSnapshot: () => ({ cid: "project", identity: { agent_id: identity }, identityTrusted: true, identityPending: false }),
+  useSnapshot: () => ({ cid: "project", snap: { agents: [], tasks: [{ id: "build", status: snapshotStatus }] }, identity: { agent_id: identity }, identityTrusted: true, identityPending: false }),
   useActingAuthority: () => ({ human: { id: identity, kind: "human", member_role: "owner" }, reason: null, readOnly: false, pending: false }),
 }));
-beforeEach(() => { identity = "kedar"; });
+beforeEach(() => { identity = "kedar"; snapshotStatus = "not_ready"; });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 function Probe() {
   const { blockLegacy, index } = useTaskWorkflow("build");
@@ -127,4 +128,31 @@ it("also clears previous reads when OpenAPI discovery itself refuses access", as
   fireEvent.click(screen.getByRole("button", { name: "Check again" }));
   expect(await screen.findByRole("alert")).toHaveTextContent("access is unavailable");
   expect(screen.queryByRole("link", { name: "Mobile release" })).toBeNull();
+});
+
+it.each(["Draft · not prepared", "On hold", "Prepared · waiting for Start", "Stopped by owner · owner decides", "Stopping", "Recovery needed"])("keeps the workflow's %s label on a not-ready task", async (label) => {
+  mockReads(() => jsonResponse({ capability: writeCapability, workflows: [exampleWorkflow({ tasks: [exampleTask({ status: "not_ready", display_state: { label } })] })] }));
+  render(<MemoryRouter><WorkflowTaskProvider><WorkflowTaskStatus taskId="build" fallback="not_ready" showLabel /></WorkflowTaskProvider></MemoryRouter>);
+  expect(screen.getByText("Not ready · checking workflow")).toBeVisible();
+  expect(await screen.findByText(label)).toBeVisible();
+  if (label !== "On hold") expect(screen.queryByText("On hold")).toBeNull();
+});
+it.each(["hidden", "forbidden", "unavailable", "ordinary"])("uses an honest fallback for %s membership", async (mode) => {
+  mockReads(() => jsonResponse(mode === "hidden" ? { capability: writeCapability, workflows: [exampleWorkflow({ hidden: true })] }
+    : { capability: writeCapability, workflows: [] }, mode === "forbidden" ? 403 : mode === "unavailable" ? 503 : 200));
+  render(<MemoryRouter><WorkflowTaskProvider><WorkflowTaskStatus taskId="build" fallback="not_ready" showLabel /></WorkflowTaskProvider></MemoryRouter>);
+  expect(await screen.findByText(mode === "ordinary" ? "On hold" : "Not ready")).toBeVisible();
+});
+
+it("refreshes the shared membership index after a live task status changes", async () => {
+  let label = "Prepared · waiting for Start";
+  const fetch = mockReads(() => jsonResponse({ capability: writeCapability, workflows: [exampleWorkflow({ tasks: [exampleTask({ display_state: { label } })] })] }));
+  function Status() { return <MemoryRouter><WorkflowTaskProvider><WorkflowTaskStatus taskId="build" fallback={snapshotStatus} showLabel /></WorkflowTaskProvider></MemoryRouter>; }
+  const view = render(<Status />);
+  await screen.findByText(label);
+  label = "Working"; snapshotStatus = "in_progress"; view.rerender(<Status />);
+  await screen.findByText("Working");
+  expect(fetch.mock.calls.filter(([url]) => url.includes("visibility=all"))).toHaveLength(2);
+  view.rerender(<Status />);
+  expect(fetch.mock.calls.filter(([url]) => url.includes("visibility=all"))).toHaveLength(2);
 });

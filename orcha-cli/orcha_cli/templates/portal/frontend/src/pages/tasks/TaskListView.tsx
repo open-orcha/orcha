@@ -28,7 +28,7 @@ import { agentByAlias, planAwaitsHuman, useSnapshot } from "../../state/Snapshot
 import { Icon } from "../../components/ui";
 import { Button, Menu, MenuButton, Popover, Row, isEditingTarget, moveRowFocus, type MenuItemSpec } from "../../components/primitives";
 import { Avatar, AvatarStack, type AvatarActor } from "../../components/primitives";
-import { StatusGlyph, StatusIcon } from "../../components/primitives";
+import { StatusGlyph } from "../../components/primitives";
 import { PriorityGlyph, PriorityIcon, priorityLevel } from "../../components/primitives";
 import { Chip } from "../../components/primitives";
 import { LivePill } from "../../components/primitives";
@@ -223,7 +223,7 @@ export function TaskRow({ t, snap, selected, onSelect, compact, groupedBy, revie
     >
       <PriorityIcon priority={t.priority} className="tl-prio" />
       <span className="tl-id">{shortId(t.id)}</span>
-      {!member ? <StatusIcon status={t.status} className="tl-st" /> : <WorkflowTaskStatus taskId={t.id} fallback={t.status} className="tl-st" />}
+      <WorkflowTaskStatus taskId={t.id} fallback={t.status} className="tl-st" />
       <span className="tl-title">{t.title}{member && !member.detail.hidden && <WorkflowTaskStatus taskId={t.id} fallback={t.status} className="wf-task-label" showLabel />}</span>
       {chips.length ? <span className="tl-chips">{chips}</span> : null}
       <span className="tl-who">

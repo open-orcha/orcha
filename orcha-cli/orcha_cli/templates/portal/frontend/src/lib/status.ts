@@ -29,7 +29,7 @@ export const STAT: Record<string, { l: string; c: string }> = {
   // run / task states the backend emits that used to render raw (tasks r1)
   rate_limited: { l: "Rate limited", c: "s-warn" },
   orphaned: { l: "Orphaned", c: "s-bad" },
-  not_ready: { l: "On hold", c: "s-idle" },
+  not_ready: { l: "Not ready", c: "s-idle" },
 };
 
 export function statusMeta(status: string | null | undefined): { l: string; c: string } {
