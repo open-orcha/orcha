@@ -43,3 +43,13 @@ it("crosses out a step that was not selected and keeps version-1 rows unchanged"
   expect(screen.queryByText(/^Round /)).toBeNull();
   expect(screen.queryByText("Decision needed")).toBeNull();
 });
+
+it("shows a loop that has not opened yet as not started, with no round lit (round 0)", () => {
+  render(<WorkflowTaskRows label="Workflow tasks"><WorkflowLoopGroup group={group({ current_round: 0 })} reviewTitle="Review the post" ownerName="Kedar">
+    <WorkflowTaskRow task={exampleTask({})} selected={false} onSelect={() => {}} assignees={[]} actorName={() => "Someone"} menuItems={[]} loop={{ round: 0 }} />
+  </WorkflowLoopGroup></WorkflowTaskRows>);
+  const loop = screen.getByRole("group", { name: "Draft and review, not started · up to 5 rounds" });
+  const dots = within(loop).getByRole("img", { name: "Not started · up to 5 rounds" }).querySelectorAll(".wf-rnd");
+  expect([...dots].map((d) => d.className)).toEqual(Array(5).fill("wf-rnd"));
+  expect(within(loop).queryByText(/^Round 0/)).toBeNull();
+});

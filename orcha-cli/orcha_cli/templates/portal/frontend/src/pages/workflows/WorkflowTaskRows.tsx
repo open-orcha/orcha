@@ -35,7 +35,7 @@ export const WorkflowTaskRow = forwardRef<HTMLElement, WorkflowTaskRowProps>(fun
   const warning = task.display_state.list_warning ? task.display_state.warning || "Released without stop confirmation: the worker may still be running outside Orcha." : null;
   const sub = subline ?? (withdrawn ? `Withdrawn by ${task.withdrawn_by ? actorName(task.withdrawn_by) : "Name unavailable"}`
     : task.display_state.release_available_at ? `Release lost worker becomes available at ${formatServerTime(task.display_state.release_available_at)}`
-    : [loop ? `Round ${loop.round}` : null, task.display_state.label, task.blockers[0]?.message].filter(Boolean).join(" · "));
+    : [loop && loop.round > 0 ? `Round ${loop.round}` : null, task.display_state.label, task.blockers[0]?.message].filter(Boolean).join(" · "));
   return <Row ref={(el) => { if (el) el.id = `workflow-task-${task.id}`; if (typeof ref === "function") ref(el); else if (ref) ref.current = el; }} id={`workflow-task-${task.id}`} className={`wf-row is-two${notSelected ? " wf-notsel" : ""}`} selected={selected} dim={withdrawn} onActivate={onSelect} title={task.title}>
     <span className="wf-st"><StatusIcon status={task.status} label={task.display_state.label} /></span>
     <span className="wf-title"><span>{task.title}</span><span className="wf-sub">{sub}</span></span>
@@ -63,10 +63,11 @@ export function WorkflowLoopGroup({ group, reviewTitle, ownerName, children }: {
   group: { name: string; current_round: number; max_rounds: number; exit_outcome: string; state: string };
   reviewTitle?: string; ownerName?: string; children: ReactNode;
 }) {
-  const round = Math.max(1, group.current_round);
+  // Round 0 means the loop has not opened yet (before Start, or on a path not reached): no round is lit.
+  const round = group.current_round;
   const paused = PAUSED.has(group.state);
   const ended = group.state === "exited" || group.state === "stopped";
-  const of = `Round ${round} of ${group.max_rounds}`;
+  const of = round < 1 ? `Not started · up to ${group.max_rounds} rounds` : `Round ${round} of ${group.max_rounds}`;
   return <div className="wf-loop" role="group" aria-label={`${group.name}, ${of.toLowerCase()}`}>
     <div className="wf-loop-h">
       <b>{group.name}</b><span aria-hidden="true">·</span><span>{of}</span>

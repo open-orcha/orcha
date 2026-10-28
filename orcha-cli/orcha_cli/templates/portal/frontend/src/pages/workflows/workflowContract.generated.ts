@@ -1,5 +1,5 @@
 // Generated from FastAPI OpenAPI slices. DO NOT EDIT.
-// Workflow source SHA-256: 09be48b3092179b5d9a13747bea69ee297b03b75e6bac9aa4218c3ec0a3cd7c7
+// Workflow source SHA-256: fbde7ecdac93124c6a0d1d8f116c62f23748d296abfcac0eacd261cd2cd554a2
 // Evidence GET source SHA-256: f2a794298f992bd3ff3955fa5d6aefc30a97e373794a3c1e9d03c8f46796853e
 // Regenerate with tools/generate-workflow-contract.mjs and both source files.
 
@@ -105,6 +105,7 @@ export type DisplayState = {
 export type EarlierRound = {
   "round": number;
   "ended"?: string | null;
+  "outcome"?: string | null;
   "findings"?: Array<RoundFinding>;
 };
 
@@ -1405,6 +1406,16 @@ export const workflowSchemas = {
         "type": "integer"
       },
       "ended": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "outcome": {
         "anyOf": [
           {
             "type": "string"

@@ -47,14 +47,16 @@ export function WorkflowRoundContext({ detail, task }: { detail: WorkflowDetail;
   };
   const round = group?.this_round;
   const back = task.routes?.find((r) => r.outcome === round?.outcome);
-  const why = !round || round.trigger === "initial" || !round.trigger ? "First round of the loop."
+  const started = !!group && group.round > 0;
+  const why = !started ? "The loop has not started yet."
+    : !round || round.trigger === "initial" || !round.trigger ? "First round of the loop."
     : round.trigger === "return" ? <>Round {group!.round - 1} review reported <b>{round.outcome}</b>{back ? ` (rule: ${round.outcome} ${back.destination === "return" ? "↺" : "→"} ${back.destination_task ? title(back.destination_task) : "the next step"})` : ""}.</>
     : `${TRIGGERS[round.trigger] ?? "This round"}.`;
   const received = !!round && (!!round.findings?.length || !!round.note || !!round.owner_note);
   return <div className="wf-round-context">
     {group && <Section>
       <dl className="wf-kv">
-        <dt>Round</dt><dd>{group.round} of {group.max_rounds} in “{group.name}”</dd>
+        <dt>Round</dt><dd>{started ? `${group.round} of ${group.max_rounds}` : `Not started · up to ${group.max_rounds} rounds`} in “{group.name}”</dd>
         <dt>Ends when</dt><dd>{group.is_review_step ? "This step" : group.review_step ?? "The review step"} reports “{group.exit_outcome}”</dd>
         <dt>Why it runs</dt><dd>{why}</dd>
         <dt>Waiting on</dt><dd>{task.blockers[0]?.message ?? task.display_state.label}</dd>

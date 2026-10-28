@@ -504,6 +504,12 @@ def test_round_two_prompt_carries_the_findings_and_the_rule(setup_workflow, flex
     assert "outcome was 'Changes requested'" in text and "   - No call to action" in text
     assert "Round 1 ended (return)" in text
     assert "report exactly one outcome" not in text  # Write declares no outcomes
+    # An earlier round carries the outcome that started it, so Review history can badge every round.
+    w = finish(setup_workflow, w, write)
+    w = finish(setup_workflow, w, review, "Changes requested", ["Still too long"])
+    context, _ = prompt(write)
+    earlier = context["round_context"]["group"]["earlier_rounds"]
+    assert [(r["round"], r["outcome"]) for r in earlier] == [(1, None), (2, "Changes requested")]
 
 
 def test_version_one_prompt_has_no_round_context(setup_workflow, monkeypatch):

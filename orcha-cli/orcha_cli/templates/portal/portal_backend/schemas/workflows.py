@@ -509,6 +509,7 @@ class ThisRound(BaseModel):
 class EarlierRound(BaseModel):
     round: int
     ended: str | None = None
+    outcome: str | None = None
     findings: list[RoundFinding] = Field(default_factory=list)
 
 

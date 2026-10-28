@@ -112,3 +112,22 @@ it.each([
   expect(screen.queryByRole("link", { name: /Reviewed file/ })).toBeNull();
   expect(screen.getByText(value.outcome ? /exact reviewed-task reference is unavailable/ : /after this review outcome is recorded/)).toBeVisible();
 });
+
+it("badges every loop round with its review outcome, and lists no rounds before the loop opens (x03)", async () => {
+  const loop = { id: "g1", name: "Draft and review", member_tasks: ["write", "review"], review_task: "review", exit_outcome: "Approved", max_rounds: 5, stall_rule: "findings_and_artifact", current_round: 3, state: "running" };
+  const review = exampleTask({ id: "review", title: "Review the post", repeat_group_id: "g1", reported_outcome: null });
+  vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ task_id: "review", outcomes: [], group: { name: "Draft and review", round: 3, max_rounds: 5, state: "running", is_review_step: true, exit_outcome: "Approved",
+    this_round: { trigger: "return", outcome: "Needs proof", findings: [{ text: "No source for the figure" }] },
+    earlier_rounds: [{ round: 1, ended: "return", outcome: null, findings: [] }, { round: 2, ended: "return", outcome: "Changes requested", findings: [{ text: "Too long" }] }] } })));
+  render(<MemoryRouter><WorkflowReviewHistory detail={exampleWorkflow({ semantics_version: 2, repeat_groups: [loop], tasks: [review], review_rounds: [] })} /></MemoryRouter>);
+  await waitFor(() => expect(screen.getByText("Changes requested")).toBeVisible());
+  const items = [...document.querySelectorAll(".wf-round ol.wf-earlier > li")].map((li) => li.textContent);
+  expect(items[0]).toMatch(/^Round 1 · Changes requested · sent backToo long$/);
+  expect(items[1]).toMatch(/^Round 2 · Needs proof · sent backNo source for the figure$/);
+  expect(items[2]).toMatch(/^Round 3 · in progress$/);
+  cleanup();
+  render(<MemoryRouter><WorkflowReviewHistory detail={exampleWorkflow({ semantics_version: 2, repeat_groups: [{ ...loop, current_round: 0, state: "open" }], tasks: [review], review_rounds: [] })} /></MemoryRouter>);
+  expect(screen.getByText("Not started · up to 5 rounds")).toBeVisible();
+  expect(screen.getByText(/No rounds yet/)).toBeVisible();
+  expect(document.querySelectorAll(".wf-round ol.wf-earlier > li")).toHaveLength(0);
+});

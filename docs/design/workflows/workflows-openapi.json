@@ -3415,6 +3415,17 @@
             ],
             "title": "Ended"
           },
+          "outcome": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outcome"
+          },
           "findings": {
             "items": {
               "$ref": "#/components/schemas/RoundFinding"

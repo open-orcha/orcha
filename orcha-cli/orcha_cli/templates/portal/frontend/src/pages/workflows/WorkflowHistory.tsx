@@ -120,15 +120,17 @@ function LoopRounds({ detail, group }: { detail: WorkflowDetail; group: RepeatGr
   if (!review) return null;
   const g = context?.group;
   // Round N's inputs hold round N-1's findings; the latest review's findings are on its reported outcome.
-  const rounds = Array.from({ length: Math.max(group.current_round, 1) }, (_, i) => i + 1).map((n) => {
+  // Round 0 means the loop has not opened yet, so there is no round to list.
+  const rounds = Array.from({ length: Math.max(group.current_round, 0) }, (_, i) => i + 1).map((n) => {
     const later = n + 1 === g?.round ? g.this_round : g?.earlier_rounds?.find((r) => r.round === n + 1);
     const ended = g?.earlier_rounds?.find((r) => r.round === n)?.ended;
     const latest = n === group.current_round ? review.reported_outcome : null;
-    return { n, findings: latest?.findings ?? later?.findings ?? [], outcome: latest?.outcome ?? (later ? (later as { outcome?: string | null }).outcome : null), ended };
+    return { n, findings: latest?.findings ?? later?.findings ?? [], outcome: latest?.outcome ?? later?.outcome ?? null, ended };
   });
   return <TimelineCard className="wf-round" label={group.name}>
-    <div className="wf-round-h"><h4><Icon name="refresh" cls="v2-ico" /> {group.name}</h4><Badge tone="neutral">Round {group.current_round} of {group.max_rounds}</Badge></div>
+    <div className="wf-round-h"><h4><Icon name="refresh" cls="v2-ico" /> {group.name}</h4><Badge tone="neutral">{group.current_round < 1 ? `Not started · up to ${group.max_rounds} rounds` : `Round ${group.current_round} of ${group.max_rounds}`}</Badge></div>
     <p className="wf-muted">Exits when {review.title} reports {group.exit_outcome.replaceAll("_", " ")}.</p>
+    {rounds.length === 0 && <p className="wf-muted">No rounds yet: the loop opens when its first step starts.</p>}
     <ol className="wf-earlier">{rounds.map((r) => <li key={r.n}><strong>Round {r.n}</strong>
       {r.outcome ? <> · <Badge tone={outcomeTone(r.outcome === group.exit_outcome ? "accepted" : "changes_requested")}>{r.outcome.replaceAll("_", " ")}</Badge></> : r.n === group.current_round ? <span className="wf-muted"> · in progress</span> : null}
       {r.ended && <span className="wf-muted"> · {ENDINGS[r.ended] ?? r.ended}</span>}

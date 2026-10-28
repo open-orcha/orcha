@@ -68,6 +68,7 @@ def round_context(cur, task, wid):
             },
             "earlier_rounds": [
                 {"round": r["round_number"], "ended": r["end_reason"],
+                 "outcome": (_json(r["inputs"]) or {}).get("outcome"),
                  "findings": _findings(_json(r["inputs"]))}
                 for r in rounds if r["round_number"] < group["current_round"]
             ],
