@@ -111,6 +111,11 @@ def _task_list_sql(where: str, order: str) -> str:
                       t.is_root, t.created_by_agent_id, t.result,
                       t.autonomy, t.autonomy_revision, t.autonomy_changed_at,
                       t.autonomy_changed_by, t.workflow_id, t.work_revision,
+                      -- GH #350 §4.14: hidden membership is presentation-only. Task views drop
+                      -- the workflow chip / crumb / section when this is true; the task itself,
+                      -- its status, messages, result and evidence are untouched.
+                      (SELECT w.hidden_at IS NOT NULL FROM workflows w
+                        WHERE w.id = t.workflow_id) AS workflow_hidden,
                       -- SPEC-4: per-task working agreement {{review_chain,handoff_to,autonomy,notes}}
                       -- (NULL when unset). Rides the shared task-list builder so it surfaces on the
                       -- snapshot poll + GET /containers/{{cid}}/tasks with no extra call.

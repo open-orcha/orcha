@@ -59,7 +59,7 @@ JSON_ALIASES = frozenset({
 # BOOLEAN type on SQLite and come back as 1/0; these aliases are turned back into bools.
 BOOL_ALIASES = frozenset({
     "cold_required", "escalated", "is_human", "pending", "requester_retired", "runtime_served",
-    "target_retired", "wake_enabled",
+    "target_retired", "wake_enabled", "workflow_hidden",
 })
 
 

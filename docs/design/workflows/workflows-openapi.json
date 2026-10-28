@@ -195,6 +195,23 @@
               "default": 50,
               "title": "Limit"
             }
+          },
+          {
+            "name": "visibility",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "visible",
+                "hidden",
+                "all"
+              ],
+              "type": "string",
+              "description": "GH #350 \u00a74.14: `visible` (default) excludes hidden workflows, `hidden` lists only hidden ones for the Hidden workflows view, `all` returns both.",
+              "default": "visible",
+              "title": "Visibility"
+            },
+            "description": "GH #350 \u00a74.14: `visible` (default) excludes hidden workflows, `hidden` lists only hidden ones for the Hidden workflows view, `all` returns both."
           }
         ],
         "responses": {
@@ -1500,6 +1517,56 @@
         "x-workflow-operation": "accept_goal"
       }
     },
+    "/api/workflows/{wid}/hide": {
+      "post": {
+        "summary": "Workflow Hide",
+        "operationId": "workflow_hide_api_workflows__wid__hide_post",
+        "parameters": [
+          {
+            "name": "wid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Wid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Mutation"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowDetail"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "x-workflow-operation": "hide"
+      }
+    },
     "/api/workflows/{wid}/import": {
       "post": {
         "summary": "Workflow Import",
@@ -1936,6 +2003,56 @@
             }
           }
         }
+      }
+    },
+    "/api/workflows/{wid}/restore": {
+      "post": {
+        "summary": "Workflow Restore",
+        "operationId": "workflow_restore_api_workflows__wid__restore_post",
+        "parameters": [
+          {
+            "name": "wid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Wid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Mutation"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowDetail"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "x-workflow-operation": "restore"
       }
     },
     "/api/workflows/{wid}/resume": {
@@ -2397,6 +2514,46 @@
           }
         },
         "x-workflow-operation": "transfer_owner"
+      }
+    },
+    "/api/workflows/{wid}/visibility-check": {
+      "get": {
+        "summary": "Workflow Visibility Check",
+        "description": "GH #350 \u00a74.14: fresh Hide / Restore eligibility (finished, no live worker turn,\ncurrent hidden state) with the exact blockers; read-only.",
+        "operationId": "workflow_visibility_check_api_workflows__wid__visibility_check_get",
+        "parameters": [
+          {
+            "name": "wid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Wid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisibilityCheck"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
       }
     }
   },
@@ -4745,6 +4902,68 @@
         ],
         "title": "ValidationError"
       },
+      "VisibilityCheck": {
+        "properties": {
+          "revision": {
+            "type": "integer",
+            "title": "Revision"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "paused",
+              "completed",
+              "cancelled"
+            ],
+            "title": "Status"
+          },
+          "hidden": {
+            "type": "boolean",
+            "title": "Hidden"
+          },
+          "task_count": {
+            "type": "integer",
+            "title": "Task Count"
+          },
+          "live_turns": {
+            "type": "integer",
+            "title": "Live Turns"
+          },
+          "can_hide": {
+            "type": "boolean",
+            "title": "Can Hide"
+          },
+          "can_restore": {
+            "type": "boolean",
+            "title": "Can Restore"
+          },
+          "blockers": {
+            "items": {
+              "$ref": "#/components/schemas/Blocker"
+            },
+            "type": "array",
+            "title": "Blockers"
+          }
+        },
+        "type": "object",
+        "required": [
+          "revision",
+          "title",
+          "status",
+          "hidden",
+          "task_count",
+          "live_turns",
+          "can_hide",
+          "can_restore"
+        ],
+        "title": "VisibilityCheck",
+        "description": "GH #350 (spec \u00a74.14): fresh server eligibility for Hide / Restore. `can_hide` is true\nonly for a completed or cancelled workflow with no live worker turn that is not already\nhidden; `can_restore` only for a hidden one. Blockers carry the exact reason."
+      },
       "WorkerToStop": {
         "properties": {
           "task_id": {
@@ -4993,6 +5212,56 @@
             "title": "Activity Truncated",
             "default": false
           },
+          "hidden": {
+            "type": "boolean",
+            "title": "Hidden",
+            "default": false
+          },
+          "hidden_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hidden At"
+          },
+          "hidden_by_human_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hidden By Human Id"
+          },
+          "hidden_by_alias": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hidden By Alias"
+          },
+          "hidden_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hidden Reason"
+          },
           "evidence_capability": {
             "$ref": "#/components/schemas/IntegrationCapability"
           },
@@ -5225,6 +5494,56 @@
             "type": "boolean",
             "title": "Activity Truncated",
             "default": false
+          },
+          "hidden": {
+            "type": "boolean",
+            "title": "Hidden",
+            "default": false
+          },
+          "hidden_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hidden At"
+          },
+          "hidden_by_human_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hidden By Human Id"
+          },
+          "hidden_by_alias": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hidden By Alias"
+          },
+          "hidden_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hidden Reason"
           },
           "evidence_capability": {
             "$ref": "#/components/schemas/IntegrationCapability"

@@ -160,6 +160,11 @@ def list_workflows(
     status: str | None = None,
     cursor: str | None = None,
     limit: int = Query(default=50, ge=1, le=200),
+    visibility: Literal["visible", "hidden", "all"] = Query(
+        default="visible",
+        description="GH #350 §4.14: `visible` (default) excludes hidden workflows, `hidden` "
+        "lists only hidden ones for the Hidden workflows view, `all` returns both.",
+    ),
 ):
     with db_cursor(readonly=True) as (_, cur):
         require_member_read(cur, request, cid)
@@ -169,6 +174,10 @@ def list_workflows(
         if status:
             query += " AND status=%s"
             params.append(status)
+        if visibility == "visible":
+            query += " AND hidden_at IS NULL"
+        elif visibility == "hidden":
+            query += " AND hidden_at IS NOT NULL"
         if cursor:
             query += " AND id>%s"
             params.append(cursor)
@@ -334,6 +343,17 @@ def workflow_cancellation_check(wid: str, request: Request):
     return _impact(wid, request, "cancellation")
 
 
+@app.get(
+    "/api/workflows/{wid}/visibility-check", response_model=model.VisibilityCheck
+)
+def workflow_visibility_check(wid: str, request: Request):
+    """GH #350 §4.14: fresh Hide / Restore eligibility (finished, no live worker turn,
+    current hidden state) with the exact blockers; read-only."""
+    with db_cursor(readonly=True) as (_, cur):
+        svc, _w, _actor = read_context(cur, request, wid)
+        return svc.visibility_check(wid)
+
+
 @app.post("/api/workflows/{wid}/import-preview", response_model=model.Preview)
 def workflow_import_preview(wid: str, body: model.ImportPreview, request: Request):
     with db_cursor(readonly=True) as (_, cur):
@@ -424,7 +444,7 @@ def _task_action(path, operation, body_model, *, allow_agent=False):
     )
 
 
-for name in ("pause", "resume", "cancel", "finish"):
+for name in ("pause", "resume", "cancel", "finish", "hide", "restore"):
     _workflow_action("/api/workflows/{wid}/" + name, name, model.Mutation)
 _workflow_action("/api/workflows/{wid}", "patch", model.WorkflowPatch, method="PATCH")
 _workflow_action(

@@ -1,5 +1,5 @@
 // Generated from FastAPI OpenAPI slices. DO NOT EDIT.
-// Workflow source SHA-256: 62aece78664480d405eba842e86c3e20b1d79b35434fd814a48f29fdf819c86c
+// Workflow source SHA-256: bf57f176fe49c24513d7669e6bd57ec73561818512a4cb8d3bc57b1bd126482c
 // Evidence GET source SHA-256: f2a794298f992bd3ff3955fa5d6aefc30a97e373794a3c1e9d03c8f46796853e
 // Regenerate with tools/generate-workflow-contract.mjs and both source files.
 
@@ -408,6 +408,18 @@ export type ValidationError = {
   "ctx"?: Record<string, unknown>;
 };
 
+export type VisibilityCheck = {
+  "revision": number;
+  "title": string;
+  "status": "active" | "paused" | "completed" | "cancelled";
+  "hidden": boolean;
+  "task_count": number;
+  "live_turns": number;
+  "can_hide": boolean;
+  "can_restore": boolean;
+  "blockers"?: Array<Blocker>;
+};
+
 export type WorkerToStop = {
   "task_id": string;
   "agent_id"?: string | null;
@@ -452,6 +464,11 @@ export type WorkflowDetail = {
   "review_rounds"?: Array<ReviewHistory>;
   "activity"?: Array<Activity>;
   "activity_truncated"?: boolean;
+  "hidden"?: boolean;
+  "hidden_at"?: string | null;
+  "hidden_by_human_id"?: string | null;
+  "hidden_by_alias"?: string | null;
+  "hidden_reason"?: string | null;
   "evidence_capability"?: IntegrationCapability;
   "created_task_ids"?: Record<string, string>;
 };
@@ -492,6 +509,11 @@ export type WorkflowImpact = {
   "review_rounds"?: Array<ReviewHistory>;
   "activity"?: Array<Activity>;
   "activity_truncated"?: boolean;
+  "hidden"?: boolean;
+  "hidden_at"?: string | null;
+  "hidden_by_human_id"?: string | null;
+  "hidden_by_alias"?: string | null;
+  "hidden_reason"?: string | null;
   "evidence_capability"?: IntegrationCapability;
   "created_task_ids"?: Record<string, string>;
   "impact": Impact;
@@ -650,6 +672,7 @@ export type WorkflowModels = {
   TaskMutation: TaskMutation;
   TransferOwner: TransferOwner;
   ValidationError: ValidationError;
+  VisibilityCheck: VisibilityCheck;
   WorkerToStop: WorkerToStop;
   WorkflowCreate: WorkflowCreate;
   WorkflowDetail: WorkflowDetail;
@@ -2676,6 +2699,57 @@ export const workflowSchemas = {
       "type"
     ]
   },
+  "VisibilityCheck": {
+    "properties": {
+      "revision": {
+        "type": "integer"
+      },
+      "title": {
+        "type": "string"
+      },
+      "status": {
+        "type": "string",
+        "enum": [
+          "active",
+          "paused",
+          "completed",
+          "cancelled"
+        ]
+      },
+      "hidden": {
+        "type": "boolean"
+      },
+      "task_count": {
+        "type": "integer"
+      },
+      "live_turns": {
+        "type": "integer"
+      },
+      "can_hide": {
+        "type": "boolean"
+      },
+      "can_restore": {
+        "type": "boolean"
+      },
+      "blockers": {
+        "items": {
+          "$ref": "#/components/schemas/Blocker"
+        },
+        "type": "array"
+      }
+    },
+    "type": "object",
+    "required": [
+      "revision",
+      "title",
+      "status",
+      "hidden",
+      "task_count",
+      "live_turns",
+      "can_hide",
+      "can_restore"
+    ]
+  },
   "WorkerToStop": {
     "properties": {
       "task_id": {
@@ -2886,6 +2960,50 @@ export const workflowSchemas = {
       "activity_truncated": {
         "type": "boolean"
       },
+      "hidden": {
+        "type": "boolean"
+      },
+      "hidden_at": {
+        "anyOf": [
+          {
+            "type": "string",
+            "format": "date-time"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "hidden_by_human_id": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "hidden_by_alias": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "hidden_reason": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
       "evidence_capability": {
         "$ref": "#/components/schemas/IntegrationCapability"
       },
@@ -3084,6 +3202,50 @@ export const workflowSchemas = {
       },
       "activity_truncated": {
         "type": "boolean"
+      },
+      "hidden": {
+        "type": "boolean"
+      },
+      "hidden_at": {
+        "anyOf": [
+          {
+            "type": "string",
+            "format": "date-time"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "hidden_by_human_id": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "hidden_by_alias": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "hidden_reason": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
       },
       "evidence_capability": {
         "$ref": "#/components/schemas/IntegrationCapability"
@@ -3950,6 +4112,12 @@ export const workflowRoutes = [
     "body": "AcceptBasis"
   },
   {
+    "path": "/api/workflows/{wid}/hide",
+    "method": "post",
+    "operation": "hide",
+    "body": "Mutation"
+  },
+  {
     "path": "/api/workflows/{wid}/import",
     "method": "post",
     "operation": "import",
@@ -3993,6 +4161,12 @@ export const workflowRoutes = [
   {
     "path": "/api/workflows/{wid}/release-check",
     "method": "get"
+  },
+  {
+    "path": "/api/workflows/{wid}/restore",
+    "method": "post",
+    "operation": "restore",
+    "body": "Mutation"
   },
   {
     "path": "/api/workflows/{wid}/resume",
@@ -4047,5 +4221,9 @@ export const workflowRoutes = [
     "method": "post",
     "operation": "transfer_owner",
     "body": "TransferOwner"
+  },
+  {
+    "path": "/api/workflows/{wid}/visibility-check",
+    "method": "get"
   }
 ] as const;

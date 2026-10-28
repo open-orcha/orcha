@@ -359,10 +359,34 @@ class WorkflowDetail(BaseModel):
     review_rounds: list[ReviewHistory] = Field(default_factory=list)
     activity: list[Activity] = Field(default_factory=list)
     activity_truncated: bool = False
+    # GH #350 (spec §4.14): reversible deactivation is a VISIBILITY state, not a lifecycle
+    # status. A hidden workflow keeps its completed/cancelled status, tasks, evidence and
+    # history; it only leaves the usual list and ordinary task views until restored.
+    hidden: bool = False
+    hidden_at: datetime | None = None
+    hidden_by_human_id: str | None = None
+    hidden_by_alias: str | None = None
+    hidden_reason: str | None = None
     evidence_capability: IntegrationCapability = Field(
         default_factory=IntegrationCapability
     )
     created_task_ids: dict[str, str] = Field(default_factory=dict)
+
+
+class VisibilityCheck(BaseModel):
+    """GH #350 (spec §4.14): fresh server eligibility for Hide / Restore. `can_hide` is true
+    only for a completed or cancelled workflow with no live worker turn that is not already
+    hidden; `can_restore` only for a hidden one. Blockers carry the exact reason."""
+
+    revision: int
+    title: str
+    status: Literal["active", "paused", "completed", "cancelled"]
+    hidden: bool
+    task_count: int
+    live_turns: int
+    can_hide: bool
+    can_restore: bool
+    blockers: list[Blocker] = Field(default_factory=list)
 
 
 class ImpactTask(BaseModel):

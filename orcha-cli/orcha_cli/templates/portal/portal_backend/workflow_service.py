@@ -458,6 +458,9 @@ class WorkflowService:
                 return "workflow_completed"
             elif kind == "not_terminal" and w["status"] in {"completed", "cancelled"}:
                 return "workflow_terminal"
+            elif kind == "terminal" and w["status"] not in {"completed", "cancelled"}:
+                # GH #350 §4.14: hiding never stops work or evades Finish.
+                return "workflow_not_finished"
             return None
 
         def action(
@@ -824,6 +827,7 @@ class WorkflowService:
             (w["container_id"],),
         )
         w["graph_revision"] = guard["revision"] if guard else 1
+        live_turns = self.live_turns(wid)
         full = len(s["tasks"]) >= w["task_limit"]
         startable = any(
             t["preparation_state"] == "prepared"
@@ -883,6 +887,23 @@ class WorkflowService:
             ),
             action("transfer_owner", "workflow_or_project_owner", "not_terminal"),
             action("move", "workflow_owner", "active"),
+            # GH #350 §4.14: reversible deactivation. Hide needs a finished workflow with
+            # no live worker turn; restore needs a hidden one and never starts work.
+            action(
+                "hide",
+                "workflow_or_project_owner",
+                "terminal",
+                first(
+                    (bool(w["hidden_at"]), "workflow_hidden"),
+                    (bool(live_turns), "worker_live"),
+                ),
+            ),
+            action(
+                "restore",
+                "workflow_or_project_owner",
+                "any",
+                first((not w["hidden_at"], "workflow_visible")),
+            ),
         ]
         for o in s["objectives"]:
             o["available_actions"] = [
@@ -893,7 +914,16 @@ class WorkflowService:
             "SELECT * FROM workflow_history WHERE workflow_id=%s ORDER BY created_at DESC,id DESC LIMIT 101",
             (wid,),
         )
+        hidden_by = (
+            self.one(
+                "SELECT alias FROM agents WHERE id=%s", (w["hidden_by_human_id"],)
+            )
+            if w.get("hidden_by_human_id")
+            else None
+        )
         w.update(
+            hidden=bool(w.get("hidden_at")),
+            hidden_by_alias=hidden_by["alias"] if hidden_by else None,
             capability={
                 "workflow_read": True,
                 "workflow_human_write": can_write,
@@ -2736,6 +2766,82 @@ class WorkflowService:
                 "DELETE FROM agent_self_wake WHERE task_id=%s", (task["id"],)
             )
         self.audit(w, p, "workflow_cancelled", {"reason": b["reason"]})
+
+    def live_turns(self, wid):
+        """Open worker turns (reserved/running/awaiting_review/stopping/recovery_needed)."""
+        row = self.one(
+            "SELECT count(*) AS n FROM workflow_executions WHERE workflow_id=%s AND state IN "
+            "('reserved','running','awaiting_review','stopping','recovery_needed')",
+            (wid,),
+        )
+        return int(row["n"]) if row else 0
+
+    def visibility_check(self, wid):
+        """GH #350 §4.14: fresh, read-only Hide / Restore eligibility with exact blockers.
+        Hiding is a presentation change for FINISHED work only: it never stops a worker,
+        never cancels, and never bypasses Finish. Restore never starts anything."""
+        w = self.workflow(wid)
+        task_count = self.one(
+            "SELECT count(*) AS n FROM tasks WHERE workflow_id=%s", (wid,)
+        )["n"]
+        live = self.live_turns(wid)
+        hidden = bool(w["hidden_at"])
+        blockers = []
+        if hidden:
+            blockers.append(
+                {"code": "workflow_hidden", "message": "This workflow is already hidden."}
+            )
+        if w["status"] not in {"completed", "cancelled"}:
+            blockers.append(
+                {
+                    "code": "workflow_not_finished",
+                    "message": "Finish or cancel the workflow before hiding it. "
+                    "Hiding never stops work.",
+                }
+            )
+        if live:
+            blockers.append(
+                {
+                    "code": "worker_live",
+                    "message": f"{live} worker turn(s) are still open. Wait for them to "
+                    "stop before hiding this workflow.",
+                }
+            )
+        return {
+            "revision": w["revision"],
+            "title": w["title"],
+            "status": w["status"],
+            "hidden": hidden,
+            "task_count": int(task_count),
+            "live_turns": live,
+            "can_hide": not blockers,
+            "can_restore": hidden,
+            "blockers": blockers,
+        }
+
+    def op_hide(self, w, actor, b, tid):
+        p = self.owner(w, actor, project_owner=True)
+        check = self.visibility_check(w["id"])
+        if not check["can_hide"]:
+            first = check["blockers"][0]
+            conflict(first["code"], first["message"])
+        self.cur.execute(
+            "UPDATE workflows SET hidden_at=%s,hidden_by_human_id=%s,hidden_reason=%s WHERE id=%s",
+            (sql.utcnow(), p["id"], b.get("reason") or None, w["id"]),
+        )
+        # Presentation only: no task, dependency, evidence or execution row changes.
+        self.audit(w, p, "workflow_hidden", {"reason": b.get("reason") or ""})
+
+    def op_restore(self, w, actor, b, tid):
+        p = self.owner(w, actor, project_owner=True)
+        if not w["hidden_at"]:
+            conflict("workflow_visible", "This workflow is not hidden.")
+        self.cur.execute(
+            "UPDATE workflows SET hidden_at=NULL,hidden_by_human_id=NULL,hidden_reason=NULL WHERE id=%s",
+            (w["id"],),
+        )
+        # Status stays completed/cancelled, so restoring can never start a worker.
+        self.audit(w, p, "workflow_restored", {"reason": b.get("reason") or ""})
 
     def op_accept_goal(self, w, actor, b, tid):
         p = self.owner(w, actor)
