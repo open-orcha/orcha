@@ -2,16 +2,12 @@ import { useState } from "react";
 import { Button } from "../../components/primitives/Button";
 import { availableActionReason, workflowPaths, workflowRequest } from "./workflowApi";
 import { evidenceReference, evidenceSupplier, evidenceUsable, WorkflowEvidencePanel, type EvidenceSupplier } from "./WorkflowEvidence";
-import type { EvidenceReference, RoutingPreview, StepRoute, WorkflowDetail, WorkflowTask } from "./workflowContract.generated";
+import type { EvidenceReference, RoutingPreview, WorkflowDetail, WorkflowTask } from "./workflowContract.generated";
 import type { DraftScope } from "./workflowDraft";
 import { useWorkflowForm } from "./workflowFormState";
 import { sendWorkflowOperation, useWorkflowOperation } from "./workflowOperations";
 import { WorkflowOperationNotice } from "./WorkflowOperationNotice";
-
-const ROUTE_LABELS: Record<StepRoute["destination"], string> = {
-  next: "the next steps proceed", step: "goes to", return: "goes back to", ask_owner: "the owner decides what happens next",
-  exit_group: "the loop ends", stop: "the workflow stops here",
-};
+import { ROUTE_LABELS } from "./WorkflowRouteSummary";
 
 /** Plan approval and result acceptance are different decisions. This form only
  * accepts/rejects the exact submitted result, using the workflow receipt route. A step that

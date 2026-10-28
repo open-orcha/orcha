@@ -95,6 +95,27 @@ it("start submits only selected prepared task revisions and leaves human holds a
   const calls = fetch.mock.calls as unknown as [string, RequestInit][]; const body = JSON.parse(calls.find(([url]) => url.endsWith("/start"))![1].body as string);
   expect(body.task_ids).toEqual(["build"]); expect(body.task_revisions).toEqual({ build: 3 }); expect(body.holds).toEqual(["start"]); expect(body.expected_revision).toBe(7);
 });
+it("start review lists each loop, the rules that change the route and the agent-turn allowance", async () => {
+  const detail = exampleWorkflow({ capability: writeCapability, available_actions: [{ action: "start", enabled: true }], semantics_version: 2, turn_allowance: 30, turns_used: 4,
+    tasks: [exampleTask({ outcomes: [{ name: "Approved" }, { name: "Changes" }], routes: [{ outcome: "Approved", destination: "exit_group" }, { outcome: "Changes", destination: "return", destination_task: "ios" }] }),
+      exampleTask({ id: "ios", title: "Build iOS" })],
+    repeat_groups: [{ id: "g", name: "Draft and review", member_tasks: ["ios", "build"], review_task: "build", exit_outcome: "Approved", max_rounds: 3, current_round: 0, state: "open", stall_rule: "off" }] });
+  vi.stubGlobal("fetch", vi.fn(async (url: string) => jsonResponse(url.includes("start-check") ? exampleImpact(detail, url) : detail)));
+  render(<MemoryRouter><WorkflowActions detail={detail} scope={scope()} verified stale={false} onSaved={vi.fn()} /></MemoryRouter>);
+  fireEvent.click(screen.getByRole("button", { name: "Review start" }));
+  const route = await screen.findByRole("region", { name: "Expected route" });
+  expect(within(route).getByText(/Build iOS, Build Android repeat until Build Android reports “Approved”\. Up to 3 rounds; at the limit the owner decides\./)).toBeVisible();
+  expect(within(route).queryByText(/same findings/)).toBeNull();
+  expect(within(route).getByText("Build Android: if “Changes”, goes back to Build iOS.")).toBeVisible();
+  expect(within(route).getByText(/Agent-turn allowance for this run: 30 \(4 used\)/)).toBeVisible();
+});
+it("start review shows no route section for a simple workflow", async () => {
+  const detail = exampleWorkflow({ capability: writeCapability, available_actions: [{ action: "start", enabled: true }] });
+  vi.stubGlobal("fetch", vi.fn(async (url: string) => jsonResponse(url.includes("start-check") ? exampleImpact(detail, url) : detail)));
+  render(<MemoryRouter><WorkflowActions detail={detail} scope={scope()} verified stale={false} onSaved={vi.fn()} /></MemoryRouter>);
+  fireEvent.click(screen.getByRole("button", { name: "Review start" })); await screen.findByRole("checkbox", { name: /Build Android/ });
+  expect(screen.queryByRole("region", { name: "Expected route" })).toBeNull();
+});
 it("finish reads fresh blockers and never combines goal acceptance with Finish", async () => {
   const detail = exampleWorkflow({ capability: writeCapability, available_actions: [{ action: "finish", enabled: true }], completion: { can_finish: true, blockers: [] } });
   const fetch = vi.fn(async (url: string) => jsonResponse(url.endsWith("/completion-check") ? { can_finish: false, blockers: [{ code: "live_worker", message: "Build Android is still stopping", task_id: "build" }] } : detail));

@@ -12,6 +12,7 @@ import { WorkflowAcceptance } from "./WorkflowAcceptance";
 import { acceptanceAttributionUnavailable, samePersonOutsideAcceptance, WorkflowTaskAcceptanceRecord } from "./WorkflowTaskAcceptanceRecord";
 import { useWorkflowForm } from "./workflowFormState";
 import { impactMatches, readWorkflowImpact, WorkflowImpactView } from "./WorkflowImpact";
+import { WorkflowRouteSummary } from "./WorkflowRouteSummary";
 
 export type WorkflowAction = "start" | "pause" | "resume" | "cancel" | "finish";
 type Action = WorkflowAction;
@@ -117,6 +118,7 @@ export function WorkflowActions({ detail, scope, verified, stale, onSaved, reque
           {!checkedSelection && <p>Your task choices need a fresh check before Start.</p>}
           <Button disabled={busy || unresolved || stale || (!selected.length && !allAccepted)} onClick={() => void review("start")}>Check selected tasks</Button>
           {checkedSelection && impact && <WorkflowImpactView impact={impact} detail={preview} />}
+          <WorkflowRouteSummary detail={preview} />
         </>}
         {action === "pause" && <p>Running work may finish. New tasks will not start until you resume the workflow.</p>}
         {action === "resume" && <p>Eligible tasks may start after resuming. Dependencies, holds and task autonomy still apply.</p>}
