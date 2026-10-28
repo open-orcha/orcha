@@ -52,11 +52,13 @@ async def _verify(client, tid, human_id, approve=True, feedback=None):
 
 
 async def _task_verified(client, make_task, work_headers, alias, aid, human_id, *,
-                         title, cost=None, reject_first=False):
+                         title, cost=None, reject_first=False, extra_cost=None):
     t = await make_task(title, "dod", assignee_alias=alias)
     tid = t["id"]
     if cost is not None:
         await _run(client, aid, tid, cost=cost)
+    if extra_cost is not None:
+        await _run(client, aid, tid, cost=extra_cost)
     if reject_first:
         await _done(client, work_headers, aid, tid)
         await _verify(client, tid, human_id, approve=False, feedback="needs tests")
@@ -154,13 +156,12 @@ async def test_full_scenario_per_agent_and_project(client, container, make_agent
     pixel = (await make_agent("Pixel"))["agent_id"]
 
     # Forge: 4 verified, one after a rejection; 3 fully metered, 1 on a subscription (no cost)
-    f1 = await _task_verified(client, make_task, work_headers, "Forge", forge, human, title="f1", cost=0.40)
+    f1 = await _task_verified(client, make_task, work_headers, "Forge", forge, human, title="f1", cost=0.40, extra_cost=0.10)
     f2 = await _task_verified(client, make_task, work_headers, "Forge", forge, human, title="f2", cost=0.60,
                               reject_first=True)
     await _task_verified(client, make_task, work_headers, "Forge", forge, human, title="f3", cost=0.20)
     await _task_verified(client, make_task, work_headers, "Forge", forge, human, title="f4", cost=None)
-    # a Forge run with NO cost on f3 as well → f3 becomes not metered
-    await _run(client, forge, f1, cost=0.10)  # f1 total 0.50, still fully priced
+    # f1 has two runs before verification: total 0.50, still fully priced.
     # backdate f1's start so the median has spread
     db.execute(f"UPDATE tasks SET started_at = {ts_ago(7200)} WHERE id=%s", (f1,))
 

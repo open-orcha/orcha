@@ -114,7 +114,7 @@ def newest_answer_task_id(cur, aid: str, delivered_ts):
     task_id = (answer["payload"] or {}).get("originating_task_id") if answer else None
     if not task_id:
         return None
-    cur.execute("SELECT 1 FROM tasks WHERE id=%s", (task_id,))
+    cur.execute("SELECT 1 FROM tasks WHERE id=%s AND status NOT IN ('completed','cancelled')", (task_id,))
     return task_id if cur.fetchone() else None
 
 
@@ -124,6 +124,7 @@ def ready_task_ids(cur, aid: str, cid: str):
         """SELECT t.id FROM tasks t
            JOIN agent_tasks at ON at.task_id = t.id AND at.agent_id = %s
            WHERE t.container_id = %s AND t.status = 'ready'
+             AND at.assignment_status <> 'done'
              AND t.is_root = false
            ORDER BY t.priority, t.created_at""",
         (aid, cid),

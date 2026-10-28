@@ -26,8 +26,12 @@ def resolve_context_task_id(
     A parked task (a Workflow task waiting for its turn) never owns a wake: it
     cannot launch, so binding to it would drop the wake. Its rows stay pending.
     """
-    if initial_task_id is not None or not pending:
+    if (initial_task_id is not None
+            and str(initial_task_id) not in parked_task_ids
+            and drain_task_status(cur, initial_task_id) not in (None, "completed", "cancelled")):
         return initial_task_id
+    if not pending:
+        return None
     cur.execute(
         f"""SELECT e.event_name, e.payload, e.target_id FROM agent_events e
            WHERE e.event_key=%s AND e.ts > %s AND e.ts <= %s
@@ -150,6 +154,7 @@ def parked_pending_events(
     task_bound_bucket: str,
     directive_bucket: str,
     is_parked: Callable[[Any], bool],
+    skip_event_ids: Collection = (),
 ):
     """Split pending rows into those waiting on a parked task and the rest.
 
@@ -174,6 +179,8 @@ def parked_pending_events(
     parked_ids, parked_tasks = set(), set()
     unparked, newest = 0, None
     for row in cur.fetchall():
+        if row["id"] in skip_event_ids:
+            continue
         classification = drain_class(
             cur, row["event_name"], row["payload"], target_id=row["target_id"]
         )

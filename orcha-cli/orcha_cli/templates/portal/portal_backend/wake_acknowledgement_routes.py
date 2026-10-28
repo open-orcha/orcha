@@ -1,6 +1,6 @@
 """Acknowledge wake delivery, release leases, and advance handled-event floors."""
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 from portal_backend import sql
 from portal_backend.agent_status import log_event
@@ -234,3 +234,30 @@ def events_ack_handled(aid: str, body: EventsAckHandled):
         "handled": len(event_ids),
         "delivered_ts": new_floor,
     }
+
+
+from pydantic import BaseModel, Field
+from portal_backend.stale_wake_events import reconcile_events
+
+
+class StaleEventReconciliation(BaseModel):
+    event_ids: list[int] = Field(..., max_length=200)
+    dry_run: bool = True
+
+
+@app.post("/api/agents/{aid}/events/reconcile-stale")
+def reconcile_stale_events(aid: str, body: StaleEventReconciliation, request: Request):
+    """Preview or acknowledge only named obsolete notifications using current state.
+
+    No cursor advance, queue deletion, workflow change or launch. Prompts and answers
+    remain pending. Apply records exact IDs and reasons in the audit history.
+    """
+    if not valid_uuid(aid):
+        raise HTTPException(400, "agent_id is not a valid UUID")
+    with db_cursor() as (conn, cur):
+        agent = require_agent(cur, aid)
+        from portal_backend.identity_routes import require_machine_lane_member
+        require_machine_lane_member(cur, request, str(agent["container_id"]))
+        result = reconcile_events(cur, aid, str(agent["container_id"]), body.event_ids, dry_run=body.dry_run)
+        conn.commit()
+    return result

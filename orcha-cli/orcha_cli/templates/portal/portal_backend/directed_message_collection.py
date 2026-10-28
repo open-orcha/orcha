@@ -65,6 +65,10 @@ def collect_directed_messages(
         event_name = row["event_name"]
         if event_name == "task_message":
             event_task_id = payload.get("task_id")
+            from portal_backend.drain_classification import _drain_task_status
+            if _drain_task_status(cur, event_task_id) in ("completed", "cancelled"):
+                included_ts = row["ts"]
+                continue
             preview = payload.get("preview") or ""
             feed = ""
             message_id = payload.get("message_id")
@@ -165,7 +169,7 @@ def collect_directed_messages(
                 {"text": message, "task_id": event_task_id, "bucket": bucket}
             )
             budget -= len(message)
-            if event_task_id:
+            if event_task_id and bucket in ("task_bound", "directive", "new_work"):
                 wake_task_id = event_task_id
         included_ts = row["ts"]
     return messages, wake_task_id, ack_through_ts
