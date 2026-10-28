@@ -1,5 +1,5 @@
 // Generated from FastAPI OpenAPI slices. DO NOT EDIT.
-// Workflow source SHA-256: 187cf006b92394932a15f176c810aa02a640cfe24251d8c5d1d689b50b84d815
+// Workflow source SHA-256: 83e42ee8052b68484bfed6c3a43baa63ffb44d99b53e8da77c2dc8fb867465a8
 // Evidence GET source SHA-256: f2a794298f992bd3ff3955fa5d6aefc30a97e373794a3c1e9d03c8f46796853e
 // Regenerate with tools/generate-workflow-contract.mjs and both source files.
 
@@ -130,6 +130,21 @@ export type Finding = {
   "id"?: string | null;
   "text": string;
   "severity"?: "blocker" | "major" | "minor" | "note" | null;
+};
+
+export type FlowEdit = {
+  "expected_revision": number;
+  "idempotency_key": string;
+  "reason"?: string;
+  "steps"?: Array<FlowStep>;
+  "repeat_groups"?: Array<RepeatGroup>;
+};
+
+export type FlowStep = {
+  "task_id": string;
+  "outcomes"?: Array<StepOutcome>;
+  "routes"?: Array<StepRoute>;
+  "expected_work_revision"?: number | null;
 };
 
 export type HTTPValidationError = {
@@ -791,6 +806,8 @@ export type WorkflowModels = {
   EvidenceItem: EvidenceItem;
   EvidenceReference: EvidenceReference;
   Finding: Finding;
+  FlowEdit: FlowEdit;
+  FlowStep: FlowStep;
   HTTPValidationError: HTTPValidationError;
   Impact: Impact;
   ImpactTask: ImpactTask;
@@ -1506,6 +1523,80 @@ export const workflowSchemas = {
     "type": "object",
     "required": [
       "text"
+    ]
+  },
+  "FlowEdit": {
+    "properties": {
+      "expected_revision": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "idempotency_key": {
+        "type": "string",
+        "maxLength": 200,
+        "minLength": 1
+      },
+      "reason": {
+        "type": "string",
+        "maxLength": 4000
+      },
+      "steps": {
+        "items": {
+          "$ref": "#/components/schemas/FlowStep"
+        },
+        "type": "array",
+        "maxItems": 100
+      },
+      "repeat_groups": {
+        "items": {
+          "$ref": "#/components/schemas/RepeatGroup"
+        },
+        "type": "array",
+        "maxItems": 5
+      }
+    },
+    "additionalProperties": false,
+    "type": "object",
+    "required": [
+      "expected_revision",
+      "idempotency_key"
+    ]
+  },
+  "FlowStep": {
+    "properties": {
+      "task_id": {
+        "type": "string"
+      },
+      "outcomes": {
+        "items": {
+          "$ref": "#/components/schemas/StepOutcome"
+        },
+        "type": "array",
+        "maxItems": 8
+      },
+      "routes": {
+        "items": {
+          "$ref": "#/components/schemas/StepRoute"
+        },
+        "type": "array",
+        "maxItems": 8
+      },
+      "expected_work_revision": {
+        "anyOf": [
+          {
+            "type": "integer",
+            "minimum": 1
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "additionalProperties": false,
+    "type": "object",
+    "required": [
+      "task_id"
     ]
   },
   "HTTPValidationError": {
@@ -5135,6 +5226,12 @@ export const workflowRoutes = [
     "method": "post",
     "operation": "finish",
     "body": "Mutation"
+  },
+  {
+    "path": "/api/workflows/{wid}/flow",
+    "method": "put",
+    "operation": "flow",
+    "body": "FlowEdit"
   },
   {
     "path": "/api/workflows/{wid}/goal/accept",

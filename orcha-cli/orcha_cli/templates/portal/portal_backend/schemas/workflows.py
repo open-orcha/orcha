@@ -264,6 +264,26 @@ class OutcomeReport(TaskMutation):
     note: str = Field(default="", max_length=4000)
 
 
+class FlowStep(Input):
+    """One step's outcomes and next-step rules in a flow edit. `expected_work_revision`
+    is optional; when given, the edit is refused if the step's work changed meanwhile."""
+
+    task_id: str
+    outcomes: list[StepOutcome] = Field(default_factory=list, max_length=8)
+    routes: list[StepRoute] = Field(default_factory=list, max_length=8)
+    expected_work_revision: int | None = Field(default=None, ge=1)
+
+
+class FlowEdit(Mutation):
+    """Replace the workflow's outcomes, next-step rules and repeat groups (version 2).
+    Steps left out have none. After Start a started step keeps its outcomes and rules,
+    and a repeat group with a started step keeps its steps, review step, ending outcome
+    and stall rule; its round limit can still be raised."""
+
+    steps: list[FlowStep] = Field(default_factory=list, max_length=100)
+    repeat_groups: list[RepeatGroup] = Field(default_factory=list, max_length=5)
+
+
 class LoopDecision(Mutation):
     """The owner's choice when a loop or an outcome waits for them. Every decision is
     recorded beside the outcome that caused it."""

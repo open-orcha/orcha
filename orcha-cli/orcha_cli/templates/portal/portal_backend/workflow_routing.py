@@ -278,6 +278,50 @@ def record_definition_version(svc, w, actor_id, reason, body):
 STARTED = {"in_progress", "needs_verification", "completed"}
 
 
+def _step_key(outcomes, routes, tid):
+    return (
+        sorted((o["name"].casefold(), o.get("kind", "custom")) for o in outcomes.get(tid, [])),
+        sorted(
+            (r["outcome"].casefold(), r["destination"], r.get("destination_task") or "")
+            for r in routes.get(tid, [])
+        ),
+    )
+
+
+_GROUP_FROZEN = ("member_tasks", "review_task", "exit_outcome", "stall_rule")
+
+
+def frozen_changes(started, old, new):
+    """Per-step freeze (HLD D2 as revised): the parts of a flow edit that touch work
+    already started. `old`/`new` are (outcomes, routes, groups); returns
+    [{task_id?, group?, reason}] — empty when the edit only changes unstarted steps."""
+    (old_o, old_r, old_g), (new_o, new_r, new_g) = old, new
+    found = []
+    for tid in sorted(started):
+        if _step_key(old_o, old_r, tid) != _step_key(new_o, new_r, tid):
+            found.append({"task_id": tid, "reason": "step_rules"})
+    before = {g["name"].casefold(): g for g in old_g}
+    after = {g["name"].casefold(): g for g in new_g}
+    for name in sorted(set(before) | set(after)):
+        o, n = before.get(name), after.get(name)
+        members = set((o or {}).get("member_tasks", [])) | set((n or {}).get("member_tasks", []))
+        if not members & set(started):
+            continue
+        if o is None or n is None:
+            found.append({"group": (o or n)["name"], "reason": "group_added" if o is None else "group_removed"})
+            continue
+        if any(
+            (o.get(k) or "findings_and_artifact" if k == "stall_rule" else o.get(k))
+            != (n.get(k) or "findings_and_artifact" if k == "stall_rule" else n.get(k))
+            for k in _GROUP_FROZEN
+        ):
+            found.append({"group": o["name"], "reason": "group_shape"})
+        elif int(n["max_rounds"]) < int(o.get("current_round") or 0):
+            found.append({"group": o["name"], "reason": "below_current_round"})
+    return found
+
+
+
 def propagate_unselected(seed, tasks, dependencies):
     """Steps left without any selected prerequisite are not selected either."""
     out = set(seed)

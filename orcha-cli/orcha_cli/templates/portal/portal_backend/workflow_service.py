@@ -1890,6 +1890,8 @@ class WorkflowService:
             {"tasks": ids},
             scope=True,
         )
+        if w["launch_enabled"]:
+            self._record_definition(w, actor, "edit")
 
     def op_import(self, w, actor, b, tid):
         p = self.owner(w, actor)
@@ -2195,6 +2197,8 @@ class WorkflowService:
             "UPDATE tasks SET work_revision=work_revision+1 WHERE id=%s", (tid,)
         )
         self.audit(w, p, "workflow_dependencies_changed", b, tid, scope=True)
+        if w["launch_enabled"]:
+            self._record_definition(w, actor, "edit")
 
     def reserve_turn(self, tid, actor, run_id=None):
         require_capability()
@@ -2767,6 +2771,69 @@ class WorkflowService:
             "artifact_unchanged": True,
             "method": "finding text and file versions",
         }
+
+    def _started(self, t):
+        return bool(
+            t["started_at"]
+            or t["status"] in routing.STARTED
+            or self.one(
+                "SELECT id FROM workflow_executions WHERE task_id=%s LIMIT 1", (t["id"],)
+            )
+        )
+
+    def op_flow(self, w, actor, b, tid):
+        """Replace outcomes, next-step rules and repeat groups. Before Start anything
+        can change; after Start started steps are frozen (per-step freeze) and each
+        accepted edit is recorded as a definition version with reason `edit`."""
+        p = self.owner(w, actor)
+        self.active(w, allow_paused=True)
+        if w.get("semantics_version", 1) != 2 or not routing.flexible_enabled():
+            conflict(
+                "flexible_disabled",
+                "Outcomes, next-step rules and repeat groups need the newer workflow version.",
+                status=422,
+            )
+        steps = b["steps"]
+        if len({x["task_id"] for x in steps}) != len(steps):
+            conflict("duplicate_step", "List each step once.", status=422)
+        tasks = {}
+        for x in steps:
+            tasks[x["task_id"]] = self.task(w["id"], x["task_id"], x.get("expected_work_revision"))
+        specs = [{**x, "client_key": x["task_id"]} for x in steps]
+        new = routing.draft_flow(specs, b["repeat_groups"])
+        old = routing.load_flow(self, w["id"])
+        launched = bool(w["launch_enabled"])
+        if launched:
+            started = {
+                r["id"]
+                for r in self.rows("SELECT * FROM tasks WHERE workflow_id=%s", (w["id"],))
+                if self._started(r)
+            }
+            frozen = routing.frozen_changes(started, old, new)
+            if frozen:
+                conflict(
+                    "step_started",
+                    "Started steps keep their outcomes, rules and repeat group. Change steps that have not started, or add a new step.",
+                    changes=frozen,
+                )
+        self._save_flow(w, *new)
+        self.audit(
+            w,
+            p,
+            "workflow_flow_changed",
+            {"steps": sorted(tasks), "repeat_groups": [g["name"] for g in new[2]], "reason": b.get("reason", "")},
+            scope=True,
+        )
+        if launched:
+            self._open_new_groups(w, old[2])
+            self._record_definition(w, actor, "edit")
+
+    def _open_new_groups(self, w, before):
+        """A repeat group added after Start (all of its steps unstarted) opens round 1."""
+        known = {g["name"].casefold() for g in before}
+        for g in routing.load_flow(self, w["id"])[2]:
+            if g["name"].casefold() not in known and not g.get("current_round"):
+                self._start_round(w, g, "initial", g["member_tasks"], {})
 
     def op_loop_decision(self, w, actor, b, tid):
         """Owner decisions at a round limit, a stall, a missing outcome or ask-the-owner."""

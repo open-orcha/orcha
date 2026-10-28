@@ -1657,6 +1657,56 @@
         "x-workflow-operation": "finish"
       }
     },
+    "/api/workflows/{wid}/flow": {
+      "put": {
+        "summary": "Workflow Flow",
+        "operationId": "workflow_flow_api_workflows__wid__flow_put",
+        "parameters": [
+          {
+            "name": "wid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Wid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FlowEdit"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowDetail"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "x-workflow-operation": "flow"
+      }
+    },
     "/api/workflows/{wid}/goal/accept": {
       "post": {
         "summary": "Workflow Accept Goal",
@@ -3507,6 +3557,94 @@
           "text"
         ],
         "title": "Finding"
+      },
+      "FlowEdit": {
+        "properties": {
+          "expected_revision": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Expected Revision"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Idempotency Key"
+          },
+          "reason": {
+            "type": "string",
+            "maxLength": 4000,
+            "title": "Reason",
+            "default": ""
+          },
+          "steps": {
+            "items": {
+              "$ref": "#/components/schemas/FlowStep"
+            },
+            "type": "array",
+            "maxItems": 100,
+            "title": "Steps"
+          },
+          "repeat_groups": {
+            "items": {
+              "$ref": "#/components/schemas/RepeatGroup"
+            },
+            "type": "array",
+            "maxItems": 5,
+            "title": "Repeat Groups"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "expected_revision",
+          "idempotency_key"
+        ],
+        "title": "FlowEdit",
+        "description": "Replace the workflow's outcomes, next-step rules and repeat groups (version 2).\nSteps left out have none. After Start a started step keeps its outcomes and rules,\nand a repeat group with a started step keeps its steps, review step, ending outcome\nand stall rule; its round limit can still be raised."
+      },
+      "FlowStep": {
+        "properties": {
+          "task_id": {
+            "type": "string",
+            "title": "Task Id"
+          },
+          "outcomes": {
+            "items": {
+              "$ref": "#/components/schemas/StepOutcome"
+            },
+            "type": "array",
+            "maxItems": 8,
+            "title": "Outcomes"
+          },
+          "routes": {
+            "items": {
+              "$ref": "#/components/schemas/StepRoute"
+            },
+            "type": "array",
+            "maxItems": 8,
+            "title": "Routes"
+          },
+          "expected_work_revision": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Work Revision"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "task_id"
+        ],
+        "title": "FlowStep",
+        "description": "One step's outcomes and next-step rules in a flow edit. `expected_work_revision`\nis optional; when given, the edit is refused if the step's work changed meanwhile."
       },
       "HTTPValidationError": {
         "properties": {

@@ -500,3 +500,146 @@ async def test_round_context_endpoint_matches_the_prompt(client, setup_workflow,
     assert [f["text"] for f in body["group"]["this_round"]["findings"]] == ["Too long"]
     body = (await client.get(f"/api/tasks/{ids['Publish']}/round-context", headers=headers)).json()
     assert body == {"task_id": ids["Publish"], "outcomes": [], "group": None}
+
+
+def flow_body(ids, *, max_rounds=3, publish_outcomes=(), exit_outcome="Approved", write_outcomes=()):
+    """The loop draft's flow in task-id space, for PUT /api/workflows/{wid}/flow."""
+    write, review, publish = ids
+    steps = [
+        {
+            "task_id": review,
+            "outcomes": [
+                {"name": "Approved", "kind": "success"},
+                {"name": "Changes requested", "kind": "changes"},
+            ],
+            "routes": [
+                {"outcome": "Approved", "destination": "exit_group", "destination_task": None},
+                {"outcome": "Changes requested", "destination": "return", "destination_task": write},
+            ],
+        }
+    ]
+    if write_outcomes:
+        steps.append(
+            {
+                "task_id": write,
+                "outcomes": [{"name": n, "kind": "custom"} for n in write_outcomes],
+                "routes": [{"outcome": n, "destination": "next", "destination_task": None} for n in write_outcomes],
+            }
+        )
+    if publish_outcomes:
+        steps.append(
+            {
+                "task_id": publish,
+                "outcomes": [{"name": n, "kind": "custom"} for n in publish_outcomes],
+                "routes": [{"outcome": n, "destination": "next", "destination_task": None} for n in publish_outcomes],
+            }
+        )
+    return {
+        "steps": steps,
+        "repeat_groups": [
+            {
+                "name": "Draft and review",
+                "member_tasks": [write, review],
+                "review_task": review,
+                "exit_outcome": exit_outcome,
+                "max_rounds": max_rounds,
+                "escalation_owner_id": None,
+                "stall_rule": "findings_and_artifact",
+            }
+        ],
+    }
+
+
+def loop_ids(w):
+    by = {t["title"]: t["id"] for t in w["tasks"]}
+    return by["Write the launch post"], by["Review the post"], by["Publish"]
+
+
+def definition_reasons(wid):
+    with db_cursor(readonly=True) as (_, cur):
+        cur.execute(
+            "SELECT version,reason FROM workflow_definition_versions WHERE workflow_id=%s ORDER BY version",
+            (wid,),
+        )
+        return [(r["version"], r["reason"]) for r in cur.fetchall()]
+
+
+def test_flow_edit_before_start_replaces_the_rules(setup_workflow, flexible):
+    execute = setup_workflow[-1]
+    w = execute("create", loop_draft(setup_workflow[2]))
+    ids = loop_ids(w)
+    w = execute("flow", flow_body(ids, max_rounds=4, publish_outcomes=["Live"]), w["id"])
+    byid = {t["id"]: t for t in w["tasks"]}
+    assert [o["name"] for o in byid[ids[2]]["outcomes"]] == ["Live"]
+    assert w["repeat_groups"][0]["max_rounds"] == 4
+    # Nothing has started, so no definition version is written yet.
+    assert definition_reasons(w["id"]) == []
+
+
+def test_flow_edit_after_start_freezes_started_steps_only(setup_workflow, flexible):
+    execute = setup_workflow[-1]
+    w = prepare_and_start(setup_workflow, execute("create", loop_draft(setup_workflow[2])))
+    ids = loop_ids(w)
+    w = finish(setup_workflow, w, ids[0])
+    # The group has a started step: its shape and the started step's rules stay.
+    for body in (
+        flow_body(ids, exit_outcome="Changes requested"),
+        flow_body(ids, write_outcomes=["Drafted"]),
+    ):
+        assert code(execute, "flow", body, w["id"]) == "step_started"
+    # Raising the round limit and giving the unstarted Publish step outcomes is fine.
+    w = execute("flow", flow_body(ids, max_rounds=6, publish_outcomes=["Live"]), w["id"])
+    assert w["repeat_groups"][0]["max_rounds"] == 6
+    assert w["repeat_groups"][0]["current_round"] == 1
+    assert [o["name"] for o in {t["id"]: t for t in w["tasks"]}[ids[2]]["outcomes"]] == ["Live"]
+    assert definition_reasons(w["id"]) == [(1, "start"), (2, "edit")]
+
+
+def test_flow_edit_names_what_is_frozen():
+    started = {"w"}
+    old = (
+        {"r": [{"name": "Ok", "kind": "success"}]},
+        {"r": [{"outcome": "Ok", "destination": "exit_group"}]},
+        [{"name": "G", "member_tasks": ["w", "r"], "review_task": "r", "exit_outcome": "Ok", "max_rounds": 3, "current_round": 2}],
+    )
+    same = (old[0], old[1], [{**old[2][0], "max_rounds": 5}])
+    assert workflow_routing.frozen_changes(started, old, same) == []
+    lower = (old[0], old[1], [{**old[2][0], "max_rounds": 1}])
+    assert workflow_routing.frozen_changes(started, old, lower) == [
+        {"group": "G", "reason": "below_current_round"}
+    ]
+    gone = (old[0], old[1], [])
+    assert workflow_routing.frozen_changes(started, old, gone) == [
+        {"group": "G", "reason": "group_removed"}
+    ]
+    # A step that has not started can change freely, even inside an untouched flow.
+    assert workflow_routing.frozen_changes(set(), old, gone) == []
+
+
+def test_flow_edit_needs_version_two(setup_workflow, flexible, monkeypatch):
+    execute = setup_workflow[-1]
+    monkeypatch.delenv(workflow_routing.FLAG, raising=False)
+    w = create(setup_workflow)
+    monkeypatch.setenv(workflow_routing.FLAG, "1")
+    assert code(execute, "flow", {"steps": [], "repeat_groups": []}, w["id"]) == "flexible_disabled"
+
+
+def test_adding_a_step_after_start_records_an_edit(setup_workflow, flexible):
+    execute = setup_workflow[-1]
+    w = prepare_and_start(setup_workflow, execute("create", loop_draft(setup_workflow[2])))
+    execute(
+        "add_tasks",
+        {
+            "tasks": [
+                {
+                    "client_key": "announce",
+                    "title": "Announce",
+                    "definition_of_done": "Announced",
+                    "assignee_id": setup_workflow[2],
+                    "depends_on": [],
+                }
+            ]
+        },
+        w["id"],
+    )
+    assert definition_reasons(w["id"]) == [(1, "start"), (2, "edit")]

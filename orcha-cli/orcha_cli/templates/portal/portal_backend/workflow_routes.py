@@ -461,6 +461,7 @@ _workflow_action(
     "/api/workflows/{wid}/transfer-owner", "transfer_owner", model.TransferOwner
 )
 _workflow_action("/api/workflows/{wid}/decisions", "loop_decision", model.LoopDecision)
+_workflow_action("/api/workflows/{wid}/flow", "flow", model.FlowEdit, method="PUT")
 _workflow_action(
     "/api/workflows/{wid}/review-rounds",
     "review_round",
