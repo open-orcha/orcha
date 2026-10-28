@@ -24,7 +24,7 @@ for (const theme of themes) {
     await page.goto(`${url}?theme=${theme}&frame=${f.id}`, { waitUntil: "networkidle0" });
     await page.evaluate(() => document.fonts.ready);
     const el = await page.$("#" + f.id);
-    await el.evaluate((e) => { e.scrollIntoView({ block: "start" }); if (e.dataset.scroll) { const n = Number(e.dataset.scroll); e.querySelectorAll(".v2-content, .v2-main, .wf-page, .v2-split-list").forEach((c) => { c.scrollTop = n; }); } });
+    await el.evaluate((e) => { e.scrollIntoView({ block: "start" }); if (e.dataset.scroll) { const c = e.querySelector(".wf-create, .wf-page"); if (c) c.style.marginTop = `-${Number(e.dataset.scroll)}px`; } });
     await new Promise((r) => setTimeout(r, 150));
     await el.screenshot({ path: path.join(here, "renders", `${f.id}-${theme}.png`) });
     console.log("rendered", f.id, theme);
