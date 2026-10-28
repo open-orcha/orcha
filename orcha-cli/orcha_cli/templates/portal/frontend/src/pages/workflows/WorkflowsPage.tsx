@@ -17,6 +17,7 @@ import { WorkflowResolveReview, WorkflowReviewEditor } from "./WorkflowReviewEdi
 import { WorkflowActivity, WorkflowReviewHistory } from "./WorkflowHistory";
 import { WorkflowHeader } from "./WorkflowHeader";
 import { WorkflowRail } from "./WorkflowRail";
+import { WorkflowOwnerBar } from "./WorkflowLoopDecision";
 import { WorkflowLoopGroup, WorkflowTaskRow, WorkflowTaskRows } from "./WorkflowTaskRows";
 import { WorkflowTaskInspector } from "./WorkflowTaskInspector";
 import { WorkflowHide } from "./WorkflowHide";
@@ -261,6 +262,7 @@ function WorkflowScreen() {
         {availability === "ready" && writeReason && <p className="wf-bar">{writeReason}</p>}
       </div>}
       {detail.hidden && <p role="status" className="wf-bar">This workflow is hidden. Its tasks, messages and evidence are kept. Restore it from the workflow menu; restoring never starts work.</p>}
+      <WorkflowOwnerBar detail={detail} viewer={scope.identity} ownerName={actorName(detail.owner_human_id)} onDecide={(id) => { query("tab", "tasks"); setSelectedId(id); setTaskRequest(null); }} />
       <WorkflowActions detail={detail} scope={scope} verified={verified} stale={stale} onSaved={saved} request={actionRequest} />
       <WorkflowInput detail={detail} scope={scope} stale={stale} open={inputOpen} onOpen={() => setInputOpen(true)} onClose={() => setInputOpen(false)} onSaved={saved} onChecklist={() => setActionRequest({ action: "finish", seq: ++requestSeq.current })} />
       {!inputOpen && <><div className="wf-tabs-row">

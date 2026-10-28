@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
-import { WorkflowLoopDecision } from "./WorkflowLoopDecision";
+import { WorkflowLoopDecision, WorkflowOwnerBar } from "./WorkflowLoopDecision";
 import { WorkflowTaskInspector } from "./WorkflowTaskInspector";
 import { exampleTask, exampleWorkflow, jsonResponse } from "./workflowTestFixtures";
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
@@ -56,4 +56,21 @@ it("shows a loop decision's save status once in the task inspector", async () =>
   fireEvent.click(screen.getByRole("button", { name: "Stop the loop" }));
   expect(await screen.findByText("The workflow changed. Refresh and decide again.")).toBeVisible();
   expect(screen.getAllByLabelText("Save status")).toHaveLength(1);
+});
+
+it("puts a Needs-you bar across the page for the owner and a waiting note for everyone else (x04)", () => {
+  const limited = { ...task, repeat_group_id: "g1", reported_outcome: { outcome: "Changes requested" } };
+  const detail = exampleWorkflow({ repeat_groups: [group], tasks: [limited] });
+  const onDecide = vi.fn();
+  render(<WorkflowOwnerBar detail={detail} viewer={detail.owner_human_id} ownerName="Kedar" onDecide={onDecide} />);
+  expect(screen.getByRole("status")).toHaveTextContent("Needs you. “Draft and review” used all 3 rounds and the last review reported “Changes requested”. No round 4 was started.");
+  fireEvent.click(screen.getByRole("button", { name: "Decide…" }));
+  expect(onDecide).toHaveBeenCalledWith(limited.id);
+  cleanup();
+  render(<WorkflowOwnerBar detail={detail} viewer="someone-else" ownerName="Kedar" onDecide={onDecide} />);
+  expect(screen.getByRole("status")).toHaveTextContent(/^Waiting for Kedar\./);
+  expect(screen.queryByRole("button", { name: "Decide…" })).toBeNull();
+  cleanup();
+  const { container } = render(<WorkflowOwnerBar detail={exampleWorkflow({ tasks: [exampleTask({})] })} viewer="x" ownerName="Kedar" onDecide={onDecide} />);
+  expect(container).toBeEmptyDOMElement();
 });

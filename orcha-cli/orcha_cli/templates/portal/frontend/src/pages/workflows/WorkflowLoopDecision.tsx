@@ -93,3 +93,25 @@ export function WorkflowLoopDecision({ detail, task, scope, stale, agents, onSav
     {operation?.operation === "loop_decision" && <WorkflowOperationNotice scope={scope} slot={slot} onSaved={onSaved} canRetry={async () => !stale} />}
   </section>;
 }
+
+/** The bar across the workflow page when a loop or rule waits for the owner (issue #362 x04 callout 1):
+ * what happened in words, and for the owner a Decide button that opens the step with the decision. */
+export function WorkflowOwnerBar({ detail, viewer, ownerName, onDecide }: {
+  detail: WorkflowDetail; viewer: string; ownerName: string; onDecide: (taskId: string) => void;
+}) {
+  const task = detail.tasks.find((t) => t.awaiting_loop_decision);
+  if (!task?.awaiting_loop_decision) return null;
+  const group = detail.repeat_groups?.find((g) => g.id === task.repeat_group_id);
+  const reported = task.reported_outcome?.outcome;
+  const what = {
+    limit_reached: group ? `“${group.name}” used all ${group.max_rounds} rounds${reported ? ` and the last review reported “${reported}”` : ""}. No round ${group.max_rounds + 1} was started. Nothing is lost: every round’s work and review is kept.` : HEADINGS.limit_reached + ".",
+    stalled: group ? `“${group.name}” is paused: round ${group.current_round} brought back the same findings on unchanged work, so another round would likely repeat them.` : HEADINGS.stalled + ".",
+    missing_outcome: `${task.title} was accepted without an outcome, so Orcha did not guess what comes next.`,
+    ask_owner: `${task.title} reported${reported ? ` “${reported}”` : " an outcome"}, and its rule asks you what happens next.`,
+  }[task.awaiting_loop_decision];
+  const owner = detail.owner_human_id === viewer;
+  return <div className="wf-ownerbar" role="status">
+    <span><b>{owner ? "Needs you." : `Waiting for ${ownerName}.`}</b> {what}</span>
+    {owner && <Button size="sm" variant="primary" onClick={() => onDecide(task.id)}>Decide…</Button>}
+  </div>;
+}
