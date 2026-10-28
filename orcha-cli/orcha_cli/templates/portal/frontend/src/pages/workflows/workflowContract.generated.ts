@@ -1,5 +1,5 @@
 // Generated from FastAPI OpenAPI slices. DO NOT EDIT.
-// Workflow source SHA-256: 83e42ee8052b68484bfed6c3a43baa63ffb44d99b53e8da77c2dc8fb867465a8
+// Workflow source SHA-256: 8c4f5526b43984df04fe8d2056f88456b6023897b209198a36ea9474e7043b52
 // Evidence GET source SHA-256: f2a794298f992bd3ff3955fa5d6aefc30a97e373794a3c1e9d03c8f46796853e
 // Regenerate with tools/generate-workflow-contract.mjs and both source files.
 
@@ -377,6 +377,15 @@ export type RepeatGroupView = {
   "state": string;
 };
 
+export type ReportedOutcome = {
+  "outcome": string;
+  "findings"?: Array<Finding>;
+  "note"?: string;
+  "reporter_id"?: string | null;
+  "reporter_kind"?: string | null;
+  "applied"?: boolean;
+};
+
 export type RetryTask = {
   "expected_revision": number;
   "idempotency_key": string;
@@ -729,6 +738,7 @@ export type WorkflowTask = {
   "awaiting_loop_decision"?: "limit_reached" | "stalled" | "missing_outcome" | "ask_owner" | null;
   "repeat_group_id"?: string | null;
   "round"?: number | null;
+  "reported_outcome"?: ReportedOutcome | null;
 };
 
 export type WorkflowTaskChoice = {
@@ -833,6 +843,7 @@ export type WorkflowModels = {
   ReleaseTasks: ReleaseTasks;
   RepeatGroup: RepeatGroup;
   RepeatGroupView: RepeatGroupView;
+  ReportedOutcome: ReportedOutcome;
   RetryTask: RetryTask;
   ReviewHistory: ReviewHistory;
   ReviewRound: ReviewRound;
@@ -2749,6 +2760,49 @@ export const workflowSchemas = {
       "stall_rule",
       "current_round",
       "state"
+    ]
+  },
+  "ReportedOutcome": {
+    "properties": {
+      "outcome": {
+        "type": "string"
+      },
+      "findings": {
+        "items": {
+          "$ref": "#/components/schemas/Finding"
+        },
+        "type": "array"
+      },
+      "note": {
+        "type": "string"
+      },
+      "reporter_id": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "reporter_kind": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "applied": {
+        "type": "boolean"
+      }
+    },
+    "type": "object",
+    "required": [
+      "outcome"
     ]
   },
   "RetryTask": {
@@ -4687,6 +4741,16 @@ export const workflowSchemas = {
         "anyOf": [
           {
             "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "reported_outcome": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/ReportedOutcome"
           },
           {
             "type": "null"

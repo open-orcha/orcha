@@ -4997,6 +4997,59 @@
         ],
         "title": "RepeatGroupView"
       },
+      "ReportedOutcome": {
+        "properties": {
+          "outcome": {
+            "type": "string",
+            "title": "Outcome"
+          },
+          "findings": {
+            "items": {
+              "$ref": "#/components/schemas/Finding"
+            },
+            "type": "array",
+            "title": "Findings"
+          },
+          "note": {
+            "type": "string",
+            "title": "Note",
+            "default": ""
+          },
+          "reporter_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reporter Id"
+          },
+          "reporter_kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reporter Kind"
+          },
+          "applied": {
+            "type": "boolean",
+            "title": "Applied",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "outcome"
+        ],
+        "title": "ReportedOutcome",
+        "description": "The outcome reported for a step's current work revision, shown to its reviewer.\n`applied` is true once acceptance applied the route it selected."
+      },
       "RetryTask": {
         "properties": {
           "expected_revision": {
@@ -7251,6 +7304,16 @@
               }
             ],
             "title": "Round"
+          },
+          "reported_outcome": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReportedOutcome"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "type": "object",

@@ -542,6 +542,17 @@ class WorkflowService:
             routing.load_flow(self, wid) if w.get("semantics_version") == 2 else ({}, {}, [])
         )
         group_of = {m: g for g in groups for m in g["member_tasks"]}
+        reports = (
+            {
+                (r["task_id"], r["work_revision"]): r
+                for r in self.rows(
+                    "SELECT r.task_id,r.work_revision,r.outcome_name,r.findings,r.note,r.reporter_id,r.reporter_kind,d.applied_at FROM workflow_outcome_reports r LEFT JOIN workflow_route_decisions d ON d.report_id=r.id WHERE r.workflow_id=%s",
+                    (wid,),
+                )
+            }
+            if w.get("semantics_version") == 2
+            else {}
+        )
         for tid, task in s["tasks"].items():
             executions = executions_by_task[tid]
             live = next((e for e in executions if e["state"] in LIVE_EXECUTIONS), None)
@@ -585,6 +596,19 @@ class WorkflowService:
             row["routes"] = routes.get(tid, [])
             row["repeat_group_id"] = group_of[tid]["id"] if tid in group_of else None
             row["round"] = group_of[tid]["current_round"] if tid in group_of else None
+            report = reports.get((tid, task["work_revision"]))
+            row["reported_outcome"] = (
+                {
+                    "outcome": report["outcome_name"],
+                    "findings": routing.findings_of(report["findings"]),
+                    "note": report["note"] or "",
+                    "reporter_id": report["reporter_id"],
+                    "reporter_kind": report["reporter_kind"],
+                    "applied": bool(report["applied_at"]),
+                }
+                if report
+                else None
+            )
             terminal = task["status"] in {"completed", "cancelled"}
             started = not never_started(tid)
             current = next(

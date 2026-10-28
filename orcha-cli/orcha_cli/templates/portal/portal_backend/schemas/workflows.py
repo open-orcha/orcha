@@ -250,6 +250,18 @@ class Finding(Input):
     severity: Literal["blocker", "major", "minor", "note"] | None = None
 
 
+class ReportedOutcome(BaseModel):
+    """The outcome reported for a step's current work revision, shown to its reviewer.
+    `applied` is true once acceptance applied the route it selected."""
+
+    outcome: str
+    findings: list[Finding] = Field(default_factory=list)
+    note: str = ""
+    reporter_id: str | None = None
+    reporter_kind: str | None = None
+    applied: bool = False
+
+
 class OutcomeChoice(Input):
     outcome: OutcomeName
     expected_work_revision: int = Field(ge=1)
@@ -413,6 +425,7 @@ class WorkflowTask(BaseModel):
     ) = None
     repeat_group_id: str | None = None
     round: int | None = None
+    reported_outcome: ReportedOutcome | None = None
 
 
 class Progress(BaseModel):

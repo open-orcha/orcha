@@ -385,6 +385,31 @@ def test_detail_shows_the_flow_rounds_and_allowance(setup_workflow, flexible):
     assert w["turns_used"] == 2
 
 
+def test_detail_shows_the_reported_outcome_to_the_reviewer(setup_workflow, flexible):
+    from portal_backend import workflow_service as ws
+
+    execute = setup_workflow[-1]
+    w = prepare_and_start(setup_workflow, execute("create", loop_draft(setup_workflow[2])))
+    ids = {t["title"]: t["id"] for t in w["tasks"]}
+    write, review = ids["Write the launch post"], ids["Review the post"]
+    w = finish(setup_workflow, w, write)
+    submit_result(setup_workflow, w, review)
+    w = execute(
+        "report_outcome",
+        {"outcome": "Approved", "findings": [{"text": "Good", "severity": "note"}], "note": "Ship it"},
+        w["id"],
+        review,
+    )
+    with db_cursor(readonly=True) as (_, cur):
+        w = ws.WorkflowService(cur, setup_workflow[4]).detail(w["id"], setup_workflow[1])
+    reported = {t["id"]: t["reported_outcome"] for t in w["tasks"]}
+    assert reported[write] is None
+    assert reported[review]["outcome"] == "Approved" and not reported[review]["applied"]
+    assert [f["text"] for f in reported[review]["findings"]] == ["Good"]
+    assert reported[review]["note"] == "Ship it"
+    assert reported[review]["reporter_kind"] == "human"
+
+
 def test_version_one_detail_has_no_flow(setup_workflow, monkeypatch):
     monkeypatch.delenv(workflow_routing.FLAG, raising=False)
     execute = setup_workflow[-1]

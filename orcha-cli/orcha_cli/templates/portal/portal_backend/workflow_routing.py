@@ -29,6 +29,12 @@ def capability():
     }
 
 
+def findings_of(value):
+    """Stored report findings (JSON text on SQLite, a list on Postgres) as a list."""
+    findings = json.loads(value) if isinstance(value, str) else value
+    return [f for f in findings or [] if isinstance(f, dict) and f.get("text")]
+
+
 def wants_flow(draft):
     return bool(
         draft.get("repeat_groups")
