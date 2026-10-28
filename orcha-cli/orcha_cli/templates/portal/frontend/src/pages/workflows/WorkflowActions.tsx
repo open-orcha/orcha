@@ -20,6 +20,9 @@ export interface WorkflowActionRequest { action: WorkflowAction; seq: number }
 const labels: Record<Action, string> = { start: "Review start", pause: "Pause new starts", resume: "Resume workflow", cancel: "Cancel workflow", finish: "Finish checklist" };
 const confirmation: Record<Action, string> = { start: "Start selected tasks", pause: "Pause new starts", resume: "Resume workflow", cancel: "Cancel workflow", finish: "Finish workflow" };
 
+const LOOP_ENDINGS: Record<string, string> = { exited: "the loop ended", stopped: "the loop was stopped", limit_reached: "waiting at its round limit",
+  stalled: "waiting after a stall", awaiting_owner: "waiting for the owner" };
+
 export function WorkflowActions({ detail, scope, verified, stale, onSaved, request }: {
   detail: WorkflowDetail; scope: DraftScope; verified: boolean; stale: boolean; onSaved: (detail: WorkflowDetail) => void;
   /** When provided, the header menu opens dialogs and the inline button row is not rendered. */
@@ -150,6 +153,8 @@ export function WorkflowActions({ detail, scope, verified, stale, onSaved, reque
           {preview.goal_accepted_revision !== preview.goal_revision && <details><summary>Review current goal</summary>
             <WorkflowAcceptance detail={preview} scope={scope} verified={verified} stale={stale} onSaved={(result) => { onSaved(result); setPreview(null); }} /></details>}
           {preview.completion.can_finish && <p>All {preview.progress.total} required tasks and {preview.progress.objectives_total} objectives are accepted.</p>}
+          {(preview.repeat_groups ?? []).map((g) => <p key={g.id}>{g.name}: {LOOP_ENDINGS[g.state] ?? "still open"} after round {g.current_round} of {g.max_rounds}.</p>)}
+          {preview.tasks.some((t) => t.route_state === "not_selected") && <p>Not needed on the path this workflow took: {preview.tasks.filter((t) => t.route_state === "not_selected").map((t) => t.title).join(", ")}. They do not count toward Finish.</p>}
           <p>Finishing makes this workflow read-only. Your project stays open. Only its verified human owner can finish it; task autonomy never finishes a workflow.</p>
         </>}
       </>}

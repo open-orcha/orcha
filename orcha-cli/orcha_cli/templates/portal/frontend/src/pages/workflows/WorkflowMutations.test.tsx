@@ -104,3 +104,13 @@ it("finish reads fresh blockers and never combines goal acceptance with Finish",
   expect(screen.getByRole("button", { name: "Finish workflow" })).toBeDisabled();
   expect((fetch.mock.calls as unknown as [string, RequestInit][]).every(([, options]) => options.method === "GET")).toBe(true);
 });
+it("finish says how each loop ended and which steps were not needed", async () => {
+  const detail = exampleWorkflow({ capability: writeCapability, available_actions: [{ action: "finish", enabled: true }], completion: { can_finish: true, blockers: [] }, semantics_version: 2,
+    tasks: [exampleTask({ status: "completed" }), exampleTask({ id: "ios", title: "Build iOS", route_state: "not_selected" })],
+    repeat_groups: [{ id: "g", name: "Draft and review", member_tasks: ["build", "ios"], review_task: "build", exit_outcome: "Approved", max_rounds: 3, current_round: 2, state: "exited", stall_rule: "findings_and_artifact" }] });
+  vi.stubGlobal("fetch", vi.fn(async (url: string) => jsonResponse(url.endsWith("/completion-check") ? { can_finish: true, blockers: [] } : detail)));
+  render(<MemoryRouter><WorkflowActions detail={detail} scope={scope()} verified stale={false} onSaved={vi.fn()} /></MemoryRouter>);
+  fireEvent.click(screen.getByRole("button", { name: "Finish checklist" }));
+  expect(await screen.findByText("Draft and review: the loop ended after round 2 of 3.")).toBeVisible();
+  expect(screen.getByText("Not needed on the path this workflow took: Build iOS. They do not count toward Finish.")).toBeVisible();
+});
