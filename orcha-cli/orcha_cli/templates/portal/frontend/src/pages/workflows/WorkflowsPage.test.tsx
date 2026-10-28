@@ -5,7 +5,7 @@ import { exampleWorkflow, exampleTask, jsonResponse, readCapability, workflowSpe
 const context = vi.hoisted(() => ({ cid: "project", identity: null as null | { agent_id: string }, identityTrusted: false, identityPending: false,
   snap: { agents: [{ id: "kedar", alias: "Kedar" }, { id: "andrew", alias: "Andrew" }] } }));
 const authority = vi.hoisted(() => ({ human: null as null | { id: string; kind: string; member_role: string }, reason: null, readOnly: false, pending: false }));
-vi.mock("../../shell/Shell", () => ({ Shell: ({ children }: { children: React.ReactNode }) => <main>{children}</main> }));
+vi.mock("../../shell/Shell", () => ({ Shell: ({ children, primaryAction, toolbar }: { children: React.ReactNode; primaryAction?: React.ReactNode; toolbar?: React.ReactNode }) => <main>{toolbar}{primaryAction}{children}</main> }));
 vi.mock("../../state/SnapshotProvider", () => ({ useSnapshot: () => context, useActingAuthority: () => authority }));
 import { WorkflowsPage } from "./WorkflowsPage";
 beforeEach(() => { context.cid = "project"; context.identity = null; context.identityTrusted = false; context.identityPending = false; authority.human = null; });
@@ -48,12 +48,12 @@ it("rejects malformed discovery and only retries on request", async () => {
 });
 it("reads exact server progress, discloses loaded search and paginates without duplicate workflows", async () => {
   reads((url) => ({ workflows: url.includes("cursor=") ? [exampleWorkflow(), exampleWorkflow({ id: "guide", title: "Publish setup guide" })] : [exampleWorkflow()], capability: readCapability, next_cursor: url.includes("cursor=") ? null : "next-page" }));
-  renderPage(); expect(await screen.findByText("4 of 8 tasks accepted · 50%")).toBeVisible();
-  expect(screen.getByText(/search and owner filters apply to loaded pages/)).toBeVisible();
+  renderPage(); expect(await screen.findByRole("img", { name: "4 of 8 tasks accepted · 50%" })).toBeInTheDocument();
+  expect(screen.getByLabelText(/search and owner filters apply to loaded pages/)).toBeVisible();
   fireEvent.click(screen.getByRole("button", { name: "Load more workflows" }));
-  expect(await screen.findByRole("link", { name: "Publish setup guide" })).toBeVisible(); expect(screen.getAllByRole("link", { name: "Mobile release" })).toHaveLength(1);
+  expect(await screen.findByRole("option", { name: /Publish setup guide/ })).toBeVisible(); expect(screen.getAllByRole("option", { name: /Mobile release/ })).toHaveLength(1);
   fireEvent.change(screen.getByRole("searchbox"), { target: { value: "guide" } });
-  expect(screen.queryByRole("link", { name: "Mobile release" })).toBeNull(); expect(screen.getByText(/1 matching workflows shown from 2 loaded/)).toBeVisible();
+  expect(screen.queryByRole("option", { name: /Mobile release/ })).toBeNull(); expect(screen.getByLabelText(/1 of 2 loaded workflows shown/)).toBeVisible();
 });
 it("keeps stale rows on an interrupted refresh but hides them after access is denied", async () => {
   let failure = 0;
@@ -63,12 +63,12 @@ it("keeps stale rows on an interrupted refresh but hides them after access is de
     if (failure === 1) throw new TypeError("network");
     if (failure === 2) return jsonResponse({ detail: "Forbidden" }, 403);
     return jsonResponse({ workflows: [exampleWorkflow()], capability: readCapability, next_cursor: null });
-  }); vi.stubGlobal("fetch", fetch); renderPage(); await screen.findByRole("link", { name: "Mobile release" });
+  }); vi.stubGlobal("fetch", fetch); renderPage(); await screen.findByRole("option", { name: /Mobile release/ });
   failure = 1; fireEvent.click(screen.getByRole("button", { name: "Refresh workflows" }));
-  expect(await screen.findByRole("alert")).toHaveTextContent("Could not reach Orcha"); expect(screen.getByRole("link", { name: "Mobile release" })).toBeVisible();
+  expect(await screen.findByRole("alert")).toHaveTextContent("Could not reach Orcha"); expect(screen.getByRole("option", { name: /Mobile release/ })).toBeVisible();
   expect(screen.getByText(/Showing the last loaded/)).toBeVisible();
   failure = 2; fireEvent.click(screen.getByRole("button", { name: "Refresh workflows" }));
-  await waitFor(() => expect(screen.queryByRole("link", { name: "Mobile release" })).toBeNull());
+  await waitFor(() => expect(screen.queryByRole("option", { name: /Mobile release/ })).toBeNull());
 });
 it("renders server stop outcomes and deadline without unlocking release from the browser clock", async () => {
   reads(() => exampleWorkflow({ tasks: [exampleTask({ display_state: { label: "Stopping - accepted", release_available: false, release_available_at: "2020-01-01T00:00:00Z", warning: null } })] }));
@@ -94,15 +94,16 @@ it("rejects malformed detail rather than treating missing tasks or blockers as s
 it("restores list filters and keyboard focus after a workflow detail round trip", async () => {
   reads((url) => url.startsWith("/api/workflows/") ? exampleWorkflow() : { workflows: [exampleWorkflow()], capability: readCapability, next_cursor: null });
   renderPage("/workflows?cid=project&status=preparing&search=mobile&owner=kedar");
-  fireEvent.click(await screen.findByRole("link", { name: "Mobile release" }));
+  fireEvent.click(await screen.findByRole("option", { name: /Mobile release/ }));
   expect(await screen.findByRole("heading", { name: "Mobile release" })).toHaveFocus();
   expect(screen.getByRole("link", { name: "All workflows" })).toHaveAttribute("href", "/workflows?cid=project&status=preparing&search=mobile&owner=kedar");
   fireEvent.click(screen.getByRole("link", { name: "All workflows" }));
-  const row = await screen.findByRole("link", { name: "Mobile release" });
-  expect(screen.getByLabelText("Status")).toHaveValue("preparing");
+  const row = await screen.findByRole("option", { name: /Mobile release/ });
+  expect(screen.getByRole("radio", { name: /Preparing/ })).toHaveAttribute("aria-checked", "true");
   expect(screen.getByRole("searchbox")).toHaveValue("mobile");
-  expect(screen.getByLabelText("Owner")).toHaveValue("kedar");
   expect(row).toHaveFocus();
+  fireEvent.click(screen.getByRole("button", { name: "Owner filter" }));
+  expect(screen.getByRole("radio", { name: "Kedar" })).toBeChecked();
 });
 it("focuses the requested task after the workflow read finishes", async () => {
   reads(() => exampleWorkflow());

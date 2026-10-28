@@ -13,7 +13,9 @@ import { WorkflowSettings } from "./WorkflowSettings";
 import { WorkflowMove } from "./WorkflowMove";
 import { WorkflowResolveReview, WorkflowReviewEditor } from "./WorkflowReviewEditor";
 import { WorkflowActivity, WorkflowReviewHistory } from "./WorkflowHistory";
-import { WorkflowDependencies, WorkflowSummary, WorkflowTaskList, WorkflowProgress, type WorkflowTaskView } from "./WorkflowReadViews";
+import { WorkflowDependencies, WorkflowSummary, WorkflowTaskList, type WorkflowTaskView } from "./WorkflowReadViews";
+import { WorkflowListEmpty, WorkflowRow, WorkflowRows, WorkflowsToolbar, matchesWorkflowFilter, workflowServerStatus } from "./WorkflowListView";
+import { Skeleton, EmptyState } from "../../components/primitives";
 import { hasWorkflowRoutes, WorkflowApiError, workflowLabel, workflowPaths, workflowRequest, workflowWriteReason } from "./workflowApi";
 import type { Capability, WorkflowDetail, WorkflowList } from "./workflowContract.generated";
 import { workflowListReturnTarget, workflowNavigationState } from "./workflowNavigation";
@@ -27,7 +29,7 @@ export function WorkflowsPage() {
   const { pathname } = useLocation();
   // Never carry an old actor's reads or confirmations across identity/project changes.
   const key = JSON.stringify([context.cid, authority.human?.id, context.identityTrusted, context.identityPending, pathname]);
-  return <Shell page="workflows" title="Workflows"><WorkflowScreen key={key} /></Shell>;
+  return <WorkflowScreen key={key} />;
 }
 function WorkflowScreen() {
   const { cid, snap, identityPending } = useSnapshot();
@@ -65,7 +67,7 @@ function WorkflowScreen() {
     if (row) { row.scrollIntoView?.({ block: "nearest" }); row.focus(); }
   }, [detail?.id, location.hash]);
   const initialTaskId = params.get("addTask") ?? undefined;
-  const serverStatus = ["preparing", "active", "ready"].includes(filter) ? "active" : ["paused", "completed", "cancelled"].includes(filter) ? filter : "";
+  const serverStatus = workflowServerStatus(filter);
   const query = (key: string, value: string) => setParams((previous) => { const p = new URLSearchParams(previous); value ? p.set(key, value) : p.delete(key); return p; });
   const actorName = (id: string) => snap?.agents.find((a) => a.id === id)?.alias ?? "Name unavailable";
   const href = (id?: string) => !id && cid && workflowListReturnTarget(navigationState.workflowListReturn, cid)
@@ -130,14 +132,42 @@ function WorkflowScreen() {
     // Missing task autonomy means OFF; legacy project/agent levels never grant it.
     autonomy: t.autonomy === "on",
   })) ?? [];
-  const rows = list?.workflows.filter((w) => {
-    const matchesStatus = filter === "open" ? w.status === "active" || w.status === "paused"
-      : filter === "preparing" ? w.status === "active" && !w.launch_enabled
-      : filter === "ready" ? w.status === "active" && w.completion.can_finish
-      : filter === "active" ? w.status === "active" && w.launch_enabled : true;
-    return matchesStatus && (!owner || owner === w.owner_human_id) && `${w.title} ${w.goal}`.toLowerCase().includes(search.toLowerCase());
-  }) ?? [];
-  return <div className="wf-page">
+  const rows = list?.workflows.filter((w) => matchesWorkflowFilter(w, filter) && (!owner || owner === w.owner_human_id) && `${w.title} ${w.goal}`.toLowerCase().includes(search.toLowerCase())) ?? [];
+  const isList = !isNew && !workflowId;
+  const refresh = () => { setNext(null); setRetry((n) => n + 1); };
+  const counts = list ? Object.fromEntries(["open", "preparing", "active", "paused", "ready", "completed", "cancelled", "all"].map((k) => [k, list.workflows.filter((w) => matchesWorkflowFilter(w, k)).length])) : null;
+  const newWorkflow = cid && isList ? (verified
+    ? <Button variant="primary" icon="plus" onClick={() => navigate(href("new"), { state: returnState() })}>New workflow</Button>
+    : <Button variant="primary" icon="plus" disabled title={writeReason ?? undefined}>New workflow</Button>) : undefined;
+  const toolbar = cid && isList ? <WorkflowsToolbar filter={filter} setFilter={(k) => query("status", k === "open" ? "" : k)} counts={counts}
+    search={search} setSearch={(v) => query("search", v)} owner={owner} setOwner={(id) => query("owner", id)}
+    owners={[...new Set(list?.workflows.map((w) => w.owner_human_id) ?? [])].map((id) => ({ id, name: actorName(id) }))}
+    shown={rows.length} loaded={list?.workflows.length ?? 0} hasMore={!!list?.next_cursor} onRefresh={refresh} refreshing={loading} /> : undefined;
+  if (isList) {
+    return <Shell page="workflows" title="Workflows" primaryAction={newWorkflow} toolbar={toolbar} flush><div className="wf-page wf-flush">
+      {!cid && <div className="wf-states"><EmptyState title="Choose a project to view Workflows" /></div>}
+      {cid && availability === "checking" && <div className="wf-states"><Skeleton lines={5} label="Checking Workflows support" /></div>}
+      {availability === "unsupported" && <div className="wf-states"><EmptyState title="This Orcha server doesn’t support Workflows yet." body="Your existing tasks are still available."
+        action={<Button variant="secondary" onClick={() => navigate(cid ? `/tasks?${new URLSearchParams({ cid })}` : "/tasks")}>Open tasks</Button>} /></div>}
+      {error && !list && <div className="wf-states"><EmptyState tone="danger" icon="alert" title={availability === "forbidden" ? "You do not have access to these workflows" : "Could not load workflows"} body={error}
+        action={availability === "forbidden" ? undefined : <Button variant="secondary" icon="refresh" onClick={refresh}>Retry</Button>} /></div>}
+      {error && list && <p role="alert" className="wf-notice">{error}</p>}
+      {stale && list && <p role="status" className="wf-notice">Showing the last loaded workflow data. Refresh before making changes.</p>}
+      {availability === "ready" && writeReason && <p className="wf-notice">{writeReason}</p>}
+      {list && <div className="wf-list">
+        {rows.length === 0 ? <WorkflowListEmpty loadedAny={list.workflows.length > 0} action={newWorkflow} />
+          : <WorkflowRows rows={rows} grouped={filter === "all"} renderRow={(w) => <WorkflowRow key={w.id} workflow={w} href={href(w.id)} ownerName={actorName(w.owner_human_id)}
+            onActivate={(e) => { e.preventDefault(); navigate(href(w.id), { state: returnState(w.id) }); }}
+            ref={(element) => {
+              if (element && !restoredFocus.current && navigationState.workflowListFocus === w.id && workflowListReturnTarget(navigationState.workflowListReturn, cid!)) {
+                restoredFocus.current = true; element.focus();
+              }
+            }} />} />}
+        {list.next_cursor && <Button variant="ghost" className="wf-more" disabled={loading} onClick={() => setNext(list.next_cursor ?? null)}>Load more workflows</Button>}
+      </div>}
+    </div></Shell>;
+  }
+  return <Shell page="workflows" title="Workflows"><div className="wf-page">
     <nav className="wf-actions" aria-label="Workflow navigation"><Link to={href()} state={navigationState}>All workflows</Link><Link to={cid ? `/tasks?${new URLSearchParams({ cid })}` : "/tasks"}>Open tasks</Link>
       {cid && !isNew && (verified ? <Link to={href("new")} state={returnState()}>Create workflow</Link> : <Button disabled title={writeReason ?? undefined}>Create workflow</Button>)}
       {cid && <Button disabled={loading} onClick={() => { setNext(null); setRetry((n) => n + 1); }}>Refresh workflows</Button>}</nav>
@@ -152,23 +182,6 @@ function WorkflowScreen() {
       agents={snap?.agents.filter((a) => a.kind === "ai" && a.status !== "terminated").map((a) => ({ id: a.id, alias: a.alias }))}
       initialTaskId={initialTaskId} ownerName={actorName(scope.identity)} onSaved={(result) => navigate(href(result.id), { state: navigationState })} />}
     {isNew && !verified && <p>Choose a current human member of this project before preparing a workflow draft.</p>}
-    {!isNew && !workflowId && list && <>
-      <div className="wf-filters"><label>Status<select value={filter} onChange={(e) => query("status", e.target.value)}>
-        <option value="open">Open workflows</option><option value="preparing">Preparing</option><option value="active">Active</option><option value="paused">Paused</option><option value="ready">Ready to finish</option><option value="completed">Completed</option><option value="cancelled">Cancelled</option><option value="all">All</option>
-      </select></label><label>Search loaded workflows<input type="search" value={search} onChange={(e) => query("search", e.target.value)} /></label>
-      <label>Owner<select value={owner} onChange={(e) => query("owner", e.target.value)}><option value="">Anyone</option>{[...new Set(list.workflows.map((w) => w.owner_human_id))].map((id) => <option key={id} value={id}>{actorName(id)}</option>)}</select></label></div>
-      <p>{rows.length} matching workflows shown from {list.workflows.length} loaded. {list.next_cursor ? "More workflows are available; search and owner filters apply to loaded pages." : "All available pages loaded."}</p>
-      {rows.length === 0 && <p>{list.workflows.length ? "No loaded workflows match these filters." : "No workflows yet. Create one to plan tasks around a shared goal."}</p>}
-      <ul className="wf-task-list">{rows.map((w) => <li key={w.id}><h2><Link to={href(w.id)} state={returnState(w.id)} ref={(element) => {
-        if (element && !restoredFocus.current && navigationState.workflowListFocus === w.id && workflowListReturnTarget(navigationState.workflowListReturn, cid!)) {
-          restoredFocus.current = true; element.focus();
-        }
-      }}>{w.title}</Link></h2><p>{w.goal}</p>
-        <p>Owner: {actorName(w.owner_human_id)} · {workflowLabel(w)}</p><WorkflowProgress accepted={w.progress.accepted} total={w.progress.total} />
-        {w.completion.blockers.length > 0 && <p>{w.completion.blockers[0].message}</p>}
-      </li>)}</ul>
-      {list.next_cursor && <Button disabled={loading} onClick={() => setNext(list.next_cursor ?? null)}>Load more workflows</Button>}
-    </>}
     {detail && <>
       <WorkflowSummary focusHeading workflow={{ id: detail.id, name: detail.title, goal: detail.goal, owner: actorName(detail.owner_human_id), displayLabel: workflowLabel(detail),
         modeLabel: detail.execution_mode === "serial" ? "One task at a time" : "Independent tasks together; tasks with dependencies take their turn alone",
@@ -190,5 +203,5 @@ function WorkflowScreen() {
           onSaved={() => { setStale(true); setRetry((n) => n + 1); }} />} />}
       {detail.progress.withdrawn > 0 && <p>{detail.progress.withdrawn} tasks withdrawn from scope. Withdrawn tasks do not count as accepted.</p>}
     </>}
-  </div>;
+  </div></Shell>;
 }

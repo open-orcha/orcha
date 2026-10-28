@@ -58,3 +58,46 @@
 .td-task-authority { min-width: 0; }
 .td-task-authority p { margin: 8px 0; }
 @media (max-width: 720px) { .td-task-authority button { min-height: 44px; white-space: normal; } }
+
+/* ===== #350 redesign (tokens only). `.wf-flush` is the new flush panel frame; the legacy
+   960 px column above stays for screens not yet rewritten and for `.wf-page` dialogs. ===== */
+.wf-page.wf-flush { max-width: none; margin: 0; height: var(--v2-content-h); min-height: 320px; display: flex; flex-direction: column; min-width: 0; font-size: inherit; }
+.wf-page.wf-flush p { max-width: none; margin: 0; }
+.wf-flush .v2-split { flex: 1; min-height: 0; }
+.wf-flush .v2-split-list, .wf-flush .v2-split-inspector { background: transparent; }
+.wf-flush .v2-split-inspector { border-left: 1px solid var(--v2-border-subtle, var(--v2-border)); }
+.wf-flush .v2-inspector-h { background: var(--v2-panel, var(--v2-canvas)); }
+/* toolbar (Shell toolbar slot) — same rules as .tl-toolbar / .tl-search */
+.wf-toolbar { gap: var(--v2-space-2); }
+.wf-toolbar .wf-scopes.v2-pills { flex: 0 1 auto; min-width: 0; overflow-x: auto; }
+.wf-search { position: relative; display: inline-flex; align-items: center; min-width: 0; }
+.wf-search > .v2-ico { position: absolute; left: 10px; width: 13px; height: 13px; color: var(--v2-text-3); pointer-events: none; }
+.wf-search-in { width: 170px; max-width: 100%; height: 28px; padding: 0 10px 0 28px; border-radius: var(--v2-radius-full, 999px); border: 1px solid var(--v2-border); background: transparent; color: var(--v2-text); font: inherit; font-size: var(--v2-fs-meta, 12px); }
+.wf-search-in::placeholder { color: var(--v2-text-3); }
+.wf-filtercount { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; font-size: var(--v2-fs-meta, 12px); color: var(--v2-text-3); flex: none; }
+/* list rows — same geometry as .tl-row (36 px, 44 touch) */
+.wf-list { flex: 1; min-height: 0; overflow: auto; padding: 4px var(--v2-space-2) var(--v2-space-4); }
+.wf-grp.v2-group { position: sticky; top: 0; z-index: 1; }
+.wf-rows { display: flex; flex-direction: column; }
+.wf-row.v2-row { display: flex; align-items: center; gap: 10px; min-height: 36px; height: 36px; padding: 0 var(--v2-space-3) 0 22px; border: 0; border-radius: 6px; font-size: var(--v2-fs-row, 13px); box-shadow: none; color: inherit; text-decoration: none; }
+.wf-row.v2-row::before { display: none; }
+.wf-row.v2-row:hover { background: var(--v2-hover); }
+.wf-row.v2-row.is-selected { background: var(--v2-selected); }
+.wf-row .wf-st { flex: none; display: inline-flex; }
+.wf-row .wf-title { flex: 0 1 auto; min-width: 120px; max-width: 46%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--v2-text); font-weight: var(--v2-fw-book, 450); }
+.wf-row .wf-goal { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--v2-text-3); font-size: var(--v2-fs-meta); }
+.wf-row .wf-chips { flex: none; display: inline-flex; align-items: center; gap: 6px; max-width: 42%; overflow: hidden; }
+.wf-row .wf-who { flex: none; display: inline-flex; align-items: center; justify-content: flex-end; min-width: 20px; }
+.wf-row .wf-sub { display: block; font-weight: 400; font-size: var(--v2-fs-meta); color: var(--v2-text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wf-row.is-two { height: auto; min-height: 44px; padding-block: 6px; }
+.wf-row.is-two .wf-title { white-space: normal; max-width: none; flex: 1 1 auto; display: flex; flex-direction: column; min-width: 0; }
+.wf-row.is-two .wf-title > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wf-noone { display: inline-block; width: 18px; height: 18px; border-radius: 50%; border: 1px dashed var(--v2-border-strong); flex: none; }
+/* progress: 5 px track, accepted fill = done colour (status, not accent) */
+.wf-prog { flex: none; display: inline-flex; align-items: center; gap: 6px; font-size: var(--v2-fs-meta); color: var(--v2-text-3); font-variant-numeric: tabular-nums; }
+.wf-prog-bar { width: 72px; height: 5px; border-radius: 3px; background: var(--v2-prio-bar-empty); overflow: hidden; }
+.wf-prog-bar > i { display: block; height: 100%; background: var(--v2-status-done); border-radius: 3px; }
+.wf-prog.is-lg .wf-prog-bar { width: 160px; height: 6px; }
+.wf-more { margin: var(--v2-space-2) var(--v2-space-3); }
+.wf-states { padding: var(--v2-space-4) var(--v2-panel-px); }
+@media (max-width: 720px) { .wf-row.v2-row { padding-left: var(--v2-space-3); border-radius: 0; min-height: 44px; height: auto; } .wf-row .wf-goal { display: none; } }
