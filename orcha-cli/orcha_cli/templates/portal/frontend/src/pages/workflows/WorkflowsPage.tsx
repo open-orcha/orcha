@@ -202,6 +202,7 @@ function WorkflowScreen() {
     </div></Shell>;
   }
   const selectedTask = detail?.tasks.find((t) => t.id === selectedId) ?? null;
+  const flexible = detail?.semantics_version === 2;
   const decideTask = detail?.tasks.find((t) => t.id === decideId && t.awaiting_loop_decision) ?? null;
   const saved = () => { setStale(true); setRetry((n) => n + 1); };
   const openTask = (id: string) => navigate(`/tasks?${new URLSearchParams({ task: id, cid: cid ?? "", workflowReturn: `${pathname}${location.search}` })}`, { state: navigationState });
@@ -270,7 +271,7 @@ function WorkflowScreen() {
       <WorkflowInput detail={detail} scope={scope} stale={stale} open={inputOpen} onOpen={() => setInputOpen(true)} onClose={() => setInputOpen(false)} onSaved={saved} onChecklist={() => setActionRequest({ action: "finish", seq: ++requestSeq.current })} />
       {!inputOpen && <><div className="wf-tabs-row">
         <Tabs label="Workflow views" value={tab} onChange={(t) => { query("tab", t); setTaskSearch(""); }} tabs={[
-          { key: "tasks", label: "Tasks", count: detail.tasks.length }, { key: "dependencies", label: "Dependencies" },
+          { key: "tasks", label: flexible ? "Steps" : "Tasks", count: detail.tasks.length }, { key: "dependencies", label: flexible ? "Route" : "Dependencies" },
           { key: "review", label: "Review history", count: detail.review_rounds?.length ?? null }, { key: "activity", label: "Activity" },
         ]} />
         {tab === "dependencies" && <div className="wf-tab-actions">

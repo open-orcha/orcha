@@ -65,6 +65,9 @@ export function WorkflowHeader({ detail, ownerName, verified, stale, frozen, onA
     return [{ label, danger: a === "cancel", disabled: !!reason, disabledReason: reason ?? undefined, onSelect: () => onAction(a) }];
   });
   if (primaryHidden) items.unshift({ label: WORKFLOW_ACTION_LABEL.finish, disabled: frozen, disabledReason: frozen ? "Wait for the current save to finish." : undefined, onSelect: () => onAction("finish") }, "separator");
+  // The loop in progress (#362 x03): the first group still running, else the last one that ran.
+  const groups = detail.semantics_version === 2 ? detail.repeat_groups ?? [] : [];
+  const loop = groups.find((g) => g.current_round > 0 && !["exited", "stopped"].includes(g.state)) ?? null;
   const progressTitle = `${detail.progress.accepted} of ${detail.progress.total} tasks accepted · ${detail.progress.objectives_accepted} of ${detail.progress.objectives_total} objectives accepted`;
   return <header className="wf-head">
     <h1 ref={titleRef} tabIndex={-1} className="wf-head-title">{detail.title}</h1>
@@ -75,7 +78,8 @@ export function WorkflowHeader({ detail, ownerName, verified, stale, frozen, onA
       <span aria-hidden="true">·</span>
       <Chip title={mode.long}>{mode.short}</Chip>
       <Tooltip label={progressTitle}><span><WorkflowProgressBar accepted={detail.progress.accepted} total={detail.progress.total} size="lg" />
-        <span className="wf-muted tnum"> · {detail.progress.objectives_accepted}/{detail.progress.objectives_total} objectives</span></span></Tooltip>
+        <span className="wf-muted tnum"> · {detail.progress.objectives_accepted}/{detail.progress.objectives_total} objectives{loop ? ` · round ${loop.current_round} of ${loop.max_rounds}` : ""}</span></span></Tooltip>
+      {detail.semantics_version === 2 && <span className="wf-muted tnum" title="Agent turns this run has used of its allowance. When it runs out, no new agent turn starts until the owner raises it.">agent turns {detail.turns_used ?? 0} of {detail.turn_allowance ?? 40}</span>}
       <Chip dot={goalAccepted ? "ok" : "warn"} title={goalAccepted ? "The current goal is accepted" : "The current goal still needs acceptance with saved evidence"}>{goalAccepted ? "Goal accepted" : "Goal needs acceptance"}</Chip>
       {detail.hidden ? <Chip dot="neutral" title={detail.hidden_reason ?? "Hidden from the usual list"}>Hidden</Chip> : null}
     </div>

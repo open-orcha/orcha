@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
 import { WorkflowLoopDecision, WorkflowLoopDecisionPrompt, WorkflowOwnerBar } from "./WorkflowLoopDecision";
+import { WorkflowHeader } from "./WorkflowHeader";
 import { WorkflowTaskInspector } from "./WorkflowTaskInspector";
 import { exampleTask, exampleWorkflow, jsonResponse } from "./workflowTestFixtures";
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
@@ -103,4 +104,16 @@ it("puts a Needs-you bar across the page for the owner and a waiting note for ev
   cleanup();
   const { container } = render(<WorkflowOwnerBar detail={exampleWorkflow({ tasks: [exampleTask({})] })} viewer="x" ownerName="Kedar" onDecide={onDecide} />);
   expect(container).toBeEmptyDOMElement();
+});
+
+it("shows the running loop's round and the agent turns used in the workflow header (x03, x11)", () => {
+  const running = { ...group, current_round: 2, max_rounds: 5, state: "running" };
+  const detail = exampleWorkflow({ semantics_version: 2, repeat_groups: [running], tasks: [exampleTask({})], turn_allowance: 40, turns_used: 7 });
+  render(<MemoryRouter><WorkflowHeader detail={detail} ownerName="Kedar" verified stale={false} frozen={false} onAction={vi.fn()} onRefresh={vi.fn()} refreshing={false} primaryHidden={false} /></MemoryRouter>);
+  expect(screen.getByText(/· round 2 of 5/)).toBeVisible();
+  expect(screen.getByText("agent turns 7 of 40")).toBeVisible();
+  cleanup();
+  render(<MemoryRouter><WorkflowHeader detail={exampleWorkflow({ tasks: [exampleTask({})] })} ownerName="Kedar" verified stale={false} frozen={false} onAction={vi.fn()} onRefresh={vi.fn()} refreshing={false} primaryHidden={false} /></MemoryRouter>);
+  expect(screen.queryByText(/agent turns/)).toBeNull();
+  expect(screen.queryByText(/· round \d/)).toBeNull();
 });
