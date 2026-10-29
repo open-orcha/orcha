@@ -62,6 +62,8 @@ internal fun WorkflowMenuSheet(
     onClose: () -> Unit,
 ) {
     if (action == MenuAction.ReviewRound) return WorkflowReviewRoundSheet(controller, detail, snapshot, onClose)
+    var objectiveId by remember { mutableStateOf<String?>(null) }
+    objectiveId?.let { oid -> return WorkflowObjectiveSheet(controller, detail, oid) { objectiveId = null } }
     val p = Orcha.palette
     val s by controller.state.collectAsState()
     val d = s.detail ?: detail
@@ -135,18 +137,26 @@ internal fun WorkflowMenuSheet(
             }
         }
         MenuAction.Move -> { { fresh().also { if (it == null) checkedPick = picked } } }
+        MenuAction.Settings -> {
+            {
+                fresh() ?: (controller.state.value.detail ?: d).let { latest ->
+                    WorkflowLogic.actionReason(latest, "patch", controller.hasHuman) ?: WorkflowLogic.modeChangeReason(latest, mode)
+                }
+            }
+        }
         MenuAction.ReviewRound -> null
         else -> fresh
     }
 
+    val loops = d.semanticsVersion == 2
+    val settingsInvalid = WorkflowLogic.settingsInvalid(d, title, goal, reason, listOf(taskLimit, roundLimit), turns)
     val startIds = impact?.tasks?.filter { it.selected && it.canStart }?.map { it.taskId }.orEmpty()
     val inputsValid = when (action) {
         MenuAction.Start -> impact != null && startIds.isNotEmpty()
         MenuAction.Cancel -> impact != null && reason.isNotBlank()
         MenuAction.Finish -> completion?.canFinish == true
         MenuAction.Hide -> visibility != null && (if (d.hidden) visibility?.canRestore == true else visibility?.canHide == true)
-        MenuAction.Settings -> title.isNotBlank() && goal.isNotBlank() &&
-            listOf(taskLimit, roundLimit, turns).all { it.toIntOrNull()?.let { n -> n > 0 } == true }
+        MenuAction.Settings -> settingsInvalid == null
         MenuAction.TransferOwner -> newOwner != null
         MenuAction.AddTasks -> newTitle.isNotBlank() && newDone.isNotBlank()
         MenuAction.Import -> picked.isNotEmpty() && checkedPick == picked && preview?.blockers.isNullOrEmpty()
@@ -165,7 +175,7 @@ internal fun WorkflowMenuSheet(
         check = check,
         checkedNote = "Checked against revision ${d.revision}.",
         confirmEnabled = serverReason == null && inputsValid,
-        disabledHint = serverReason ?: "Fill in the fields above, then check again.",
+        disabledHint = serverReason ?: settingsInvalid.takeIf { action == MenuAction.Settings } ?: "Fill in the fields above, then check again.",
         successNotice = when {
             hiding -> "Workflow hidden."
             restoring -> "Workflow restored."
@@ -181,7 +191,7 @@ internal fun WorkflowMenuSheet(
                     WorkflowWrites.workflowMutation(d, action.key, key, reason)
                 MenuAction.Hide -> WorkflowWrites.workflowMutation(d, if (d.hidden) "restore" else "hide", key, reason)
                 MenuAction.Settings -> WorkflowWrites.patch(
-                    d, key, title, goal, mode, taskLimit.toIntOrNull(), roundLimit.toIntOrNull(), turns.toIntOrNull(), reason,
+                    d, key, title, goal, mode, taskLimit.toIntOrNull(), roundLimit.toIntOrNull(), turns.toIntOrNull()?.takeIf { loops }, reason,
                 )
                 MenuAction.TransferOwner -> newOwner?.let { WorkflowWrites.transferOwner(d, key, it, reason) }
                 MenuAction.AddTasks -> WorkflowWrites.addTasks(
@@ -215,7 +225,7 @@ internal fun WorkflowMenuSheet(
                 OutlinedTextField(title, { title = it.take(200) }, Modifier.fillMaxWidth(), label = { Text("Title") })
                 OutlinedTextField(goal, { goal = it.take(4000) }, Modifier.fillMaxWidth(), label = { Text("Goal") }, minLines = 2)
                 Text("Run tasks", style = ltype(LType.BodyEmph), color = p.text)
-                listOf("serial" to "One at a time", "parallel" to "In parallel").forEach { (k, l) ->
+                listOf("serial" to "One task at a time", "parallel" to "Independent tasks together").forEach { (k, l) ->
                     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().clickable { mode = k }) {
                         RadioButton(mode == k, { mode = k })
                         Text(l, color = p.text)
@@ -223,8 +233,16 @@ internal fun WorkflowMenuSheet(
                 }
                 NumberField("Task limit", taskLimit) { taskLimit = it }
                 NumberField("Round limit", roundLimit) { roundLimit = it }
-                NumberField("Turn allowance", turns) { turns = it }
-                ReasonField(reason, required = false) { reason = it }
+                if (loops) NumberField("Agent-turn allowance", turns) { turns = it }
+                ReasonField(reason, required = true) { reason = it }
+                Text("Objectives", style = ltype(LType.BodyEmph), color = p.text)
+                if (d.objectives.isEmpty()) Text("No objectives were added to this workflow.", color = p.muted)
+                d.objectives.forEach { o ->
+                    Text(
+                        "Edit objective: ${o.title}", color = p.accent,
+                        modifier = Modifier.fillMaxWidth().clickable { objectiveId = o.id },
+                    )
+                }
             }
             MenuAction.TransferOwner -> {
                 if (humans.isEmpty()) Text("No other human in this project can own it.", color = p.muted)
@@ -315,5 +333,50 @@ private fun PickRow(title: String, checked: Boolean, onToggle: () -> Unit) {
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().clickable(onClick = onToggle)) {
         Checkbox(checked, { onToggle() })
         Text(title, color = p.text)
+    }
+}
+
+/* W22 objectives editor, opened from Workflow settings (web WorkflowObjectiveEditor): current vs
+   proposed criteria; saving sends acceptance of the objective and the goal back for review. */
+@Composable
+private fun WorkflowObjectiveSheet(
+    controller: WorkflowsController,
+    detail: WorkflowDetailDto,
+    objectiveId: String,
+    onClose: () -> Unit,
+) {
+    val p = Orcha.palette
+    val s by controller.state.collectAsState()
+    val d = s.detail ?: detail
+    val repo = controller.repository ?: return
+    val objective = d.objectives.firstOrNull { it.id == objectiveId } ?: return onClose()
+    var title by remember { mutableStateOf(objective.title) }
+    var criteria by remember { mutableStateOf(objective.criteria) }
+    var reason by remember { mutableStateOf("") }
+    val serverReason = WorkflowLogic.objectiveActionReason(d, objectiveId, "edit_objective", controller.hasHuman)
+    val invalid = if (title.isBlank() || criteria.isBlank() || reason.isBlank()) {
+        "Give the objective a title, completion criteria and reason for changing it."
+    } else null
+
+    WorkflowActionSheet(
+        controller = controller,
+        title = "Edit objective",
+        description = "Changing this objective requires its acceptance and the goal acceptance to be reviewed again. Existing evidence stays in the history.",
+        confirmLabel = "Save objective",
+        onClose = onClose,
+        check = {
+            checkRead({ repo.detail(d.id) }) { controller.applyDetail(it) }
+                ?: WorkflowLogic.objectiveActionReason(controller.state.value.detail ?: d, objectiveId, "edit_objective", controller.hasHuman)
+        },
+        checkedNote = "Checked against revision ${d.revision}.",
+        confirmEnabled = serverReason == null && invalid == null,
+        disabledHint = serverReason ?: invalid,
+        write = { key -> WorkflowWrites.editObjective(d, objectiveId, key, title, criteria, reason) },
+    ) {
+        OutlinedTextField(title, { title = it.take(200) }, Modifier.fillMaxWidth(), label = { Text("Objective title") })
+        OutlinedTextField(criteria, { criteria = it.take(4000) }, Modifier.fillMaxWidth(), label = { Text("Objective done when") }, minLines = 2)
+        OutlinedTextField(reason, { reason = it.take(4000) }, Modifier.fillMaxWidth(), label = { Text("Reason for changing objective") }, minLines = 2)
+        Text("Current: ${objective.criteria}", style = ltype(LType.Meta), color = p.text2)
+        Text("Proposed: ${criteria.trim()}", style = ltype(LType.Meta), color = p.text)
     }
 }

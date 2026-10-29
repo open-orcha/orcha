@@ -199,6 +199,29 @@ object WorkflowLogic {
         return availableActionReason(w.capability, t.availableActions, action, hasHuman)
     }
 
+    fun objectiveActionReason(w: WorkflowDetailDto, objectiveId: String, action: String, hasHuman: Boolean): String? {
+        if (w.hidden) return "Restore this hidden workflow before making changes."
+        return availableActionReason(w.capability, w.objectives.firstOrNull { it.id == objectiveId }?.availableActions.orEmpty(), action, hasHuman)
+    }
+
+    /** W22 mode change rule (web WorkflowSettings): a started workflow changes how work runs only while paused. */
+    fun modeChangeReason(latest: WorkflowDetailDto, mode: String): String? =
+        if (latest.launchEnabled && latest.status != "paused" && latest.executionMode != mode) {
+            "Pause new starts and wait for current turns before changing how work runs."
+        } else null
+
+    /** W22 field rule (web WorkflowSettings); turn allowance only on loop-capable (semantics v2) workflows. */
+    fun settingsInvalid(w: WorkflowDetailDto, title: String, goal: String, reason: String, limits: List<String>, turns: String): String? {
+        val loops = w.semanticsVersion == 2
+        return when {
+            title.isBlank() || goal.isBlank() || reason.isBlank() -> "Give the workflow a name, goal and reason for the change."
+            !(limits + if (loops) listOf(turns) else emptyList()).all { it.toIntOrNull()?.let { n -> n > 0 } == true } ->
+                "Enter positive whole-number limits."
+            loops && (turns.toIntOrNull() ?: 0) > 1000 -> "The agent-turn allowance can be at most 1000."
+            else -> null
+        }
+    }
+
     // ---- W03 header: primary action + overflow in the web's fixed order ----
 
     enum class MenuAction(val key: String, val label: String, val danger: Boolean = false) {

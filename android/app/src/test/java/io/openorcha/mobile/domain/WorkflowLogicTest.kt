@@ -84,4 +84,24 @@ class WorkflowLogicTest {
         assertEquals("1 task", WorkflowLogic.plural(1, "task"))
         assertEquals("3 tasks", WorkflowLogic.plural(3, "task"))
     }
+
+    @Test fun modeChangeNeedsPauseOnceStarted() {
+        val running = WorkflowDetailDto(launchEnabled = true, status = "active", executionMode = "serial")
+        assertEquals(
+            "Pause new starts and wait for current turns before changing how work runs.",
+            WorkflowLogic.modeChangeReason(running, "parallel"),
+        )
+        assertNull(WorkflowLogic.modeChangeReason(running, "serial"))
+        assertNull(WorkflowLogic.modeChangeReason(running.copy(status = "paused"), "parallel"))
+        assertNull(WorkflowLogic.modeChangeReason(running.copy(launchEnabled = false), "parallel"))
+    }
+
+    @Test fun settingsNeedReasonAndTurnAllowanceOnlyForLoops() {
+        val v1 = WorkflowDetailDto(semanticsVersion = 1)
+        val v2 = WorkflowDetailDto(semanticsVersion = 2)
+        assertEquals("Give the workflow a name, goal and reason for the change.", WorkflowLogic.settingsInvalid(v1, "T", "G", " ", listOf("3", "2"), "40"))
+        assertNull(WorkflowLogic.settingsInvalid(v1, "T", "G", "why", listOf("3", "2"), ""))
+        assertEquals("Enter positive whole-number limits.", WorkflowLogic.settingsInvalid(v2, "T", "G", "why", listOf("3", "2"), "0"))
+        assertEquals("The agent-turn allowance can be at most 1000.", WorkflowLogic.settingsInvalid(v2, "T", "G", "why", listOf("3", "2"), "1001"))
+    }
 }
