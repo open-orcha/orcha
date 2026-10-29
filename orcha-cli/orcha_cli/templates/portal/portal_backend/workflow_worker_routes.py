@@ -124,7 +124,15 @@ def confirm_worker_stopped(aid: str, rid: str, body: WorkflowStopObserved, reque
         after_stopped(svc, w, current_task, current_execution)
         cur.execute("SELECT state FROM workflow_executions WHERE id=%s", (e["id"],))
         result["state"] = cur.fetchone()["state"]
-        cur.execute("SELECT id FROM workflow_review_handoffs WHERE source_task_id=%s OR review_task_id=%s LIMIT 1", (task['id'],task['id']))
+        cur.execute("""SELECT id FROM workflow_review_handoffs
+            WHERE (source_task_id=%s AND source_work_revision=%s)
+               OR (review_task_id=%s AND review_work_revision=%s)
+               OR ((source_task_id=%s OR review_task_id=%s) AND phase='cancelled')
+            LIMIT 1""", (
+                task['id'], current_task['work_revision'],
+                task['id'], current_task['work_revision'],
+                task['id'], task['id'],
+            ))
         has_handoff = cur.fetchone() is not None
         if (
             not has_handoff and

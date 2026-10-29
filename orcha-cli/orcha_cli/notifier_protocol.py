@@ -170,6 +170,21 @@ def _round_lines(context):
                 lines.append(f"   Reviewer note: {_clip(this['note'], 1500)}")
             if this.get("owner_note"):
                 lines.append(f"   Owner note: {_clip(this['owner_note'], 1500)}")
+        if group.get("can_review_handoff"):
+            lines.append(
+                "This step directly feeds the group's review step. If its exact draft needs "
+                "agent review before human verification, POST the explicit review-handoff from "
+                f"this worker with review_task_id '{group['review_task_id']}', then exit for "
+                "runner-confirmed hand-over. That captured handoff satisfies only this direct "
+                "prerequisite for the current round; it does not accept either task."
+            )
+        elif group.get("is_review_step"):
+            lines.append(
+                "When this turn reviews a captured group handoff, first report the configured "
+                "loop outcome and findings using the outcome API above, then POST the matching "
+                "review verdict and exit. 'changes_requested' uses a send-back, owner question, "
+                f"or stop outcome; 'clean' reports the exit outcome '{group['exit_outcome']}'."
+            )
         for r in group.get("earlier_rounds") or []:
             texts = "; ".join(f["text"] for f in r.get("findings") or []) or "no findings"
             lines.append(f"   Round {r['round']} ended ({r['ended'] or 'open'}): {_clip(texts, 600)}")
@@ -199,8 +214,14 @@ def _render_workflow(workflow) -> Optional[str]:
                 result = json.dumps(result, ensure_ascii=False)
             lines.append(f"   Result: {_clip(result, 1500)}")
     lines.extend(_round_lines(workflow.get("round_context")))
-    lines.append("If unfinished work needs another workflow task to review it, use the explicit "
-                 "review-handoff API from your current worker, then exit for runner-confirmed "
-                 "handoff. Read docs/workflow-review-handoffs.md. Never mark unfinished work done "
-                 "to release the serial turn; CLEAN still requires human verification.")
+    group = (workflow.get("round_context") or {}).get("group")
+    if not group:
+        lines.append("If unfinished work needs another workflow task to review it, use the explicit "
+                     "review-handoff API from your current worker, then exit for runner-confirmed "
+                     "handoff. Read docs/workflow-review-handoffs.md. Never mark unfinished work done "
+                     "to release the serial turn; CLEAN still requires human verification.")
+    elif group.get("can_review_handoff") or group.get("is_review_step"):
+        lines.append("Read docs/workflow-review-handoffs.md for the exact handoff sequence. Never "
+                     "mark unfinished work done to release the serial turn; final verification is "
+                     "still human.")
     return "\n".join(lines)

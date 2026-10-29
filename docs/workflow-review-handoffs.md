@@ -4,10 +4,17 @@ The review handoff is an explicit worker API operation for prepared tasks in the
 workflow. It does not change their descriptions, definitions of done, dependencies,
 autonomy, holds, or approval records. Reviewers must be independently assigned.
 
-Use a review task with no dependency on acceptance of the draft it must review.
-An acceptance dependency means exactly that and is never waived by a handoff.
-Downstream implementation should depend on acceptance of the source task (and any
-other required tasks). Existing serial scheduling still admits just one turn.
+Outside a repeat group, use a review task with no dependency on acceptance of the draft
+it must review. An ordinary acceptance dependency is never waived by a handoff.
+
+Inside a repeat group, the group's review step must be downstream of its members. A
+captured handoff from the member that is the review step's **sole in-group direct
+prerequisite** is the round's explicit hand-over: it satisfies only that
+source-to-review prerequisite for the current round. It does not accept either task.
+An earlier member in a longer chain such as A -> B -> Review still follows normal
+acceptance before B starts; B may then hand off to Review. Holds, outside prerequisites
+and every other admission gate remain in force. Existing serial scheduling still
+admits just one turn.
 
 ## Worker sequence
 
@@ -25,11 +32,20 @@ other required tasks). Existing serial scheduling still admits just one turn.
    activation, and plan approval. Holds and other prerequisites still block it.
 3. Read `/api/workflows/{workflow}/review-handoffs` for the current round, source
    result, and immutable evidence references. Review those exact artifacts.
-4. POST `/api/agents/{reviewer}/runs/{run}/review-verdict` with `handoff_id`,
-   `verdict` (`changes_requested` or `clean`), and the substantive `result`; then exit.
-   Changes requested returns the turn to the original task after confirmed exit.
-   That worker corrects the work and requests another review. Each round is retained.
-5. CLEAN plus confirmed reviewer exit puts both exact results at
+4. For a repeat-group review, first report the review step's configured outcome and
+   findings with `POST /api/tasks/{task}/outcome`. Then POST
+   `/api/agents/{reviewer}/runs/{run}/review-verdict` with `handoff_id`, `verdict`
+   (`changes_requested` or `clean`), and the substantive `result`; then exit.
+   `changes_requested` must use a configured `return`, `ask_owner` or `stop` outcome.
+   `clean` must use the group's exit outcome. Outside a repeat group, the outcome call
+   is not required.
+5. After confirmed reviewer exit, a repeat-group route goes through the normal loop
+   engine. A return starts the next round, carries findings into the worker prompt and
+   preserves the round limit, stall and owner-decision rules. If the task requirements
+   did not change, the human-approved plan carries into the next round; the final work
+   still requires human verification. A non-group `changes_requested` verdict returns
+   the turn to the original task directly. Each handoff and group round is retained.
+6. CLEAN plus confirmed reviewer exit puts both exact results at
    `needs_verification`. Neither task is accepted automatically, even if task autonomy
    is on. A human uses the normal evidence-bound acceptance flow. Workflow Finish and
    PR merge remain human decisions.

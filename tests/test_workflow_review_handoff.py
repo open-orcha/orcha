@@ -1,8 +1,10 @@
 """Actual API design -> review -> correction -> CLEAN -> human verification."""
+import json
+
 import pytest
 from portal_backend.database import db_cursor
 from portal_backend import workflow_evidence_service as evidence
-from test_workflow_local_launch import Project, local_lane
+from test_workflow_local_launch import Project, local_lane, uid
 
 
 @pytest.fixture(autouse=True)
@@ -39,11 +41,289 @@ async def stopped(p, aid, r):
     return res.json()
 
 
-async def verdict(p,r,h,outcome):
+async def verdict(p,r,h,outcome,expect=200):
     res=await p.client.post(f"/api/agents/{p.bob}/runs/{r['run_id']}/review-verdict",json={
         'handoff_id':h['handoff_id'],'verdict':outcome,'result':'Review: '+outcome},
         headers={'X-Orcha-Run-Token':r['token']})
-    assert res.status_code==200,res.text
+    assert res.status_code==expect,res.text
+    return res.json()
+
+
+async def start_repeat(
+    p, *, max_rounds=3, outside_prerequisite=False, owner_outcome=False
+):
+    tasks = [
+        {'client_key': 'design', 'title': 'Task design', 'description': 'd',
+         'definition_of_done': 'done', 'assignee_id': p.ann, 'priority': 10},
+    ]
+    review_dependencies = ['design']
+    if outside_prerequisite:
+        tasks.append({'client_key': 'research', 'title': 'Task research', 'description': 'd',
+                      'definition_of_done': 'done', 'assignee_id': p.bob, 'priority': 20})
+        review_dependencies.append('research')
+    tasks.extend([
+        {'client_key': 'review', 'title': 'Task review', 'description': 'd',
+         'definition_of_done': 'done', 'assignee_id': p.bob,
+         'depends_on': review_dependencies, 'priority': 30,
+         'outcomes': [
+             {'name': 'Approved', 'kind': 'success'},
+             {'name': 'Changes requested', 'kind': 'changes'},
+         ],
+         'routes': [
+             {'outcome': 'Approved', 'destination': 'exit_group'},
+             {'outcome': 'Changes requested', 'destination': 'return',
+              'destination_task': 'design'},
+         ]},
+        {'client_key': 'implementation', 'title': 'Task implementation', 'description': 'd',
+         'definition_of_done': 'done', 'assignee_id': p.ann,
+         'depends_on': ['review'], 'priority': 40},
+    ])
+    if owner_outcome:
+        review = next(task for task in tasks if task['client_key'] == 'review')
+        review['outcomes'].append({'name': 'Ask owner', 'kind': 'custom'})
+        review['routes'].append({'outcome': 'Ask owner', 'destination': 'ask_owner'})
+    draft = {
+        'title': 'Repeat review', 'goal': 'Ship reviewed work', 'execution_mode': 'serial',
+        'idempotency_key': uid(), 'tasks': tasks,
+        'repeat_groups': [{
+            'name': 'Design review', 'member_tasks': ['design', 'review'],
+            'review_task': 'review', 'exit_outcome': 'Approved',
+            'max_rounds': max_rounds, 'stall_rule': 'findings_and_artifact',
+        }],
+    }
+    p.wid = (await p.call('POST', f'/api/containers/{p.cid}/workflows', draft, 201))['id']
+    detail = await p.detail(p.wid)
+    p.tasks = {t['title'].removeprefix('Task '): t['id'] for t in detail['tasks']}
+    for tid in p.tasks.values():
+        detail = await p.detail(p.wid)
+        task = next(t for t in detail['tasks'] if t['id'] == tid)
+        await p.call('POST', f'/api/tasks/{tid}/prepare',
+                     p.mutation(detail, expected_work_revision=task['work_revision']))
+    detail = await p.detail(p.wid)
+    await p.call('POST', f'/api/workflows/{p.wid}/start', p.mutation(
+        detail, task_ids=list(p.tasks.values()), holds=['start'],
+        task_revisions={t['id']: t['work_revision'] for t in detail['tasks']}))
+
+
+async def report_outcome(p, run, outcome, findings=()):
+    detail = await p.detail(p.wid)
+    task = next(t for t in detail['tasks'] if t['id'] == p.tasks['review'])
+    response = await p.client.post(
+        f"/api/tasks/{p.tasks['review']}/outcome",
+        json={'outcome': outcome, 'findings': [{'text': text} for text in findings],
+              'note': 'Review findings', 'expected_revision': detail['revision'],
+              'expected_work_revision': task['work_revision'], 'idempotency_key': uid()},
+        headers={'X-Orcha-Run-Token': run['token']},
+    )
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+async def test_repeat_group_handoff_routes_two_rounds_before_human_verification(client):
+    p = Project(client)
+    await start_repeat(p)
+    before = {t['id']: t['work_revision'] for t in (await p.detail(p.wid))['tasks']}
+
+    source = await launch(p, p.ann, 'design')
+    first = await handoff(p, source, 'Draft one')
+    await stopped(p, p.ann, source)
+    review = await launch(p, p.bob, 'review')
+    await report_outcome(p, review, 'Changes requested', ['Tighten the hierarchy'])
+    await verdict(p, review, first, 'changes_requested')
+    await stopped(p, p.bob, review)
+
+    detail = await p.detail(p.wid)
+    rows = {t['id']: t for t in detail['tasks']}
+    assert rows[p.tasks['design']]['work_revision'] == before[p.tasks['design']] + 1
+    assert rows[p.tasks['review']]['work_revision'] == before[p.tasks['review']] + 1
+    assert rows[p.tasks['design']]['can_start']
+    context = (await p.client.get(
+        f"/api/tasks/{p.tasks['design']}/round-context", headers=p.headers
+    )).json()
+    assert context['group']['round'] == 2
+    assert [f['text'] for f in context['group']['this_round']['findings']] == [
+        'Tighten the hierarchy'
+    ]
+
+    # The unchanged, human-approved plans carry into round two.  No second plan
+    # message or decision is created before either handoff operation.
+    correction = await launch(p, p.ann, 'design', approve=False)
+    second = await handoff(p, correction, 'Draft two')
+    await stopped(p, p.ann, correction)
+    review_two = await launch(p, p.bob, 'review', approve=False)
+    await report_outcome(p, review_two, 'Approved')
+    await verdict(p, review_two, second, 'clean')
+    await stopped(p, p.bob, review_two)
+
+    detail = await p.detail(p.wid)
+    rows = {t['id']: t for t in detail['tasks']}
+    assert rows[p.tasks['design']]['status'] == 'needs_verification'
+    assert rows[p.tasks['review']]['status'] == 'needs_verification'
+    assert rows[p.tasks['implementation']]['status'] == 'pending'
+    assert detail['repeat_groups'][0]['state'] == 'exited'
+    history = (await p.client.get(
+        f'/api/workflows/{p.wid}/review-handoffs'
+    )).json()['handoffs']
+    assert [row['phase'] for row in history] == ['superseded', 'clean']
+    with db_cursor() as (_, cur):
+        cur.execute("SELECT count(*) AS n FROM task_approval_records WHERE phase='plan' AND task_id IN (%s,%s)",
+                    (p.tasks['design'], p.tasks['review']))
+        assert cur.fetchone()['n'] == 2
+        cur.execute("SELECT count(*) AS n FROM workflow_task_acceptances")
+        assert cur.fetchone()['n'] == 0
+
+
+async def test_repeat_group_handoff_keeps_outside_prerequisites(client):
+    p = Project(client)
+    await start_repeat(p, outside_prerequisite=True)
+    source = await launch(p, p.ann, 'design')
+    refused = await handoff(p, source, expect=409)
+    assert refused['detail']['code'] == 'review_not_eligible'
+    blockers = refused['detail']['blockers']
+    assert [b['code'] for b in blockers] == ['prerequisites']
+    assert 'research' in blockers[0]['message']
+
+
+async def test_repeat_group_verdict_must_match_the_reported_outcome(client):
+    p = Project(client)
+    await start_repeat(p)
+    source = await launch(p, p.ann, 'design')
+    receipt = await handoff(p, source)
+    await stopped(p, p.ann, source)
+    review = await launch(p, p.bob, 'review')
+    await report_outcome(p, review, 'Approved')
+    refused = await verdict(p, review, receipt, 'changes_requested', expect=409)
+    assert refused['detail']['code'] == 'review_verdict_outcome_mismatch'
+
+
+async def test_repeat_group_prompt_names_the_supported_handoff_order(client):
+    from orcha_cli.notifier_protocol import _render_workflow
+    from portal_backend.workflow_prompt import workflow_for_prompt
+
+    p = Project(client)
+    await start_repeat(p)
+    with db_cursor() as (_, cur):
+        cur.execute('SELECT * FROM tasks WHERE id=%s', (p.tasks['design'],))
+        source_text = _render_workflow(workflow_for_prompt(cur, dict(cur.fetchone())))
+        cur.execute('SELECT * FROM tasks WHERE id=%s', (p.tasks['review'],))
+        review_text = _render_workflow(workflow_for_prompt(cur, dict(cur.fetchone())))
+    assert "review_task_id" in source_text and p.tasks['review'] in source_text
+    assert 'satisfies only this direct prerequisite' in source_text
+    assert 'first report the configured loop outcome and findings' in review_text
+    assert 'then POST the matching review verdict' in review_text
+
+
+@pytest.mark.parametrize('choice', ['raise_limit', 'reassign_continue'])
+async def test_repeat_group_round_limit_holds_both_results_until_owner_continues(client, choice):
+    p = Project(client)
+    await start_repeat(p, max_rounds=1)
+    source = await launch(p, p.ann, 'design')
+    receipt = await handoff(p, source)
+    await stopped(p, p.ann, source)
+    review = await launch(p, p.bob, 'review')
+    await report_outcome(p, review, 'Changes requested', ['One more pass'])
+    await verdict(p, review, receipt, 'changes_requested')
+    await stopped(p, p.bob, review)
+    detail = await p.detail(p.wid)
+    rows = {t['id']: t for t in detail['tasks']}
+    assert detail['repeat_groups'][0]['state'] == 'limit_reached'
+    assert rows[p.tasks['design']]['status'] == 'not_ready'
+    assert rows[p.tasks['review']]['status'] == 'not_ready'
+    assert rows[p.tasks['review']]['awaiting_loop_decision'] == 'limit_reached'
+
+    decision = {'kind': choice, 'task_id': p.tasks['review'], 'note': 'One more round'}
+    if choice == 'raise_limit':
+        decision['new_max_rounds'] = 2
+    await p.call('POST', f'/api/workflows/{p.wid}/decisions',
+                 p.mutation(detail, **decision))
+    detail = await p.detail(p.wid)
+    rows = {t['id']: t for t in detail['tasks']}
+    assert detail['repeat_groups'][0]['state'] == 'open'
+    assert detail['repeat_groups'][0]['current_round'] == 2
+    assert rows[p.tasks['design']]['can_start']
+
+
+@pytest.mark.parametrize('choice,state', [('accept_override', 'exited'), ('stop', 'stopped')])
+async def test_repeat_group_owner_can_end_a_handoff_at_the_round_limit(client, choice, state):
+    p = Project(client)
+    await start_repeat(p, max_rounds=1)
+    source = await launch(p, p.ann, 'design')
+    receipt = await handoff(p, source)
+    await stopped(p, p.ann, source)
+    review = await launch(p, p.bob, 'review')
+    await report_outcome(p, review, 'Changes requested', ['Owner decides'])
+    await verdict(p, review, receipt, 'changes_requested')
+    await stopped(p, p.bob, review)
+    detail = await p.detail(p.wid)
+    await p.call('POST', f'/api/workflows/{p.wid}/decisions', p.mutation(
+        detail, kind=choice, task_id=p.tasks['review']))
+    detail = await p.detail(p.wid)
+    rows = {t['id']: t for t in detail['tasks']}
+    assert detail['repeat_groups'][0]['state'] == state
+    assert rows[p.tasks['design']]['status'] == 'needs_verification'
+    assert rows[p.tasks['review']]['status'] == 'needs_verification'
+    history = (await p.client.get(
+        f'/api/workflows/{p.wid}/review-handoffs'
+    )).json()['handoffs']
+    assert history[-1]['phase'] == 'clean'
+    if choice == 'stop':
+        assert rows[p.tasks['implementation']]['route_state'] == 'not_selected'
+
+
+async def test_repeat_group_owner_can_pick_the_exit_after_a_handoff_question(client):
+    p = Project(client)
+    await start_repeat(p, owner_outcome=True)
+    source = await launch(p, p.ann, 'design')
+    receipt = await handoff(p, source)
+    await stopped(p, p.ann, source)
+    review = await launch(p, p.bob, 'review')
+    await report_outcome(p, review, 'Ask owner', ['Choose whether this is sufficient'])
+    await verdict(p, review, receipt, 'changes_requested')
+    await stopped(p, p.bob, review)
+    detail = await p.detail(p.wid)
+    rows = {t['id']: t for t in detail['tasks']}
+    assert detail['repeat_groups'][0]['state'] == 'awaiting_owner'
+    assert rows[p.tasks['design']]['status'] == 'not_ready'
+    assert rows[p.tasks['review']]['awaiting_loop_decision'] == 'ask_owner'
+
+    await p.call('POST', f'/api/workflows/{p.wid}/decisions', p.mutation(
+        detail, kind='pick_outcome', task_id=p.tasks['review'], outcome='Approved'))
+    detail = await p.detail(p.wid)
+    rows = {t['id']: t for t in detail['tasks']}
+    assert detail['repeat_groups'][0]['state'] == 'exited'
+    assert rows[p.tasks['design']]['status'] == 'needs_verification'
+    assert rows[p.tasks['review']]['status'] == 'needs_verification'
+
+
+async def test_repeat_group_stall_compares_captured_handoff_hashes(client):
+    p = Project(client)
+    await start_repeat(p, max_rounds=4)
+    for round_number in (1, 2):
+        source = await launch(p, p.ann, 'design', approve=round_number == 1)
+        receipt = await handoff(p, source, 'Unchanged draft')
+        await stopped(p, p.ann, source)
+        review = await launch(p, p.bob, 'review', approve=round_number == 1)
+        await report_outcome(p, review, 'Changes requested', ['Same finding'])
+        await verdict(p, review, receipt, 'changes_requested')
+        await stopped(p, p.bob, review)
+    detail = await p.detail(p.wid)
+    rows = {t['id']: t for t in detail['tasks']}
+    assert detail['repeat_groups'][0]['state'] == 'stalled'
+    assert detail['repeat_groups'][0]['current_round'] == 2
+    assert rows[p.tasks['design']]['status'] == 'not_ready'
+    assert rows[p.tasks['review']]['awaiting_loop_decision'] == 'stalled'
+    with db_cursor() as (_, cur):
+        cur.execute("SELECT stall FROM workflow_group_rounds WHERE end_reason='stall'")
+        stall = cur.fetchone()['stall']
+        stall = json.loads(stall) if isinstance(stall, str) else stall
+        assert stall['method'] == 'finding text and captured evidence hashes'
+    await p.call('POST', f'/api/workflows/{p.wid}/decisions', p.mutation(
+        detail, kind='resume_stalled', task_id=p.tasks['review'], note='Try one more round'))
+    detail = await p.detail(p.wid)
+    rows = {t['id']: t for t in detail['tasks']}
+    assert detail['repeat_groups'][0]['state'] == 'open'
+    assert detail['repeat_groups'][0]['current_round'] == 3
+    assert rows[p.tasks['design']]['can_start']
 
 
 @pytest.mark.parametrize('autonomy', ['off', 'on'])

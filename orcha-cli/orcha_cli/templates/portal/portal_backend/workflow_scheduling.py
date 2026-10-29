@@ -98,7 +98,34 @@ def waiting_on(task, dependencies, tasks, acceptances):
     return [p for p in (selected or prerequisites) if not satisfied(tasks[p], acceptances)]
 
 
-def stored_status(task, dependencies, tasks, acceptances, outside_evidence=None):
+def _effective_waiting_on(workflow, task, dependencies, tasks, acceptances):
+    """Prerequisites still owed after the one explicit handoff bridge.
+
+    A captured same-round review handoff is proof that the source worker has handed
+    the exact draft to the group's reviewer.  It satisfies only that direct
+    source-to-review prerequisite while the review turn is current; it is not a task
+    acceptance and it never clears an outside prerequisite or a hold.
+    """
+    waiting = waiting_on(task, dependencies, tasks, acceptances)
+    if (
+        workflow
+        and str(task["id"]) == str(workflow.get("review_handoff_target"))
+        and workflow.get("review_handoff_prerequisite") is not None
+    ):
+        waived = str(workflow["review_handoff_prerequisite"])
+        waiting = [tid for tid in waiting if str(tid) != waived]
+    return waiting
+
+
+def stored_status(
+    task,
+    dependencies,
+    tasks,
+    acceptances,
+    outside_evidence=None,
+    *,
+    workflow=None,
+):
     """Recompute waiting states without dropping ANY hold or owner decision.
 
     Running, terminal and review states are changed by lifecycle actions, never by a
@@ -117,9 +144,14 @@ def stored_status(task, dependencies, tasks, acceptances, outside_evidence=None)
         or task.get("start_hold")
         or task.get("human_hold_by")
         or task.get("awaiting_owner_decision")
+        or (workflow and workflow.get("paused_group_tasks", {}).get(task["id"]))
     ):
         return "not_ready"
-    return "pending" if waiting_on(task, dependencies, tasks, acceptances) else "ready"
+    return (
+        "pending"
+        if _effective_waiting_on(workflow, task, dependencies, tasks, acceptances)
+        else "ready"
+    )
 
 
 def _base_blockers(
@@ -179,9 +211,13 @@ def _base_blockers(
     prerequisites = dependencies.get(task["id"], ())
     if len(prerequisites) > 3 or any(p not in tasks for p in prerequisites):
         add("invalid_graph", "The prerequisite graph needs repair.")
-    elif waiting_on(task, dependencies, tasks, acceptances):
+    else:
+        waiting = _effective_waiting_on(
+            workflow, task, dependencies, tasks, acceptances
+        )
+    if len(prerequisites) <= 3 and all(p in tasks for p in prerequisites) and waiting:
         names = [
-            tasks[p]["title"] for p in waiting_on(task, dependencies, tasks, acceptances)
+            tasks[p]["title"] for p in waiting
         ]
         add("prerequisites", "Waiting for " + ", ".join(names) + ".")
     if task.get("route_state") == "not_selected":

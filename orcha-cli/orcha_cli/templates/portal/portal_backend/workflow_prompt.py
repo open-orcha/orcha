@@ -46,6 +46,15 @@ def round_context(cur, task, wid):
     if group:
         cur.execute("SELECT title FROM tasks WHERE id=%s", (group["review_task_id"],))
         review = cur.fetchone()
+        cur.execute(
+            """SELECT dependency.depends_on_id
+               FROM task_dependencies dependency
+               JOIN workflow_repeat_group_members member
+                 ON member.group_id=%s AND member.task_id=dependency.depends_on_id
+              WHERE dependency.task_id=%s""",
+            (group["id"], group["review_task_id"]),
+        )
+        group_review_prerequisites = [str(row["depends_on_id"]) for row in cur.fetchall()]
         cur.execute("SELECT round_number,trigger_kind,end_reason,inputs FROM workflow_group_rounds "
                     "WHERE group_id=%s ORDER BY round_number", (group["id"],))
         rounds = cur.fetchall()
@@ -57,7 +66,12 @@ def round_context(cur, task, wid):
             "max_rounds": group["max_rounds"],
             "state": group["state"],
             "review_step": review["title"] if review else None,
+            "review_task_id": str(group["review_task_id"]),
             "is_review_step": str(group["review_task_id"]) == str(task["id"]),
+            "can_review_handoff": (
+                str(group["review_task_id"]) != str(task["id"])
+                and group_review_prerequisites == [str(task["id"])]
+            ),
             "exit_outcome": group["exit_outcome"],
             "this_round": {
                 "trigger": current["trigger_kind"] if current else None,

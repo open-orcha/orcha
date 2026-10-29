@@ -519,7 +519,9 @@ class RoundGroup(BaseModel):
     max_rounds: int
     state: str
     review_step: str | None = None
+    review_task_id: str
     is_review_step: bool
+    can_review_handoff: bool = False
     exit_outcome: str
     this_round: ThisRound
     earlier_rounds: list[EarlierRound] = Field(default_factory=list)

@@ -5413,9 +5413,18 @@
             ],
             "title": "Review Step"
           },
+          "review_task_id": {
+            "type": "string",
+            "title": "Review Task Id"
+          },
           "is_review_step": {
             "type": "boolean",
             "title": "Is Review Step"
+          },
+          "can_review_handoff": {
+            "type": "boolean",
+            "title": "Can Review Handoff",
+            "default": false
           },
           "exit_outcome": {
             "type": "string",
@@ -5438,6 +5447,7 @@
           "round",
           "max_rounds",
           "state",
+          "review_task_id",
           "is_review_step",
           "exit_outcome",
           "this_round"

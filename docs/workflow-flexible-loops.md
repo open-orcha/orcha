@@ -47,15 +47,25 @@ Start. Prerequisites stay acyclic; a loop is a repeat group, never a cycle in th
 2. `POST /api/tasks/{tid}/outcome/preview` shows, read-only, what that outcome would do:
    which steps run again, which later steps would need redoing, which branch steps are not
    needed, and whether the round limit stops it.
-3. The rule is applied only when the result is **accepted** under the step's own approval
-   rule (autonomy ON or OFF), in the same transaction, once.
+3. Normally the rule is applied only when the result is **accepted** under the step's
+   own approval rule (autonomy ON or OFF), in the same transaction, once. The exception
+   is an explicit same-group review handoff: after the reviewer reports the configured
+   outcome and matching handoff verdict, confirmed reviewer exit applies that route
+   without accepting either unfinished task.
 4. `return` ends the round and starts the next one: the repeat set (the destination and the
    loop steps between it and the review step) gets a new work revision, like Retry, and the
    new round carries the findings, note and who sent it back.
 5. At the round limit the loop waits for the owner (`limit_reached`). If the same findings
-   come back on unchanged work, it waits as `stalled`. An accepted step with outcomes but no
-   report waits as `missing_outcome`. `ask_owner` waits as `ask_owner`. Steps waiting on a
-   decision do not count as satisfied prerequisites, and Finish is blocked meanwhile.
+   come back on unchanged work, it waits as `stalled`. For handoff-driven rounds, unchanged
+   work means the captured evidence SHA-256 values match; two empty evidence sets never
+   count as unchanged. An accepted step with outcomes but no report waits as
+   `missing_outcome`. `ask_owner` waits as `ask_owner`. Both unfinished handoff tasks stay
+   held while the owner decides; the source never becomes ready by accident. Steps waiting
+   on a decision do not count as satisfied prerequisites, and Finish is blocked meanwhile.
+6. `clean` with the configured exit outcome puts the exact source and review results at
+   `needs_verification`. A human verifies them once after agent review. A return outcome
+   starts the next round without another plan approval when the task requirements digest
+   is unchanged; changed requirements still require a new plan approval.
 
 ## Owner decisions
 
@@ -65,6 +75,12 @@ Start. Prerequisites stay acyclic; a loop is a repeat group, never a cycle in th
 `resume_stalled` (`note` goes to the next round), `pick_outcome` (`outcome`, for
 `missing_outcome` and `ask_owner`), and `stop`. Each one is recorded with the outcome that
 caused it and written to the audit log.
+
+For a handoff-driven loop, continuing decisions (`raise_limit`, `reassign_continue`,
+`resume_stalled`, and a return chosen with `pick_outcome`) start the next round from the
+captured findings. Ending decisions (`accept_override`, `stop`, or an exit chosen with
+`pick_outcome`) retain both exact results for final human verification. They never accept
+the draft implicitly.
 
 ## Editing after Start
 
@@ -78,8 +94,10 @@ after Start writes a new definition version; Start writes version 1.
 
 The prompt for a version-2 step lists the outcomes to report with the report URL, and for
 a loop member its round of the limit, the rule that ends the loop, what this round must
-address and the earlier rounds (trimmed oldest-first to 64 KB). The same view is
-`GET /api/tasks/{tid}/round-context`.
+address and the earlier rounds (trimmed oldest-first to 64 KB). A member is told to use a
+review handoff only when it is the sole in-group direct prerequisite of the group's
+review step. The reviewer is told to report the loop outcome and findings before the
+matching verdict. The same view is `GET /api/tasks/{tid}/round-context`.
 
 ## Portal
 

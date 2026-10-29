@@ -361,6 +361,8 @@ class WorkflowService:
         if handoff:
             w['review_handoff_target'] = (handoff['review_task_id'] if handoff['phase'] == 'review'
                 else handoff['source_task_id'] if handoff['phase'] == 'correction' else 'waiting_for_stop')
+            if handoff['phase'] == 'review':
+                w['review_handoff_prerequisite'] = handoff['source_task_id']
         eligibility = workflow_eligibility(
             w, tasks, deps, acceptances, executions, outside, availability
         )
@@ -1115,15 +1117,22 @@ class WorkflowService:
             if kind == "release" and "human" in holds:
                 t["human_hold_by"] = None
         sim_w = dict(w, launch_enabled=True) if kind == "start" else w
-        for t in sim.values():
-            t["status"] = stored_status(
-                t, deps, sim, s["acceptances"], s["outside_evidence"]
-            )
         from portal_backend.workflow_review_handoff import active_handoff
         handoff = active_handoff(self.cur, wid)
         if handoff:
             sim_w['review_handoff_target'] = (handoff['review_task_id'] if handoff['phase'] == 'review'
                 else handoff['source_task_id'] if handoff['phase'] == 'correction' else 'waiting_for_stop')
+            if handoff['phase'] == 'review':
+                sim_w['review_handoff_prerequisite'] = handoff['source_task_id']
+        for t in sim.values():
+            t["status"] = stored_status(
+                t,
+                deps,
+                sim,
+                s["acceptances"],
+                s["outside_evidence"],
+                workflow=sim_w,
+            )
         eligibility = workflow_eligibility(
             sim_w,
             sim,
@@ -1246,6 +1255,7 @@ class WorkflowService:
                 s["tasks"],
                 s["acceptances"],
                 s["outside_evidence"].get(tid),
+                workflow=s["workflow"],
             )
             if state != task["status"]:
                 self.cur.execute("UPDATE tasks SET status=%s WHERE id=%s", (state, tid))
@@ -2779,29 +2789,58 @@ class WorkflowService:
 
         if not texts(d["findings"]) or texts(d["findings"]) != texts(previous["findings"]):
             return None
-        artifacts = []
-        for rnd in (group["current_round"] - 1, group["current_round"]):
-            artifacts.append(
-                sorted(
-                    (i["deliverable_id"], i["deliverable_version"])
-                    for a in self.rows(
-                        "SELECT a.evidence_items FROM workflow_task_acceptances a JOIN workflow_step_instances i ON i.task_id=a.task_id AND i.work_revision=a.work_revision JOIN workflow_group_rounds g ON g.id=i.group_round_id WHERE g.group_id=%s AND g.round_number=%s AND a.task_id<>%s",
-                        (group["id"], rnd, group["review_task"]),
-                    )
-                    for i in (
-                        json.loads(a["evidence_items"])
-                        if isinstance(a["evidence_items"], str)
-                        else a["evidence_items"]
-                    )
+        rounds = (group["current_round"] - 1, group["current_round"])
+        handoff_artifacts = [
+            sorted(
+                row["sha256"]
+                for row in self.rows(
+                    """SELECT evidence.sha256
+                       FROM workflow_review_handoffs handoff
+                       JOIN workflow_step_instances instance
+                         ON instance.task_id=handoff.source_task_id
+                        AND instance.work_revision=handoff.source_work_revision
+                       JOIN workflow_group_rounds round
+                         ON round.id=instance.group_round_id
+                       JOIN workflow_executions execution
+                         ON execution.id=handoff.source_execution_id
+                       JOIN workflow_evidence evidence
+                         ON evidence.evidence_set_id=execution.current_evidence_set_id
+                      WHERE round.group_id=%s AND round.round_number=%s
+                        AND handoff.phase<>'cancelled'
+                      ORDER BY evidence.sha256""",
+                    (group["id"], rnd),
                 )
             )
-        if artifacts[0] != artifacts[1]:
+            for rnd in rounds
+        ]
+        if any(handoff_artifacts):
+            artifacts = handoff_artifacts
+            method = "finding text and captured evidence hashes"
+        else:
+            artifacts = []
+            for rnd in rounds:
+                artifacts.append(
+                    sorted(
+                        (i["deliverable_id"], i["deliverable_version"])
+                        for a in self.rows(
+                            "SELECT a.evidence_items FROM workflow_task_acceptances a JOIN workflow_step_instances i ON i.task_id=a.task_id AND i.work_revision=a.work_revision JOIN workflow_group_rounds g ON g.id=i.group_round_id WHERE g.group_id=%s AND g.round_number=%s AND a.task_id<>%s",
+                            (group["id"], rnd, group["review_task"]),
+                        )
+                        for i in (
+                            json.loads(a["evidence_items"])
+                            if isinstance(a["evidence_items"], str)
+                            else a["evidence_items"]
+                        )
+                    )
+                )
+            method = "finding text and file versions"
+        if not artifacts[0] or not artifacts[1] or artifacts[0] != artifacts[1]:
             return None
         return {
             "compared_rounds": [group["current_round"] - 1, group["current_round"]],
             "unchanged_findings": texts(d["findings"]),
             "artifact_unchanged": True,
-            "method": "finding text and file versions",
+            "method": method,
         }
 
     def _started(self, t):
@@ -3004,6 +3043,9 @@ class WorkflowService:
                 }[kind],
                 note=b.get("note") or None,
             )
+        if group:
+            from portal_backend.workflow_review_handoff import finalize_routed_group_handoff
+            finalize_routed_group_handoff(self, w, tid)
         self.cur.execute(
             "INSERT INTO workflow_owner_decisions(id,workflow_id,task_id,group_id,subject_kind,chosen,original_outcome,detail,reason,decided_by) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
             (

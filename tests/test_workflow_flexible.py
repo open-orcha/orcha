@@ -527,6 +527,33 @@ def test_version_one_prompt_has_no_round_context(setup_workflow, monkeypatch):
         assert "round_context" not in workflow_for_prompt(cur, dict(cur.fetchone()))
 
 
+def test_only_the_direct_group_member_is_told_to_handoff(setup_workflow, flexible):
+    from orcha_cli.notifier_protocol import _render_workflow
+    from portal_backend.workflow_prompt import workflow_for_prompt
+
+    execute = setup_workflow[-1]
+    worker = setup_workflow[2]
+    draft = loop_draft(worker)
+    draft['tasks'].insert(1, {
+        'client_key': 'polish', 'title': 'Polish the launch post',
+        'definition_of_done': 'A polished draft', 'assignee_id': worker,
+        'depends_on': ['write'],
+    })
+    review = next(task for task in draft['tasks'] if task['client_key'] == 'review')
+    review['depends_on'] = ['polish']
+    draft['repeat_groups'][0]['member_tasks'] = ['write', 'polish', 'review']
+    w = prepare_and_start(setup_workflow, execute('create', draft))
+    ids = {t['title']: t['id'] for t in w['tasks']}
+    with db_cursor(readonly=True) as (_, cur):
+        cur.execute('SELECT * FROM tasks WHERE id=%s', (ids['Write the launch post'],))
+        write_prompt = _render_workflow(workflow_for_prompt(cur, dict(cur.fetchone())))
+        cur.execute('SELECT * FROM tasks WHERE id=%s', (ids['Polish the launch post'],))
+        polish_prompt = _render_workflow(workflow_for_prompt(cur, dict(cur.fetchone())))
+    assert 'review_task_id' not in write_prompt
+    assert 'review_task_id' in polish_prompt
+    assert ids['Review the post'] in polish_prompt
+
+
 @pytest.mark.asyncio
 async def test_round_context_endpoint_matches_the_prompt(client, setup_workflow, flexible):
     execute = setup_workflow[-1]

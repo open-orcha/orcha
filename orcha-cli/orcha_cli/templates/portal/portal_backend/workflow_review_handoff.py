@@ -87,10 +87,150 @@ def require_plan(cur, task):
         AND work_revision=%s AND requirements_sha256=%s LIMIT 1""",
         (task['id'], task['work_revision'], requirements_digest(task)))
     approved = cur.fetchone()
+    if not approved:
+        # A repeat round changes the work revision, not the requirements.  Carry a
+        # human-approved plan from an earlier round of this same group when its
+        # requirements digest is unchanged; retries outside the group still need a
+        # fresh approval.
+        cur.execute("""SELECT 1
+            FROM task_approval_records a
+            JOIN workflow_step_instances old_i
+              ON old_i.task_id=a.task_id AND old_i.work_revision=a.work_revision
+            JOIN workflow_group_rounds old_r ON old_r.id=old_i.group_round_id
+            JOIN workflow_step_instances current_i
+              ON current_i.task_id=a.task_id AND current_i.work_revision=%s
+            JOIN workflow_group_rounds current_r ON current_r.id=current_i.group_round_id
+            WHERE a.task_id=%s AND a.phase='plan' AND a.requirements_sha256=%s
+              AND old_r.group_id=current_r.group_id
+              AND old_r.round_number<=current_r.round_number
+            LIMIT 1""", (task['work_revision'], task['id'], requirements_digest(task)))
+        approved = cur.fetchone()
     cur.execute("SELECT decision FROM decisions WHERE subject_type='plan_approval' AND subject_id=%s ORDER BY created_at DESC LIMIT 1", (str(task['id']),))
     latest = cur.fetchone()
     if not approved or not latest or latest['decision'] != 'approve':
         conflict('plan_approval_required', 'Approve the current plan before handing off work.')
+
+
+def _repeat_group_bridge(svc, w, source, review):
+    """The one dependency a captured handoff may satisfy for this group round."""
+    if w.get('semantics_version', 1) != 2:
+        return None
+    return svc.one("""SELECT g.*
+        FROM workflow_repeat_groups g
+        JOIN workflow_repeat_group_members source_member
+          ON source_member.group_id=g.id AND source_member.task_id=%s
+        JOIN workflow_repeat_group_members review_member
+          ON review_member.group_id=g.id AND review_member.task_id=%s
+        JOIN task_dependencies dependency
+          ON dependency.task_id=%s AND dependency.depends_on_id=%s
+        JOIN workflow_step_instances source_instance
+          ON source_instance.task_id=%s AND source_instance.work_revision=%s
+        JOIN workflow_step_instances review_instance
+          ON review_instance.task_id=%s AND review_instance.work_revision=%s
+        JOIN workflow_group_rounds round
+          ON round.id=source_instance.group_round_id
+         AND round.id=review_instance.group_round_id
+         AND round.group_id=g.id
+         AND round.round_number=g.current_round
+        WHERE g.workflow_id=%s AND g.review_task_id=%s AND g.state='open'
+          AND 1=(
+              SELECT count(*)
+              FROM task_dependencies group_dependency
+              JOIN workflow_repeat_group_members group_member
+                ON group_member.group_id=g.id
+               AND group_member.task_id=group_dependency.depends_on_id
+              WHERE group_dependency.task_id=g.review_task_id
+          )
+        LIMIT 1""", (
+            source['id'], review['id'], review['id'], source['id'],
+            source['id'], source['work_revision'], review['id'],
+            review['work_revision'], w['id'], review['id'],
+        ))
+
+
+def _group_route(svc, w, review, execution):
+    """The current review worker's unapplied outcome and its resolved route."""
+    decision = svc.one("""SELECT d.*,r.outcome_name,r.findings,r.note,
+            r.reporter_id,r.reporter_kind,r.generation
+        FROM workflow_route_decisions d
+        JOIN workflow_outcome_reports r ON r.id=d.report_id
+        WHERE r.task_id=%s AND r.work_revision=%s""",
+        (review['id'], review['work_revision']))
+    if (
+        not decision
+        or decision['applied_at']
+        or str(decision['reporter_id']) != str(execution['claimant_id'])
+        or decision['reporter_kind'] != 'ai'
+        or decision['generation'] != execution['generation']
+    ):
+        conflict(
+            'review_outcome_required',
+            'Report this review turn\'s loop outcome and findings before its handoff verdict.',
+        )
+    from portal_backend import workflow_routing as routing
+    preview = routing.resolve(
+        svc.snapshot(w['id']), routing.load_flow(svc, w['id']),
+        review['id'], decision['outcome_name'],
+    )
+    return decision, preview
+
+
+def _validate_group_verdict(svc, w, group, review, execution, verdict):
+    _, preview = _group_route(svc, w, review, execution)
+    is_exit = (
+        preview['outcome'].casefold() == group['exit_outcome'].casefold()
+        and preview['destination'] not in {'return', 'ask_owner'}
+    )
+    if verdict == 'clean' and not is_exit:
+        conflict(
+            'review_verdict_outcome_mismatch',
+            f"CLEAN must report the loop's exit outcome '{group['exit_outcome']}'.",
+        )
+    if verdict == 'changes_requested' and (
+        is_exit or preview['destination'] not in {'return', 'ask_owner', 'stop'}
+    ):
+        conflict(
+            'review_verdict_outcome_mismatch',
+            'Changes requested must send work back, ask the owner, or stop the loop.',
+        )
+
+
+def _finalize_group_handoff(svc, w, handoff):
+    """Put both exact unfinished results at the one final human-verification gate."""
+    source = svc.task(w['id'], handoff['source_task_id'], handoff['source_work_revision'])
+    review = svc.task(w['id'], handoff['review_task_id'], handoff['review_work_revision'])
+    saved_reference(svc, source, handoff['source_execution_id'])
+    saved_reference(svc, review, handoff['review_execution_id'])
+    for task, result in (
+        (source, handoff['source_result']),
+        (review, handoff['review_result']),
+    ):
+        svc.cur.execute(
+            "UPDATE tasks SET status='needs_verification',result=%s WHERE id=%s",
+            (json.dumps({'result': result, 'review_handoff_id': str(handoff['id'])}), task['id']),
+        )
+        svc.notice(w, 'workflow_task_awaiting_acceptance', task['id'], task['work_revision'])
+    svc.cur.execute("UPDATE workflow_review_handoffs SET phase='clean' WHERE id=%s", (handoff['id'],))
+
+
+def finalize_routed_group_handoff(svc, w, review_task_id):
+    """Finish an owner-routed handoff when the owner exits or stops its group."""
+    review = svc.task(w['id'], review_task_id)
+    group = svc.one(
+        "SELECT state FROM workflow_repeat_groups WHERE workflow_id=%s AND review_task_id=%s",
+        (w['id'], review_task_id),
+    )
+    if not group or group['state'] not in {'exited', 'stopped'}:
+        return
+    handoff = svc.one("""SELECT h.* FROM workflow_review_handoffs h
+        JOIN tasks source ON source.id=h.source_task_id
+        WHERE h.review_task_id=%s AND h.review_work_revision=%s
+          AND source.work_revision=h.source_work_revision
+          AND h.phase='superseded'
+        ORDER BY h.created_at DESC,h.id DESC LIMIT 1""",
+        (review_task_id, review['work_revision']))
+    if handoff:
+        _finalize_group_handoff(svc, w, handoff)
 
 
 def _capture(cur, task, execution, result):
@@ -109,7 +249,9 @@ def request_review(svc, w, source, execution, review, result):
             conflict('handoff_receipt_conflict', 'This turn already handed off different work.')
         return {'handoff_id': str(previous['id']), 'phase': previous['phase']}
     require_plan(svc.cur, source)
-    if source['status'] != 'in_progress' or review['status'] not in {'ready', 'in_progress'}:
+    group = _repeat_group_bridge(svc, w, source, review)
+    review_states = {'ready', 'in_progress'} | ({'pending'} if group else set())
+    if source['status'] != 'in_progress' or review['status'] not in review_states:
         conflict('handoff_unavailable', 'Both unfinished tasks must be available for a review handoff.')
     if source['id'] == review['id']:
         conflict('independent_review_required', 'Choose a different assigned reviewer.')
@@ -120,12 +262,19 @@ def request_review(svc, w, source, execution, review, result):
         if (prior['phase'] != 'correction' or prior['source_task_id'] != source['id']
                 or prior['review_task_id'] != review['id']):
             conflict('handoff_in_progress', 'Finish the current review handoff first.')
-    # No dependency or hold may be waived. Assess the reviewer without the source's
-    # exclusive turn, which is the one thing this explicit handoff will release.
+    # Ordinary handoffs waive no dependency.  A same-round repeat-group handoff
+    # satisfies only its direct source-to-review prerequisite; every outside
+    # prerequisite, hold and admission gate remains visible here and in scheduling.
     snapshot = svc.snapshot(w['id'])
     from portal_backend.workflow_scheduling import _base_blockers
     candidate = dict(review, status='ready')
-    blockers = _base_blockers(dict(snapshot['workflow'], review_handoff_target=None), candidate, snapshot['tasks'],
+    eligibility_workflow = dict(snapshot['workflow'], review_handoff_target=None)
+    if group:
+        eligibility_workflow.update(
+            review_handoff_target=review['id'],
+            review_handoff_prerequisite=source['id'],
+        )
+    blockers = _base_blockers(eligibility_workflow, candidate, snapshot['tasks'],
         snapshot['dependencies'], snapshot['acceptances'], [], snapshot['outside_evidence'],
         {review['id']: svc.hooks.availability(svc.cur, review)}, 'worker')
     if blockers or svc.live_turn(review['id']):
@@ -155,8 +304,11 @@ def record_verdict(svc, w, task, execution, hid, verdict, result):
     if not h or str(h['id']) != hid or h['phase'] != 'review' or h['review_task_id'] != task['id']:
         conflict('review_handoff_changed', 'This is not the current review turn.')
     source = svc.task(w['id'], h['source_task_id'], h['source_work_revision'])
-    svc.task(w['id'], h['review_task_id'], h['review_work_revision'])
+    review = svc.task(w['id'], h['review_task_id'], h['review_work_revision'])
     require_independent_reviewer(svc, h['source_task_id'], h['source_execution_id'], execution['claimant_id'])
+    group = _repeat_group_bridge(svc, w, source, review)
+    if group:
+        _validate_group_verdict(svc, w, group, review, execution, verdict)
     saved_reference(svc, source, h['source_execution_id'])
     _capture(svc.cur, task, execution, result)
     svc.cur.execute("UPDATE workflow_review_handoffs SET phase='review_stopping',verdict=%s,review_result=%s,review_execution_id=%s WHERE id=%s",
@@ -175,6 +327,38 @@ def saved_reference(svc, task, eid):
     ref = evidence_reference(svc.cur, e['current_evidence_set_id'])
     svc.hooks.validate_evidence(svc.cur, task, ref)
     return ref
+
+
+def _route_group_after_stop(svc, w, source, review, execution, handoff):
+    """Close the handoff first, then let the existing loop engine route it."""
+    _group_route(svc, w, review, execution)
+    svc.cur.execute(
+        "UPDATE tasks SET status='not_ready' WHERE id IN (%s,%s)",
+        (source['id'], review['id']),
+    )
+    # _repeat bumps work revisions.  End the active handoff before applying the
+    # route so reconciliation cannot mistake that intentional bump for an
+    # interrupted worker and put the new round on an owner hold.
+    svc.cur.execute(
+        "UPDATE workflow_review_handoffs SET phase='superseded' WHERE id=%s",
+        (handoff['id'],),
+    )
+    from portal_backend.workflow_service import WorkflowActor
+    reviewer = svc.actor(
+        WorkflowActor(str(execution['claimant_id']), True, True), w['container_id']
+    )
+    svc._apply_route(w, review, reviewer)
+    state = svc.one(
+        "SELECT state FROM workflow_repeat_groups WHERE workflow_id=%s AND review_task_id=%s",
+        (w['id'], review['id']),
+    )
+    current = svc.one(
+        "SELECT * FROM workflow_review_handoffs WHERE id=%s", (handoff['id'],)
+    )
+    if state and state['state'] in {'exited', 'stopped'}:
+        _finalize_group_handoff(svc, w, current)
+        return 'clean'
+    return 'superseded'
 
 
 def after_stopped(svc, w, task, execution):
@@ -205,18 +389,19 @@ def after_stopped(svc, w, task, execution):
     saved_reference(svc, task, execution['id'])
     fence_execution(svc.cur, current)
     svc.cur.execute("UPDATE workflow_executions SET state='released',released_at=%s,release_reason='review_handoff' WHERE id=%s", (sql.utcnow(), execution['id']))
+    group = _repeat_group_bridge(svc, w, source, review) if review_side else None
     if source_side:
         phase, target = 'review', review
+    elif group:
+        phase = _route_group_after_stop(svc, w, source, review, current, h)
+        target = None
     elif h['verdict'] == 'changes_requested':
         phase, target = 'correction', source
     else:
         phase, target = 'clean', None
-        saved_reference(svc, source, h['source_execution_id'])
-        for t, result, eid in [(source,h['source_result'],h['source_execution_id']), (review,h['review_result'],h['review_execution_id'])]:
-            svc.cur.execute("UPDATE tasks SET status='needs_verification',result=%s WHERE id=%s",
-                (json.dumps({'result':result,'review_handoff_id':str(h['id'])}),t['id']))
-            svc.notice(w,'workflow_task_awaiting_acceptance',t['id'],t['work_revision'])
-    svc.cur.execute('UPDATE workflow_review_handoffs SET phase=%s WHERE id=%s', (phase,h['id']))
+        _finalize_group_handoff(svc, w, h)
+    if not group:
+        svc.cur.execute('UPDATE workflow_review_handoffs SET phase=%s WHERE id=%s', (phase,h['id']))
     from portal_backend.agent_status import log_event
     log_event(svc.cur, w['container_id'], 'system', None, 'task', task['id'],
               'review_handoff_routed', {'handoff_id': str(h['id']), 'phase': phase})
@@ -228,9 +413,24 @@ def after_stopped(svc, w, task, execution):
                 'task_id':str(target['id']), 'preview':f"Review handoff: {phase}. Read /api/workflows/{w['id']}/review-handoffs for the exact evidence and verdict."})
 
 
+def _relevant_handoff(svc, task):
+    current = svc.one("""SELECT * FROM workflow_review_handoffs
+        WHERE (source_task_id=%s AND source_work_revision=%s)
+           OR (review_task_id=%s AND review_work_revision=%s)
+        ORDER BY created_at DESC,id DESC LIMIT 1""",
+        (task['id'], task['work_revision'], task['id'], task['work_revision']))
+    if current:
+        return current
+    # An interrupted review remains a durable CLEAN requirement across owner Retry.
+    # A routed repeat round uses `superseded`, so it does not poison the next round.
+    return svc.one("""SELECT * FROM workflow_review_handoffs
+        WHERE (source_task_id=%s OR review_task_id=%s) AND phase='cancelled'
+        ORDER BY created_at DESC,id DESC LIMIT 1""", (task['id'], task['id']))
+
+
 def acceptance_turn(svc, task):
     """Only CLEAN exact evidence may replace the released slot at human verification."""
-    h = svc.one("SELECT * FROM workflow_review_handoffs WHERE (source_task_id=%s OR review_task_id=%s) ORDER BY created_at DESC,id DESC LIMIT 1", (task['id'],task['id']))
+    h = _relevant_handoff(svc, task)
     if not h:
         return None
     if h['phase'] != 'clean':
@@ -241,7 +441,7 @@ def acceptance_turn(svc, task):
 
 
 def require_clean(svc, task):
-    h = svc.one("SELECT * FROM workflow_review_handoffs WHERE source_task_id=%s OR review_task_id=%s ORDER BY created_at DESC,id DESC LIMIT 1", (task['id'],task['id']))
+    h = _relevant_handoff(svc, task)
     if h and h['phase'] != 'clean':
         conflict('clean_review_required', 'Finish the review and correction loop before submitting finished work.')
     return h
