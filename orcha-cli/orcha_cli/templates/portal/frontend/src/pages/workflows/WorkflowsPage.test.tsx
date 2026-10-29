@@ -189,6 +189,15 @@ it("Run again creates a distinct draft, navigates to it, and leaves Start explic
   expect(screen.getByRole("menuitem", { name: "Workflow settings…" })).not.toHaveAttribute("aria-disabled", "true");
 });
 
+it.each(["cancelled", "paused"] as const)("does not show draft Start guidance or copy notes for a %s workflow that never started", async (status) => {
+  reads(() => exampleWorkflow({ status, launch_enabled: false,
+    copy_notes: ["Choose an available assignee for Build Android."] }));
+  renderPage("/workflows/release?cid=project");
+  await screen.findByRole("heading", { name: "Mobile release", level: 1 });
+  expect(screen.queryByText(/Nothing runs until you choose Start/)).toBeNull();
+  expect(screen.queryByRole("list", { name: "Copied draft notes" })).toBeNull();
+});
+
 it("Run again follows the server action even for a completed workflow", async () => {
   authority.human = { id: "kedar", kind: "human", member_role: "owner" };
   reads(() => exampleWorkflow({ status: "completed", available_actions: [{ action: "run_again", enabled: false, reason: "workflow_owner_required" }] }));

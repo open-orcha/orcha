@@ -290,8 +290,8 @@ function WorkflowScreen() {
         {availability === "ready" && writeReason && <p className="wf-bar">{writeReason}</p>}
       </div>}
       {detail.hidden && <p role="status" className="wf-bar">This workflow is hidden. Its tasks, messages and evidence are kept. Restore it from the workflow menu; restoring never starts work.</p>}
-      {!detail.launch_enabled && <p role="status" className="wf-bar">Draft — review the steps and workflow settings, then choose Review start when ready. Nothing runs until you choose Start.</p>}
-      {!detail.launch_enabled && !!detail.copy_notes?.length && <ul className="wf-notice" aria-label="Copied draft notes">{detail.copy_notes.map((note, i) => <li key={i}>{note}</li>)}</ul>}
+      {detail.status === "active" && !detail.launch_enabled && <p role="status" className="wf-bar">Draft — review the steps and workflow settings, then choose Review start when ready. Nothing runs until you choose Start.</p>}
+      {detail.status === "active" && !detail.launch_enabled && !!detail.copy_notes?.length && <ul className="wf-notice" aria-label="Copied draft notes">{detail.copy_notes.map((note, i) => <li key={i}>{note}</li>)}</ul>}
       <WorkflowOwnerBar detail={detail} viewer={scope.identity} ownerName={actorName(detail.owner_human_id)} onDecide={setDecideId} />
       {decideTask && <WorkflowLoopDecision key={`${decideTask.id}:${decideTask.awaiting_loop_decision}`} detail={detail} task={decideTask} scope={scope} stale={stale} agents={aiAgents} onSaved={saved} onClose={() => setDecideId(null)} />}
       <WorkflowActions detail={detail} scope={scope} verified={verified} stale={stale} onSaved={saved} request={actionRequest} />
