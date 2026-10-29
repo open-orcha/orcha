@@ -177,7 +177,8 @@ fun WorkspaceScreen(
                     workflows?.bind(state.selectedContainer)
                 }
                 val workflowDecisions = workflows?.state?.collectAsState()?.value?.loaded.orEmpty()
-                    .filter { !it.hidden && io.openorcha.mobile.domain.WorkflowLogic.needsDecision(it) }
+                    // Only the owner decides (design W17), so only the owner's Home lists the decision.
+                    .filter { !it.hidden && io.openorcha.mobile.domain.WorkflowLogic.needsDecision(it) && it.ownerHumanId == state.selectedContainer?.humanAgentId }
                 PullToRefreshBox(isRefreshing = state.loading, onRefresh = refreshAll, modifier = Modifier.weight(1f)) {
                 when (state.selectedTab) {
                     WorkspaceTab.Home -> HomeTab(

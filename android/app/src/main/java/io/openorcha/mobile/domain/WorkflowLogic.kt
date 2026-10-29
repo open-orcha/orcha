@@ -318,9 +318,14 @@ object WorkflowLogic {
             .distinct()
             .map { TaskActionRow(it, taskActionReason(w, t, it.key, hasHuman)) }
 
-    /** Result review (W09) is offered for a task waiting on acceptance; never the legacy verify. */
+    /**
+     * Result review (W09) is offered only when the server lists an enabled review action for this
+     * viewer (design L100: enabled available_actions only); never the legacy verify.
+     */
     fun canReviewResult(t: WorkflowTaskDto): Boolean =
-        t.status == "needs_verification" || t.availableActions.any { it.action == "accept" || it.action == "reject" }
+        t.availableActions.any { it.enabled && it.action in REVIEW_ACTIONS }
+
+    private val REVIEW_ACTIONS = setOf("accept", "reject", "report_outcome")
 
     // ---- W04 repeat-group bracket ----
 

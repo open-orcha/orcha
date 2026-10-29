@@ -11,6 +11,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -63,7 +64,12 @@ internal fun WorkflowTaskActionSheet(
     val p = Orcha.palette
     val s by controller.state.collectAsState()
     val d = s.detail ?: detail
-    val task = d.tasks.firstOrNull { it.id == taskId } ?: return onClose()
+    val task = d.tasks.firstOrNull { it.id == taskId }
+    // Closing is a side effect: never call it during composition.
+    if (task == null) {
+        LaunchedEffect(Unit) { onClose() }
+        return
+    }
     val repo = controller.repository ?: return
     val agents = snapshot.agents.filter { it.kind != "human" || it.id == controller.actorId }
 
