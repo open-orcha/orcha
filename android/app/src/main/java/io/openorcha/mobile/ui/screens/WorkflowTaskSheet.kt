@@ -1,6 +1,7 @@
 package io.openorcha.mobile.ui.screens
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -22,6 +23,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -93,7 +95,9 @@ internal fun WorkflowTaskSheet(
     var showMore by remember { mutableStateOf(false) }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
-    LaunchedEffect(task.id, task.workRevision) {
+    // Refresh re-reads evidence even at the same work revision (design L102).
+    var evidenceReads by remember { mutableIntStateOf(0) }
+    LaunchedEffect(task.id, task.workRevision, evidenceReads, task.currentEvidenceSetId) {
         if (task.repeatGroupId != null || task.outcomes.isNotEmpty()) round = runCatching { repo.roundContext(task.id) }.getOrNull()
         runCatching { repo.taskEvidence(d.id, task.id) }.onSuccess { evidence = it; evidenceError = null }.onFailure { evidenceError = it.message }
     }
@@ -193,7 +197,14 @@ internal fun WorkflowTaskSheet(
             Section("Saved evidence") {
                 evidenceError?.let { Banner(BannerKind.Warn, it, action = "Refresh", onAction = {
                     controller.refreshDetail()
+                    evidenceReads++
                 }) }
+                if (evidenceError == null) {
+                    Text(
+                        "Refresh evidence", style = ltype(LType.Meta), color = p.accent,
+                        modifier = Modifier.clickable { evidenceReads++ },
+                    )
+                }
                 val sets = evidence?.sets.orEmpty()
                 if (evidence != null && sets.isEmpty()) Text("No saved evidence yet.", style = ltype(LType.Meta), color = p.muted)
                 sets.forEach { EvidenceSetCard(it, it.evidenceSetId == evidence?.currentEvidenceSetId) }
