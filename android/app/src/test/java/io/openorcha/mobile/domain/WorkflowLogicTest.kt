@@ -145,4 +145,18 @@ class WorkflowLogicTest {
         assertEquals(emptyList(), WorkflowLogic.invalidReleaseIds(listOf("t1"), pv, listOf("t1"), canRelease = true))
         assertEquals(listOf("t1"), WorkflowLogic.invalidReleaseIds(listOf("t1"), pv, listOf("t1"), canRelease = false))
     }
+
+    @Test fun addTasksRulesMatchTheWeb() {
+        val a = WorkflowLogic.NewTaskDraft("n1", title = "A", dependsOn = listOf("n2"))
+        val b = WorkflowLogic.NewTaskDraft("n2", title = "B")
+        assertEquals("Add at least one task summary.", WorkflowLogic.addTasksProblem(emptyList(), emptyList()))
+        assertEquals("Name task 2.", WorkflowLogic.addTasksProblem(listOf(a, b.copy(title = " ")), emptyList()))
+        assertNull(WorkflowLogic.addTasksProblem(listOf(a, b.copy(dependsOn = listOf("t9"))), listOf("t9")))
+        assertEquals("B refers to a task that is no longer in this draft.", WorkflowLogic.addTasksProblem(listOf(a, b.copy(dependsOn = listOf("gone"))), emptyList()))
+        // b waiting on a would close a cycle; self and the 3-max are refused
+        assertEquals("Would create a cycle", WorkflowLogic.addTaskDependencyReason(listOf(a, b), b, "n1"))
+        assertEquals("A task cannot wait for itself", WorkflowLogic.addTaskDependencyReason(listOf(a, b), b, "n2"))
+        assertEquals("At most 3 prerequisites", WorkflowLogic.addTaskDependencyReason(listOf(a, b), b.copy(dependsOn = listOf("x", "y", "z")), "t1"))
+        assertNull(WorkflowLogic.addTaskDependencyReason(listOf(a, b), a, "t1"))
+    }
 }

@@ -562,4 +562,46 @@ object WorkflowLogic {
         invalidRelease.isNotEmpty() -> "Remove the start choices that are no longer available."
         else -> null
     }
+
+    // ---- W11 add new tasks (web WorkflowAddTasks.tsx + workflowDraft.draftProblems task rules) ----
+
+    data class NewTaskDraft(
+        val key: String,
+        val title: String = "",
+        val done: String = "",
+        val description: String = "",
+        val assigneeId: String? = null,
+        val dependsOn: List<String> = emptyList(),
+    )
+
+    /** True when [from] already waits (directly or not) on [target] through the new-task drafts. */
+    fun draftWaitsOn(drafts: List<NewTaskDraft>, from: String, target: String, seen: Set<String> = emptySet()): Boolean {
+        if (from == target) return true
+        if (from in seen) return false
+        val next = drafts.firstOrNull { it.key == from }?.dependsOn.orEmpty()
+        return next.any { draftWaitsOn(drafts, it, target, seen + from) }
+    }
+
+    /** Why [task] cannot add [candidate] as a prerequisite; null = allowed. Existing tasks never wait on new ones, so only drafts can cycle. */
+    fun addTaskDependencyReason(drafts: List<NewTaskDraft>, task: NewTaskDraft, candidate: String): String? = when {
+        candidate in task.dependsOn -> null
+        candidate == task.key -> "A task cannot wait for itself"
+        task.dependsOn.size >= 3 -> "At most 3 prerequisites"
+        draftWaitsOn(drafts, candidate, task.key) -> "Would create a cycle"
+        else -> null
+    }
+
+    fun addTasksProblem(drafts: List<NewTaskDraft>, existingIds: List<String>): String? {
+        if (drafts.isEmpty()) return "Add at least one task summary."
+        drafts.forEachIndexed { i, t ->
+            val name = t.title.trim().ifEmpty { "Task ${i + 1}" }
+            if (t.title.isBlank()) return "Name task ${i + 1}."
+            if (t.dependsOn.size > 3 || t.dependsOn.toSet().size != t.dependsOn.size) return "$name needs no more than three different dependencies."
+            t.dependsOn.forEach { dep ->
+                if (drafts.none { it.key == dep } && dep !in existingIds) return "$name refers to a task that is no longer in this draft."
+                if (drafts.any { it.key == dep } && draftWaitsOn(drafts, dep, t.key)) return "$name: Would create a cycle"
+            }
+        }
+        return null
+    }
 }

@@ -25,7 +25,6 @@ import io.openorcha.mobile.data.WorkflowCompletionDto
 import io.openorcha.mobile.data.WorkflowDetailDto
 import io.openorcha.mobile.data.WorkflowImpactDto
 import io.openorcha.mobile.data.WorkflowImportPreviewBody
-import io.openorcha.mobile.data.WorkflowNewTaskBody
 import io.openorcha.mobile.data.WorkflowPreviewDto
 import io.openorcha.mobile.data.WorkflowTaskChoiceDto
 import io.openorcha.mobile.data.WorkflowWrites
@@ -64,6 +63,7 @@ internal fun WorkflowMenuSheet(
     onClose: () -> Unit,
 ) {
     if (action == MenuAction.ReviewRound) return WorkflowReviewRoundSheet(controller, detail, snapshot, onClose)
+    if (action == MenuAction.AddTasks) return WorkflowAddTasksSheet(controller, detail, snapshot, onClose)
     var objectiveId by remember { mutableStateOf<String?>(null) }
     objectiveId?.let { oid -> return WorkflowObjectiveSheet(controller, detail, oid) { objectiveId = null } }
     val p = Orcha.palette
@@ -87,10 +87,6 @@ internal fun WorkflowMenuSheet(
     // Transfer (W23)
     val humans = snapshot.agents.filter { it.kind == "human" && it.id != d.ownerHumanId }
     var newOwner by remember { mutableStateOf<String?>(null) }
-    // Add new task (W11)
-    var newTitle by remember { mutableStateOf("") }
-    var newDone by remember { mutableStateOf("") }
-    var newAssignee by remember { mutableStateOf<String?>(null) }
     // Import (W11b) / Move (W26)
     var query by remember { mutableStateOf("") }
     var found by remember { mutableStateOf<List<WorkflowTaskChoiceDto>>(emptyList()) }
@@ -105,7 +101,6 @@ internal fun WorkflowMenuSheet(
     val destinations = s.loaded.filter { it.id != d.id && !it.hidden && it.status in setOf("active", "paused") }
 
     val serverReason = WorkflowLogic.menuReason(d, action, controller.hasHuman)
-    val agents = snapshot.agents.filter { it.kind != "human" }
     val label = when {
         restoring -> "Restore workflow"
         else -> action.label.removeSuffix("…")
@@ -169,7 +164,7 @@ internal fun WorkflowMenuSheet(
         MenuAction.Hide -> visibility != null && (if (d.hidden) visibility?.canRestore == true else visibility?.canHide == true)
         MenuAction.Settings -> settingsInvalid == null
         MenuAction.TransferOwner -> newOwner != null
-        MenuAction.AddTasks -> newTitle.isNotBlank() && newDone.isNotBlank()
+        MenuAction.AddTasks -> false
         MenuAction.Import -> picked.isNotEmpty() && importBlocked == null
         MenuAction.Move -> picked.isNotEmpty() && checkedPick == picked && reason.isNotBlank()
         MenuAction.ReviewRound -> false
@@ -206,14 +201,7 @@ internal fun WorkflowMenuSheet(
                     d, key, title, goal, mode, taskLimit.toIntOrNull(), roundLimit.toIntOrNull(), turns.toIntOrNull()?.takeIf { loops }, reason,
                 )
                 MenuAction.TransferOwner -> newOwner?.let { WorkflowWrites.transferOwner(d, key, it, reason) }
-                MenuAction.AddTasks -> WorkflowWrites.addTasks(
-                    d, key,
-                    listOf(
-                        WorkflowNewTaskBody(
-                            clientKey = "t1", title = newTitle.trim(), definitionOfDone = newDone.trim(), assigneeId = newAssignee,
-                        ),
-                    ),
-                )
+                MenuAction.AddTasks -> null
                 MenuAction.Import -> importPreview?.let {
                     WorkflowWrites.import(d, key, picked, it.previewDigest, releaseIds, WorkflowLogic.importAcceptances(it, reviews))
                 }
@@ -268,11 +256,7 @@ internal fun WorkflowMenuSheet(
                 }
                 ReasonField(reason, required = false) { reason = it }
             }
-            MenuAction.AddTasks -> {
-                OutlinedTextField(newTitle, { newTitle = it.take(200) }, Modifier.fillMaxWidth(), label = { Text("Task title") })
-                OutlinedTextField(newDone, { newDone = it.take(4000) }, Modifier.fillMaxWidth(), label = { Text("Done when") }, minLines = 2)
-                AgentPicker("Assignee (optional)", agents, newAssignee, allowKeep = true) { newAssignee = it }
-            }
+            MenuAction.AddTasks -> Unit
             MenuAction.Import -> {
                 OutlinedTextField(
                     query, { query = it.take(200); found = emptyList() },
