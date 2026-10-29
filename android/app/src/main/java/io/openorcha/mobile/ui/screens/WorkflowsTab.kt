@@ -73,9 +73,34 @@ import io.openorcha.mobile.ui.theme.Orcha
    with filters, owner, search and load more, every support/empty/stale state, and opens
    the workflow detail (WorkflowDetailScreen.kt) in place. */
 
-@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+/** Success notices ("Workflow saved", "Workflow hidden" + Restore, W26) as a snackbar over list and detail. */
 @Composable
 internal fun WorkflowsTab(
+    controller: WorkflowsController?,
+    snapshot: ContainerSnapshot,
+    container: StoredContainer?,
+    onOpenTask: (String) -> Unit,
+    onCreateTask: () -> Unit,
+    onTaskChanged: () -> Unit,
+) {
+    val snackbar = remember { androidx.compose.material3.SnackbarHostState() }
+    val notice = controller?.state?.collectAsState()?.value?.let { it.notice to it.noticeRestoreId }
+    LaunchedEffect(notice) {
+        val (text, restoreId) = notice ?: return@LaunchedEffect
+        if (text == null) return@LaunchedEffect
+        val result = snackbar.showSnackbar(text, actionLabel = restoreId?.let { "Restore" }, withDismissAction = restoreId != null)
+        if (result == androidx.compose.material3.SnackbarResult.ActionPerformed && restoreId != null) controller.restoreHidden(restoreId)
+        controller.clearNotice()
+    }
+    Box(Modifier.fillMaxSize()) {
+        WorkflowsTabContent(controller, snapshot, container, onOpenTask, onCreateTask, onTaskChanged)
+        androidx.compose.material3.SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter))
+    }
+}
+
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+private fun WorkflowsTabContent(
     controller: WorkflowsController?,
     snapshot: ContainerSnapshot,
     container: StoredContainer?,
