@@ -135,6 +135,10 @@ fun TaskDetailScreen(
     onSendMessage: ((String) -> Unit)? = null,
     /** Reloads the workspace snapshot after a reassign / reviewer change (wire `viewModel::refreshSelected`). */
     onTaskChanged: (() -> Unit)? = null,
+    /** W16: the workflow this task belongs to (from the loaded workflows), or null for standalone tasks. */
+    workflow: io.openorcha.mobile.data.WorkflowDetailDto? = null,
+    /** W16 "Open task controls" → the workflow task sheet (W06). */
+    onOpenTaskControls: (() -> Unit)? = null,
 ) {
     val p = Orcha.palette
     val task = state.selectedTask
@@ -147,7 +151,9 @@ fun TaskDetailScreen(
     var showPlan by remember { mutableStateOf(false) }
     var paneName by rememberSaveable { mutableStateOf(DetailPane.Activity.name) }
     val pane = DetailPane.valueOf(paneName)
-    val closable = task != null && !task.isRoot && task.status !in setOf("completed", "cancelled")
+    // W16: workflow members use the workflow's controls; legacy Close, Verify and Reassign are hidden.
+    val member = workflow != null
+    val closable = !member && task != null && !task.isRoot && task.status !in setOf("completed", "cancelled")
     // Parity features (evidence, Verdikt, goal chain, routines, reassign, reviewer): own state, see TaskInsightsController.
     val insights = rememberTaskInsights()
     val ins by insights.state.collectAsState()
@@ -210,7 +216,7 @@ fun TaskDetailScreen(
                                 onClick = { menuOpen = false; insights.clearError(); sheet = InsightSheetKind.Recurring },
                             )
                         }
-                        DropdownMenuItem(
+                        if (!member) DropdownMenuItem(
                             text = { Text("Close task…", style = ltype(LType.Body), color = if (closable) p.danger else p.faint) },
                             enabled = closable,
                             onClick = { menuOpen = false; onPrepareClose(); closing = true },
@@ -267,8 +273,35 @@ fun TaskDetailScreen(
             if (TaskInsightsUx.hasAncestry(ins.goalChain)) {
                 item(key = "goal") { GoalChainBreadcrumb(ins.goalChain, onOpenTask) }
             }
+            workflow?.let { w ->
+                item(key = "workflow-crumb") {
+                    Text(
+                        "Back to ${w.title}", style = ltype(LType.Meta), color = p.accent,
+                        modifier = Modifier.clickable { onOpenTaskControls?.invoke() },
+                    )
+                }
+            }
             item(key = "header") { TaskDetailHeader(task, state.snapshot?.container?.name ?: state.selectedContainer?.displayName, agents) }
-            if (task.status == "needs_verification") {
+            workflow?.let { w ->
+                item(key = "workflow") {
+                    val wt = w.tasks.firstOrNull { it.id == task.id }
+                    LSection("Workflow") {
+                        Column(verticalArrangement = Arrangement.spacedBy(LSpace.s)) {
+                            Text(w.title, style = ltype(LType.BodyEmph), color = p.text)
+                            wt?.let { t ->
+                                Text(t.displayState.label, style = ltype(LType.Meta), color = p.text2)
+                                t.displayState.warning?.let { b -> Text(b, style = ltype(LType.Meta), color = p.warn) }
+                            }
+                            Text(
+                                "Workflow tasks are reviewed, accepted and stopped from the workflow's task controls.",
+                                style = ltype(LType.Meta), color = p.muted,
+                            )
+                            onOpenTaskControls?.let { LButton("Open task controls", onClick = it, kind = LButtonKind.Primary) }
+                        }
+                    }
+                }
+            }
+            if (task.status == "needs_verification" && !member) {
                 item(key = "verify") {
                     VerificationCard(
                         task = task,

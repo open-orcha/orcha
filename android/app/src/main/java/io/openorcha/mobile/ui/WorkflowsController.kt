@@ -38,6 +38,8 @@ sealed interface WorkflowOperation {
 
 data class WorkflowsState(
     val containerId: String? = null,
+    /** W16 "Open task controls": the task sheet to open once the workflow detail shows. */
+    val pendingTaskSheet: String? = null,
     val segment: WorkflowsSegment = WorkflowsSegment.Workflows,
     val support: WorkflowSupport = WorkflowSupport.Checking,
     val capability: WorkflowCapabilityDto? = null,
@@ -236,6 +238,19 @@ class WorkflowsController(
         }
         refreshDetail()
     }
+
+    /** W16: open [workflowId] on the Workflows segment with [taskId]'s task sheet (W06). */
+    fun openTaskControls(workflowId: String, taskId: String) {
+        selectSegment(WorkflowsSegment.Workflows)
+        openWorkflow(workflowId)
+        _state.update { it.copy(pendingTaskSheet = taskId) }
+    }
+
+    fun consumePendingTaskSheet() = _state.update { it.copy(pendingTaskSheet = null) }
+
+    /** W16: the loaded workflow that lists [taskId] as a member, if any. */
+    fun membershipOf(taskId: String?): WorkflowDetailDto? =
+        taskId?.let { id -> _state.value.loaded.firstOrNull { w -> w.tasks.any { it.id == id } } }
 
     fun closeWorkflow() {
         if (_state.value.operation is WorkflowOperation.Sending) return

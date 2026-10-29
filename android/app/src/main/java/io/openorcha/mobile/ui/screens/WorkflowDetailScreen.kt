@@ -89,6 +89,9 @@ internal fun WorkflowDetailScreen(controller: WorkflowsController, snapshot: Con
     val p = Orcha.palette
     val s by controller.state.collectAsState()
     var sheet by remember { mutableStateOf<WorkflowSheet?>(null) }
+    androidx.compose.runtime.LaunchedEffect(s.pendingTaskSheet) {
+        s.pendingTaskSheet?.let { sheet = WorkflowSheet.Task(it); controller.consumePendingTaskSheet() }
+    }
     val agents = snapshot.agents
     val nameOf = { id: String? -> agents.firstOrNull { it.id == id }?.alias }
 

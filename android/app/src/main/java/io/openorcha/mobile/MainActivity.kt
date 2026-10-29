@@ -201,6 +201,17 @@ class MainActivity : ComponentActivity() {
                         onOpenRun = viewModel::openRun,
                         onSendMessage = viewModel::sendTaskMessage,
                         onTaskChanged = viewModel::refreshSelected,
+                        workflow = viewModel.workflows.state.collectAsState().value.loaded
+                            .firstOrNull { w -> w.tasks.any { it.id == state.selectedTask?.id } },
+                        onOpenTaskControls = state.selectedTask?.id?.let { tid ->
+                            viewModel.workflows.membershipOf(tid)?.let { w ->
+                                {
+                                    viewModel.workflows.openTaskControls(w.id, tid)
+                                    viewModel.showWorkspace()
+                                    viewModel.selectTab(io.openorcha.mobile.ui.WorkspaceTab.Workflows)
+                                }
+                            }
+                        },
                     )
 
                     AppRoute.TaskThread -> TaskThreadScreen(
