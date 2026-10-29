@@ -233,12 +233,29 @@ fun WorkspaceScreen(
         )
     }
     verifySheetTask?.let { task ->
-        VerifySheet(
-            task = task,
-            busy = state.actionInFlight,
-            onDismiss = { verifySheetTask = null },
-            onVerify = { approve, feedback -> verifySheetTask = null; onVerifyFor(task.id, approve, feedback) },
-        )
+        // W17 / §8: a workflow member's verification goes through the W09 result review; the
+        // legacy verify sheet is for non-members only, and unknown membership is never "non-member".
+        val ws = workflows?.state?.collectAsState()?.value
+        androidx.compose.runtime.LaunchedEffect(task.id) { workflows?.resolveMembership(task.id) }
+        val membership = if (workflows == null || ws == null) io.openorcha.mobile.ui.TaskMembership.None else workflows.membership(task.id)
+        when (membership) {
+            is io.openorcha.mobile.ui.TaskMembership.Member -> androidx.compose.runtime.LaunchedEffect(membership.workflow.id) {
+                verifySheetTask = null
+                workflows?.openResultReview(membership.workflow.id, task.id)
+                onTab(WorkspaceTab.Workflows)
+            }
+            io.openorcha.mobile.ui.TaskMembership.None -> VerifySheet(
+                task = task,
+                busy = state.actionInFlight,
+                onDismiss = { verifySheetTask = null },
+                onVerify = { approve, feedback -> verifySheetTask = null; onVerifyFor(task.id, approve, feedback) },
+            )
+            else -> WorkflowMembershipSheet(
+                membership,
+                onRetry = { workflows?.resolveMembership(task.id, force = true) },
+                onDismiss = { verifySheetTask = null },
+            )
+        }
     }
     if (controlsSheetOpen) {
         ContainerControlsSheet(

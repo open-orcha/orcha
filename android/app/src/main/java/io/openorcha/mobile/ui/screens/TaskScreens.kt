@@ -135,8 +135,14 @@ fun TaskDetailScreen(
     onSendMessage: ((String) -> Unit)? = null,
     /** Reloads the workspace snapshot after a reassign / reviewer change (wire `viewModel::refreshSelected`). */
     onTaskChanged: (() -> Unit)? = null,
-    /** W16: the workflow this task belongs to (from the loaded workflows), or null for standalone tasks. */
-    workflow: io.openorcha.mobile.data.WorkflowDetailDto? = null,
+    /** W16: whether this task is a workflow member; null when Workflows are not available (legacy task page). */
+    membership: io.openorcha.mobile.ui.TaskMembership? = null,
+    /** W16: re-reads membership (and the member's workflow). */
+    onRefreshMembership: () -> Unit = {},
+    /** W16: "(last loaded)" — the workflow list or detail failed to refresh after it was shown. */
+    workflowStale: Boolean = false,
+    /** W16 "Workflow membership…" for non-members; null hides the menu item. */
+    onWorkflowMembership: (() -> Unit)? = null,
     /** W16 "Open task controls" → the workflow task sheet (W06). */
     onOpenTaskControls: (() -> Unit)? = null,
     /** W16 "Task authority" section (autonomy switch, approval history); null hides it. */
@@ -153,8 +159,10 @@ fun TaskDetailScreen(
     var showPlan by remember { mutableStateOf(false) }
     var paneName by rememberSaveable { mutableStateOf(DetailPane.Activity.name) }
     val pane = DetailPane.valueOf(paneName)
-    // W16: workflow members use the workflow's controls; legacy Close, Verify and Reassign are hidden.
-    val member = workflow != null
+    // W16: workflow members use the workflow's controls; legacy Close, Verify and Reassign are hidden
+    // for members AND while membership is unknown (checking or failed).
+    val workflow = (membership as? io.openorcha.mobile.ui.TaskMembership.Member)?.workflow
+    val member = membership != null && membership !is io.openorcha.mobile.ui.TaskMembership.None
     val closable = !member && task != null && !task.isRoot && task.status !in setOf("completed", "cancelled")
     // Parity features (evidence, Verdikt, goal chain, routines, reassign, reviewer): own state, see TaskInsightsController.
     val insights = rememberTaskInsights()
@@ -216,6 +224,12 @@ fun TaskDetailScreen(
                             DropdownMenuItem(
                                 text = { Text("Make recurring…", style = ltype(LType.Body), color = p.text) },
                                 onClick = { menuOpen = false; insights.clearError(); sheet = InsightSheetKind.Recurring },
+                            )
+                        }
+                        if (task != null && !task.isRoot && membership is io.openorcha.mobile.ui.TaskMembership.None) onWorkflowMembership?.let { open ->
+                            DropdownMenuItem(
+                                text = { Text("Workflow membership…", style = ltype(LType.Body), color = p.text) },
+                                onClick = { menuOpen = false; open() },
                             )
                         }
                         if (!member) DropdownMenuItem(
@@ -284,15 +298,44 @@ fun TaskDetailScreen(
                 }
             }
             item(key = "header") { TaskDetailHeader(task, state.snapshot?.container?.name ?: state.selectedContainer?.displayName, agents) }
+            if (membership is io.openorcha.mobile.ui.TaskMembership.Checking || membership is io.openorcha.mobile.ui.TaskMembership.Failed) {
+                item(key = "workflow-membership") {
+                    Column(Modifier.padding(horizontal = 16.dp)) { WorkflowMembershipLine(membership, onRefreshMembership) }
+                }
+            }
             workflow?.let { w ->
                 item(key = "workflow") {
                     val wt = w.tasks.firstOrNull { it.id == task.id }
                     LSection("Workflow") {
                         Column(verticalArrangement = Arrangement.spacedBy(LSpace.s)) {
-                            Text(w.title, style = ltype(LType.BodyEmph), color = p.text)
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    w.title, style = ltype(LType.BodyEmph), color = p.accent,
+                                    modifier = Modifier.weight(1f).clickable { onOpenTaskControls?.invoke() },
+                                )
+                                IconButton(onClick = onRefreshMembership) { Icon(OrchaIcons.Refresh, "Refresh workflow", tint = p.text2) }
+                            }
+                            if (workflowStale) Banner(BannerKind.Warn, "Showing the last loaded workflow. Refresh before making changes.")
                             wt?.let { t ->
-                                Text(t.displayState.label, style = ltype(LType.Meta), color = p.text2)
+                                Text(
+                                    t.displayState.label + if (workflowStale) " (last loaded)" else "",
+                                    style = ltype(LType.Meta), color = p.text2,
+                                )
+                                t.blockers.forEach { b -> Text("• ${b.message}", style = ltype(LType.Meta), color = p.text2) }
                                 t.displayState.warning?.let { b -> Text(b, style = ltype(LType.Meta), color = p.warn) }
+                                t.displayState.releaseAvailableAt?.let { at ->
+                                    val local = runCatching {
+                                        java.time.OffsetDateTime.parse(at).atZoneSameInstant(java.time.ZoneId.systemDefault())
+                                            .format(java.time.format.DateTimeFormatter.ofPattern("MMM d, HH:mm"))
+                                    }.getOrDefault(at)
+                                    Text("Can be released from $local", style = ltype(LType.Meta), color = p.text2)
+                                }
+                                Text(
+                                    t.acceptance?.let { a ->
+                                        if (a.workRevision == t.workRevision) "Accepted by ${a.actorAlias.ifBlank { "the owner" }}" else "Accepted an earlier revision; this revision needs review"
+                                    } ?: "Not accepted yet",
+                                    style = ltype(LType.Meta), color = p.text2,
+                                )
                             }
                             Text(
                                 "Workflow tasks are reviewed, accepted and stopped from the workflow's task controls.",

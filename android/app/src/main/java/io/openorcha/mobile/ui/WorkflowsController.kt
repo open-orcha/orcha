@@ -36,10 +36,22 @@ sealed interface WorkflowOperation {
     data class Refused(override val label: String, val message: String) : WorkflowOperation
 }
 
+/** W16/W17: whether a task is a workflow member. Task reads carry no workflow_id, so this is resolved from the server. */
+sealed interface TaskMembership {
+    data object Checking : TaskMembership
+    data class Failed(val message: String) : TaskMembership
+    data object None : TaskMembership
+    data class Member(val workflow: WorkflowDetailDto) : TaskMembership
+}
+
 data class WorkflowsState(
     val containerId: String? = null,
     /** W16 "Open task controls": the task sheet to open once the workflow detail shows. */
     val pendingTaskSheet: String? = null,
+    /** W17 member verification: the W09 result review to open once the workflow detail shows. */
+    val pendingResultReview: String? = null,
+    /** Server-resolved membership per task id (see [TaskMembership]). */
+    val memberships: Map<String, TaskMembership> = emptyMap(),
     val segment: WorkflowsSegment = WorkflowsSegment.Workflows,
     val support: WorkflowSupport = WorkflowSupport.Checking,
     val capability: WorkflowCapabilityDto? = null,
@@ -246,11 +258,65 @@ class WorkflowsController(
         _state.update { it.copy(pendingTaskSheet = taskId) }
     }
 
-    fun consumePendingTaskSheet() = _state.update { it.copy(pendingTaskSheet = null) }
+    fun consumePendingTaskSheet() = _state.update { it.copy(pendingTaskSheet = null, pendingResultReview = null) }
 
-    /** W16: the loaded workflow that lists [taskId] as a member, if any. */
+    /** W17: a member's verification goes through the W09 result review, not the legacy verify sheet. */
+    fun openResultReview(workflowId: String, taskId: String) {
+        selectSegment(WorkflowsSegment.Workflows)
+        openWorkflow(workflowId)
+        _state.update { it.copy(pendingResultReview = taskId) }
+    }
+
+    /** W16: the workflow [taskId] belongs to, only once membership is known to be Member. */
     fun membershipOf(taskId: String?): WorkflowDetailDto? =
-        taskId?.let { id -> _state.value.loaded.firstOrNull { w -> w.tasks.any { it.id == id } } }
+        (taskId?.let { membership(it) } as? TaskMembership.Member)?.workflow
+
+    /** Membership as known now: a loaded workflow that lists the task wins; otherwise the server lookup's result. */
+    fun membership(taskId: String): TaskMembership {
+        _state.value.loaded.firstOrNull { w -> w.tasks.any { it.id == taskId } }?.let { return TaskMembership.Member(it) }
+        return _state.value.memberships[taskId] ?: TaskMembership.Checking
+    }
+
+    /** W16 section refresh: re-reads the member's workflow and updates both the list entry and the membership. */
+    fun refreshMembershipWorkflow(workflowId: String, taskId: String) {
+        val repo = repository ?: return
+        scope.launch {
+            val d = try { repo.detail(workflowId) } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (e: Exception) {
+                _state.update { it.copy(memberships = it.memberships + (taskId to TaskMembership.Failed(e.message ?: "Couldn't refresh the workflow."))) }
+                return@launch
+            }
+            val m = if (d.tasks.any { it.id == taskId }) TaskMembership.Member(d) else TaskMembership.None
+            _state.update { st -> st.copy(loaded = st.loaded.map { if (it.id == d.id) d else it }, memberships = st.memberships + (taskId to m)) }
+        }
+    }
+
+    /**
+     * Resolves [taskId]'s workflow from the server (workflow-task-search echoes the selected
+     * task's workflow_id, then the workflow detail is read). Until it answers the task counts
+     * as unknown, never as a non-member (design W16).
+     */
+    fun resolveMembership(taskId: String, force: Boolean = false) {
+        if (_state.value.loaded.any { w -> w.tasks.any { it.id == taskId } }) return
+        val known = _state.value.memberships[taskId]
+        if (!force && known != null && known !is TaskMembership.Failed) return
+        val repo = repository
+        if (repo == null) {
+            _state.update { it.copy(memberships = it.memberships + (taskId to TaskMembership.Failed("Workflows aren't connected yet. Try again."))) }
+            return
+        }
+        _state.update { it.copy(memberships = it.memberships + (taskId to TaskMembership.Checking)) }
+        scope.launch {
+            val result = try {
+                val wid = repo.searchTasks("", listOf(taskId)).selected.firstOrNull { it.id == taskId }?.workflowId
+                if (wid == null) TaskMembership.None else TaskMembership.Member(repo.detail(wid))
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                TaskMembership.Failed(e.message ?: "Couldn't check whether this task is in a workflow.")
+            }
+            _state.update { it.copy(memberships = it.memberships + (taskId to result)) }
+        }
+    }
 
     fun closeWorkflow() {
         if (_state.value.operation is WorkflowOperation.Sending) return
