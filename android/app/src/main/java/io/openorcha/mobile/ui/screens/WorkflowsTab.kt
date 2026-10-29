@@ -82,6 +82,8 @@ internal fun WorkflowsTab(
     onOpenTask: (String) -> Unit,
     onCreateTask: () -> Unit,
     onTaskChanged: () -> Unit,
+    /** W01 Forbidden "Choose acting human": the acting human comes from pairing, chosen in Settings. */
+    onChooseActingHuman: () -> Unit = {},
 ) {
     val snackbar = remember { androidx.compose.material3.SnackbarHostState() }
     val notice = controller?.state?.collectAsState()?.value?.let { it.notice to it.noticeRestoreId }
@@ -93,7 +95,7 @@ internal fun WorkflowsTab(
         controller.clearNotice()
     }
     Box(Modifier.fillMaxSize()) {
-        WorkflowsTabContent(controller, snapshot, container, onOpenTask, onCreateTask, onTaskChanged)
+        WorkflowsTabContent(controller, snapshot, container, onOpenTask, onCreateTask, onTaskChanged, onChooseActingHuman)
         androidx.compose.material3.SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter))
     }
 }
@@ -107,6 +109,7 @@ private fun WorkflowsTabContent(
     onOpenTask: (String) -> Unit,
     onCreateTask: () -> Unit,
     onTaskChanged: () -> Unit,
+    onChooseActingHuman: () -> Unit,
 ) {
     if (controller == null) {
         TasksTab(snapshot.tasks, snapshot.agents, onOpenTask, container = container, onTaskChanged = onTaskChanged)
@@ -141,17 +144,25 @@ private fun WorkflowsTabContent(
             }
             when (s.segment) {
                 WorkflowsSegment.Tasks -> TasksTab(snapshot.tasks, snapshot.agents, onOpenTask, container = container, onTaskChanged = onTaskChanged)
-                WorkflowsSegment.Workflows -> WorkflowsList(controller, snapshot.agents)
+                WorkflowsSegment.Workflows -> WorkflowsList(controller, snapshot.agents, onChooseActingHuman)
             }
         }
         val canCreateWorkflow = s.segment == WorkflowsSegment.Workflows && s.support == WorkflowSupport.Supported
         if (canCreateWorkflow || s.segment == WorkflowsSegment.Tasks) {
+            // A stale list disables writes, New workflow included (design L70/L220).
+            val fabEnabled = !(canCreateWorkflow && s.listStale)
             ExtendedFloatingActionButton(
-                onClick = { if (canCreateWorkflow) creating = true else onCreateTask() },
+                onClick = {
+                    when {
+                        !fabEnabled -> controller.notify("Refresh the workflow list before creating a workflow.")
+                        canCreateWorkflow -> creating = true
+                        else -> onCreateTask()
+                    }
+                },
                 icon = { Icon(OrchaIcons.Add, null) },
                 text = { Text(if (canCreateWorkflow) "New workflow" else "New task") },
-                containerColor = Orcha.palette.accent,
-                contentColor = Orcha.palette.accentInk,
+                containerColor = if (fabEnabled) Orcha.palette.accent else Orcha.palette.raised,
+                contentColor = if (fabEnabled) Orcha.palette.accentInk else Orcha.palette.faint,
                 modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp),
             )
         }
@@ -160,7 +171,7 @@ private fun WorkflowsTabContent(
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun WorkflowsList(controller: WorkflowsController, agents: List<AgentDto>) {
+private fun WorkflowsList(controller: WorkflowsController, agents: List<AgentDto>, onChooseActingHuman: () -> Unit) {
     val p = Orcha.palette
     val s by controller.state.collectAsState()
     val nameOf = { id: String? -> agents.firstOrNull { it.id == id }?.alias }
@@ -182,10 +193,11 @@ private fun WorkflowsList(controller: WorkflowsController, agents: List<AgentDto
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Banner(BannerKind.Danger, s.supportMessage ?: "You do not have access to this project's workflows.")
                 Text(
-                    "Choose acting human: re-pair this phone as a current human member of the project (Settings → Containers).",
+                    "Re-pair this phone as a current human member of the project, then try again.",
                     style = ltype(LType.Body), color = p.text2,
                 )
-                LButton("Try again", { controller.checkSupport() })
+                LButton("Choose acting human", onChooseActingHuman)
+                LButton("Try again", { controller.checkSupport() }, kind = LButtonKind.Secondary)
             }
             return
         }

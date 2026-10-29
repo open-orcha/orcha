@@ -56,9 +56,13 @@ fun RunDetailScreen(
     onBack: () -> Unit,
     onRefresh: () -> Unit,
     onStop: () -> Unit,
+    /** W16: run Stop is hidden for workflow members and while membership is unknown; null = no Workflows (legacy). */
+    membership: io.openorcha.mobile.ui.TaskMembership? = null,
 ) {
     val p = Orcha.palette
     val run = state.selectedRun
+    // Workflow tasks are stopped from the workflow's task controls (design L180).
+    val legacyStop = run?.taskId == null || membership == null || membership is io.openorcha.mobile.ui.TaskMembership.None
     val scope = androidx.compose.runtime.rememberCoroutineScope()
     var confirmStop by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
@@ -104,7 +108,7 @@ fun RunDetailScreen(
                     io.openorcha.mobile.ui.components.ModelProviderMark(it.runtime)
                     Spacer(Modifier.weight(1f))
                     it.agentAlias?.let { a -> LAvatar(a, isAI = true, size = 20.dp) }
-                    if (it.status == "running") {
+                    if (it.status == "running" && legacyStop) {
                         LButton("Stop run", { confirmStop = true }, kind = LButtonKind.Danger, size = LSize.Small, enabled = !state.actionInFlight)
                     }
                 }
