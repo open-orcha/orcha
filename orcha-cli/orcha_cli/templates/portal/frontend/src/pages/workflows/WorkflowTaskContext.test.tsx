@@ -144,6 +144,18 @@ it.each(["hidden", "forbidden", "unavailable", "ordinary"])("uses an honest fall
   expect(await screen.findByText(mode === "ordinary" ? "On hold" : "Not ready")).toBeVisible();
 });
 
+it("shows a version-two unselected branch as Not selected instead of a hold", async () => {
+  const task = exampleTask({ status: "not_ready", start_hold: false, route_state: "not_selected",
+    display_state: { label: "Not selected" },
+    blockers: [{ code: "not_selected", message: "An earlier step's outcome did not select this step." }] });
+  mockReads(() => jsonResponse({ capability: writeCapability,
+    workflows: [exampleWorkflow({ semantics_version: 2, tasks: [task] })] }));
+  render(<MemoryRouter><WorkflowTaskProvider><WorkflowTaskStatus taskId="build" fallback="not_ready" showLabel /></WorkflowTaskProvider></MemoryRouter>);
+  expect(screen.getByText("Not ready · checking workflow")).toBeVisible();
+  expect(await screen.findByText("Not selected")).toBeVisible();
+  expect(screen.queryByText("On hold")).toBeNull();
+});
+
 it("refreshes the shared membership index after a live task status changes", async () => {
   let label = "Prepared · waiting for Start";
   const fetch = mockReads(() => jsonResponse({ capability: writeCapability, workflows: [exampleWorkflow({ tasks: [exampleTask({ display_state: { label } })] })] }));

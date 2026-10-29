@@ -60,7 +60,7 @@ async def test_ordinary_hold_can_receive_message_and_release_still_works(client)
     assert (await project.call('POST', f'/api/tasks/{tid}/readiness', {'actor_agent_id': project.owner, 'ready': True}))['status'] == 'ready'
 
 
-@pytest.mark.parametrize('gate,reason', [('hold', 'on hold'), ('draft', 'Prepare'), ('owner', 'owner to decide'), ('review', 'not waiting'), ('start', 'not released')])
+@pytest.mark.parametrize('gate,reason', [('hold', 'on hold'), ('draft', 'Prepare'), ('owner', 'owner to decide'), ('review', 'not waiting'), ('start', 'not released'), ('not_selected', 'did not select')])
 async def test_workflow_waiting_guidance_matches_selection_and_preserves_pending_message(client, gate, reason):
     project = Project(client)
     await project.start('parallel', [('a', project.ann, [])])
@@ -71,6 +71,9 @@ async def test_workflow_waiting_guidance_matches_selection_and_preserves_pending
         if gate == 'owner': cur.execute("UPDATE tasks SET awaiting_owner_decision='stopped_by_owner',status='not_ready' WHERE id=%s", (tid,))
         if gate == 'review': cur.execute("UPDATE tasks SET status='needs_verification' WHERE id=%s", (tid,))
         if gate == 'start': cur.execute("UPDATE tasks SET start_hold=true,status='not_ready' WHERE id=%s", (tid,))
+        if gate == 'not_selected':
+            cur.execute("UPDATE workflows SET semantics_version=2 WHERE id=%s", (project.wid,))
+            cur.execute("UPDATE tasks SET route_state='not_selected',status='not_ready' WHERE id=%s", (tid,))
     # Remove setup notifications from this isolated fixture's question-only scan.
     with db_cursor() as (_, cur):
         cur.execute("INSERT INTO agent_event_acks(agent_id,event_id) SELECT %s,id FROM agent_events WHERE event_key=%s ON CONFLICT DO NOTHING", (project.ann, project.ann))
