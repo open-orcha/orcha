@@ -51,7 +51,6 @@ private val MENU_DESCRIPTIONS = mapOf(
     MenuAction.AddTasks to "New tasks are added as drafts. Adding a task does not start it; prepare it, then Review start.",
     MenuAction.Import to "Existing tasks join this workflow with their history. Completed results need acceptance before they count.",
     MenuAction.Move to "Moved tasks leave this workflow. Tasks moved nowhere become standalone tasks; their history stays.",
-    MenuAction.ReviewRound to "Record the outcome of a review round from the review task's sheet: open the task, then Review result.",
 )
 
 @Composable
@@ -62,6 +61,7 @@ internal fun WorkflowMenuSheet(
     action: MenuAction,
     onClose: () -> Unit,
 ) {
+    if (action == MenuAction.ReviewRound) return WorkflowReviewRoundSheet(controller, detail, snapshot, onClose)
     val p = Orcha.palette
     val s by controller.state.collectAsState()
     val d = s.detail ?: detail
