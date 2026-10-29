@@ -85,6 +85,7 @@ def handle_terminal_result(
         )
     ack = {
         "kind": "worker_completed_reaped",
+        "run_id": worker.get("run_id"),
         "release_lease": True,
         "lane": lane,
     }
@@ -157,7 +158,8 @@ def kill_stalled(
         if (stalled and not over_cap)
         else "worker_timeout_killed"
     )
-    ack = {"kind": kind, "release_lease": True, "lane": worker.get("lane", "work")}
+    ack = {"kind": kind, "release_lease": True, "lane": worker.get("lane", "work"),
+           "run_id": worker.get("run_id")}
     if (
         not worker.get("wake_task_id")
         and not (diff or "").strip()

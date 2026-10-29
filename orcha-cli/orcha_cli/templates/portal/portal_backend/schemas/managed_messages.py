@@ -5,6 +5,7 @@ from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field, model_validator
+from pydantic_core import PydanticCustomError
 
 
 class ManagedMessagePoll(BaseModel):
@@ -21,7 +22,7 @@ class ManagedMessageHandle(BaseModel):
         if self.handling_note is not None:
             self.handling_note = self.handling_note.strip() or None
         if self.outcome == "not_applicable" and not self.handling_note:
-            raise ValueError("Explain why this guidance cannot apply")
+            raise PydanticCustomError("managed_explanation_required", "Explain why this guidance cannot apply")
         return self
 
 

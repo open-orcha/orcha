@@ -33,7 +33,7 @@ def lock_agent_runs(cur, aid, lane):
     return runs, cur.fetchone()
 
 
-def require_managed_run(cur, tid, token, request):
+def require_managed_run(cur, tid, token, request, *, allow_lapsed=False, enrol=True):
     if not token:
         raise HTTPException(403, "work-lane token required")
     cur.execute("SELECT * FROM embodiment_tokens WHERE run_token=%s", (token,))
@@ -83,13 +83,18 @@ def require_managed_run(cur, tid, token, request):
             conflict("workflow_work_on_hold")
     elif not lane or str(lane["work_run_id"]) != str(run["run_id"]):
         conflict("worker_lane_owner_changed")
-    elif not lane["wake_lease_until"] or lane["wake_lease_until"] <= sql.utcnow():
+    elif not lane["wake_lease_until"] or (not allow_lapsed and lane["wake_lease_until"] <= sql.utcnow()):
         conflict("worker_lease_lapsed")
     elif lane["lease_kind"] != "ephemeral":
         conflict("managed_commands_require_one_shot_worker")
     # Enrol old one-shot launchers on first managed use. From here on a header-less
     # alias-only scheduling call cannot release or extend this managed lane.
-    if not run["managed_commands"]:
+    # Once published, fixed caps also fence receipts and other managed effects.
+    cur.execute("SELECT * FROM managed_run_limits WHERE run_id=%s", (run["run_id"],))
+    limits = cur.fetchone()
+    if limits and min(d for d in (limits["run_until"], limits["sandbox_until"]) if d) <= sql.utcnow():
+        conflict("worker_runtime_limit_reached")
+    if enrol and not run["managed_commands"]:
         cur.execute("UPDATE worker_runs SET managed_commands=true WHERE run_id=%s", (run["run_id"],))
     return run, task
 

@@ -8,7 +8,10 @@ from portal_backend.application import app
 from portal_backend.database import db_cursor
 from portal_backend.guards import require_container, valid_uuid
 from portal_backend.identity_routes import require_machine_lane_member
-from portal_backend.stranded_runs import reconcile_stranded_runs, turn_owned_expr
+from portal_backend.stranded_runs import (
+    SANDBOX_STRANDED_EXTRA_SECS, STRANDED_RUN_SECS, managed_activity,
+    managed_job_expr, reconcile_stranded_runs, turn_owned_expr,
+)
 from portal_backend.workflow_evidence_service import terminalize_worker_run
 
 ORPHAN_LEASE_SECS = 1260.0
@@ -53,7 +56,23 @@ def _reap_lane(
            SELECT agent_id, alias, lease_kind, idle_seconds FROM orphans""",
         (cid, stale_before),
     )
-    reaped = cur.fetchall()
+    candidates = cur.fetchall()
+    reaped = []
+    for row in candidates:
+        # The graph lock is already held. Use the same activity expression and
+        # minimum grace interval that the supervisor's authority response uses;
+        # a caller-supplied zero must not revoke authority promised to that job.
+        if run_lane == "work":
+            cur.execute("SELECT wr.run_id,wr.sandbox_container_id FROM worker_runs wr "
+                        "WHERE wr.agent_id=%s AND wr.lane='work' AND wr.status='running' "
+                        f"AND {managed_job_expr()}", (row["agent_id"],))
+            managed = cur.fetchall()
+            if any(managed_activity(cur, run["run_id"]) >= sql.ago(
+                    max(orphan_secs, STRANDED_RUN_SECS)
+                    + (SANDBOX_STRANDED_EXTRA_SECS if run["sandbox_container_id"] else 0))
+                   for run in managed):
+                continue
+        reaped.append(row)
     # SQLite has no data-modifying CTE: release in a second statement of the same transaction.
     if reaped:
         cur.execute(
