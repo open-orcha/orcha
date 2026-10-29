@@ -278,14 +278,14 @@
             </svg>
           </div>
           <div class="helper">Solid arrows = prerequisites · dotted return = loop · dotted dim = not selected. Pinch to zoom, tap a node for its task sheet.</div>
-          <div class="banner info"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/></svg><div class="grow">Drawing nodes and editing outcome routes is done on the laptop. You can edit prerequisites from any task's sheet.</div><span class="b-act">Copy link</span></div>
+          <div class="banner info"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/></svg><div class="grow">Routes and the repeat group were set when this workflow was created (W10). You can still edit prerequisites from any task's sheet; drawing nodes is done on the laptop.</div><span class="b-act">Copy link</span></div>
         </div>
         <div class="homebar"></div>
       </div>
     </div>
     <figcaption>
       <div class="cap-title">W05 · Route segment (read-only graph) <span class="plat">Android · light</span></div>
-      <div class="cap-note">Replaces web's Dependencies tab and keeps its contents (#362 §6): List / Graph, the saved prerequisite graph and the outcome routes. On the phone the graph is <b>read-only</b> (pinch, pan, fit; a node tap opens W06); the loop is the dotted return arrow and the group box, the Not selected branch is dim. <b>Edit prerequisites</b> stays available from the task sheet (W12); drawing nodes and editing routes is honestly labelled laptop-only.</div>
+      <div class="cap-note">Replaces web's Dependencies tab and keeps its contents (#362 §6): List / Graph, the saved prerequisite graph and the outcome routes. On the phone the graph is <b>read-only</b> (pinch, pan, fit; a node tap opens W06); the loop is the dotted return arrow and the group box, the Not selected branch is dim. <b>Edit prerequisites</b> stays available from the task sheet (W12). <b>Outcome routes and repeat groups are set at create time (W10) and are read-only here</b>, as on the web's Route tab; drawing nodes is honestly labelled laptop-only.</div>
       <div class="cap-api">GET /api/workflows/{wid}/dependencies · GET /api/workflows/{wid} <b>(repeat_groups, routes read-only)</b></div>
     </figcaption>
   </figure>
@@ -371,7 +371,7 @@
     </div>
     <figcaption>
       <div class="cap-title">W07 · Review start (action-sheet pattern) <span class="plat">Android · dark</span></div>
-      <div class="cap-note">One pattern for all 17 workflow and task actions: inputs → <b>Check</b> (the server check route, "checked N s ago against revision R") → the <b>impact card</b> (one row per task with its resulting status and any refusal) → confirm, enabled only while the check matches the inputs. #368 adds the <b>expected route</b> (loops, gates, stops-and-asks) and the <b>limits for this run</b>: rounds, the editable agent-turn allowance (default 40) and the cost labelled as an estimate. Undismissable while sending.</div>
+      <div class="cap-note">One pattern for every workflow and task action (the 23-row table in the spec, W07–W08): inputs → <b>Check</b> (the server check route, "checked N s ago against revision R") → the <b>impact card</b> (one row per task with its resulting status and any refusal) → confirm, enabled only while the check matches the inputs. #368 adds the <b>expected route</b> (loops, gates, stops-and-asks) and the <b>limits for this run</b>: rounds, the editable agent-turn allowance (default 40) and the cost labelled as an estimate. Undismissable while sending.</div>
       <div class="cap-api">GET /api/workflows/{wid}/start-check?task_ids= → POST /api/workflows/{wid}/start {task_ids, expected_revision, idempotency_key, turn_allowance}</div>
     </figcaption>
   </figure>
@@ -489,14 +489,14 @@
             <div class="helper" style="margin:2px 0 0;">Each round receives the last draft, findings and reason.</div>
           </div>
           <div style="display:flex; gap:8px;"><div class="btn tonal sm" style="flex:1;">Add step</div><div class="btn neutral sm" style="flex:1;">Add existing tasks…</div><div class="btn neutral sm" style="flex:1;">Add repeat group</div></div>
-          <div class="helper">Cards / Graph: the graph is read-only here. Draw nodes on the laptop.</div>
+          <div class="helper">Cards / Graph: the graph is read-only here (draw nodes on the laptop). Outcomes, routes and the repeat group are set in these cards; after Save they are read-only (W05).</div>
         </div>
         <div class="homebar"></div>
       </div>
     </div>
     <figcaption>
       <div class="cap-title">W10 · Create workflow · Steps <span class="plat">iOS · dark</span></div>
-      <div class="cap-note"><b>Creating a workflow on the phone is in v1</b> (the workflow goal asks for it). Three steps: Goal (name, owner, goal, Serial/Parallel, objectives), <b>Steps</b> (this frame), Review and save. A step card = summary, Done when, assignee, prerequisites chip picker (3 max, reasons inline), and the #368 parts: <b>outcomes this step can report</b> and a <b>What happens next</b> destination per outcome, plus a <b>Repeat group</b> card (steps, exit outcome, most rounds, what happens at the limit). "Add existing tasks…" opens W11b.</div>
+      <div class="cap-note"><b>Creating a workflow on the phone is in v1</b> (the workflow goal asks for it). Three steps: Goal (name, owner, goal, Serial/Parallel, objectives), <b>Steps</b> (this frame), Review and save. A step card = summary, Done when, assignee, prerequisites chip picker (3 max, reasons inline), and the #368 parts: <b>outcomes this step can report</b> and a <b>What happens next</b> destination per outcome, plus a <b>Repeat group</b> card (steps, exit outcome, most rounds, what happens at the limit). <b>This is the only place routes and repeat groups are edited on the phone</b>, by list, as the web create dialog does; after Save they are read-only (W05). "Add existing tasks…" opens W11b.</div>
       <div class="cap-api">POST /api/containers/{cid}/workflows/preview → POST /api/containers/{cid}/workflows {title, goal, execution_mode, objectives[], tasks[], repeat_groups[], turn_allowance, idempotency_key, preview_digest}</div>
     </figcaption>
   </figure>

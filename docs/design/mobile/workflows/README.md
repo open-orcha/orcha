@@ -20,10 +20,10 @@ Status legend: **existing** = the route is in the live `/openapi.json` (checked 
 ## 1. Principles (carried from #350 and #362, plus three for the phone)
 
 1. **The server's words, never ours.** Status labels are `display_state.label` and `workflowLabel`; disabled actions show the server's reason verbatim; blockers are listed, never summarised away.
-2. **Check, see the impact, then confirm.** Every write that has a check route runs it first and shows the impact card before the confirm button enables, with `expected_revision` and one idempotency key. A refusal clears the preview. Same rule as web, same 17 actions.
+2. **Check, see the impact, then confirm.** Every write that has a check route runs it first and shows the impact card before the confirm button enables, with `expected_revision` and one idempotency key. A refusal clears the preview. Same rule as web, for every row of the W07–W08 action table (23 rows; a row that pairs an action with its inverse, such as Pause / Resume, shares one sheet).
 3. **Explain loops in words first.** "Round 2 of 5 · exits when Review reports Passed · then asks Kedar" is on the screen before any bracket or dot.
 4. **One hand, one screen.** Web's three-column detail (list · inspector · rail) becomes a stack: detail → task sheet → action sheet. Nothing needs a hover, a drag or a precise edge tap.
-5. **Honest about the laptop.** Drawing the dependency graph and editing outcome routes stay on the laptop in v1; the phone shows a read-only graph and route list and says where to edit them.
+5. **Honest about the laptop.** Drawing the dependency graph (placing nodes, dragging arrows) stays on the laptop in v1; the phone shows a read-only graph and says so. Outcome routes and repeat groups **are** set on the phone, by list, when a workflow is created (W10 step 2, the same list the web create dialog uses). After Save they are read-only on the phone (W05), exactly as on the web's Route tab, which has no route editor either. The one rule: **routes are edited at create time, by list, on both platforms; never after Save in v1.**
 6. **Never the legacy path for a workflow member.** Accept and reject go through the workflow routes; the legacy Close and Verify sheets (flows/05, flows/08) are hidden for members and while membership is unknown.
 
 ## 2. Navigation (replaces §1 and §3 of `02-ia-navigation.md` for the workspace)
@@ -35,7 +35,7 @@ Container workspace (tabbed)
 │    ├─ Workflows list (filters · owner · search · load more)  → Workflow detail
 │    │     Workflow detail: header · Needs your input strip · segments Tasks | Route | Review | Activity
 │    │       ├─ Task sheet (state · actions · prerequisites · acceptance · evidence · discussion) → Task page
-│    │       ├─ Action sheets (17, one pattern: inputs · Check · impact · confirm)
+│    │       ├─ Action sheets (the 23-row table in W07–W08, one pattern: inputs · Check · impact · confirm)
 │    │       ├─ Result review / outcome report (full-screen sheet)
 │    │       ├─ Owner decision sheets (limit reached · stalled · missing outcome · allowance used up · conflicting instructions)
 │    │       └─ Finish checklist (full-screen sheet)
@@ -49,7 +49,7 @@ Container workspace (tabbed)
 - **Segment memory.** The Workflows tab remembers the last segment per container. First launch after the update opens **Workflows**; a container whose server reports no workflow capability opens **Tasks** and shows a one-line note on the Workflows segment ("This Orcha runs an older version without workflows") instead of a dead screen.
 - **Create.** Android: the Workflows segment has an extended FAB "New workflow"; the Tasks segment keeps its FAB "New task" (flows/11). iOS: toolbar "+" offers "New workflow" or "New task" via a `Menu` when both segments are available; on a segment, "+" does that segment's create directly.
 - **Deep links.** Portal routes map 1:1: `/workflows` → list; `/workflows/{wid}?tab=` → detail on that segment; `#workflow-task-{tid}` → detail with that task's sheet open; `/tasks?task={tid}&workflowReturn=…` → task page with the "Back to {workflow}" crumb. Notifications (flows/08) for a workflow task open the task sheet, not the legacy task detail.
-- **Back.** Android: system back closes the open sheet first, then pops detail → list, then the segment root goes to Containers home (predictive back). iOS: swipe-back pops detail → list; sheets dismiss by drag; the "Back to {workflow}" crumb on the task page is a real push target so swipe-back returns to the detail with the same task selected.
+- **Back.** Android: system back closes the open sheet first, then pops detail → list, then the segment root goes to Containers home (predictive back; needs the manifest flag in §8). iOS: swipe-back pops detail → list; sheets dismiss by drag; the "Back to {workflow}" crumb on the task page is a real push target so swipe-back returns to the detail with the same task selected.
 - **Home card.** "Workflows" summary card under Needs you: counts for Active, Paused, Ready to finish and "N need your decision" (limit, stall, missing outcome); tap opens the Workflows segment with the matching filter.
 
 ## 3. Screens
@@ -85,10 +85,10 @@ Checking support → skeleton cards (15 s timeout). Unsupported server → neutr
 - **Repeat group bracket** (#368): consecutive member rows are wrapped by a left bracket with the group name, "Round 2 of 5", round dots (filled = done, ring = current, empty = remaining), the exit rule sentence and the escalation owner. The running step's sub-line names the round and what it received ("Round 2 · received draft v2 + 3 findings"). Gate rows and Not selected rows sit outside the bracket; Not selected rows are struck through with the deciding outcome, never styled as failed.
 - Row long-press (Android) / swipe-leading (iOS) exposes the task's enabled `available_actions` as a quick menu; everything is also in W06.
 
-### W05 Route segment (read-only on the phone)
+### W05 Route segment (read-only after Save)
 
 - **List / Graph** segmented control. List: the same rows with "Depends on · Needed by" sub-line plus outcome routes ("Passed → Publish · Changes requested ↺ Write (round)"). Graph: the saved graph rendered read-only (pinch-zoom, pan, fit), nodes = task rows, solid arrows = prerequisites, dotted return arrows = loop returns, selected node ringed, neighbours full, others dimmed. Tapping a node opens W06.
-- **Editing**: "Edit prerequisites" lives in W06 (a list picker, max 3, reasons inline) and saves with `PUT /api/tasks/{tid}/dependencies`. Drawing nodes or editing outcome routes is laptop-only in v1; the segment says so in a muted line with "Open on the laptop" (copies the portal link).
+- **Editing**: "Edit prerequisites" lives in W06 (a list picker, max 3, reasons inline) and saves with `PUT /api/tasks/{tid}/dependencies`. **Outcome routes and repeat groups are set when the workflow is created (W10 step 2) and are read-only here**, as on the web's Route tab; the segment says so in a muted line ("Routes and the repeat group were set when this workflow was created"). Drawing nodes is laptop-only in v1; the same line offers "Open on the laptop" (copies the portal link). `PUT /api/workflows/{wid}/flow` exists on the server (after Start, started steps keep their rules; a round limit can still be raised), but neither the web nor the phone exposes a post-save route editor in v1; a phone "Edit routes…" sheet on that route is a v1.1 candidate, not drawn.
 - Endpoints: `GET /api/workflows/{wid}/dependencies` · `GET /api/workflows/{wid}` (flow definition for routes, read-only).
 
 ### W06 Task sheet (replaces web's inspector)
@@ -104,7 +104,7 @@ Full-height sheet (M3 modal bottom sheet, expanded; iOS `.sheet` large detent) w
 7. **Task authority** line (ON/OFF and what it means) → task page switch.
 - Endpoints: `GET /api/workflows/{wid}` (task view) · `GET /api/tasks/{tid}/round-context` · `GET /api/tasks/{tid}/evidence` · `GET /api/workflows/{wid}/tasks/{tid}/evidence` · `GET/POST /api/tasks/{tid}/messages`.
 
-### W07–W08 Action sheets (one pattern for 17 actions)
+### W07–W08 Action sheets (one pattern for every action: 23 rows)
 
 Sheet with title = the action, the one-paragraph description, inputs, **Check** (calls the check route; shows "checked N s ago against revision R"), the **impact card** ("What this action will do": one row per task with title · resulting status badge · refusal or blocker lines), then confirm. Confirm is primary, or danger for Stop, Cancel, Withdraw, Withdraw outside result, Release lost worker; disabled until the check matches the current inputs; a refusal clears the preview. The sheet cannot be dismissed while sending or uncertain (drag disabled, back shows "Still saving"). Typed drafts are kept on refusal.
 
@@ -150,9 +150,9 @@ Full-screen sheet for a task in `needs_verification`, opened from "Review result
 Full-screen flow, three steps with a top stepper and "Draft kept while this app stays open. Nothing starts until you review Start." (in-memory draft scoped by container and person, as web; not persisted across relaunch, said in the stepper line).
 
 1. **Goal**: name · owner (defaults to the paired human) · goal · How work runs as a segmented control (Serial / Parallel) with the explanation line · **Objectives** (0–50) as cards (Title · Done when · Remove).
-2. **Steps** (1–200): cards with "Draft · Autonomy OFF" chip, summary, Done when, assignee picker (avatars), the autonomy explanation, **Depends on** chip picker ("Add prerequisite" → list of other draft and selected existing tasks; disabled entries carry `dependencyReason`: 3-max, cycle, self), Instructions behind a disclosure, Remove (disabled "Change dependents first" when depended on). **Outcomes this step can report** chips and **What happens next** rows per outcome (destination: a step · ask the owner · exit group · end of route) (#368); **Repeat group** card (steps, review step, exit outcome, most rounds (default 5), what happens at the limit, escalation owner) (#368). "Add existing tasks…" → W11b. Cards / Graph: the Graph view is read-only on the phone (the laptop draws); a muted line says so.
+2. **Steps** (1–200): cards with "Draft · Autonomy OFF" chip, summary, Done when, assignee picker (avatars), the autonomy explanation, **Depends on** chip picker ("Add prerequisite" → list of other draft and selected existing tasks; disabled entries carry `dependencyReason`: 3-max, cycle, self), Instructions behind a disclosure, Remove (disabled "Change dependents first" when depended on). **Outcomes this step can report** chips and **What happens next** rows per outcome (destination: a step · ask the owner · exit group · end of route) (#368); **Repeat group** card (steps, review step, exit outcome, most rounds (default 5), what happens at the limit, escalation owner) (#368). **This is the only place outcome routes and repeat groups are edited on the phone**, by list, the same as the web create dialog; after Save they show read-only in W05 (§1 principle 5). "Add existing tasks…" → W11b. Cards / Graph: the Graph view is read-only on the phone (the laptop draws); a muted line says so.
 3. **Review and save**: "Review draft" → the draft problems list or the checked summary card (blockers, import impact, finished-result reviews when existing tasks are included; refused missing destinations, unbounded groups, ineligible reporters; the default agent-turn allowance). "Save workflow" primary, enabled only after a clean review; "Discard draft…" with confirm; after saving, "Workflow saved · Open" and the new detail.
-- Endpoints: `GET /api/containers/{cid}/workflows/capability` · `POST /api/containers/{cid}/workflows/preview` · `POST /api/containers/{cid}/workflows` · `PUT /api/workflows/{wid}/flow` (outcomes, routes, repeat groups; #368) · `GET /api/snapshot/{cid}` (assignees).
+- Endpoints: `GET /api/containers/{cid}/workflows/capability` · `POST /api/containers/{cid}/workflows/preview` · `POST /api/containers/{cid}/workflows` (the `WorkflowCreate` body carries `tasks[].outcomes`, `tasks[].routes`, `repeat_groups`, `turn_allowance` and `semantics_version: 2`, so outcomes, routes and repeat groups are saved by the create call, as the web does; #368) · `GET /api/snapshot/{cid}` (assignees). The phone does not call `PUT /api/workflows/{wid}/flow` in v1 (see W05).
 
 ### W11 / W11b Add new tasks · Add existing tasks
 
@@ -240,7 +240,7 @@ Identity and connectivity: the phone acts as the paired human (`actor_agent_id` 
 | Owner decision | `ModalBottomSheet` with radio cards | `.sheet` with a `List` of selectable rows |
 | Overflow | `DropdownMenu` with two-line disabled items | `Menu` with `.disabled` items and a footnote line for the reason |
 | Feedback | `Snackbar` ("Workflow hidden" + Restore) | inline top banner, auto-dismiss, Restore link |
-| Back | system / predictive back closes sheet → detail → list | swipe-back; sheets drag to dismiss; crumb is a push target |
+| Back | system / predictive back closes sheet → detail → list (manifest flag, §8) | swipe-back; sheets drag to dismiss; crumb is a push target |
 | Long-press / swipe | row long-press opens quick actions | leading swipe opens quick actions |
 | Graph | `Canvas` with transform gestures, read-only | `Canvas` + `MagnifyGesture`, read-only |
 
@@ -252,7 +252,7 @@ Workflow card · status glyph set (the web `StatusIcon` mapping in #350 §3) · 
 
 ## 7. API check (live `/openapi.json`, portal running PR #368, 2026-10-29)
 
-Every route named in §3 exists on the live server, including the #368 additions: `PUT /api/workflows/{wid}/flow`, `POST /api/workflows/{wid}/decisions`, `POST /api/tasks/{tid}/outcome` and `/outcome/preview`, `GET /api/tasks/{tid}/round-context`, `PUT /api/tasks/{tid}/reviewer`, `GET /api/workflows/{wid}/review-handoffs`, `POST /api/workflows/{wid}/hide` / `/restore` / `GET …/visibility-check`. Field names on the phone follow the schemas exactly; the gallery captions name the route under each frame.
+Every route named in §3 exists on the live server, including the #368 additions: `PUT /api/workflows/{wid}/flow` (exists; not called by the phone in v1, see W05), `POST /api/workflows/{wid}/decisions`, `POST /api/tasks/{tid}/outcome` and `/outcome/preview`, `GET /api/tasks/{tid}/round-context`, `PUT /api/tasks/{tid}/reviewer`, `GET /api/workflows/{wid}/review-handoffs`, `POST /api/workflows/{wid}/hide` / `/restore` / `GET …/visibility-check`. Field names on the phone follow the schemas exactly; the gallery captions name the route under each frame.
 
 **Asks (proposed, drawn as unavailable until they exist):**
 
@@ -264,7 +264,7 @@ Every route named in §3 exists on the live server, including the #368 additions
 
 **Both (shared model, do not drift):** one `WorkflowsRepository` per container behind the same reachability states as tasks; every write carries `expected_revision` (workflow) and `expected_work_revision` (task) plus one idempotency key generated when the sheet opens and reused on retry; an uncertain reply reads `GET /api/containers/{cid}/workflow-operations/{key}` before offering Retry. Capability is read once per container session and on every stale recovery. All user-visible labels come from the server (`display_state.label`, `workflowLabel`, `available_actions[].reason`); the client never invents a status. Members never call `verify`, `cancel` or `assign`.
 
-**Andrew (Compose):** `WorkspaceScreen.kt` bottom bar: replace the Tasks destination with Workflows; `WorkflowsRoute` hosts a `PrimaryTabRow` (Workflows | Tasks) and the existing task list composable moves under it unchanged. `LazyColumn` with `stickyHeader` groups; the loop bracket as a `Box` drawing a left border with `drawBehind` around the grouped items; `ModalBottomSheet` for W06–W26 with `sheetState.hide()` blocked while `sending`; danger confirms as `AlertDialog`; `DropdownMenu` items use a two-line `Text` for the reason.
+**Andrew (Compose):** `WorkspaceScreen.kt` bottom bar: replace the Tasks destination with Workflows; `WorkflowsRoute` hosts a `PrimaryTabRow` (Workflows | Tasks) and the existing task list composable moves under it unchanged. `LazyColumn` with `stickyHeader` groups; the loop bracket as a `Box` drawing a left border with `drawBehind` around the grouped items; `ModalBottomSheet` for W06–W26 with `sheetState.hide()` blocked while `sending`; danger confirms as `AlertDialog`; `DropdownMenu` items use a two-line `Text` for the reason. **Predictive back:** the manifest does not enable it today, so add `android:enableOnBackInvokedCallback="true"` on `<application>` in `android/app/src/main/AndroidManifest.xml` (targetSdk is already 35) and close sheets through `BackHandler` / `PredictiveBackHandler` before the navigation pop, otherwise the §2 back order does not hold.
 
 **Ethan (SwiftUI):** `WorkspaceScreen.swift` `TabView`: replace Tasks with Workflows; `WorkflowsView` holds a `Picker(.segmented)` in `.principal` and embeds the existing `TasksListView` unchanged. `List` with section headers for groups; the bracket as a `VStack` overlay with a leading `Capsule`; W06–W26 as `.sheet` with `.presentationDetents` and `.interactiveDismissDisabled(sending)`; danger confirms as `confirmationDialog`; `Menu` items disabled with the reason in a trailing footnote; `NavigationStack` path carries `workflowReturn` so swipe-back restores selection.
 
@@ -272,5 +272,12 @@ Every route named in §3 exists on the live server, including the #368 additions
 
 - Entry point: main Workflows tab, Tasks moved under it (Kedar, 2026-10-29). #348 §2 flow 1 and plan choice (d) withdrawn.
 - #368 is the base, not an addendum: W03, W04, W05, W06, W07, W09, W10, W13, W14, W15, W17, W19, W20 carry loop, outcome and decision content.
-- Creating a workflow on the phone is in v1 (W10, W11); the graph is read-only and outcome routes are edited by list, drawing stays on the laptop.
+- Creating a workflow on the phone is in v1 (W10, W11). Outcome routes and repeat groups are set by list at create time only (W10 step 2) and are read-only afterwards (W05), the same as the web; the graph is read-only and drawing stays on the laptop.
 - Hide/restore moved from "proposed" to live (routes exist on the running server).
+
+## 10. Review round 2 (CodeCleanupAgent findings, 2026-10-29)
+
+- **Blocking, fixed:** one rule for outcome routes on the phone: set by list at create time (W10 step 2), read-only after Save (W05), the same as the web, whose create dialog sends them in the create body and whose Route tab has no editor. §1 principle 5, §2, W05, W10, §7 and §9 now say the same thing; W10 no longer cites `PUT /api/workflows/{wid}/flow` (the `WorkflowCreate` body carries outcomes, routes and repeat groups).
+- **Action count:** "17 actions" replaced by the real size of the W07–W08 table (23 rows) in §1, §2, the W07 heading and the gallery caption.
+- **Predictive back:** Android manifest note added to §8 (`android:enableOnBackInvokedCallback`), referenced from §2 and §5.
+- Gallery captions for W05, W07 and W10 updated to match; `renders/gallery-full.png` re-rendered.
