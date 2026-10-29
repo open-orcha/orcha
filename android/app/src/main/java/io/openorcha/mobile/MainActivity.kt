@@ -201,8 +201,19 @@ class MainActivity : ComponentActivity() {
                         onOpenRun = viewModel::openRun,
                         onSendMessage = viewModel::sendTaskMessage,
                         onTaskChanged = viewModel::refreshSelected,
-                        workflow = viewModel.workflows.state.collectAsState().value.loaded
-                            .firstOrNull { w -> w.tasks.any { it.id == state.selectedTask?.id } },
+                        membership = run {
+                            val ws = viewModel.workflows.state.collectAsState().value
+                            val tid = state.selectedTask?.id
+                            LaunchedEffect(tid) { tid?.let { viewModel.workflows.resolveMembership(it) } }
+                            tid?.let { ws.let { _ -> viewModel.workflows.membership(it) } }
+                        },
+                        onRefreshMembership = {
+                            state.selectedTask?.id?.let { tid ->
+                                viewModel.workflows.resolveMembership(tid, force = true)
+                                viewModel.workflows.membershipOf(tid)?.let { w -> viewModel.workflows.refreshMembershipWorkflow(w.id, tid) }
+                            }
+                        },
+                        workflowStale = viewModel.workflows.state.collectAsState().value.listStale,
                         onOpenTaskControls = state.selectedTask?.id?.let { tid ->
                             viewModel.workflows.membershipOf(tid)?.let { w ->
                                 {
