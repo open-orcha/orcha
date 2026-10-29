@@ -585,6 +585,9 @@ class WorkflowService:
                 ),
                 lost_release=any(e["state"] == "released_lost" for e in executions),
                 workflow_open=w["status"] in {"active", "paused"},
+                loop_waiting=bool(
+                    s["workflow"].get("paused_group_tasks", {}).get(tid)
+                ),
             )
             outside = s["outside_evidence"].get(tid)
             row["outside_result_id"] = outside["id"] if outside else None

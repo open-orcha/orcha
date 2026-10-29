@@ -184,6 +184,55 @@ async def test_repeat_group_handoff_keeps_outside_prerequisites(client):
     assert 'research' in blockers[0]['message']
 
 
+async def test_repeat_group_handoff_survives_an_owner_edit_after_start(client):
+    p = Project(client)
+    await start_repeat(p)
+    detail = await p.detail(p.wid)
+    review = next(t for t in detail['tasks'] if t['id'] == p.tasks['review'])
+    await p.call(
+        'PUT',
+        f"/api/tasks/{p.tasks['review']}/dependencies",
+        p.mutation(
+            detail,
+            expected_work_revision=review['work_revision'],
+            depends_on=[p.tasks['design']],
+        ),
+    )
+
+    source = await launch(p, p.ann, 'design')
+    receipt = await handoff(p, source)
+    assert receipt['phase'] == 'source_stopping'
+    with db_cursor() as (_, cur):
+        cur.execute(
+            """SELECT i.work_revision,r.round_number
+                 FROM workflow_step_instances i
+                 JOIN workflow_group_rounds r ON r.id=i.group_round_id
+                WHERE i.task_id=%s
+                ORDER BY i.work_revision DESC LIMIT 1""",
+            (p.tasks['review'],),
+        )
+        assert dict(cur.fetchone()) == {
+            'work_revision': review['work_revision'] + 1,
+            'round_number': 1,
+        }
+
+
+async def test_repeat_group_handoff_names_a_held_reviewer_blocker(client):
+    p = Project(client)
+    await start_repeat(p)
+    detail = await p.detail(p.wid)
+    review = next(t for t in detail['tasks'] if t['id'] == p.tasks['review'])
+    await p.call(
+        'POST',
+        f"/api/tasks/{p.tasks['review']}/hold",
+        p.mutation(detail, expected_work_revision=review['work_revision']),
+    )
+    source = await launch(p, p.ann, 'design')
+    refused = await handoff(p, source, expect=409)
+    assert refused['detail']['code'] == 'review_not_eligible'
+    assert [b['code'] for b in refused['detail']['blockers']] == ['human_hold']
+
+
 async def test_repeat_group_verdict_must_match_the_reported_outcome(client):
     p = Project(client)
     await start_repeat(p)
@@ -194,6 +243,45 @@ async def test_repeat_group_verdict_must_match_the_reported_outcome(client):
     await report_outcome(p, review, 'Approved')
     refused = await verdict(p, review, receipt, 'changes_requested', expect=409)
     assert refused['detail']['code'] == 'review_verdict_outcome_mismatch'
+
+
+@pytest.mark.parametrize('replacement_reporter', ['worker', 'human'])
+async def test_repeat_group_changed_outcome_interrupts_at_confirmed_exit(
+    client, replacement_reporter
+):
+    p = Project(client)
+    await start_repeat(p)
+    source = await launch(p, p.ann, 'design')
+    receipt = await handoff(p, source)
+    await stopped(p, p.ann, source)
+    review = await launch(p, p.bob, 'review')
+    await report_outcome(p, review, 'Changes requested', ['Needs another pass'])
+    await verdict(p, review, receipt, 'changes_requested')
+    if replacement_reporter == 'worker':
+        await report_outcome(p, review, 'Approved')
+    else:
+        detail = await p.detail(p.wid)
+        task = next(t for t in detail['tasks'] if t['id'] == p.tasks['review'])
+        await p.call(
+            'POST',
+            f"/api/tasks/{p.tasks['review']}/outcome",
+            p.mutation(
+                detail,
+                outcome='Approved',
+                findings=[],
+                note='Owner replacement',
+                expected_work_revision=task['work_revision'],
+            ),
+        )
+    await stopped(p, p.bob, review)
+    detail = await p.detail(p.wid)
+    rows = {t['id']: t for t in detail['tasks']}
+    assert rows[p.tasks['design']]['awaiting_owner_decision'] == 'worker_released'
+    assert rows[p.tasks['review']]['awaiting_owner_decision'] == 'worker_released'
+    history = (await p.client.get(
+        f'/api/workflows/{p.wid}/review-handoffs'
+    )).json()['handoffs']
+    assert history[-1]['phase'] == 'cancelled'
 
 
 async def test_repeat_group_prompt_names_the_supported_handoff_order(client):
@@ -230,6 +318,12 @@ async def test_repeat_group_round_limit_holds_both_results_until_owner_continues
     assert rows[p.tasks['design']]['status'] == 'not_ready'
     assert rows[p.tasks['review']]['status'] == 'not_ready'
     assert rows[p.tasks['review']]['awaiting_loop_decision'] == 'limit_reached'
+    assert rows[p.tasks['design']]['display_state']['label'] == (
+        "Waiting for the owner's loop decision"
+    )
+    assert rows[p.tasks['review']]['display_state']['label'] == (
+        'Round limit reached, waiting for the owner'
+    )
 
     decision = {'kind': choice, 'task_id': p.tasks['review'], 'note': 'One more round'}
     if choice == 'raise_limit':
@@ -312,6 +406,12 @@ async def test_repeat_group_stall_compares_captured_handoff_hashes(client):
     assert detail['repeat_groups'][0]['current_round'] == 2
     assert rows[p.tasks['design']]['status'] == 'not_ready'
     assert rows[p.tasks['review']]['awaiting_loop_decision'] == 'stalled'
+    assert rows[p.tasks['design']]['display_state']['label'] == (
+        "Waiting for the owner's loop decision"
+    )
+    assert rows[p.tasks['review']]['display_state']['label'] == (
+        'Loop stalled, waiting for the owner'
+    )
     with db_cursor() as (_, cur):
         cur.execute("SELECT stall FROM workflow_group_rounds WHERE end_reason='stall'")
         stall = cur.fetchone()['stall']

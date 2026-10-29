@@ -6,6 +6,8 @@ exit observation is the only seam that releases capacity and routes the next tur
 import json
 from uuid import UUID, uuid4
 
+from fastapi import HTTPException
+
 from portal_backend import sql
 from portal_backend.events import publish_event
 from portal_backend.task_approval_policy import requirements_digest
@@ -97,13 +99,17 @@ def require_plan(cur, task):
             JOIN workflow_step_instances old_i
               ON old_i.task_id=a.task_id AND old_i.work_revision=a.work_revision
             JOIN workflow_group_rounds old_r ON old_r.id=old_i.group_round_id
-            JOIN workflow_step_instances current_i
-              ON current_i.task_id=a.task_id AND current_i.work_revision=%s
-            JOIN workflow_group_rounds current_r ON current_r.id=current_i.group_round_id
+            JOIN workflow_repeat_group_members current_m
+              ON current_m.task_id=a.task_id
+            JOIN workflow_repeat_groups current_g
+              ON current_g.id=current_m.group_id AND current_g.state='open'
+            JOIN workflow_group_rounds current_r
+              ON current_r.group_id=current_g.id
+             AND current_r.round_number=current_g.current_round
             WHERE a.task_id=%s AND a.phase='plan' AND a.requirements_sha256=%s
               AND old_r.group_id=current_r.group_id
               AND old_r.round_number<=current_r.round_number
-            LIMIT 1""", (task['work_revision'], task['id'], requirements_digest(task)))
+            LIMIT 1""", (task['id'], requirements_digest(task)))
         approved = cur.fetchone()
     cur.execute("SELECT decision FROM decisions WHERE subject_type='plan_approval' AND subject_id=%s ORDER BY created_at DESC LIMIT 1", (str(task['id']),))
     latest = cur.fetchone()
@@ -123,14 +129,8 @@ def _repeat_group_bridge(svc, w, source, review):
           ON review_member.group_id=g.id AND review_member.task_id=%s
         JOIN task_dependencies dependency
           ON dependency.task_id=%s AND dependency.depends_on_id=%s
-        JOIN workflow_step_instances source_instance
-          ON source_instance.task_id=%s AND source_instance.work_revision=%s
-        JOIN workflow_step_instances review_instance
-          ON review_instance.task_id=%s AND review_instance.work_revision=%s
         JOIN workflow_group_rounds round
-          ON round.id=source_instance.group_round_id
-         AND round.id=review_instance.group_round_id
-         AND round.group_id=g.id
+          ON round.group_id=g.id
          AND round.round_number=g.current_round
         WHERE g.workflow_id=%s AND g.review_task_id=%s AND g.state='open'
           AND 1=(
@@ -143,9 +143,26 @@ def _repeat_group_bridge(svc, w, source, review):
           )
         LIMIT 1""", (
             source['id'], review['id'], review['id'], source['id'],
-            source['id'], source['work_revision'], review['id'],
-            review['work_revision'], w['id'], review['id'],
+            w['id'], review['id'],
         ))
+
+
+def _bind_group_round(svc, group, *tasks):
+    """Associate edits made after Start with the group's already-open round."""
+    current = svc.one(
+        "SELECT id FROM workflow_group_rounds WHERE group_id=%s AND round_number=%s",
+        (group['id'], group['current_round']),
+    )
+    if not current:
+        return
+    for task in tasks:
+        svc.cur.execute(
+            """INSERT INTO workflow_step_instances(task_id,work_revision,group_round_id)
+               VALUES (%s,%s,%s)
+               ON CONFLICT (task_id,work_revision)
+               DO UPDATE SET group_round_id=excluded.group_round_id""",
+            (task['id'], task['work_revision'], current['id']),
+        )
 
 
 def _group_route(svc, w, review, execution):
@@ -248,9 +265,16 @@ def request_review(svc, w, source, execution, review, result):
         if previous['review_task_id'] != review['id'] or previous['source_result'] != result:
             conflict('handoff_receipt_conflict', 'This turn already handed off different work.')
         return {'handoff_id': str(previous['id']), 'phase': previous['phase']}
-    require_plan(svc.cur, source)
     group = _repeat_group_bridge(svc, w, source, review)
-    review_states = {'ready', 'in_progress'} | ({'pending'} if group else set())
+    if group:
+        # Owners may edit an unstarted member after Start.  Keep the current
+        # revisions in the already-open round so plan carry-forward and stall
+        # evidence retain the round identity, including for pre-fix workflows.
+        _bind_group_round(svc, group, source, review)
+    require_plan(svc.cur, source)
+    review_states = {'ready', 'in_progress'} | (
+        {'pending', 'not_ready'} if group else set()
+    )
     if source['status'] != 'in_progress' or review['status'] not in review_states:
         conflict('handoff_unavailable', 'Both unfinished tasks must be available for a review handoff.')
     if source['id'] == review['id']:
@@ -329,9 +353,12 @@ def saved_reference(svc, task, eid):
     return ref
 
 
-def _route_group_after_stop(svc, w, source, review, execution, handoff):
+def _route_group_after_stop(svc, w, source, review, execution, handoff, group):
     """Close the handoff first, then let the existing loop engine route it."""
-    _group_route(svc, w, review, execution)
+    # An outcome may be replaced while the reviewer is stopping.  Recheck it
+    # against the captured verdict at the confirmed-exit seam so the route and
+    # the durable verdict can never disagree.
+    _validate_group_verdict(svc, w, group, review, execution, handoff['verdict'])
     svc.cur.execute(
         "UPDATE tasks SET status='not_ready' WHERE id IN (%s,%s)",
         (source['id'], review['id']),
@@ -393,8 +420,22 @@ def after_stopped(svc, w, task, execution):
     if source_side:
         phase, target = 'review', review
     elif group:
-        phase = _route_group_after_stop(svc, w, source, review, current, h)
-        target = None
+        try:
+            phase = _route_group_after_stop(
+                svc, w, source, review, current, h, group
+            )
+            target = None
+        except HTTPException as exc:
+            detail = exc.detail if isinstance(exc.detail, dict) else {}
+            if detail.get('code') not in {
+                'review_outcome_required', 'review_verdict_outcome_mismatch'
+            }:
+                raise
+            # The confirmed worker has already released its slot.  Preserve both
+            # drafts, cancel the inconsistent handoff, and give the owner an
+            # explicit recovery decision instead of rolling back with a 409.
+            interrupt_handoff(svc, w, 'review_outcome_changed')
+            phase, target = 'cancelled', None
     elif h['verdict'] == 'changes_requested':
         phase, target = 'correction', source
     else:

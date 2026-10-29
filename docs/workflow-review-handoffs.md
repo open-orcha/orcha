@@ -14,7 +14,8 @@ source-to-review prerequisite for the current round. It does not accept either t
 An earlier member in a longer chain such as A -> B -> Review still follows normal
 acceptance before B starts; B may then hand off to Review. Holds, outside prerequisites
 and every other admission gate remain in force. Existing serial scheduling still
-admits just one turn.
+admits just one turn. An owner edit to an unstarted group member after Start keeps its
+new work revision in the current round; changed requirements still require a new plan.
 
 ## Worker sequence
 
@@ -38,7 +39,8 @@ admits just one turn.
    (`changes_requested` or `clean`), and the substantive `result`; then exit.
    `changes_requested` must use a configured `return`, `ask_owner` or `stop` outcome.
    `clean` must use the group's exit outcome. Outside a repeat group, the outcome call
-   is not required.
+   is not required. If anyone replaces the outcome after the verdict, confirmed exit
+   interrupts the handoff for an owner decision instead of applying a mismatched route.
 5. After confirmed reviewer exit, a repeat-group route goes through the normal loop
    engine. A return starts the next round, carries findings into the worker prompt and
    preserves the round limit, stall and owner-decision rules. If the task requirements

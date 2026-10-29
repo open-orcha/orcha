@@ -51,7 +51,9 @@ Start. Prerequisites stay acyclic; a loop is a repeat group, never a cycle in th
    own approval rule (autonomy ON or OFF), in the same transaction, once. The exception
    is an explicit same-group review handoff: after the reviewer reports the configured
    outcome and matching handoff verdict, confirmed reviewer exit applies that route
-   without accepting either unfinished task.
+   without accepting either unfinished task. If the report is replaced after the verdict,
+   confirmed exit interrupts the handoff for owner recovery rather than applying a route
+   that disagrees with the captured verdict.
 4. `return` ends the round and starts the next one: the repeat set (the destination and the
    loop steps between it and the review step) gets a new work revision, like Retry, and the
    new round carries the findings, note and who sent it back.

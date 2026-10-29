@@ -20,10 +20,10 @@ STOP_WARNING = (
 
 
 LOOP_WAIT_LABELS = {
-    "limit_reached": "Accepted · round limit reached, waiting for the owner",
-    "stalled": "Accepted · loop stalled, waiting for the owner",
-    "missing_outcome": "Accepted · no outcome reported, waiting for the owner",
-    "ask_owner": "Accepted · waiting for the owner to choose what happens next",
+    "limit_reached": "round limit reached, waiting for the owner",
+    "stalled": "loop stalled, waiting for the owner",
+    "missing_outcome": "no outcome reported, waiting for the owner",
+    "ask_owner": "waiting for the owner to choose what happens next",
 }
 
 def _time(value):
@@ -336,6 +336,7 @@ def task_display(
     evidence_reason=None,
     lost_release=False,
     workflow_open=True,
+    loop_waiting=False,
 ):
     """One label for every surface (plan §14.1 map, §16.3, §17.3).
 
@@ -391,7 +392,14 @@ def task_display(
     if task.get("route_state") == "not_selected":
         label = "Not selected"
     elif task.get("awaiting_loop_decision") in LOOP_WAIT_LABELS:
-        label = LOOP_WAIT_LABELS[task["awaiting_loop_decision"]]
+        loop_label = LOOP_WAIT_LABELS[task["awaiting_loop_decision"]]
+        label = (
+            "Accepted · " + loop_label
+            if task["status"] == "completed"
+            else loop_label[0].upper() + loop_label[1:]
+        )
+    elif loop_waiting:
+        label = "Waiting for the owner's loop decision"
     if evidence:
         label = (
             "Outside result awaiting review"
