@@ -371,6 +371,17 @@ class WorkflowsController(
         }
     }
 
+    /** W18: plan approval for an autonomy-OFF workflow task (`POST /api/decisions`, subject plan_approval). */
+    fun decidePlan(taskId: String, approve: Boolean, reason: String?, onDone: () -> Unit) {
+        val c = container ?: return
+        val actor = c.humanAgentId ?: return notify(WorkflowsRepository.NO_HUMAN)
+        scope.launch {
+            runCatching { api.decidePlan(c.baseUrl, taskId, actor, approve, reason, null) }
+                .onSuccess { notify(if (approve) "Plan approved" else "Plan sent back"); refreshDetail(); onDone() }
+                .onFailure { notify(io.openorcha.mobile.domain.ConnectionErrorCopy.friendly(it)) }
+        }
+    }
+
     /** Snackbar Restore for a just-hidden workflow. */
     fun restoreHidden(id: String) {
         val repo = repository ?: return
