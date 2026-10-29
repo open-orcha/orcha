@@ -621,16 +621,24 @@ def branch_commit_count(base_cwd, branch, services: Any) -> int:
     )
 
 
-def teardown_worktree(base_cwd, worktree, branch, services: Any) -> None:
+def teardown_worktree(base_cwd, worktree, branch, services: Any) -> str:
     """Remove a worktree while retaining any branch with committed work."""
     if not worktree:
-        return
-    has_commits = branch_commit_count(base_cwd, branch, services) > 0
-    services._run_git(
-        ["worktree", "remove", "--force", worktree], cwd=base_cwd
-    )
-    if branch and not has_commits:
-        services._run_git(["branch", "-D", branch], cwd=base_cwd)
+        return "noop"
+    from .job_store import worktree_teardown_guard
+
+    with worktree_teardown_guard(base_cwd, worktree) as retained:
+        if retained:
+            return "preserved-job"
+        has_commits = branch_commit_count(base_cwd, branch, services) > 0
+        code, _ = services._run_git(
+            ["worktree", "remove", "--force", worktree], cwd=base_cwd
+        )
+        if code != 0:
+            return "preserved-error"
+        if branch and not has_commits:
+            services._run_git(["branch", "-D", branch], cwd=base_cwd)
+        return "removed"
 
 
 def is_git_repo(cwd, services: Any) -> bool:
@@ -657,5 +665,4 @@ def safe_teardown_worktree(base_cwd, worktree, branch, services: Any) -> str:
         return "noop"
     if services._worktree_is_dirty(worktree):
         return "preserved-dirty"
-    services._teardown_worktree(base_cwd, worktree, branch)
-    return "removed"
+    return services._teardown_worktree(base_cwd, worktree, branch) or "removed"

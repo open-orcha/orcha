@@ -230,6 +230,7 @@ __marimo__/
 .claude/.orcha-terminal-bridge.*
 .claude/.orcha-wakes/
 .claude/.orcha-attachments/
+.claude/.orcha-jobs/
 
 # --- Orcha per-project bootstrap state (never committed to the tool repo) ---
 .orcha/

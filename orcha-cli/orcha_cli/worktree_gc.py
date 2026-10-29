@@ -774,6 +774,11 @@ def remove_worktree(base_cwd, path: str, *, busy: Iterable[str] = (),
            "reason": ""}
     if not is_managed_path(base_cwd, path):
         return dict(out, reason="not inside this project's .orcha-worktrees folder")
+    from .job_store import worktree_teardown_guard
+
+    with worktree_teardown_guard(base_cwd, path) as retained:
+        if retained:
+            return dict(out, state=STATE_IN_USE, reason=retained)
     registered = [w for w in (managed_worktrees(base_cwd, run=run) or [])
                   if _real(w["path"]) == _real(path)]
     if not registered or not registered[0].get("registered"):
@@ -816,14 +821,19 @@ def remove_worktree(base_cwd, path: str, *, busy: Iterable[str] = (),
             return dict(out, state=STATE_UNMERGED, reason="it now has unmerged commits — kept")
     # Last look before the removal (GH #315): a worker may have started in the folder, or a
     # chat reused it, while it was being classified and measured.
-    late = recent_use(base_cwd, path, quiet_for=quiet_for, include_process_cwds=include_process_cwds)
-    if late:
-        return dict(out, state=STATE_IN_USE, reason=late)
-    # Everything left is scaffolding, preserved output or ignored build/dependency folders,
-    # which is the only case --force is used for.
-    code, msg = run(["worktree", "remove", "--force", path], base_cwd, 300)
-    if code != 0:
-        return dict(out, outcome="failed", reason=f"git worktree remove failed: {msg.strip()[:300]}")
+    # Registering a job and the final removal share one lock. A clean directory
+    # can still belong to a detached process, including one with unknown status.
+    with worktree_teardown_guard(base_cwd, path) as retained:
+        if retained:
+            return dict(out, state=STATE_IN_USE, reason=retained)
+        late = recent_use(base_cwd, path, quiet_for=quiet_for, include_process_cwds=include_process_cwds)
+        if late:
+            return dict(out, state=STATE_IN_USE, reason=late)
+        # Everything left is scaffolding, preserved output or ignored build/dependency folders,
+        # which is the only case --force is used for.
+        code, msg = run(["worktree", "remove", "--force", path], base_cwd, 300)
+        if code != 0:
+            return dict(out, outcome="failed", reason=f"git worktree remove failed: {msg.strip()[:300]}")
     run(["worktree", "prune"], base_cwd)
     out.update(ok=True, outcome="removed", reason=row["reason"])
     if keep_branch:
