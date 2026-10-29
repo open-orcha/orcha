@@ -371,6 +371,19 @@ class WorkflowsController(
         }
     }
 
+    /** W06 discussion: the newest thread page, oldest → newest; null on failure. */
+    suspend fun taskMessages(taskId: String): List<io.openorcha.mobile.data.TaskMessageDto>? {
+        val c = container ?: return null
+        return runCatching { api.getTaskMessages(c.baseUrl, taskId).messages }.getOrNull()
+    }
+
+    /** Posts as the paired human (`author_agent_id`); false keeps the draft. */
+    suspend fun postTaskMessage(taskId: String, body: String): Boolean {
+        val c = container ?: return false
+        val actor = c.humanAgentId ?: return false
+        return runCatching { api.postTaskMessage(c.baseUrl, taskId, actor, body) }.isSuccess
+    }
+
     /** W18: plan approval for an autonomy-OFF workflow task (`POST /api/decisions`, subject plan_approval). */
     fun decidePlan(taskId: String, approve: Boolean, reason: String?, onDone: () -> Unit) {
         val c = container ?: return
