@@ -175,13 +175,17 @@ def build_wake_prompt(cand: dict) -> str:
     # manifest. Same information either way — only the order changed.
     return (
         f"You are a ONE-SHOT headless worker: drain your "
-        f"FULL inbox, then EXIT — do NOT enter the `/orcha-listen` long-poll watch loop "
+        f"FULL inbox and do your assigned work — do NOT enter the `/orcha-listen` long-poll watch loop "
         f"(it never returns and piles up stuck workers). Steps: (1) drain the ENTIRE "
         f"backlog — handle ALL your open requests AND all unacked events, repeating until "
         f"your inbox is EMPTY (don't stop after the first item; that strands the rest "
-        f"until the next wake); {task_step}(3) once the inbox is empty and you've "
-        f"reached a natural stop — or you need the human — STOP and exit; another wake "
-        f"resumes you when there's more. With no task context, never self-certify: stop at "
+        f"until the next wake); {task_step}(3) an empty inbox alone is NOT a stopping point "
+        f"for an assigned task. Continue approved work until done, handed to review, or waiting "
+        f"on a recorded question or scheduled step. Record waits with a task-scoped request "
+        f"or self-wake. Checkpoint near the runtime limit. Eligible ordinary exits can resume "
+        f"automatically up to three times; hard-cap rollover and sandbox recovery are not "
+        f"guaranteed. Taskless inbox drains remain one-shot: EXIT when empty and never claim "
+        f"unrelated work. With no task context, never self-certify: stop at "
         f"needs_verification; with a task, follow only its ON/OFF autonomy authority. "
         f"{authority} [orcha wake] {alias}: {what}.{manifest}{directed}"
     )

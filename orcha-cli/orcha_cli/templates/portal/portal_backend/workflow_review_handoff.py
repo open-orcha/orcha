@@ -83,7 +83,7 @@ def guard_review_claim(svc, wid, task_id, reviewer_id):
         require_independent_reviewer(svc, handoff['source_task_id'], handoff['source_execution_id'], reviewer_id)
 
 
-def require_plan(cur, task):
+def current_plan_approved(cur, task):
     # A handoff is implementation work, not permission to approve its own plan.
     cur.execute("""SELECT 1 FROM task_approval_records WHERE task_id=%s AND phase='plan'
         AND work_revision=%s AND requirements_sha256=%s LIMIT 1""",
@@ -113,7 +113,11 @@ def require_plan(cur, task):
         approved = cur.fetchone()
     cur.execute("SELECT decision FROM decisions WHERE subject_type='plan_approval' AND subject_id=%s ORDER BY created_at DESC LIMIT 1", (str(task['id']),))
     latest = cur.fetchone()
-    if not approved or not latest or latest['decision'] != 'approve':
+    return bool(approved and latest and latest['decision'] == 'approve')
+
+
+def require_plan(cur, task):
+    if not current_plan_approved(cur, task):
         conflict('plan_approval_required', 'Approve the current plan before handing off work.')
 
 

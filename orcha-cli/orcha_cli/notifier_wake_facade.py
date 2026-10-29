@@ -225,5 +225,6 @@ def self_wake_ack_fields(
         return {
             "clear_self_wake": True,
             "self_wake_task_id": cand["self_wake_task_id"],
+            **({"self_wake_id": cand["self_wake_id"]} if cand.get("self_wake_id") else {}),
         }
     return {}

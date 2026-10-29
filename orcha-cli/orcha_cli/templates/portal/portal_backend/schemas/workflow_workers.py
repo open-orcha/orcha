@@ -27,6 +27,7 @@ class WorkflowActivate(BaseModel):
 
 
 class WorkflowContinue(BaseModel):
+    automatic_schedule_id: str | None = Field(default=None, description="Exact automatic schedule to validate and consume under the reservation locks")
     operation_key: str = Field(min_length=1, max_length=200)
 
 

@@ -125,10 +125,9 @@ def wake_ack(aid: str, body: WakeAck):
             and body.self_wake_task_id
             and valid_uuid(body.self_wake_task_id)
         ):
-            cur.execute(
-                "DELETE FROM agent_self_wake WHERE agent_id=%s AND task_id=%s",
-                (aid, body.self_wake_task_id),
-            )
+            identity_filter = " AND id=%s" if body.self_wake_id else " AND auto_continue_run_id IS NULL"
+            params = (aid, body.self_wake_task_id) + ((body.self_wake_id,) if body.self_wake_id else ())
+            cur.execute("DELETE FROM agent_self_wake WHERE agent_id=%s AND task_id=%s" + identity_filter, params)
             cleared_self_wake = cur.rowcount > 0
         if body.release_lease:
             cur.execute(

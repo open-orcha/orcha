@@ -98,6 +98,8 @@ def wake_scan(
         if not browser and container["status"] == "active" and wakes_enabled:
             from portal_backend.stale_wake_events import stale_pending_events, reconcile_events
             for agent in agents:
+                from portal_backend.workflow_continuation import cleanup_obsolete
+                cleanup_obsolete(cur, str(agent["id"]))
                 obsolete = stale_pending_events(cur, str(agent["id"]), agent["delivered_ts"])
                 if obsolete:
                     reconcile_events(cur, str(agent["id"]), cid, list(obsolete)[:200], dry_run=False)
