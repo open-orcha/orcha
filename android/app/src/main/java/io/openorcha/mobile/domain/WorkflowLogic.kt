@@ -1,10 +1,14 @@
 package io.openorcha.mobile.domain
 
+import io.openorcha.mobile.data.EvidenceBasisDto
+import io.openorcha.mobile.data.ImportTaskImpactDto
 import io.openorcha.mobile.data.RepeatGroupViewDto
 import io.openorcha.mobile.data.StepRouteDto
 import io.openorcha.mobile.data.WorkflowAvailableActionDto
 import io.openorcha.mobile.data.WorkflowCapabilityDto
 import io.openorcha.mobile.data.WorkflowDetailDto
+import io.openorcha.mobile.data.WorkflowImportAcceptanceBody
+import io.openorcha.mobile.data.WorkflowPreviewDto
 import io.openorcha.mobile.data.WorkflowTaskDto
 
 /**
@@ -494,4 +498,68 @@ object WorkflowLogic {
         ready = loaded.count { Filter.Ready.matches(it) },
         needDecision = loaded.count { !it.hidden && needsDecision(it) },
     )
+
+    // ---- W11b add existing tasks (web WorkflowImport.tsx / WorkflowImportReview.tsx) ----
+
+    private val RESULT_DIGEST = Regex("^[a-f0-9]{64}$")
+
+    /** A human's review of one finished task's saved result; `source` pins exactly what they read. */
+    data class ImportReview(val source: String, val narrative: String = "", val accepted: Boolean = false)
+
+    fun importSource(t: ImportTaskImpactDto): String =
+        listOf(t.resultDigest, t.resultText, t.definitionOfDone, t.description, t.completedAt, t.resultByAgentId).joinToString("\u0000")
+
+    fun importResultUnavailable(t: ImportTaskImpactDto): Boolean =
+        !t.eligible || t.resultText == null || !RESULT_DIGEST.matches(t.resultDigest.orEmpty())
+
+    fun importAcceptances(preview: WorkflowPreviewDto?, reviews: Map<String, ImportReview>): Map<String, WorkflowImportAcceptanceBody> =
+        preview?.taskImpacts.orEmpty().mapNotNull { t ->
+            val r = reviews[t.id]
+            if (!t.requiresAcceptance || t.resultText == null || !RESULT_DIGEST.matches(t.resultDigest.orEmpty())) return@mapNotNull null
+            if (r == null || !r.accepted || r.source != importSource(t) || r.narrative.isBlank()) return@mapNotNull null
+            t.id to WorkflowImportAcceptanceBody(t.resultDigest!!, EvidenceBasisDto(r.narrative.trim(), emptyMap(), emptyList()))
+        }.toMap()
+
+    fun missingImportReview(preview: WorkflowPreviewDto, reviews: Map<String, ImportReview>): Boolean {
+        val accepted = importAcceptances(preview, reviews)
+        return preview.taskImpacts.any { it.requiresAcceptance && it.id !in accepted }
+    }
+
+    /** Why a search result cannot be picked; null = pickable. */
+    fun importChoiceReason(status: String, isRoot: Boolean, workflowId: String?, id: String, members: List<String>): String? = when {
+        id in members -> "Already in this workflow"
+        workflowId != null -> "Already in another workflow"
+        isRoot -> "Project objectives cannot join a workflow"
+        status in setOf("in_progress", "needs_verification") -> "Wait for the current work and review to end"
+        status == "cancelled" -> "Retry this task before adding it"
+        else -> null
+    }
+
+    fun importChoiceNote(status: String, isRoot: Boolean, workflowId: String?, id: String, members: List<String>): String = when {
+        status == "unknown" -> "Details unavailable; this selection is kept"
+        else -> importChoiceReason(status, isRoot, workflowId, id, members)
+            ?: if (status == "completed") "Review its saved result before adding" else "Will stay held until explicitly released"
+    }
+
+    /** Release choices that no longer hold for the reviewed preview. */
+    fun invalidReleaseIds(releaseIds: List<String>, preview: WorkflowPreviewDto?, selected: List<String>, canRelease: Boolean): List<String> =
+        releaseIds.filter { id ->
+            !canRelease || id !in selected || preview?.taskImpacts.orEmpty().none { it.id == id && it.eligible && it.releasable }
+        }
+
+    /** Null when the reviewed preview can be confirmed; otherwise the first reason it cannot. */
+    fun importBlocked(
+        preview: WorkflowPreviewDto?,
+        selected: List<String>,
+        reviews: Map<String, ImportReview>,
+        invalidRelease: List<String>,
+    ): String? = when {
+        preview == null -> "Review the selected tasks first."
+        preview.blockers.isNotEmpty() -> preview.blockers.joinToString("\n") { it.message }
+        preview.requiredTaskIds.any { it !in selected } -> "Include the whole connected group, then review again."
+        preview.taskImpacts.any { !it.eligible } -> "Some selected tasks cannot be added."
+        missingImportReview(preview, reviews) -> "Review and accept each finished result before adding it."
+        invalidRelease.isNotEmpty() -> "Remove the start choices that are no longer available."
+        else -> null
+    }
 }
