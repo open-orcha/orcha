@@ -402,6 +402,23 @@ class WorkflowsController(
         return runCatching { api.getTaskMessages(c.baseUrl, taskId).messages }.getOrNull()
     }
 
+    /** W16 "Read approval history" (`GET /api/tasks/{tid}/approvals`), oldest → newest. */
+    suspend fun taskApprovals(taskId: String): Result<io.openorcha.mobile.data.TaskApprovalHistoryDto> {
+        val repo = repository ?: return Result.failure(IllegalStateException("Not connected"))
+        return runCatching { repo.approvals(taskId) }
+    }
+
+    /**
+     * W16 task authority (`PUT /api/tasks/{tid}/autonomy`). The server allows only the project
+     * owner; its refusal comes back as the failure message. On success the loaded workflows
+     * are re-read so the switch shows the saved value.
+     */
+    suspend fun setTaskAutonomy(taskId: String, on: Boolean): Result<io.openorcha.mobile.data.TaskAutonomyResultDto> {
+        val repo = repository ?: return Result.failure(IllegalStateException("Not connected"))
+        return runCatching { repo.setAutonomy(taskId, if (on) "on" else "off") }
+            .onSuccess { refreshList(); if (_state.value.openWorkflowId != null) refreshDetail() }
+    }
+
     /** Posts as the paired human (`author_agent_id`); false keeps the draft. */
     suspend fun postTaskMessage(taskId: String, body: String): Boolean {
         val c = container ?: return false
