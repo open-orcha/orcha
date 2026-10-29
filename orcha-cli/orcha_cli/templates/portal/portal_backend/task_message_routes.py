@@ -1,6 +1,7 @@
 """Append and page task collaboration messages."""
 
 import json
+from datetime import datetime
 from typing import Any, Optional
 
 from fastapi import HTTPException, Request
@@ -24,6 +25,7 @@ from portal_backend.identity_routes import trusted_actor as _trusted_actor
 from portal_backend.push_outbox import push_plan_approval as _push_plan_approval
 from portal_backend.provider_keys import container_llm_key as _container_llm_key
 from portal_backend.schemas.task_operations import TaskMessage
+from portal_backend.schemas.task_threads import TaskThreadResponse
 from portal_backend.task_message_delivery import message_recipients
 from portal_backend.result_notifications import answered_result_for_message, lock_result_requests
 from portal_backend.task_autonomy_service import record_approval
@@ -233,13 +235,15 @@ def post_message(tid: str, body: TaskMessage, request: Request):
     }
 
 
-@app.get("/api/tasks/{tid}/messages")
+@app.get("/api/tasks/{tid}/messages", response_model=TaskThreadResponse, response_model_exclude_unset=True)
 def get_task_messages(
     tid: str,
     request: Request,
     limit: int = 0,
     before: Optional[str] = None,
     before_id: Optional[str] = None,
+    after: Optional[datetime] = None,
+    after_id: Optional[str] = None,
 ):
     """Orcha#32: read the task collaboration thread. Symmetric with the POST above.
 
@@ -266,6 +270,12 @@ def get_task_messages(
     silently drop the same-timestamp rows straddling a page boundary (P2, kedar review #180). The
     composite tuple compare makes paging exact regardless of timestamp ties.
 
+    GH #312: `after` and `after_id` select forward paging instead, returning the
+    earliest messages strictly after that pair (100 by default, at most 200).
+    Supply both, with a timezone-aware timestamp, and do not mix directions.
+    `next_after` and `next_after_id` remain valid at the end of the thread, so a
+    replacement can recover later messages independently of notification acks.
+
     GH #33: the response also carries a `task` header — {title, description, definition_of_done} —
     so a worker woken by a task-thread message that follows "read the thread" sees the FULL task
     body alongside the conversation, not just the message preview. Acceptance criteria living in the
@@ -275,6 +285,14 @@ def get_task_messages(
         raise HTTPException(400, "task_id is not a valid UUID")
     if before_id is not None and not _valid_uuid(before_id):
         raise HTTPException(400, "before_id is not a valid UUID")
+    if after_id is not None and not _valid_uuid(after_id):
+        raise HTTPException(400, "after_id is not a valid UUID")
+    if (after is None) != (after_id is None):
+        raise HTTPException(400, "forward pagination requires both after and after_id")
+    if after is not None and (before is not None or before_id is not None):
+        raise HTTPException(400, "forward and backward cursors cannot be combined")
+    if after is not None and (after.tzinfo is None or limit < 0):
+        raise HTTPException(400, "forward pagination needs a timezone and a nonnegative limit")
     cols = (
         "m.id AS message_id, m.author_id, ma.alias AS author_alias, "
         "(m.author_id IS NOT NULL AND ma.kind = 'human') AS is_human, m.body, "
@@ -299,6 +317,28 @@ def get_task_messages(
             "description": _t["description"],
             "definition_of_done": _t["definition_of_done"],
         }
+        if after is not None:
+            # A worker resumes from an exact message, including timestamp ties. The
+            # returned cursor remains usable even at the current end of the thread.
+            lim = min(limit or 100, 200)
+            cur.execute(
+                f"""SELECT {cols}
+                    FROM task_messages m LEFT JOIN agents ma ON ma.id = m.author_id
+                    WHERE m.task_id = %s AND (m.created_at, m.id) > (%s, %s)
+                    ORDER BY m.created_at ASC, m.id ASC LIMIT %s""",
+                (tid, after, after_id, lim + 1),
+            )
+            rows = cur.fetchall()
+            has_more = len(rows) > lim
+            rows = rows[:lim]
+            return {
+                "task_id": tid,
+                "task": task_hdr,
+                "messages": rows,
+                "has_more": has_more,
+                "next_after": rows[-1]["created_at"].isoformat() if rows else after.isoformat(),
+                "next_after_id": str(rows[-1]["message_id"]) if rows else after_id,
+            }
         if limit and limit > 0:
             lim = min(limit, 200)
             params: list[Any] = [tid]

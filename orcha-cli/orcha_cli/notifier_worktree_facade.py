@@ -190,7 +190,7 @@ def _branch_commit_count(base_cwd, branch) -> int:
 
 
 def _teardown_worktree(base_cwd, worktree, branch):
-    _cleanup.teardown_worktree(base_cwd, worktree, branch, _compat())
+    return _cleanup.teardown_worktree(base_cwd, worktree, branch, _compat())
 
 
 def _is_git_repo(cwd) -> bool:

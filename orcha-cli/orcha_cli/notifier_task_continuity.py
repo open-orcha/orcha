@@ -31,8 +31,7 @@ def reclaim_task_worktree(base_cwd, worktree, branch, services) -> str:
         return "noop"
     if services._worktree_is_dirty(worktree, excludes=services._DIFF_EXCLUDES):
         return "preserved-dirty"
-    services._teardown_worktree(base_cwd, worktree, branch)
-    return "removed"
+    return services._teardown_worktree(base_cwd, worktree, branch) or "removed"
 
 
 def record_task_saved_ref(api_base, worker, saved, human_line, services) -> None:
