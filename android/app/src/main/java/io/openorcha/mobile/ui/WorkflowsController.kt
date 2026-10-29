@@ -111,6 +111,16 @@ class WorkflowsController(
         checkSupport()
     }
 
+    private var draft: WorkflowCreateDraft? = null
+
+    /** The W10 draft for this container and person; kept while the app stays open. */
+    fun createDraft(): WorkflowCreateDraft {
+        val scope = "${container?.id}:${actorId}"
+        return draft?.takeIf { it.scope == scope } ?: WorkflowCreateDraft(scope).also { draft = it }
+    }
+
+    fun discardDraft() { draft = null }
+
     val hasHuman: Boolean get() = repository?.actorId != null
     val actorId: String? get() = repository?.actorId
 
