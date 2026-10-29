@@ -77,7 +77,8 @@ import io.openorcha.mobile.ui.theme.Orcha
 internal sealed interface WorkflowSheet {
     data class Task(val taskId: String) : WorkflowSheet
     data class TaskAction(val taskId: String, val action: WorkflowLogic.TaskAction) : WorkflowSheet
-    data class Menu(val action: WorkflowLogic.MenuAction) : WorkflowSheet
+    /** [preselect]: tasks already picked when the sheet opens (W16 "Add to {workflow}" → import). */
+    data class Menu(val action: WorkflowLogic.MenuAction, val preselect: List<String> = emptyList()) : WorkflowSheet
     data class ResultReview(val taskId: String) : WorkflowSheet
     data class Decision(val taskId: String) : WorkflowSheet
     data class ResolveFindings(val taskId: String) : WorkflowSheet
@@ -90,7 +91,8 @@ internal fun WorkflowDetailScreen(controller: WorkflowsController, snapshot: Con
     val p = Orcha.palette
     val s by controller.state.collectAsState()
     var sheet by remember { mutableStateOf<WorkflowSheet?>(null) }
-    androidx.compose.runtime.LaunchedEffect(s.pendingTaskSheet, s.pendingResultReview) {
+    androidx.compose.runtime.LaunchedEffect(s.pendingTaskSheet, s.pendingResultReview, s.pendingImport) {
+        s.pendingImport?.let { sheet = WorkflowSheet.Menu(WorkflowLogic.MenuAction.Import, listOf(it)); controller.consumePendingTaskSheet() }
         s.pendingResultReview?.let { sheet = WorkflowSheet.ResultReview(it); controller.consumePendingTaskSheet() }
         s.pendingTaskSheet?.let { sheet = WorkflowSheet.Task(it); controller.consumePendingTaskSheet() }
     }

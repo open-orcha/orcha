@@ -141,8 +141,8 @@ fun TaskDetailScreen(
     onRefreshMembership: () -> Unit = {},
     /** W16: "(last loaded)" — the workflow list or detail failed to refresh after it was shown. */
     workflowStale: Boolean = false,
-    /** W16 "Workflow membership…" for non-members; null hides the menu item. */
-    onWorkflowMembership: (() -> Unit)? = null,
+    /** W16 "Workflow membership…" sheet for non-members (given its dismiss); null hides the menu item. */
+    workflowMembershipSheet: (@Composable (onDismiss: () -> Unit) -> Unit)? = null,
     /** W16 "Open task controls" → the workflow task sheet (W06). */
     onOpenTaskControls: (() -> Unit)? = null,
     /** W16 "Task authority" section (autonomy switch, approval history); null hides it. */
@@ -152,6 +152,7 @@ fun TaskDetailScreen(
     val task = state.selectedTask
     val agents = state.snapshot?.agents.orEmpty()
     var menuOpen by remember { mutableStateOf(false) }
+    var membershipMenu by remember { mutableStateOf(false) }
     var closing by remember { mutableStateOf(false) }
     var closeReason by remember { mutableStateOf("") }
     var showVerify by remember { mutableStateOf(false) }
@@ -226,10 +227,10 @@ fun TaskDetailScreen(
                                 onClick = { menuOpen = false; insights.clearError(); sheet = InsightSheetKind.Recurring },
                             )
                         }
-                        if (task != null && !task.isRoot && membership is io.openorcha.mobile.ui.TaskMembership.None) onWorkflowMembership?.let { open ->
+                        if (task != null && !task.isRoot && membership is io.openorcha.mobile.ui.TaskMembership.None && workflowMembershipSheet != null) {
                             DropdownMenuItem(
                                 text = { Text("Workflow membership…", style = ltype(LType.Body), color = p.text) },
-                                onClick = { menuOpen = false; open() },
+                                onClick = { menuOpen = false; membershipMenu = true },
                             )
                         }
                         if (!member) DropdownMenuItem(
@@ -476,6 +477,7 @@ fun TaskDetailScreen(
             onDismiss = { openDeliverable = null },
         )
     }
+    if (membershipMenu) workflowMembershipSheet?.invoke { membershipMenu = false }
     if (showPlan && task != null) {
         PlanApprovalSheet(task, state.actionInFlight, onDismiss = { showPlan = false }) { approve, reason ->
             showPlan = false; onDecidePlan(approve, reason)

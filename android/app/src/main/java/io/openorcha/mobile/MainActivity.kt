@@ -214,6 +214,19 @@ class MainActivity : ComponentActivity() {
                             }
                         },
                         workflowStale = viewModel.workflows.state.collectAsState().value.listStale,
+                        workflowMembershipSheet = state.selectedTask?.id?.let { tid ->
+                            { dismiss ->
+                                io.openorcha.mobile.ui.screens.WorkflowMembershipMenuSheet(
+                                    controller = viewModel.workflows,
+                                    onAdd = { wid ->
+                                        viewModel.workflows.openImportWith(wid, tid)
+                                        viewModel.showWorkspace()
+                                        viewModel.selectTab(io.openorcha.mobile.ui.WorkspaceTab.Workflows)
+                                    },
+                                    onDismiss = dismiss,
+                                )
+                            }
+                        },
                         onOpenTaskControls = state.selectedTask?.id?.let { tid ->
                             viewModel.workflows.membershipOf(tid)?.let { w ->
                                 {
