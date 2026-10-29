@@ -7,6 +7,7 @@ import json
 from . import notifier_deliverables
 from . import notifier_worktree_gc
 from . import notifier_workflow
+from . import notifier_managed_jobs
 
 
 def _save_task_result(api_base, aid, worker, diff, failed_drains, services):
@@ -54,6 +55,7 @@ def handle_exited(
     """Finalize a child process which has already exited."""
     proc = worker["proc"]
     lane = worker.get("lane", "work")
+    notifier_managed_jobs.prepare(api_base, worker, services, reason='worker_exited', stop=True)
     diff = services._capture_diff(
         worker.get("worktree") or worker.get("base_cwd")
     )
@@ -148,8 +150,16 @@ def handle_human_stop(api_base, aid, worker, live_workers, renew, quiet, service
         and str(renew.get("stop_run_id")) == str(worker.get("run_id"))
     ):
         return False
+    stop_worker(api_base, aid, worker, live_workers, quiet, services,
+                cause='human_stop', actor=renew.get('stop_requested_by'))
+    return True
+
+
+def stop_worker(api_base, aid, worker, live_workers, quiet, services, *, cause, actor=None):
+    """Stop after local evidence capture, including revoked managed authority."""
     proc = worker["proc"]
     lane = worker.get("lane", "work")
+    notifier_managed_jobs.prepare(api_base, worker, services, reason=cause, stop=True)
     services._kill_worker(proc, graceful=True)
     diff = services._capture_diff(
         worker.get("worktree") or worker.get("base_cwd")
@@ -157,8 +167,8 @@ def handle_human_stop(api_base, aid, worker, live_workers, renew, quiet, service
     diag = {
         "run_id": str(worker.get("run_id")),
         "agent_id": aid,
-        "cause": "human_stop",
-        "by": renew.get("stop_requested_by"),
+        "cause": cause,
+        "by": actor,
     }
     if services._finish_run(
         api_base,
@@ -178,11 +188,12 @@ def handle_human_stop(api_base, aid, worker, live_workers, renew, quiet, service
     notifier_worktree_gc.after_run(api_base, worker, live_workers, quiet=quiet)
     services._post_json(
         f"{api_base}/api/agents/{aid}/wake-ack",
-        {"kind": "worker_human_stopped", "release_lease": True, "lane": lane, "run_id": worker.get("run_id")},
+        {"kind": "worker_human_stopped" if cause == 'human_stop' else 'worker_authority_lost',
+         "release_lease": True, "lane": lane, "run_id": worker.get("run_id")},
     )
     services._retire_headless(api_base, live_workers, aid)
     if not quiet:
-        actor = renew.get("stop_requested_by") or "a human"
+        actor = actor or ('a human' if cause == 'human_stop' else 'loss of command authority')
         print(
             f"[notifier] worker for {aid} (pid {proc.pid}, run "
             f"{worker.get('run_id')}) STOPPED by {actor} — graceful kill, "

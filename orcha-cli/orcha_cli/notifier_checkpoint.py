@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from . import notifier_managed_limits
+from . import notifier_managed_limits, notifier_managed_jobs
 
 
 
@@ -29,7 +29,14 @@ def checkpoint_and_respawn(
     respawns = worker.get("respawns", 0) + 1
     cap = worker.get("cap", services.HARD_CAP_MIN_SECS)
 
+    jobs_stopped = notifier_managed_jobs.prepare(
+        api_base, worker, services, reason='checkpoint_transfer', stop=True)
     services._kill_worker(process, graceful=True)
+    if not jobs_stopped or process.poll() is None:
+        # Never replace a worker while a detached command's disposition is
+        # unknown. The ordinary exit path preserves its durable launch fence.
+        worker['respawns'] = services.HARD_CAP_RESPAWN_MAX
+        return
     source_cwd = worktree or base_cwd
     diff = services._capture_diff(source_cwd)
     if services._finish_run(
@@ -55,6 +62,8 @@ def checkpoint_and_respawn(
     services._revoke_or_defer(api_base, worker.get("run_token"))
     new_token = services._mint_embodiment_token(api_base, agent_id, "work", "headless")
     persona = services._build_persona(api_base, agent_id, force_fresh=True)
+    from .job_guidance import startup_guidance
+    persona = (persona or '') + startup_guidance(base_cwd, task_id)
     log_path = _next_log_path(base_cwd, context, services)
     launch_started_ts = services.time.time()
     _spawn_info: dict = {}

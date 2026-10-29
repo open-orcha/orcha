@@ -6,6 +6,8 @@ import json
 import os
 import re
 
+from . import notifier_managed_jobs
+
 
 def codex_tail_is_rate_limited(log_path, services) -> bool:
     """Return whether the last meaningful Codex event is a rate-limit signal."""
@@ -89,6 +91,7 @@ def drain_task_failure(
     services,
 ) -> None:
     """Preserve failed task work and apply bounded retry bookkeeping."""
+    notifier_managed_jobs.prepare(api_base, worker, services, reason='worker_failed', stop=True)
     if services._finish_run(
         api_base,
         worker.get("run_id"),

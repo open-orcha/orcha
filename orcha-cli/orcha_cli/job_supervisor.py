@@ -13,7 +13,7 @@ import time
 from uuid import uuid4
 
 from .job_api import AuthorityClock, JobAPI, JobAPIError
-from .job_evidence import context_snapshot
+from .job_evidence import context_snapshot, daemon_stop_requested
 from .job_executor import minimal_environment
 from .job_identity import process_identity
 from .job_store import JobStore, atomic_json, read_json, _open_private
@@ -189,6 +189,8 @@ class Supervisor:
             prepared = False
             while self.guard.poll() is None:
                 now = time.monotonic()
+                if daemon_stop_requested(self.directory, self.record):
+                    self.stopping = True
                 if self.stopping or now >= self.clock.until:
                     try:
                         self.clock.mutations_allowed = False

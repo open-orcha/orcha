@@ -306,6 +306,8 @@ async def test_saved_pid_is_never_used_to_signal_unrelated_process(jobs, tmp_pat
     api, store, launch = jobs
     jid = launch('import time;time.sleep(30)')
     eventually(lambda: running(store, jid))
+    eventually(lambda: store.read(jid)['status'] == 'running'
+               and store.read(jid)['server_version'] >= 2)
     unrelated = subprocess.Popen([sys.executable, '-c', 'import time;time.sleep(30)'])
     try:
         local = store.read(jid)
