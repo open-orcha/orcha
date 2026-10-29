@@ -2,12 +2,14 @@
 
 from fastapi import HTTPException, Request
 
+from portal_backend.managed_run_auth import lock_agent_runs, scheduling_run_matches
 from portal_backend import sql
 from portal_backend.agent_status import log_event
 from portal_backend.application import app
 from portal_backend.database import db_cursor
 from portal_backend.event_acknowledgement import (
     _recompute_delivered_floor as recompute_delivered_floor,
+    acknowledge_event_ids,
 )
 from portal_backend.guards import require_agent, valid_uuid
 from portal_backend.schemas.wakes import EventsAckHandled, WakeAck
@@ -117,6 +119,11 @@ def wake_ack(aid: str, body: WakeAck):
     with db_cursor() as (conn, cur):
         agent = require_agent(cur, aid)
         lane = body.lane or "work"
+        runs, held = lock_agent_runs(cur, aid, lane)
+        if body.release_lease and not scheduling_run_matches(
+                cur, runs, held, lane, body.run_id, allow_terminal=True):
+            return {"agent_id": aid, "lane": lane, "released": False,
+                    "cleared_self_wake": False, "reason": "worker_owner_changed"}
         row = _acknowledge_lane(cur, aid, body, lane)
         cleared_self_wake = False
         if (
@@ -208,15 +215,7 @@ def events_ack_handled(aid: str, body: EventsAckHandled):
         event_ids = [
             int(event) for event in (body.event_ids or []) if event is not None
         ]
-        if event_ids:
-            cur.execute(
-                f"""INSERT INTO agent_event_acks (agent_id, event_id)
-                   SELECT %s, e.id FROM agent_events e
-                   WHERE e.event_key=%s AND {sql.in_list('e.id')}
-                   ON CONFLICT DO NOTHING""",
-                (aid, aid, sql.list_param(event_ids)),
-            )
-        new_floor = recompute_delivered_floor(cur, aid)
+        new_floor = acknowledge_event_ids(cur, aid, event_ids)
         log_event(
             cur,
             str(agent["container_id"]),

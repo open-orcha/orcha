@@ -156,6 +156,8 @@ def reap_orphan_leases(
         raise HTTPException(400, "container_id is not a valid UUID")
     with db_cursor() as (conn, cur):
         require_container(cur, cid)
+        from portal_backend.workflow_service import lock_container_graph
+        lock_container_graph(cur, cid)
         require_machine_lane_member(cur, request, cid)  # PS-07
         work_reaped = _reap_lane(
             cur,

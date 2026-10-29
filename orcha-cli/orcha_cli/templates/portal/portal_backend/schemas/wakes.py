@@ -1,6 +1,7 @@
 """Request contracts for wakes endpoints."""
 
 from typing import Optional
+from uuid import UUID
 
 from pydantic import BaseModel, Field
 
@@ -9,6 +10,8 @@ from portal_backend.limits import MAX_NAME_LEN, MAX_PAYLOAD_LEN
 
 class WakeAck(BaseModel):
     """Notifier daemon acknowledges that it issued (or attempted) a wake."""
+
+    run_id: Optional[UUID] = Field(default=None, description="Exact worker releasing this lane; stale releases are ignored")
 
     delivered_ts: Optional[float] = Field(
         default=None,
@@ -94,6 +97,8 @@ class PromptEvent(BaseModel):
 
 class WakeClaim(BaseModel):
     """R2.4: the daemon's atomic single-flight claim before spawning a headless worker."""
+
+    run_id: Optional[UUID] = Field(default=None, description="Exact worker renewing this lane; never renew a successor")
 
     lease_ttl: float = Field(
         default=300.0,

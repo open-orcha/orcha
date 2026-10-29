@@ -95,6 +95,8 @@ def lease_lapsed_expr(lane: str) -> str:
 
 def reconcile_stranded_runs(cur, cid: str, orphan_secs: float, lane: str) -> list:
     """Orphan one lane's stranded running rows; return what was reconciled."""
+    from portal_backend.workflow_service import lock_container_graph
+    lock_container_graph(cur, cid)
     activity = last_activity_expr(lane)
     cur.execute(
         f"""WITH stranded AS (

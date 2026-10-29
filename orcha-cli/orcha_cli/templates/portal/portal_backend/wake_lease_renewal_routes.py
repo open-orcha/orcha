@@ -2,6 +2,7 @@
 
 from fastapi import HTTPException
 
+from portal_backend.managed_run_auth import lock_agent_runs, scheduling_run_matches
 from portal_backend import sql
 from portal_backend.application import app
 from portal_backend.database import db_cursor
@@ -26,6 +27,13 @@ def wake_renew(aid: str, body: WakeClaim):
     with db_cursor() as (conn, cur):
         require_agent(cur, aid)
         lane = resolve_claim_lane(body)
+        runs, held = lock_agent_runs(cur, aid, lane)
+        if not scheduling_run_matches(cur, runs, held, lane, body.run_id):
+            return {"agent_id": aid, "renewed": False, "lane": lane,
+                    "wake_lease_until": None, "lease_kind": None,
+                    "preempt_requested": False, "stop_requested": False,
+                    "stop_run_id": None, "stop_requested_by": None,
+                    "reason": "worker_owner_changed"}
         lease_until = sql.from_now(body.lease_ttl)
         if lane == "conversation":
             cur.execute(
