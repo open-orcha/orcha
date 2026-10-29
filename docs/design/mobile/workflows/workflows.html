@@ -1,0 +1,622 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Orcha Mobile — 15 Workflows (iOS + Android)</title>
+<link rel="stylesheet" href="../mockups/mobile.css">
+<style>
+  .form { display:flex; flex-direction:column; gap:2px; }
+  .helper { font-size:11.5px; color:var(--faint); line-height:1.5; margin:5px 2px 8px; }
+  .navbar-ios { display:flex; align-items:center; justify-content:space-between; padding:14px 18px 6px; }
+  .navbar-ios .nb-title { font-size:16.5px; font-weight:700; }
+  .chips-row { flex:none; display:flex; gap:8px; padding:2px 0 6px; overflow:hidden; }
+  .chip { display:inline-flex; align-items:center; gap:6px; padding:6px 12px; border-radius:999px; border:1px solid var(--border-2); background:var(--surface-2); font-size:12.5px; font-weight:650; color:var(--text-2); white-space:nowrap; flex:none; }
+  .chip.on { background:var(--accent-soft); border-color:var(--accent-line); color:var(--accent); }
+  .chip .n { font-weight:800; }
+  .tmeta { display:flex; align-items:center; gap:7px; font-size:12px; color:var(--muted); flex-wrap:wrap; }
+  .tmeta .ago { margin-left:auto; color:var(--faint); font-size:11px; }
+  .menu { position:absolute; right:14px; top:52px; z-index:9; background:var(--raised); border:1px solid var(--border); border-radius:14px; padding:6px; box-shadow:var(--shadow-lg); display:flex; flex-direction:column; min-width:236px; }
+  .menu .mi { padding:10px 12px; font-size:14px; border-radius:9px; color:var(--text); }
+  .menu .mi.dis { color:var(--faint); } .menu .mi.destructive { color:var(--danger); }
+  .menu .mi .sub { display:block; font-size:11px; color:var(--faint); margin-top:2px; }
+  .menu .sep { height:1px; background:var(--border); margin:4px 6px; }
+  /* --- workflows extras --- */
+  .prog { height:6px; border-radius:3px; background:var(--border); overflow:hidden; flex:1; }
+  .prog > i { display:block; height:100%; background:var(--ok); }
+  .progwrap { display:flex; align-items:center; gap:8px; font-size:11.5px; color:var(--muted); }
+  .glyph { width:16px; height:16px; border-radius:50%; flex:none; border:2px solid var(--muted); display:inline-block; }
+  .glyph.run { border-color:var(--info); border-top-color:transparent; }
+  .glyph.wait { border-style:dashed; }
+  .glyph.rev { border-color:var(--warn); box-shadow:inset 0 0 0 2px var(--surface), inset 0 0 0 5px var(--warn); }
+  .glyph.done { border-color:var(--ok); background:var(--ok); }
+  .glyph.draft { border-color:var(--faint); opacity:.6; }
+  .glyph.cancel { border-color:var(--danger); opacity:.7; }
+  .trow { display:flex; align-items:flex-start; gap:10px; padding:11px 12px; border-bottom:.5px solid var(--border); }
+  .trow:last-child { border-bottom:none; }
+  .trow .t { font-size:14px; font-weight:650; line-height:1.3; }
+  .trow .s { font-size:11.5px; color:var(--muted); margin-top:3px; line-height:1.4; }
+  .trow.dim { opacity:.5; }
+  .trow.sel { background:var(--accent-soft); }
+  .bracket { border-left:3px solid var(--violet); margin:6px 0 6px 6px; padding-left:8px; border-radius:2px; }
+  .bracket .bh { font-size:11.5px; font-weight:750; color:var(--violet); display:flex; align-items:center; gap:8px; padding:6px 4px 4px; flex-wrap:wrap; }
+  .bracket .rule { font-size:11px; color:var(--muted); padding:0 4px 6px; line-height:1.4; }
+  .dots { display:inline-flex; gap:4px; }
+  .dots i { width:8px; height:8px; border-radius:50%; border:1.5px solid var(--violet); display:inline-block; }
+  .dots i.f { background:var(--violet); } .dots i.c { box-shadow:0 0 0 2px var(--violet-soft); }
+  .struck .t { text-decoration:line-through; color:var(--muted); }
+  .impact { border:1px solid var(--border-2); border-radius:12px; overflow:hidden; margin-top:8px; }
+  .impact .ih { font-size:11px; font-weight:800; letter-spacing:.6px; text-transform:uppercase; color:var(--muted); padding:8px 12px; background:var(--surface-2); }
+  .impact .ir { display:flex; align-items:center; gap:8px; padding:8px 12px; border-top:.5px solid var(--border); font-size:12.5px; }
+  .impact .ir .r { margin-left:auto; }
+  .ownerbar { display:flex; gap:10px; align-items:flex-start; padding:10px 12px; border-radius:12px; background:var(--warn-soft); border:1px solid var(--warn-line); font-size:12.5px; line-height:1.45; color:var(--text); }
+  .strip { display:flex; align-items:center; gap:8px; padding:8px 12px; border-radius:10px; background:var(--info-soft); border:1px solid var(--info-line); font-size:12.5px; font-weight:650; color:var(--info); }
+  .optcard { border:1px solid var(--border-2); border-radius:12px; padding:10px 12px; display:flex; gap:10px; align-items:flex-start; margin-top:8px; }
+  .optcard.on { border-color:var(--accent-line); background:var(--accent-soft); }
+  .optcard .rad { width:18px; height:18px; border-radius:50%; border:2px solid var(--border-2); flex:none; margin-top:1px; }
+  .optcard.on .rad { border-color:var(--accent); box-shadow:inset 0 0 0 4px var(--surface); background:var(--accent); }
+  .optcard .ot { font-size:13.5px; font-weight:650; } .optcard .oc { font-size:11.5px; color:var(--muted); margin-top:2px; line-height:1.4; }
+  .propose { border:1px dashed var(--violet-line); color:var(--violet); background:var(--violet-soft); font-size:10px; font-weight:800; letter-spacing:.6px; text-transform:uppercase; padding:2px 7px; border-radius:6px; }
+  .switchrow { display:flex; align-items:center; gap:12px; padding:10px 2px; }
+  .switchrow .sw { width:44px; height:26px; border-radius:13px; background:var(--border-2); position:relative; flex:none; }
+  .switchrow .sw::after { content:""; position:absolute; top:3px; left:3px; width:20px; height:20px; border-radius:50%; background:var(--surface); box-shadow:var(--shadow-sm); }
+  .switchrow .sw.on { background:var(--accent); } .switchrow .sw.on::after { left:auto; right:3px; background:#fff; }
+  .ev { border:1px solid var(--border-2); border-radius:10px; padding:8px 10px; font-size:12px; margin-top:6px; }
+  .ev .evh { display:flex; gap:6px; align-items:center; font-weight:650; }
+  .ev .evf { font-family:"JetBrains Mono",ui-monospace,Menlo,monospace; font-size:10.5px; color:var(--muted); margin-top:4px; }
+  .stepper { display:flex; gap:6px; align-items:center; font-size:11.5px; color:var(--muted); padding:4px 2px 8px; }
+  .stepper b { color:var(--accent); }
+  .check { width:18px; height:18px; border-radius:5px; border:2px solid var(--border-2); flex:none; }
+  .check.on { background:var(--accent); border-color:var(--accent); }
+  .tl { display:flex; gap:10px; padding:9px 4px; border-bottom:.5px solid var(--border); font-size:12.5px; line-height:1.4; }
+  .tl .when { margin-left:auto; color:var(--faint); font-size:11px; flex:none; }
+</style>
+</head>
+<body>
+
+<header class="gallery-header">
+  <h1>15 — Workflows on the phone (iOS + Android)</h1>
+  <p>Phone parity with the web Workflows pages: everything <a href="https://github.com/open-orcha/orcha/pull/340">PR #340</a> ships on main plus the flexible loops of <a href="https://github.com/open-orcha/orcha/pull/368">PR #368</a> (rounds, outcomes, owner decisions, turn allowance). Per Kedar: <b>Workflows is a main tab</b> and the task list moves under it; loops are base design, not an addendum. Every control that has no live route carries a <span class="propose">Proposed</span> tag and renders disabled on a server without the capability. 26 frames, iOS and Android, light and dark. Spec: <span class="mono">workflows/README.md</span>.</p>
+</header>
+
+<div class="gallery">
+
+  <!-- ============ W01: Workflows list (iOS dark) ============ -->
+  <figure class="shot">
+    <div class="phone ios" data-theme="dark">
+      <div class="statusbar"><span>9:41</span><span class="sicons"><svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span></div>
+      <div class="screen">
+        <div class="appbar large">
+          <div class="row"><span class="conn"><span class="dot"></span>live</span><span class="spacer"></span><button class="iconbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 5v14M5 12h14"/></svg></button></div>
+          <div class="big-title">openorcha</div>
+          <div class="seg" style="margin:6px 0 2px;"><div class="opt on">Workflows</div><div class="opt">Tasks</div></div>
+        </div>
+        <div class="scroll">
+          <div class="input" style="margin-bottom:8px;"><span class="ph">Search workflows</span><span style="margin-left:auto;font-size:11px;color:var(--faint);">6 of 6 loaded</span></div>
+          <div class="chips-row"><span class="chip on">Open <span class="n">4</span></span><span class="chip">Preparing <span class="n">1</span></span><span class="chip">Active <span class="n">3</span></span><span class="chip">Paused <span class="n">1</span></span><span class="chip">Ready to finish</span><span class="chip">All</span></div>
+          <div class="card tap">
+            <div class="rowline"><span class="glyph run"></span><div class="grow"><div class="c-title">Launch post for the Recipe App</div><div class="c-sub">Publish a reviewed launch post by Friday.</div></div><span class="chev"></span></div>
+            <div class="tmeta"><span class="pill s-info"><span class="dot"></span>Active</span><span class="tag">Serial</span><span class="pill s-violet">Round 2 of 5</span><span class="ago">2h</span></div>
+            <div class="progwrap"><div class="prog"><i style="width:40%"></i></div><span>2/5 accepted</span><span class="avatar sm human">K</span></div>
+          </div>
+          <div class="card tap">
+            <div class="rowline"><span class="glyph run"></span><div class="grow"><div class="c-title">Help-centre rewrite</div><div class="c-sub">Four articles rewritten and published.</div></div><span class="chev"></span></div>
+            <div class="tmeta"><span class="pill s-info"><span class="dot"></span>Active</span><span class="tag">Parallel</span><span class="pill s-warn"><span class="dot"></span>Needs your decision</span><span class="ago">5h</span></div>
+            <div class="progwrap"><div class="prog"><i style="width:75%"></i></div><span>3/4 accepted</span><span class="avatar sm human">K</span></div>
+          </div>
+          <div class="card tap">
+            <div class="rowline"><span class="glyph wait"></span><div class="grow"><div class="c-title">Mobile workflows design</div><div class="c-sub">Phone designs reviewed and accepted.</div></div><span class="chev"></span></div>
+            <div class="tmeta"><span class="pill s-idle"><span class="dot"></span>Paused</span><span class="tag">Serial</span><span class="pill s-warn"><span class="dot"></span>Goal needs acceptance</span><span class="ago">1d</span></div>
+            <div class="progwrap"><div class="prog"><i style="width:25%"></i></div><span>1/4 accepted</span><span class="avatar sm human">P</span></div>
+          </div>
+          <div class="card tap">
+            <div class="rowline"><span class="glyph wait"></span><div class="grow"><div class="c-title">Homebrew tap refresh</div><div class="c-sub">Formula bumped and tested.</div></div><span class="chev"></span></div>
+            <div class="tmeta"><span class="pill s-idle"><span class="dot"></span>Preparing</span><span class="tag">Serial</span><span style="color:var(--faint);">No tasks yet</span><span class="ago">3d</span></div>
+          </div>
+          <div class="btn tonal block sm" style="margin-top:6px;">Load more</div>
+          <div class="helper" style="text-align:center;">Search and owner filters apply to loaded pages · <span style="color:var(--accent);">Hidden workflows</span></div>
+        </div>
+        <div class="tabbar">
+          <div class="tab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 11l9-7 9 7v9a1 1 0 01-1 1h-5v-6H9v6H4a1 1 0 01-1-1z"/></svg>Home</div>
+          <div class="tab active"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="5" cy="6" r="2"/><circle cx="19" cy="6" r="2"/><circle cx="12" cy="18" r="2"/><path d="M7 6h10M6 8l5 8M18 8l-5 8"/></svg>Workflows</div>
+          <div class="tab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 5h16v10H8l-4 4z"/></svg>Requests<span class="bdg">2</span></div>
+          <div class="tab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0116 0"/></svg>Agents</div>
+          <div class="tab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>Search</div>
+        </div>
+        <div class="homebar"></div>
+      </div>
+    </div>
+    <figcaption>
+      <div class="cap-title">W01 · Workflows list <span class="plat">iOS · dark</span></div>
+      <div class="cap-note"><b>Workflows is the second tab</b> (Kedar's direction): the bottom bar is Home · Workflows · Requests · Agents · Search, and the former Tasks tab lives as the second segment at the top. Same eight filters and counts as web; cards show the server status label, mode, the first completion blocker, <b>Round N of M</b> while a repeat group runs (#368) and <b>Needs your decision</b> when an owner decision is pending. Load more while <span class="mono">next_cursor</span> is set; Hidden workflows at the end.</div>
+      <div class="cap-api">GET /api/containers/{cid}/workflows/capability · GET /api/containers/{cid}/workflows?status=active&amp;cursor= · <b>page = 50</b></div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ W02: List states (Android light) ============ -->
+  <figure class="shot">
+    <div class="phone android" data-theme="light">
+      <div class="statusbar"><span>9:41</span><span class="sicons"><svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span></div>
+      <div class="screen">
+        <div class="appbar"><div class="title">openorcha</div><span class="spacer"></span><span class="conn polling"><span class="dot"></span>polling</span><button class="iconbtn"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg></button></div>
+        <div class="seg" style="margin:0 14px 8px;"><div class="opt on">Workflows</div><div class="opt">Tasks</div></div>
+        <div class="scroll">
+          <div class="banner warn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4M12 17h.01M10.3 3.9L2.6 17a2 2 0 001.7 3h15.4a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"/></svg><div class="grow">Showing the last loaded workflow data. Refresh before making changes.</div><span class="b-act">Retry</span></div>
+          <div style="opacity:.45;">
+            <div class="chips-row"><span class="chip on">Open <span class="n">4</span></span><span class="chip">Preparing</span><span class="chip">Active</span><span class="chip">Paused</span></div>
+            <div class="card"><div class="rowline"><span class="glyph run"></span><div class="grow"><div class="c-title">Launch post for the Recipe App</div><div class="c-sub">Publish a reviewed launch post by Friday.</div></div></div><div class="tmeta"><span class="pill s-info"><span class="dot"></span>Active</span><span class="tag">Serial</span><span class="ago">2h</span></div></div>
+            <div class="card"><div class="rowline"><span class="glyph wait"></span><div class="grow"><div class="c-title">Mobile workflows design</div><div class="c-sub">Phone designs reviewed and accepted.</div></div></div><div class="tmeta"><span class="pill s-idle"><span class="dot"></span>Paused</span><span class="ago">1d</span></div></div>
+          </div>
+          <div class="section-h" style="margin-top:14px;">Other states (same panel)</div>
+          <div class="card" style="gap:10px;">
+            <div class="rowline"><span class="skel line" style="width:60%"></span></div><div class="rowline"><span class="skel line" style="width:85%"></span></div>
+            <div class="helper">Checking support · skeleton for up to 15 s</div>
+          </div>
+          <div class="card">
+            <div class="state" style="padding:8px 0;"><div class="glyph"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/></svg></div><div class="st-title">This Orcha runs an older version without workflows</div><div class="st-sub">You can still work with tasks.</div><div class="btn tonal sm">Open tasks</div></div>
+          </div>
+          <div class="card">
+            <div class="state" style="padding:8px 0;"><div class="glyph danger"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M15 9l-6 6M9 9l6 6"/></svg></div><div class="st-title">You can't view workflows as this person</div><div class="st-sub">401/403 from the server.</div><div class="btn tonal sm">Choose acting human</div></div>
+          </div>
+          <div class="fab extended"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M12 5v14M5 12h14"/></svg>New workflow</div>
+        </div>
+        <div class="tabbar">
+          <div class="tab"><span class="ind"></span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 11l9-7 9 7v9a1 1 0 01-1 1h-5v-6H9v6H4a1 1 0 01-1-1z"/></svg>Home</div>
+          <div class="tab active"><span class="ind"></span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="5" cy="6" r="2"/><circle cx="19" cy="6" r="2"/><circle cx="12" cy="18" r="2"/><path d="M7 6h10M6 8l5 8M18 8l-5 8"/></svg>Workflows</div>
+          <div class="tab"><span class="ind"></span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 5h16v10H8l-4 4z"/></svg>Requests</div>
+          <div class="tab"><span class="ind"></span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0116 0"/></svg>Agents</div>
+          <div class="tab"><span class="ind"></span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>Search</div>
+        </div>
+        <div class="homebar"></div>
+      </div>
+    </div>
+    <figcaption>
+      <div class="cap-title">W02 · List states <span class="plat">Android · light</span></div>
+      <div class="cap-note">The state replaces the list body only; the segment and bar stay. A failed refresh after data = the <b>stale banner</b> over the dimmed list with every write disabled. Below it, the other three states drawn in place: checking support (skeleton, 15 s), unsupported server ("Open tasks" switches to the Tasks segment), forbidden ("Choose acting human", flow 03). Unreachable with nothing loaded reuses flow 04. The extended FAB is the Android create entry for this segment.</div>
+      <div class="cap-api">GET /api/containers/{cid}/workflows <b>(failed → cached)</b> · GET /api/containers/{cid}/workflows/capability</div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ W03: Workflow detail with overflow (Android dark) ============ -->
+  <figure class="shot">
+    <div class="phone android" data-theme="dark">
+      <div class="statusbar"><span>9:41</span><span class="sicons"><svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span></div>
+      <div class="screen" style="position:relative;">
+        <div class="appbar"><button class="backbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M15 5l-7 7 7 7"/></svg></button><div class="title">Workflow</div><span class="spacer"></span><button class="iconbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12a8 8 0 0114-5M20 12a8 8 0 01-14 5M18 3v4h-4M6 21v-4h4"/></svg></button><button class="iconbtn on-surface"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg></button></div>
+        <div class="menu">
+          <div class="mi dis">Review start<span class="sub">All released tasks are running</span></div>
+          <div class="mi">Pause new starts</div>
+          <div class="mi dis">Resume workflow<span class="sub">Not paused</span></div>
+          <div class="sep"></div>
+          <div class="mi">Add new tasks…</div><div class="mi">Add existing tasks…</div><div class="mi">Move or remove tasks…</div><div class="mi">Record review outcome…</div>
+          <div class="sep"></div>
+          <div class="mi">Workflow settings…</div><div class="mi">Transfer ownership…</div>
+          <div class="mi dis">Hide workflow…<span class="sub">Finish or cancel it first</span></div>
+          <div class="sep"></div>
+          <div class="mi destructive">Cancel workflow…</div>
+        </div>
+        <div class="scroll">
+          <div style="font-size:21px; font-weight:800; letter-spacing:-.3px; line-height:1.2;">Launch post for the Recipe App</div>
+          <div class="tmeta" style="margin-top:8px;"><span class="pill s-info"><span class="dot"></span>Active</span><span class="avatar sm human">K</span><span>Kedar</span><span class="tag">Serial</span><span class="pill s-ok"><span class="dot"></span>Goal accepted</span></div>
+          <div class="progwrap" style="margin-top:8px;"><div class="prog"><i style="width:40%"></i></div><span>2/5 tasks · 1/2 objectives</span></div>
+          <div class="helper" style="margin-top:6px;">Agent turns used <b>14 of 40</b> · revision 12</div>
+          <div style="font-size:13px; color:var(--text-2); line-height:1.5;">Publish a reviewed launch post by Friday. The writer drafts, the reviewer checks, the owner approves before publishing… <span style="color:var(--accent);">More</span></div>
+          <div class="strip" style="margin-top:10px;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px;"><circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/></svg>2 need your input<span style="margin-left:auto;">View</span></div>
+          <div style="display:flex; gap:8px; margin-top:10px;"><div class="btn primary" style="flex:1;">Finish checklist</div></div>
+          <div class="seg" style="margin-top:12px;"><div class="opt on">Tasks 5</div><div class="opt">Route</div><div class="opt">Review 1/5</div><div class="opt">Activity</div></div>
+          <div class="card" style="padding:0; margin-top:8px;">
+            <div class="trow"><span class="glyph done"></span><div class="grow"><div class="t">Plan the launch</div><div class="s">Accepted · by Kedar · rev 3</div></div><span class="avatar sm">P</span></div>
+            <div class="trow"><span class="glyph run"></span><div class="grow"><div class="t">Write the launch post</div><div class="s">Running · Round 2 · received draft v2 + 3 findings</div><div class="tmeta" style="margin-top:4px;"><span class="tag">Autonomy OFF</span></div></div><span class="avatar sm">W</span></div>
+          </div>
+        </div>
+        <div class="homebar"></div>
+      </div>
+    </div>
+    <figcaption>
+      <div class="cap-title">W03 · Workflow detail · overflow open <span class="plat">Android · dark</span></div>
+      <div class="cap-note">Header = title, server status, owner, mode, progress for tasks and objectives, goal-acceptance chip, <b>agent turns used of the allowance</b> (#368), the goal clamped to two lines. ONE primary button = first enabled of Review start → Resume → Finish checklist. The ⋯ menu lists every other action in web's fixed order; disabled items keep the server reason as a second line (M3 <span class="mono">DropdownMenu</span>). The <b>Needs your input</b> strip sits under the goal (W19). Segments: Tasks · Route · Review (used/limit) · Activity.</div>
+      <div class="cap-api">GET /api/workflows/{wid} → <b>available_actions[].reason, turns_used/turn_allowance, repeat_groups</b></div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ W04: Tasks segment with a running loop (iOS light) ============ -->
+  <figure class="shot">
+    <div class="phone ios" data-theme="light">
+      <div class="statusbar"><span>9:41</span><span class="sicons"><svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span></div>
+      <div class="screen">
+        <div class="appbar"><button class="backbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M15 5l-7 7 7 7"/></svg><span class="blabel">Workflows</span></button><span class="spacer"></span><button class="iconbtn"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg></button></div>
+        <div class="scroll">
+          <div style="font-size:21px; font-weight:800; letter-spacing:-.3px; line-height:1.2;">Launch post for the Recipe App</div>
+          <div class="tmeta" style="margin-top:6px;"><span class="pill s-info"><span class="dot"></span>Active</span><span class="tag">Serial</span><span style="color:var(--muted);">2/5 accepted · turns 14 of 40</span></div>
+          <div class="seg" style="margin-top:10px;"><div class="opt on">Tasks 5</div><div class="opt">Route</div><div class="opt">Review</div><div class="opt">Activity</div></div>
+          <div class="card" style="padding:0; margin-top:8px;">
+            <div class="trow"><span class="glyph done"></span><div class="grow"><div class="t">Plan the launch</div><div class="s">Accepted · by Kedar · rev 3</div></div><span class="avatar sm">P</span></div>
+            <div class="bracket">
+              <div class="bh">Draft and review <span class="dots"><i class="f"></i><i class="c"></i><i></i><i></i><i></i></span> Round 2 of 5</div>
+              <div class="rule">Exits when Review reports <b>Passed</b> · at the limit asks Kedar · each round receives the last draft, findings and reason</div>
+              <div class="trow sel"><span class="glyph run"></span><div class="grow"><div class="t">Write the launch post</div><div class="s">Running · Round 2 · received draft v2 + 3 findings</div><div class="tmeta" style="margin-top:4px;"><span class="tag">Autonomy OFF</span></div></div><span class="avatar sm">W</span></div>
+              <div class="trow"><span class="glyph wait"></span><div class="grow"><div class="t">Review the post</div><div class="s">Waiting for Write the launch post · reports Passed / Changes requested</div></div><span class="avatar sm">R</span></div>
+            </div>
+            <div class="trow"><span class="glyph wait"></span><div class="grow"><div class="t">Owner approval</div><div class="s">Gate · waiting for the loop to exit</div><div class="tmeta" style="margin-top:4px;"><span class="propose">Proposed</span></div></div><span class="avatar sm human">K</span></div>
+            <div class="trow"><span class="glyph wait"></span><div class="grow"><div class="t">Publish the post</div><div class="s">Waiting for Owner approval</div></div><span class="avatar sm">B</span></div>
+            <div class="trow struck dim"><span class="glyph cancel"></span><div class="grow"><div class="t">Post to the newsletter</div><div class="s">Not selected · Review reported "Blog only"</div></div></div>
+          </div>
+          <div class="helper">Withdrawn tasks render dim with "Withdrawn by {name}". Long-press a row (Android) or swipe (iOS) for its enabled actions; everything is in the task sheet.</div>
+        </div>
+        <div class="homebar"></div>
+      </div>
+    </div>
+    <figcaption>
+      <div class="cap-title">W04 · Tasks segment · repeat group running <span class="plat">iOS · light</span></div>
+      <div class="cap-note">The #368 loop drawn in words first: a <b>bracket</b> wraps the group's consecutive rows with its name, <b>Round 2 of 5</b>, round dots and the exit rule sentence. The running step's sub-line names the round and what it received. The gate row (Proposed, §7 ask 1) and the <b>Not selected</b> row (struck through with the deciding outcome, never styled as failed) sit outside the bracket. Each row keeps web's anatomy: glyph · title · server label + first blocker · autonomy chip · assignee.</div>
+      <div class="cap-api">GET /api/workflows/{wid} → <b>tasks[].display_state, repeat_groups[] (round, max_rounds, exit_outcome)</b></div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ W05: Route segment, read-only graph (Android light) ============ -->
+  <figure class="shot">
+    <div class="phone android" data-theme="light">
+      <div class="statusbar"><span>9:41</span><span class="sicons"><svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span></div>
+      <div class="screen">
+        <div class="appbar"><button class="backbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M15 5l-7 7 7 7"/></svg></button><div class="title">Launch post for the Recipe App</div><span class="spacer"></span><button class="iconbtn"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg></button></div>
+        <div class="scroll">
+          <div class="seg"><div class="opt">Tasks 5</div><div class="opt on">Route</div><div class="opt">Review</div><div class="opt">Activity</div></div>
+          <div style="display:flex; gap:8px; align-items:center; margin-top:10px;"><div class="seg" style="flex:1;"><div class="opt">List</div><div class="opt on">Graph</div></div><button class="iconbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4M8 11h6M11 8v6"/></svg></button><button class="iconbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button></div>
+          <div class="card" style="padding:14px 12px; margin-top:8px; position:relative; height:330px;">
+            <svg viewBox="0 0 340 300" style="width:100%; height:100%;" fill="none" stroke="var(--border-2)" stroke-width="1.5">
+              <rect x="20" y="10" width="150" height="34" rx="8" fill="var(--surface-2)"/><text x="30" y="32" fill="var(--text)" stroke="none" font-size="12" font-weight="650">● Plan the launch</text>
+              <rect x="8" y="64" width="190" height="112" rx="10" stroke="var(--violet)" stroke-dasharray="4 3"/><text x="16" y="80" fill="var(--violet)" stroke="none" font-size="10" font-weight="800">DRAFT AND REVIEW · ROUND 2 OF 5</text>
+              <rect x="20" y="88" width="150" height="34" rx="8" fill="var(--accent-soft)" stroke="var(--accent)"/><text x="30" y="110" fill="var(--text)" stroke="none" font-size="12" font-weight="650">◐ Write the launch post</text>
+              <rect x="20" y="134" width="150" height="34" rx="8" fill="var(--surface-2)"/><text x="30" y="156" fill="var(--text)" stroke="none" font-size="12" font-weight="650">○ Review the post</text>
+              <path d="M95 44v44" stroke="var(--muted)" marker-end="url(#a)"/><path d="M95 122v12" stroke="var(--muted)"/>
+              <path d="M170 151c40 0 40-46 0-46" stroke="var(--violet)" stroke-dasharray="3 3"/><text x="186" y="132" fill="var(--violet)" stroke="none" font-size="10">Changes requested ↺</text>
+              <rect x="20" y="200" width="150" height="34" rx="8" fill="var(--surface-2)" stroke="var(--violet)" stroke-dasharray="4 3"/><text x="30" y="222" fill="var(--text)" stroke="none" font-size="12" font-weight="650">○ Owner approval</text>
+              <path d="M95 176v24" stroke="var(--muted)"/><text x="104" y="192" fill="var(--muted)" stroke="none" font-size="10">Passed →</text>
+              <rect x="20" y="256" width="150" height="34" rx="8" fill="var(--surface-2)"/><text x="30" y="278" fill="var(--text)" stroke="none" font-size="12" font-weight="650">○ Publish the post</text>
+              <path d="M95 234v22" stroke="var(--muted)"/>
+              <rect x="190" y="256" width="140" height="34" rx="8" stroke-dasharray="3 3" opacity=".5"/><text x="198" y="278" fill="var(--muted)" stroke="none" font-size="11" text-decoration="line-through">Post to the newsletter</text>
+              <path d="M170 217c40 0 60 20 60 39" stroke="var(--muted)" stroke-dasharray="3 3" opacity=".5"/>
+            </svg>
+          </div>
+          <div class="helper">Solid arrows = prerequisites · dotted return = loop · dotted dim = not selected. Pinch to zoom, tap a node for its task sheet.</div>
+          <div class="banner info"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/></svg><div class="grow">Drawing nodes and editing outcome routes is done on the laptop. You can edit prerequisites from any task's sheet.</div><span class="b-act">Copy link</span></div>
+        </div>
+        <div class="homebar"></div>
+      </div>
+    </div>
+    <figcaption>
+      <div class="cap-title">W05 · Route segment (read-only graph) <span class="plat">Android · light</span></div>
+      <div class="cap-note">Replaces web's Dependencies tab and keeps its contents (#362 §6): List / Graph, the saved prerequisite graph and the outcome routes. On the phone the graph is <b>read-only</b> (pinch, pan, fit; a node tap opens W06); the loop is the dotted return arrow and the group box, the Not selected branch is dim. <b>Edit prerequisites</b> stays available from the task sheet (W12); drawing nodes and editing routes is honestly labelled laptop-only.</div>
+      <div class="cap-api">GET /api/workflows/{wid}/dependencies · GET /api/workflows/{wid} <b>(repeat_groups, routes read-only)</b></div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ W06: Task sheet (iOS dark) ============ -->
+  <figure class="shot">
+    <div class="phone ios" data-theme="dark">
+      <div class="statusbar"><span>9:41</span><span class="sicons"><svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span></div>
+      <div class="screen">
+        <div style="height:10px; flex:none;"></div>
+        <div style="flex:1; background:var(--surface-2); border-radius:18px 18px 0 0; border:1px solid var(--border); border-bottom:none; display:flex; flex-direction:column; overflow:hidden; box-shadow:var(--shadow-lg);">
+          <div class="navbar-ios"><span class="textbtn" style="font-weight:500;">Close</span><span class="nb-title">Task</span><span class="iconbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 4h6v6M20 4l-8 8M10 20H4v-6M4 20l8-8"/></svg></span></div>
+          <div class="scroll" style="padding-top:4px;">
+            <div class="rowline"><span class="glyph run"></span><div class="grow"><div style="font-size:17px; font-weight:750; line-height:1.25;">Write the launch post</div><div class="tmeta" style="margin-top:4px;"><span class="avatar sm">W</span><span>Writer</span><span class="tag">Autonomy OFF</span><span class="mono" style="font-size:10.5px;">a3f2…</span></div></div></div>
+            <div class="section-h">State <span class="cnt" style="margin-left:auto; color:var(--info);">Running</span></div>
+            <div class="card" style="gap:6px;">
+              <div class="kv"><span class="k">Round</span><span class="v">2 of 5 · attempt 1</span></div>
+              <div class="kv"><span class="k">Why it runs</span><span class="v">Review reported Changes requested</span></div>
+              <div class="kv"><span class="k">Waiting on</span><span class="v">the worker's result</span></div>
+              <div class="hr"></div>
+              <div style="font-size:12px; font-weight:700; color:var(--text-2);">Received this round</div>
+              <div class="ev"><div class="evh">Draft v2 <span class="tag">saved 10:12</span></div><div class="evf">launch-post.md · v2</div></div>
+              <div style="font-size:12.5px; line-height:1.5; color:var(--text-2);">1. The intro repeats the headline.<br>2. No pricing paragraph.<br>3. CTA link points at staging.</div>
+            </div>
+            <div class="section-h">Actions</div>
+            <div style="display:flex; gap:8px; flex-wrap:wrap;"><div class="btn tonal sm">Review result…</div><div class="btn tonal sm">Release holds</div><div class="btn danger-tonal sm">Stop this task</div><div class="btn neutral sm">More</div></div>
+            <div class="helper"><b>Not available now</b><br>Prepare task — already prepared<br>Retry task — the worker is running<br>Release lost worker — becomes available at 10:41<br>Withdraw from scope — stop the task first</div>
+            <div class="section-h">Prerequisites</div>
+            <div style="display:flex; gap:8px; flex-wrap:wrap;"><span class="chip">Depends on: Plan the launch</span><span class="chip">Needed by: Review the post</span><span class="chip on">Edit</span></div>
+            <div class="section-h">Saved evidence</div>
+            <div class="ev"><div class="evh"><span class="pill s-ok"><span class="dot"></span>Saved</span>Current · result rev 2</div><div class="evf">launch-post.md · v2 · sha256 9f1c…</div></div>
+            <div class="section-h">Discussion</div>
+            <div class="bubble theirs"><div class="b-author">Writer</div>Round 2 draft is up. Pricing paragraph added.<div class="b-time">10:12</div></div>
+          </div>
+        </div>
+        <div class="homebar"></div>
+      </div>
+    </div>
+    <figcaption>
+      <div class="cap-title">W06 · Task sheet (web's inspector) <span class="plat">iOS · dark</span></div>
+      <div class="cap-note">A full-height sheet replaces the three-column inspector: state with every blocker and warning, the #368 <b>round context</b> (round, attempt, why it runs, what it received: exact draft version and the findings in their original words), enabled actions as buttons and <b>Not available now</b> with every disabled action and its server reason, prerequisites as chips with Edit (W12), acceptance record, evidence cards, the task's discussion thread and the authority line. The expand icon opens the task page (W16).</div>
+      <div class="cap-api">GET /api/workflows/{wid} · GET /api/tasks/{tid}/round-context · GET /api/tasks/{tid}/evidence · GET /api/tasks/{tid}/messages?limit=20</div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ W07: Review start sheet with route + limits (Android dark) ============ -->
+  <figure class="shot">
+    <div class="phone android" data-theme="dark">
+      <div class="statusbar"><span>9:41</span><span class="sicons"><svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span></div>
+      <div class="screen" style="position:relative;">
+        <div class="appbar"><button class="backbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M15 5l-7 7 7 7"/></svg></button><div class="title">Mobile workflows design</div></div>
+        <div class="scrim"></div>
+        <div class="sheet" style="top:70px;">
+          <div class="grabber"></div>
+          <div class="sh-title">Review start</div>
+          <div class="sh-sub">Releases the chosen prepared tasks. Nothing starts until you confirm.</div>
+          <div class="scroll" style="padding:0;">
+            <div class="section-h">Tasks to release</div>
+            <div class="rowline"><span class="check on"></span><div class="grow"><div style="font-size:14px;font-weight:650;">Design the screens</div><div class="helper" style="margin:0;">Prepared · Dana</div></div></div>
+            <div class="rowline"><span class="check on"></span><div class="grow"><div style="font-size:14px;font-weight:650;">Review the design</div><div class="helper" style="margin:0;">Prepared · Code Reviewer</div></div></div>
+            <div class="rowline" style="opacity:.5;"><span class="check"></span><div class="grow"><div style="font-size:14px;font-weight:650;">Build on Android</div><div class="helper" style="margin:0;">Draft · prepare it first</div></div></div>
+            <div class="section-h">Expected route</div>
+            <div class="card" style="gap:6px;">
+              <div class="tmeta"><span class="pill s-violet">Loop</span>Design ↔ Review · exits on Accepted · most 5 rounds</div>
+              <div class="tmeta"><span class="pill s-warn"><span class="dot"></span>Stops and asks</span>at the limit, on a stall, or when the allowance is used up</div>
+            </div>
+            <div class="section-h">Limits for this run</div>
+            <div class="kv"><span class="k">Rounds</span><span class="v">5</span></div>
+            <div class="kv"><span class="k">Agent turns</span><span class="v"><span class="input" style="display:inline-flex;padding:4px 10px;width:70px;">40</span> default</span></div>
+            <div class="kv"><span class="k">Estimated cost</span><span class="v">about $6 · an estimate</span></div>
+            <div class="btn tonal block sm" style="margin-top:10px;">Check selected tasks</div>
+            <div class="helper">Checked 4 s ago against revision 7</div>
+            <div class="impact"><div class="ih">What this action will do</div>
+              <div class="ir"><span class="glyph run"></span>Design the screens<span class="r pill s-info">Ready</span></div>
+              <div class="ir"><span class="glyph wait"></span>Review the design<span class="r pill s-idle">Waits for prerequisites</span></div>
+              <div class="ir"><span class="glyph draft"></span>Build on Android<span class="r pill s-idle">Unchanged</span></div>
+            </div>
+            <div style="display:flex; gap:8px; margin-top:12px;"><div class="btn neutral" style="flex:1;">Keep preparing</div><div class="btn primary" style="flex:1;">Start 2 tasks</div></div>
+          </div>
+        </div>
+        <div class="homebar"></div>
+      </div>
+    </div>
+    <figcaption>
+      <div class="cap-title">W07 · Review start (action-sheet pattern) <span class="plat">Android · dark</span></div>
+      <div class="cap-note">One pattern for all 17 workflow and task actions: inputs → <b>Check</b> (the server check route, "checked N s ago against revision R") → the <b>impact card</b> (one row per task with its resulting status and any refusal) → confirm, enabled only while the check matches the inputs. #368 adds the <b>expected route</b> (loops, gates, stops-and-asks) and the <b>limits for this run</b>: rounds, the editable agent-turn allowance (default 40) and the cost labelled as an estimate. Undismissable while sending.</div>
+      <div class="cap-api">GET /api/workflows/{wid}/start-check?task_ids= → POST /api/workflows/{wid}/start {task_ids, expected_revision, idempotency_key, turn_allowance}</div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ W08: Stop this task, danger confirm (iOS light) ============ -->
+  <figure class="shot">
+    <div class="phone ios" data-theme="light">
+      <div class="statusbar"><span>9:41</span><span class="sicons"><svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span></div>
+      <div class="screen" style="position:relative;">
+        <div class="appbar"><button class="backbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M15 5l-7 7 7 7"/></svg><span class="blabel">Workflow</span></button></div>
+        <div class="scroll" style="opacity:.5;"><div style="font-size:21px;font-weight:800;">Launch post for the Recipe App</div></div>
+        <div class="scrim"></div>
+        <div class="sheet" style="top:140px;">
+          <div class="grabber"></div>
+          <div class="sh-title">Stop this task</div>
+          <div class="sh-sub">Asks the running worker to stop. The task returns to you for Retry or Withdraw. The round stays open.</div>
+          <div class="scroll" style="padding:0;">
+            <div class="banner warn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4M12 17h.01M10.3 3.9L2.6 17a2 2 0 001.7 3h15.4a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"/></svg><div class="grow">We did not get a reply to the last request. Check the saved result before retrying.</div><span class="b-act">Check</span></div>
+            <label class="fieldlabel">Reason <span style="color:var(--danger);">*</span></label>
+            <div class="input area" style="background:var(--surface);"><span>Scope changed: the pricing paragraph is moving to a separate task.</span></div>
+            <div class="impact"><div class="ih">What this action will do</div>
+              <div class="ir"><span class="glyph run"></span>Write the launch post<span class="r pill s-warn"><span class="dot"></span>Stopping</span></div>
+              <div class="ir"><span class="glyph wait"></span>Review the post<span class="r pill s-idle">Still blocked</span></div>
+            </div>
+            <div class="helper">Checked against revision 12 · the worker may take a minute to confirm the stop.</div>
+          </div>
+        </div>
+        <div class="action-sheet">
+          <div class="grp"><div class="as-note">Stop "Write the launch post"? The worker keeps its files; you can Retry or Send stop again later.</div><div class="as-btn destructive">Stop this task</div></div>
+          <div class="grp"><div class="as-btn bold">Keep running</div></div>
+        </div>
+        <div class="homebar"></div>
+      </div>
+    </div>
+    <figcaption>
+      <div class="cap-title">W08 · Stop this task · danger confirm + uncertain state <span class="plat">iOS · light</span></div>
+      <div class="cap-note">Danger actions (Stop, Cancel workflow, Withdraw, Withdraw outside result, Release lost worker) add a second step: iOS <span class="mono">confirmationDialog</span>, Android <span class="mono">AlertDialog</span>. Also shown: the <b>uncertain</b> operation notice (no reply) with "Check saved result" before "Retry same request" with the same idempotency key; the sheet cannot be dismissed while sending or uncertain. Typed reasons are kept on refusal.</div>
+      <div class="cap-api">POST /api/tasks/{tid}/stop {reason, expected_revision, expected_work_revision, idempotency_key} · GET /api/containers/{cid}/workflow-operations/{key}</div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ W09: Result review + outcome report (Android light) ============ -->
+  <figure class="shot">
+    <div class="phone android" data-theme="light">
+      <div class="statusbar"><span>9:41</span><span class="sicons"><svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span></div>
+      <div class="screen">
+        <div class="appbar"><button class="iconbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M6 6l12 12M18 6L6 18"/></svg></button><div class="title">Review result</div></div>
+        <div class="scroll form">
+          <div style="font-size:16px; font-weight:750;">Review the post · round 2</div>
+          <div class="helper">This decision is about the finished result, separate from its plan approval. Accepting a result never finishes the workflow.</div>
+          <div class="kv"><span class="k">Done when</span><span class="v">The post is reviewed against the brief</span></div>
+          <div class="kv"><span class="k">Work revision</span><span class="v">4 · by Reviewer</span></div>
+          <div class="ev"><div class="evh"><span class="pill s-ok"><span class="dot"></span>Saved</span>Current evidence</div><div class="evf">review-round-2.md · v1 · sha256 41be…</div></div>
+          <div class="switchrow"><span class="check on"></span><div class="grow" style="font-size:13.5px;">Use current saved evidence</div></div>
+          <div class="section-h">Outcome reported</div>
+          <div class="optcard"><span class="rad"></span><div><div class="ot">Passed</div><div class="oc">→ Owner approval</div></div></div>
+          <div class="optcard on"><span class="rad"></span><div><div class="ot">Changes requested</div><div class="oc">↺ Write the launch post · round 3 of 5</div></div></div>
+          <div class="helper">Findings (2): the intro repeats the headline · CTA points at staging. Reporting cannot change the success criteria.</div>
+          <div class="section-h">Your decision</div>
+          <div class="optcard on"><span class="rad"></span><div><div class="ot">Accept result</div><div class="oc">Records the review as this round's result and routes by the outcome above.</div></div></div>
+          <div class="optcard"><span class="rad"></span><div><div class="ot">Request changes</div><div class="oc">Sends the review back to Reviewer; no routing happens.</div></div></div>
+          <div class="btn tonal block sm" style="margin-top:8px;">Review decision</div>
+          <div class="impact"><div class="ih">This sends work to…</div>
+            <div class="ir"><span class="glyph run"></span>Write the launch post<span class="r pill s-violet">Round 3</span></div>
+            <div class="ir"><span class="glyph wait"></span>Build worker (still running)<span class="r pill s-warn"><span class="dot"></span>Held · late result can't satisfy round 3</span></div>
+            <div class="ir"><span class="glyph done"></span>Plan the launch<span class="r pill s-idle">Kept</span></div>
+          </div>
+          <div class="helper">2 rounds remaining · the evidence set was re-read 3 s ago.</div>
+          <div class="btn primary block">Accept and report Changes requested</div>
+        </div>
+        <div class="homebar"></div>
+      </div>
+    </div>
+    <figcaption>
+      <div class="cap-title">W09 · Result review with outcome report <span class="plat">Android · light</span></div>
+      <div class="cap-note">Web's wide dialog becomes a full-screen sheet: Done when, revision and submitter, evidence cards with the required "Use current saved evidence", then (#368) the <b>outcome</b> the step may report, with its route sentence and findings, then Accept / Request changes. "Review decision" re-reads the detail and evidence and calls the outcome preview: what repeats, what becomes stale (a still-running worker is <b>held</b>), what is kept, rounds remaining. Never the legacy Verify for a member.</div>
+      <div class="cap-api">POST /api/tasks/{tid}/outcome/preview → POST /api/tasks/{tid}/accept + POST /api/tasks/{tid}/outcome {outcome, findings[], expected_work_revision, idempotency_key}</div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ W10: Create workflow · Steps (iOS dark) ============ -->
+  <figure class="shot">
+    <div class="phone ios" data-theme="dark">
+      <div class="statusbar"><span>9:41</span><span class="sicons"><svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span></div>
+      <div class="screen">
+        <div class="navbar-ios"><span class="textbtn" style="font-weight:500;">Cancel</span><span class="nb-title">New workflow</span><span class="textbtn" style="font-weight:750;">Next</span></div>
+        <div class="scroll form">
+          <div class="stepper">Goal · <b>Steps</b> · Review and save</div>
+          <div class="helper">Draft kept while this app stays open. Nothing starts until you review Start.</div>
+          <div class="card" style="gap:6px;">
+            <div class="tmeta"><span class="glyph draft"></span><b style="color:var(--text);">Write the launch post</b><span class="tag">Draft · Autonomy OFF</span></div>
+            <div class="kv"><span class="k">Done when</span><span class="v">A publishable post with pricing</span></div>
+            <div class="kv"><span class="k">Assignee</span><span class="v"><span class="avatar sm">W</span> Writer</span></div>
+            <div class="kv"><span class="k">Depends on</span><span class="v"><span class="chip">Plan the launch</span></span></div>
+            <div class="fieldlabel">Outcomes this step can report</div>
+            <div style="display:flex;gap:6px;flex-wrap:wrap;"><span class="chip on">Drafted</span><span class="chip">+ Add</span></div>
+            <div class="fieldlabel">What happens next</div>
+            <div class="kv"><span class="k">Drafted</span><span class="v">→ Review the post</span></div>
+          </div>
+          <div class="card" style="gap:6px;">
+            <div class="tmeta"><span class="glyph draft"></span><b style="color:var(--text);">Review the post</b><span class="tag">Draft · Autonomy OFF</span></div>
+            <div class="kv"><span class="k">Assignee</span><span class="v"><span class="avatar sm">R</span> Reviewer · reports the outcome</span></div>
+            <div class="fieldlabel">Outcomes this step can report</div>
+            <div style="display:flex;gap:6px;flex-wrap:wrap;"><span class="chip on">Passed</span><span class="chip on">Changes requested</span><span class="chip">+ Add</span></div>
+            <div class="fieldlabel">What happens next</div>
+            <div class="kv"><span class="k">Passed</span><span class="v">→ Publish the post</span></div>
+            <div class="kv"><span class="k">Changes requested</span><span class="v">↺ Write the launch post</span></div>
+          </div>
+          <div class="card" style="gap:6px; border-color:var(--violet-line);">
+            <div class="tmeta" style="color:var(--violet);font-weight:750;">Repeat group · Draft and review</div>
+            <div class="kv"><span class="k">Steps</span><span class="v">Write · Review</span></div>
+            <div class="kv"><span class="k">Exits when</span><span class="v">Review reports Passed</span></div>
+            <div class="kv"><span class="k">Most rounds</span><span class="v">5</span></div>
+            <div class="kv"><span class="k">At the limit</span><span class="v">Ask Kedar</span></div>
+            <div class="helper" style="margin:2px 0 0;">Each round receives the last draft, findings and reason.</div>
+          </div>
+          <div style="display:flex; gap:8px;"><div class="btn tonal sm" style="flex:1;">Add step</div><div class="btn neutral sm" style="flex:1;">Add existing tasks…</div><div class="btn neutral sm" style="flex:1;">Add repeat group</div></div>
+          <div class="helper">Cards / Graph: the graph is read-only here. Draw nodes on the laptop.</div>
+        </div>
+        <div class="homebar"></div>
+      </div>
+    </div>
+    <figcaption>
+      <div class="cap-title">W10 · Create workflow · Steps <span class="plat">iOS · dark</span></div>
+      <div class="cap-note"><b>Creating a workflow on the phone is in v1</b> (the workflow goal asks for it). Three steps: Goal (name, owner, goal, Serial/Parallel, objectives), <b>Steps</b> (this frame), Review and save. A step card = summary, Done when, assignee, prerequisites chip picker (3 max, reasons inline), and the #368 parts: <b>outcomes this step can report</b> and a <b>What happens next</b> destination per outcome, plus a <b>Repeat group</b> card (steps, exit outcome, most rounds, what happens at the limit). "Add existing tasks…" opens W11b.</div>
+      <div class="cap-api">POST /api/containers/{cid}/workflows/preview → POST /api/containers/{cid}/workflows {title, goal, execution_mode, objectives[], tasks[], repeat_groups[], turn_allowance, idempotency_key, preview_digest}</div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ W10b: Create workflow · Review and save (Android dark) ============ -->
+  <figure class="shot">
+    <div class="phone android" data-theme="dark">
+      <div class="statusbar"><span>9:41</span><span class="sicons"><svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span></div>
+      <div class="screen">
+        <div class="appbar"><button class="backbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M15 5l-7 7 7 7"/></svg></button><div class="title">New workflow</div></div>
+        <div class="scroll form">
+          <div class="stepper">Goal · Steps · <b>Review and save</b></div>
+          <div class="btn tonal block">Review draft</div>
+          <div class="impact"><div class="ih">Checked summary · 2 s ago</div>
+            <div class="ir"><span class="glyph done"></span>4 steps · 1 objective · Serial<span class="r pill s-ok"><span class="dot"></span>OK</span></div>
+            <div class="ir"><span class="glyph done"></span>Repeat group "Draft and review" · 5 rounds<span class="r pill s-ok"><span class="dot"></span>OK</span></div>
+            <div class="ir"><span class="glyph cancel"></span>"Publish the post" outcome "Failed" has no destination<span class="r pill s-danger"><span class="dot"></span>Fix</span></div>
+            <div class="ir"><span class="glyph wait"></span>Agent-turn allowance<span class="r">40 (default)</span></div>
+          </div>
+          <div class="helper">Refused: a missing destination, an unbounded group or a reporter who is not the step's assignee. Save stays disabled until the review is clean.</div>
+          <div class="btn primary block disabled">Save workflow</div>
+          <div class="btn neutral block sm">Discard draft…</div>
+          <div class="section-h">After saving</div>
+          <div class="card"><div class="tmeta"><span class="pill s-ok"><span class="dot"></span>Workflow saved</span><span style="color:var(--accent);margin-left:auto;">Open saved workflow</span></div><div class="helper" style="margin:4px 0 0;">The new workflow is Preparing. Prepare its tasks, then Review start.</div></div>
+        </div>
+        <div class="homebar"></div>
+      </div>
+    </div>
+    <figcaption>
+      <div class="cap-title">W10b · Create workflow · Review and save <span class="plat">Android · dark</span></div>
+      <div class="cap-note">"Review draft" runs the server preview and shows the draft problems or the checked summary (blockers, import impact, finished-result reviews for included existing tasks, the #368 refusals: missing destinations, unbounded groups, ineligible reporters, and the default allowance). Save is enabled only after a clean review and sends the preview digest with the create. Discard asks first. After saving: "Workflow saved · Open".</div>
+      <div class="cap-api">POST /api/containers/{cid}/workflows/preview → POST /api/containers/{cid}/workflows {…, preview_digest, idempotency_key}</div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ W11b: Add existing tasks (iOS light) ============ -->
+  <figure class="shot">
+    <div class="phone ios" data-theme="light">
+      <div class="statusbar"><span>9:41</span><span class="sicons"><svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span></div>
+      <div class="screen">
+        <div style="height:10px; flex:none;"></div>
+        <div style="flex:1; background:var(--surface-2); border-radius:18px 18px 0 0; border:1px solid var(--border); border-bottom:none; display:flex; flex-direction:column; overflow:hidden; box-shadow:var(--shadow-lg);">
+          <div class="navbar-ios"><span class="textbtn" style="font-weight:500;">Keep draft</span><span class="nb-title">Add existing tasks</span><span class="textbtn" style="font-weight:750;">Confirm</span></div>
+          <div class="scroll form" style="padding-top:4px;">
+            <div class="input" style="background:var(--surface);"><span>homebrew</span></div>
+            <div class="section-h">Selected (2)</div>
+            <div class="card" style="padding:0;">
+              <div class="trow"><span class="check on"></span><div class="grow"><div class="t">Bump the Homebrew formula</div><div class="s">Prepared · awaiting release · will stay held</div></div></div>
+              <div class="trow"><span class="check on"></span><div class="grow"><div class="t">Test the tap on a clean Mac</div><div class="s">Completed · needs result review</div></div></div>
+            </div>
+            <div class="section-h">Matches (3)</div>
+            <div class="card" style="padding:0;">
+              <div class="trow" style="opacity:.55;"><span class="check"></span><div class="grow"><div class="t">Publish the tap README</div><div class="s">Already in "Homebrew tap refresh"</div></div></div>
+              <div class="trow"><span class="check"></span><div class="grow"><div class="t">Write the install guide</div><div class="s">Draft · project objective</div></div></div>
+            </div>
+            <div class="btn tonal block sm">Review selected tasks</div>
+            <div class="impact"><div class="ih">Impact · group of 2</div>
+              <div class="ir"><span class="glyph wait"></span>Bump the Homebrew formula<span class="r pill s-idle">Hold retained</span></div>
+              <div class="ir"><span class="glyph rev"></span>Test the tap on a clean Mac<span class="r pill s-warn"><span class="dot"></span>Needs result review</span></div>
+            </div>
+            <div class="card" style="gap:6px;">
+              <div style="font-size:13px;font-weight:700;">Review finished result · Test the tap on a clean Mac</div>
+              <div class="kv"><span class="k">Done when</span><span class="v">brew install works from scratch</span></div>
+              <div class="kv"><span class="k">Saved result</span><span class="v">Installed in 41 s · completed 10-27</span></div>
+              <div class="switchrow"><span class="check"></span><div class="grow" style="font-size:13.5px;">I accept this saved result</div></div>
+            </div>
+          </div>
+        </div>
+        <div class="homebar"></div>
+      </div>
+    </div>
+    <figcaption>
+      <div class="cap-title">W11b · Add existing tasks <span class="plat">iOS · light</span></div>
+      <div class="cap-note">Server search (5 matches, 200 ms debounce) with selected tasks pinned above the results; each row carries the server's reason or note (already in a workflow, project objective, retry first, review its saved result, will stay held). "Review selected tasks" runs the import preview: the impact card per task and a <b>Review finished result</b> card for completed tasks with "I accept this saved result". "Include the whole group and review again" appears when required tasks are missing.</div>
+      <div class="cap-api">GET /api/containers/{cid}/workflow-task-search?q= · POST /api/workflows/{wid}/import-preview → POST /api/workflows/{wid}/import</div>
+    </figcaption>
+  </figure>
+
+  <!-- ============ W13: Finish checklist (Android light) ============ -->
+  <figure class="shot">
+    <div class="phone android" data-theme="light">
+      <div class="statusbar"><span>9:41</span><span class="sicons"><svg class="batt" viewBox="0 0 24 12"><rect x="0" y="1" width="20" height="10" rx="2.5" fill="none" stroke="currentColor"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor"/><rect x="21" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></span></div>
+      <div class="screen">
+        <div class="appbar"><button class="iconbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M6 6l12 12M18 6L6 18"/></svg></button><div class="title">Finish checklist</div><span class="spacer"></span><span class="helper" style="margin:0;">turns 31 of 40</span></div>
+        <div class="scroll form">
+          <div class="section-h">Required tasks</div>
+          <div class="card" style="padding:0;">
+            <div class="trow"><span class="glyph done"></span><div class="grow"><div class="t">Plan the launch</div><div class="s">Accepted by Kedar · rev 3 · 2 files</div></div><span class="textbtn" style="font-size:12px;">Evidence</span></div>
+            <div class="trow"><span class="glyph done"></span><div class="grow"><div class="t">Write the launch post</div><div class="s">Accepted by Kedar · rev 6 · 1 file · round 3</div></div><span class="textbtn" style="font-size:12px;">Evidence</span></div>
+            <div class="trow"><span class="glyph run"></span><div class="grow"><div class="t">Publish the post</div><div class="s">Running · Builder</div></div></div>
+          </div>
+          <div class="section-h">Objectives</div>
+          <div class="card" style="padding:0;">
+            <div class="trow"><span class="glyph done"></span><div class="grow"><div class="t">Post reviewed against the brief</div><div class="s">Accepted · rev 2</div></div></div>
+            <div class="trow"><span class="glyph rev"></span><div class="grow"><div class="t">Post is live on the blog</div><div class="s">Needs acceptance · narrative + evidence picks per task</div></div><span class="textbtn" style="font-size:12px;">Accept…</span></div>
+          </div>
+          <div class="section-h">Goal</div>
+          <div class="card"><div class="tmeta"><span class="pill s-ok"><span class="dot"></span>Goal accepted</span><span style="color:var(--muted);">rev 1 · 3 exact file versions recorded</span></div></div>
+          <div class="section-h">Still blocking Finish</div>
+          <div class="card" style="gap:8px;">
+            <div class="tmeta"><span class="pill s-warn"><span class="dot"></span>Task</span>Publish the post is still running</div>
+            <div class="tmeta"><span class="pill s-warn"><span class="dot"></span>Loop</span>"Draft and review" has an unresolved round 3 result</div>
+            <div class="tmeta"><span class="pill s-violet">Gate</span>Owner approval not reached <span class="propose">Proposed</span></div>
+            <div class="tmeta"><span class="pill s-warn"><span class="dot"></span>Objective</span>"Post is live on the blog" needs acceptance</div>
+            <div class="helper" style="margin:0;">Objective and goal acceptance are separate recorded steps before Finish. 1 owner-supplied result was accepted by the same person · View</div>
+          </div>
+          <div style="display:flex; gap:8px;"><div class="btn neutral" style="flex:1;">Close</div><div class="btn primary disabled" style="flex:1;">Finish workflow</div></div>
+          <div class="helper" style="text-align:center;">Finish is enabled when nothing blocks it and evidence can be recorded.</div>
+        </div>
+        <div class="homebar"></div>
+      </div>
+    </div>
+    <figcaption>
+      <div class="cap-title">W13 · Finish checklist <span class="plat">Android · light</span></div>
+      <div class="cap-note">Required tasks with who accepted, revision, file count and an inline Evidence disclosure; objectives and the goal with their acceptance forms (narrative, evidence picks, Review, Confirm); <b>Still blocking Finish</b> lists every blocker in words, including #368's <b>unresolved loop</b>, <b>live worker</b> and <b>unreached gate</b> lines; the header shows agent turns used of the allowance. Finish enables only when <span class="mono">can_finish</span> and evidence capability are true.</div>
+      <div class="cap-api">GET /api/workflows/{wid}/completion-check · POST …/objectives/{oid}/accept · POST …/goal/accept → POST /api/workflows/{wid}/finish</div>
+    </figcaption>
+  </figure>
+
+<!-- PART2 -->
+</div>
+</body>
+</html>
