@@ -231,4 +231,7 @@ def continue_turn(cur, execution, runner, *, operation_key, payload, now=None):
     cur.execute("""UPDATE workflow_executions SET state='reserved',generation=generation+1,run_id=NULL,
                    worker_stopped_at=NULL,last_runner_contact_at=NULL,generation_revoked_at=NULL,
                    current_evidence_set_id=NULL,evidence_state='pending' WHERE id=%s RETURNING *""", (execution["id"],))
-    return preallocate_run(cur, cur.fetchone(), runner, operation_key=operation_key, payload=payload, now=now)
+    next_execution = cur.fetchone()
+    from portal_backend.workflow_continuation import consume_automatic
+    consume_automatic(cur, runner["agent_id"], execution["task_id"])
+    return preallocate_run(cur, next_execution, runner, operation_key=operation_key, payload=payload, now=now)

@@ -117,7 +117,9 @@ def reserve_candidate(api_base, candidate):
     if previous_run:
         # One key per stopped worker: a lost response replays the same receipt.
         url = f"{api_base}/api/agents/{aid}/runs/{previous_run}/continue-reserve"
-        body = {"operation_key": f"continue:{previous_run}"}
+        schedule_id = candidate.get("automatic_schedule_id")
+        body = ({"operation_key": f"auto-continue:{previous_run}", "automatic_schedule_id": schedule_id}
+                if schedule_id else {"operation_key": f"continue:{previous_run}"})
     else:
         url = f"{api_base}/api/agents/{aid}/runs/reserve"
         body = {"task_id": task_id, "expected_workflow_revision": candidate.get("workflow_revision"),

@@ -122,6 +122,8 @@ def confirm_worker_stopped(aid: str, rid: str, body: WorkflowStopObserved, reque
         current_execution = cur.fetchone()
         from portal_backend.workflow_review_handoff import after_stopped
         after_stopped(svc, w, current_task, current_execution)
+        from portal_backend.workflow_continuation import schedule
+        schedule(cur, e["id"], aid)
         cur.execute("SELECT state FROM workflow_executions WHERE id=%s", (e["id"],))
         result["state"] = cur.fetchone()["state"]
         cur.execute("""SELECT id FROM workflow_review_handoffs
@@ -163,8 +165,22 @@ def continue_worker(aid: str, rid: str, body: WorkflowContinue, request: Request
     with db_cursor() as (_, cur):
         _lane(cur, request, aid)
         runner, _, _, e = _runner_run(cur, aid, rid)
-        return continue_turn(cur, e, runner, operation_key=body.operation_key,
-                             payload={"previous_run_id": rid, **body.model_dump()})
+        payload = {"previous_run_id": rid, **body.model_dump(exclude_none=True)}
+        # Receipt replay must precede stale-schedule validation and must not consume a replacement.
+        receipt = launch_receipt(cur, runner, body.operation_key, payload)
+        if receipt:
+            return receipt
+        if body.automatic_schedule_id:
+            from portal_backend.workflow_continuation import reserve_refusal
+            refused = reserve_refusal(cur, e, aid, body.automatic_schedule_id, rid)
+            if body.operation_key != f"auto-continue:{rid}":
+                refused = "Use the automatic continuation's source-run operation key."
+            if refused:
+                return JSONResponse(status_code=409, content={"detail": {
+                    "code": "automatic_continuation_not_allowed", "message": refused}})
+        elif body.operation_key.startswith("auto-continue:"):
+            conflict("automatic_schedule_required", "An automatic continuation needs its exact schedule.")
+        return continue_turn(cur, e, runner, operation_key=body.operation_key, payload=payload)
 
 
 @app.get("/api/tasks/{tid}/worker-launch-policy")

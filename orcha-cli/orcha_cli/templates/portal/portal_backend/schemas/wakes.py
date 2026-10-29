@@ -67,6 +67,7 @@ class WakeAck(BaseModel):
         default=False,
         description="GH #122: clear the one-shot self-wake row after its resume context rendered",
     )
+    self_wake_id: Optional[str] = Field(default=None, description="Observed schedule identity; stale acknowledgements never clear replacements")
     self_wake_task_id: Optional[str] = Field(
         default=None,
         description="GH #122: task id of the exact per-task self-wake row to clear",

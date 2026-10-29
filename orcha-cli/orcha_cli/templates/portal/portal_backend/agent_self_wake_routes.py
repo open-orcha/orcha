@@ -76,6 +76,8 @@ def schedule_agent_self_wake(
             """INSERT INTO agent_self_wake (agent_id, task_id, resume_at, context)
                VALUES (%s, %s, %s, %s)
                ON CONFLICT (agent_id, task_id) DO UPDATE SET
+                 id = EXCLUDED.id,
+                 auto_continue_run_id = NULL,
                  resume_at = EXCLUDED.resume_at,
                  context = EXCLUDED.context,
                  created_at = now()

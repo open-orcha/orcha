@@ -109,6 +109,7 @@ def build_wake_candidate(
         earliest_actionable_answer_ts(cur, aid, delivered_ts) if pending else None
     )
     pending_task_request = has_pending_task_request(cur, aid)
+    selected_schedule = {}
     self_wake_due, self_wake_context, self_wake_task_id, wake_task_id = (
         select_due_self_wake(
             cur,
@@ -117,8 +118,12 @@ def build_wake_candidate(
             auto_tasks=auto_tasks,
             pending_task_request=pending_task_request,
             valid_uuid=valid_uuid,
+            selected=selected_schedule,
+            is_parked=parking.parked,
         )
     )
+    if pending:
+        selected_schedule.pop("automatic_schedule_id", None)
     if wake_task_id is not None and parking.parked(wake_task_id):
         wake_task_id = None
     initial_task_id = auto_tasks[0] if auto_tasks else wake_task_id
@@ -235,6 +240,7 @@ def build_wake_candidate(
                 workflow_launch["workflow_continue_run_id"] = continue_run_id
     return {
         **workflow_launch,
+        **selected_schedule,
         "agent_id": aid,
         "alias": agent["alias"],
         "should_wake": should_wake,
