@@ -1,0 +1,222 @@
+"""Common managed-command interface used by one-shot Claude and Codex workers."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+import time
+from pathlib import Path
+from uuid import UUID, uuid4, uuid5
+
+from .job_api import JobAPI, JobAPIError
+from .job_identity import same_process
+from .job_store import JobStore, JobStorageError, atomic_json, command_summary, read_json
+from .job_supervisor import module_environment
+from .job_executor import minimal_environment
+
+
+def register(sub, handler):
+    parser = sub.add_parser('job', help='Run and monitor a durable, supervised foreground command')
+    parser.add_argument('--task', default=os.environ.get('ORCHA_TASK_ID'), help='current task identity')
+    parser.add_argument('--base-cwd', help='durable project directory (normally detected)')
+    commands = parser.add_subparsers(dest='job_action', required=True)
+    start = commands.add_parser('start', help='reserve once; retries never launch another copy')
+    start.add_argument('--key', required=True, help='stable name for this task operation; reuse on retries')
+    start.add_argument('--purpose', required=True, help='brief description without credentials')
+    start.add_argument('--max-seconds', type=int, default=7200)
+    start.add_argument('--max-transfers', type=int, default=3)
+    start.add_argument('command', nargs=argparse.REMAINDER)
+    status = commands.add_parser('status', help='read status and saved exit information without raw logs')
+    status.add_argument('job_id', nargs='?')
+    wait = commands.add_parser('wait', help='bounded wait; returns early for guidance or deadline')
+    wait.add_argument('job_id')
+    wait.add_argument('--seconds', type=float, default=100)
+    checkpoint = commands.add_parser('checkpoint', help='save private reasoning and request a mechanical checkpoint')
+    checkpoint.add_argument('job_id')
+    checkpoint.add_argument('--context-file', help='JSON with completed_steps and remaining_steps')
+    handled = commands.add_parser('handled', help='explicitly acknowledge guidance after handling it')
+    handled.add_argument('message_id')
+    handled.add_argument('--outcome', choices=['applied', 'not_applicable'], required=True)
+    handled.add_argument('--note', help='explanation without credentials or command output')
+    stop = commands.add_parser('stop', help='ask the current supervisor to checkpoint and stop its command')
+    stop.add_argument('job_id')
+    parser.set_defaults(func=handler)
+
+
+def project_directory(cwd):
+    for path in (cwd, *cwd.parents):
+        if (path / '.claude' / 'orcha.json').is_file():
+            return path
+    raise JobStorageError('No Orcha project configuration found')
+
+
+def summary(store, job):
+    value = {k: job[k] for k in ('job_id', 'state', 'owner_run_id', 'budget_until', 'transfers_used')}
+    try:
+        local = store.read(job['job_id'])
+        if local['task_id'] != job['task_id'] or local['launch_nonce'] != job['launch_nonce']:
+            raise JobStorageError('Managed command evidence belongs to another launch')
+        value.update(status=local['status'], record=str(store.job_directory(job['job_id']) / 'record.json'))
+        if local['status'] == 'running':
+            process = read_json(store.job_directory(job['job_id']) / 'process.json')
+            if (process['launch_nonce'] != job['launch_nonce']
+                    or not same_process(process.get('guard'))
+                    or not same_process(local.get('supervisor'))):
+                value.update(status='unknown', reason='Controller identity unavailable; do not relaunch')
+        result_path = store.job_directory(job['job_id']) / 'result.json'
+        if result_path.exists():
+            result = read_json(result_path)
+            if result['launch_nonce'] != job['launch_nonce']:
+                raise JobStorageError('Managed result belongs to another launch')
+            value.update(status=result['status'], exit_code=result['exit_code'],
+                         termination_verified=result['termination_verified'], reason=result['reason'])
+    except (JobStorageError, KeyError):
+        value.update(status='unknown', reason='Local evidence unavailable; do not relaunch')
+    return value
+
+
+def start_job(api, store, *, key, purpose, argv, cwd, max_seconds=7200, max_transfers=3):
+    if not argv:
+        raise ValueError('A foreground command is required after --')
+    job = api.request('managed-jobs', {'job_key': str(uuid5(UUID(api.task_id), key)),
+                                     'max_elapsed_secs': max_seconds, 'max_transfers': max_transfers})
+    if not Path(cwd).resolve().is_relative_to(store.root.parent.parent):
+        raise JobStorageError('Command directory is outside the durable workspace')
+    with store.locked():
+        directory = store.job_directory(job['job_id'], create=True)
+        path = directory / 'record.json'
+        if path.exists():
+            return summary(store, job)
+        if job['version'] != 0 or job['state'] != 'reserved':
+            return {'job_id': job['job_id'], 'status': 'unknown',
+                    'reason': 'Existing launch has no local evidence; do not relaunch'}
+        record = {'job_id': job['job_id'], 'task_id': api.task_id, 'version': 0,
+                  'server_version': job['version'], 'owner_run_id': job['owner_run_id'],
+                  'workflow_generation': job['workflow_generation'], 'launch_nonce': job['launch_nonce'],
+                  'status': 'reserved', 'cwd': str(Path(cwd).resolve()), 'purpose': purpose,
+                  'command': command_summary(argv), 'budget_until': job['budget_until'],
+                  'max_transfers': job['max_transfers'], 'transfers_used': job['transfers_used'],
+                  'launch_claimed': True, 'continuation': 'stop_before_transfer'}
+        # Serialize against teardown and competing CLI starts. Any crash after
+        # this durable reservation retains the fence, including before Popen.
+        if not Path(cwd).is_dir():
+            raise JobStorageError('Command directory is unavailable')
+        atomic_json(path, record)
+        atomic_json(directory / 'context.json', {'completed_steps': [], 'remaining_steps': []})
+        atomic_json(directory / 'guidance.json', {'received_position': None, 'handled_position': None,
+                                                'pending_messages': [], 'has_more': True})
+        config = {'base_cwd': str(store.root.parent.parent), 'job_id': job['job_id'],
+                  'launch_nonce': job['launch_nonce'], 'cwd': record['cwd'], 'argv': argv,
+                  'env': minimal_environment(os.environ), 'api_base': api.url.geturl(), 'token': api.token}
+        proc = subprocess.Popen([sys.executable, '-m', 'orcha_cli.job_supervisor'],
+                                stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                env=module_environment(), start_new_session=True, close_fds=True)
+        try:
+            proc.stdin.write(json.dumps(config).encode() + b'\n')
+            proc.stdin.close()
+        except (OSError, ValueError):
+            raise JobStorageError('Launch outcome is uncertain; inspect this reservation') from None
+    return summary(store, job)
+
+
+def current_job(api, job_id, *, timeout=None):
+    jobs = api.request('managed-jobs', method='GET', timeout=timeout)['jobs']
+    return next((job for job in jobs if job['job_id'] == str(UUID(job_id))), None)
+
+
+def save_guidance(store, job_id, page):
+    # Message bodies remain in the authoritative thread, not startup pointers.
+    refs = {k: page.get(k) for k in ('received_position', 'handled_position')}
+    refs['pending_messages'] = [{'message_id': m['message_id'], 'event_ids': m['event_ids'],
+                                 'operation_key': m['operation_key']} for m in page['messages']]
+    refs['has_more'] = page['has_more']
+    with store.locked():
+        atomic_json(store.job_directory(job_id) / 'guidance.json', refs)
+
+
+def wait_for_job(api, store, job_id, seconds):
+    if not 0 < seconds <= 110:
+        raise ValueError('Wait must be greater than zero and at most 110 seconds')
+    deadline = time.monotonic() + seconds
+    job = current_job(api, job_id, timeout=seconds)
+    if job is None:
+        raise JobStorageError('Managed command not found in this task')
+    while time.monotonic() < deadline:
+        remaining = deadline - time.monotonic()
+        # The receipt endpoint performs full current-run/task/hold validation.
+        page = api.request('managed-messages/poll', {}, timeout=remaining)
+        save_guidance(store, job_id, page)
+        if page['messages']:
+            return {'reason': 'guidance', **page, 'job': summary(store, job)}
+        value = summary(store, job)
+        if value['status'] in {'completed', 'interrupted', 'exhausted', 'unknown'}:
+            return {'reason': 'job_status', 'job': value, 'task': page['task']}
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        authority = api.heartbeat(job_id, timeout=remaining)
+        if not authority['mutations_allowed']:
+            return {'reason': 'scheduling_lease_lapsed', 'job': value, 'task': page['task']}
+        from .job_api import epoch
+        if epoch(authority['prepare_at']) <= epoch(authority['server_time']):
+            return {'reason': 'prepare_checkpoint', 'job': value, 'task': page['task']}
+        time.sleep(min(2, max(0, deadline - time.monotonic())))
+    return {'reason': 'wait_complete', 'job': summary(store, job)}
+
+
+def request_control(api, store, job_id, action, context=None):
+    authority = api.heartbeat(job_id)
+    if not authority['mutations_allowed']:
+        raise JobAPIError(409)
+    with store.locked():
+        record = store.read(job_id)
+        if record['owner_run_id'] != authority['run_id']:
+            raise JobAPIError(409)
+        directory = store.job_directory(job_id)
+        if context is not None:
+            if not isinstance(context, dict) or set(context) - {'completed_steps', 'remaining_steps'}:
+                raise ValueError('Context accepts completed_steps and remaining_steps only')
+            for steps in context.values():
+                if (not isinstance(steps, list) or len(steps) > 100
+                        or any(not isinstance(step, str) or len(step) > 2000 for step in steps)):
+                    raise ValueError('Context requires bounded lists of step descriptions')
+            atomic_json(directory / 'context.json', context)
+        atomic_json(directory / f'control-{uuid4()}.json', {
+            'action': action, 'owner_run_id': authority['run_id'], 'launch_nonce': record['launch_nonce'],
+        })
+    return {'job_id': job_id, 'requested': action}
+
+
+def cmd_job(args):
+    try:
+        task_id = str(UUID(args.task or ''))
+        cwd = Path.cwd().resolve()
+        base = Path(args.base_cwd).resolve() if args.base_cwd else project_directory(cwd)
+        config = json.loads((base / '.claude' / 'orcha.json').read_text())
+        api = JobAPI(config['api_base_url'], os.environ.get('ORCHA_RUN_TOKEN'), task_id)
+        store = JobStore(base)
+        if args.job_action == 'start':
+            argv = args.command[1:] if args.command[:1] == ['--'] else args.command
+            result = start_job(api, store, key=args.key, purpose=args.purpose, argv=argv, cwd=cwd,
+                               max_seconds=args.max_seconds, max_transfers=args.max_transfers)
+        elif args.job_action == 'status':
+            jobs = api.request('managed-jobs', method='GET')['jobs']
+            result = {'jobs': [summary(store, j) for j in jobs if not args.job_id or j['job_id'] == args.job_id]}
+        elif args.job_action == 'wait':
+            result = wait_for_job(api, store, args.job_id, args.seconds)
+        elif args.job_action == 'handled':
+            result = api.request(f'managed-messages/{UUID(args.message_id)}/handled',
+                                 {'outcome': args.outcome, 'handling_note': args.note})
+        else:
+            context = None
+            if args.job_action == 'checkpoint' and args.context_file:
+                context = json.loads(Path(args.context_file).read_text())
+            result = request_control(api, store, str(UUID(args.job_id)), args.job_action, context)
+        print(json.dumps(result))
+    except (JobAPIError, JobStorageError) as exc:
+        raise SystemExit(str(exc)) from None
+    except (OSError, ValueError, KeyError):
+        raise SystemExit('Managed command request is invalid or local evidence is unavailable') from None

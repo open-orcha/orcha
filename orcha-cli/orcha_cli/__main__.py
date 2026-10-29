@@ -16,6 +16,7 @@ from .cli_http import _get_json, _post_json, _put_json, _wait_for_portal
 from .cli_backup import cmd_backup, cmd_restore
 from .cli_doctor import cmd_doctor
 from .cli_logs import cmd_logs
+from .cli_job import cmd_job
 from .cli_migrate_runtime import cmd_migrate_runtime
 from .cli_pair import cmd_pair
 from .cli_portal import cmd_portal
@@ -70,6 +71,7 @@ def build_parser() -> argparse.ArgumentParser:
     from .cli_parser import build_parser as assemble_parser
 
     handlers = {
+        "job": cmd_job,
         "init": cmd_init,
         "up": cmd_up,
         "down": cmd_down,
