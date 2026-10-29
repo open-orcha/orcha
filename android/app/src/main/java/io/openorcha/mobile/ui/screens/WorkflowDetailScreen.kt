@@ -79,6 +79,7 @@ internal sealed interface WorkflowSheet {
     data class ResultReview(val taskId: String) : WorkflowSheet
     data class Decision(val taskId: String) : WorkflowSheet
     data class ResolveFindings(val taskId: String) : WorkflowSheet
+    data class Plan(val taskId: String) : WorkflowSheet
 }
 
 @Composable
