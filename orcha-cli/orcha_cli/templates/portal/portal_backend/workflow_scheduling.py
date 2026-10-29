@@ -398,7 +398,7 @@ def task_display(
             if task["status"] == "completed"
             else loop_label[0].upper() + loop_label[1:]
         )
-    elif loop_waiting:
+    elif loop_waiting and task["status"] == "not_ready":
         label = "Waiting for the owner's loop decision"
     if evidence:
         label = (

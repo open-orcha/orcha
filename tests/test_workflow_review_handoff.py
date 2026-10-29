@@ -282,6 +282,18 @@ async def test_repeat_group_changed_outcome_interrupts_at_confirmed_exit(
         f'/api/workflows/{p.wid}/review-handoffs'
     )).json()['handoffs']
     assert history[-1]['phase'] == 'cancelled'
+    with db_cursor(readonly=True) as (_, cur):
+        cur.execute(
+            "SELECT entity_id,event_type FROM events WHERE entity_id IN (%s,%s)",
+            (p.tasks['design'], p.tasks['review']),
+        )
+        events = cur.fetchall()
+    assert sum(row['event_type'] == 'review_handoff_interrupted' for row in events) == 1
+    assert not any(
+        str(row['entity_id']) == p.tasks['review']
+        and row['event_type'] == 'review_handoff_routed'
+        for row in events
+    )
 
 
 async def test_repeat_group_prompt_names_the_supported_handoff_order(client):

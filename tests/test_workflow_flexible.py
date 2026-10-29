@@ -298,6 +298,10 @@ def test_round_limit_asks_the_owner_instead_of_starting_another_round(setup_work
     w = finish(setup_workflow, w, review, "Changes requested", ["Still too long"])
     byid = {t["id"]: t for t in w["tasks"]}
     assert byid[review]["status"] == "completed"
+    assert byid[write]["display_state"]["label"] == "Accepted"
+    assert byid[review]["display_state"]["label"] == (
+        "Accepted · round limit reached, waiting for the owner"
+    )
     assert byid[write]["work_revision"] == before[write]
     assert not byid[ids["Publish"]]["can_start"]
     assert "loop_decision_pending" in {b["code"] for b in w["completion"]["blockers"]}

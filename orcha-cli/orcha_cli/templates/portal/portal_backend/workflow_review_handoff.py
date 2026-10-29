@@ -435,7 +435,7 @@ def after_stopped(svc, w, task, execution):
             # drafts, cancel the inconsistent handoff, and give the owner an
             # explicit recovery decision instead of rolling back with a 409.
             interrupt_handoff(svc, w, 'review_outcome_changed')
-            phase, target = 'cancelled', None
+            return
     elif h['verdict'] == 'changes_requested':
         phase, target = 'correction', source
     else:
