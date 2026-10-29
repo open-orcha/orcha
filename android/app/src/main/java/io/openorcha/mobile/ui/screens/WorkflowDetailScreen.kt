@@ -30,6 +30,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.SecondaryTabRow
 import androidx.compose.material3.Tab
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -82,6 +83,7 @@ internal sealed interface WorkflowSheet {
     data class Plan(val taskId: String) : WorkflowSheet
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun WorkflowDetailScreen(controller: WorkflowsController, snapshot: ContainerSnapshot, onOpenTask: (String) -> Unit) {
     val p = Orcha.palette
@@ -198,6 +200,7 @@ internal fun DetailTopRow(title: String, onBack: () -> Unit, onRefresh: (() -> U
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun WorkflowHeader(
     d: WorkflowDetailDto,
