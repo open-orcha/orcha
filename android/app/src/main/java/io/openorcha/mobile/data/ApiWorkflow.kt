@@ -92,6 +92,12 @@ private suspend inline fun <R> workflowCall(mutation: Boolean, crossinline block
     } catch (e: ResponseException) {
         val text = runCatching { e.response.bodyAsText() }.getOrDefault("")
         throw workflowErrorFrom(e.response.status.value, text, mutation)
+    } catch (e: io.ktor.serialization.ContentConvertException) {
+        // Ktor wraps body decode failures (JsonConvertException); they are not connection errors.
+        throw WorkflowApiException(
+            "Orcha returned an unreadable response. Check the saved result before trying again.",
+            0, "invalid_response", mutation, e,
+        )
     } catch (e: SerializationException) {
         throw WorkflowApiException(
             "Orcha returned an unreadable response. Check the saved result before trying again.",
