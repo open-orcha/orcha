@@ -1,6 +1,7 @@
 package io.openorcha.mobile.ui.screens
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material3.Checkbox
@@ -18,6 +19,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.foundation.text.KeyboardOptions
 import io.openorcha.mobile.data.ContainerSnapshot
+import io.openorcha.mobile.data.ImportTaskImpactDto
 import io.openorcha.mobile.data.VisibilityCheckDto
 import io.openorcha.mobile.data.WorkflowCompletionDto
 import io.openorcha.mobile.data.WorkflowDetailDto
@@ -92,6 +94,9 @@ internal fun WorkflowMenuSheet(
     // Import (W11b) / Move (W26)
     var query by remember { mutableStateOf("") }
     var found by remember { mutableStateOf<List<WorkflowTaskChoiceDto>>(emptyList()) }
+    var pinned by remember { mutableStateOf<List<WorkflowTaskChoiceDto>>(emptyList()) }
+    var reviews by remember { mutableStateOf<Map<String, WorkflowLogic.ImportReview>>(emptyMap()) }
+    var releaseIds by remember { mutableStateOf<List<String>>(emptyList()) }
     var picked by remember { mutableStateOf<List<String>>(emptyList()) }
     var preview by remember { mutableStateOf<WorkflowPreviewDto?>(null) }
     var checkedPick by remember { mutableStateOf<List<String>?>(null) }
@@ -130,7 +135,8 @@ internal fun WorkflowMenuSheet(
         }
         MenuAction.Import -> {
             {
-                checkRead({ repo.previewImport(d.id, WorkflowImportPreviewBody(picked)) }) {
+                preview = null
+                fresh() ?: checkRead({ repo.previewImport(d.id, WorkflowImportPreviewBody(picked, emptyMap())) }) {
                     preview = it
                     checkedPick = picked
                 } ?: preview?.blockers?.takeIf { it.isNotEmpty() }?.joinToString("\n") { it.message }
@@ -150,6 +156,11 @@ internal fun WorkflowMenuSheet(
 
     val loops = d.semanticsVersion == 2
     val settingsInvalid = WorkflowLogic.settingsInvalid(d, title, goal, reason, listOf(taskLimit, roundLimit), turns)
+    val members = d.tasks.map { it.id }
+    val importPreview = preview?.takeIf { checkedPick == picked }
+    val canRelease = d.status == "active" && d.launchEnabled
+    val invalidRelease = WorkflowLogic.invalidReleaseIds(releaseIds, importPreview, picked, canRelease)
+    val importBlocked = WorkflowLogic.importBlocked(importPreview, picked, reviews, invalidRelease)
     val startIds = impact?.tasks?.filter { it.selected && it.canStart }?.map { it.taskId }.orEmpty()
     val inputsValid = when (action) {
         MenuAction.Start -> impact != null && startIds.isNotEmpty()
@@ -159,7 +170,7 @@ internal fun WorkflowMenuSheet(
         MenuAction.Settings -> settingsInvalid == null
         MenuAction.TransferOwner -> newOwner != null
         MenuAction.AddTasks -> newTitle.isNotBlank() && newDone.isNotBlank()
-        MenuAction.Import -> picked.isNotEmpty() && checkedPick == picked && preview?.blockers.isNullOrEmpty()
+        MenuAction.Import -> picked.isNotEmpty() && importBlocked == null
         MenuAction.Move -> picked.isNotEmpty() && checkedPick == picked && reason.isNotBlank()
         MenuAction.ReviewRound -> false
         else -> true
@@ -175,7 +186,8 @@ internal fun WorkflowMenuSheet(
         check = check,
         checkedNote = "Checked against revision ${d.revision}.",
         confirmEnabled = serverReason == null && inputsValid,
-        disabledHint = serverReason ?: settingsInvalid.takeIf { action == MenuAction.Settings } ?: "Fill in the fields above, then check again.",
+        disabledHint = serverReason ?: settingsInvalid.takeIf { action == MenuAction.Settings }
+            ?: importBlocked.takeIf { action == MenuAction.Import && picked.isNotEmpty() } ?: "Fill in the fields above, then check again.",
         successNotice = when {
             hiding -> "Workflow hidden."
             restoring -> "Workflow restored."
@@ -202,7 +214,9 @@ internal fun WorkflowMenuSheet(
                         ),
                     ),
                 )
-                MenuAction.Import -> preview?.let { WorkflowWrites.import(d, key, picked, it.previewDigest, emptyList()) }
+                MenuAction.Import -> importPreview?.let {
+                    WorkflowWrites.import(d, key, picked, it.previewDigest, releaseIds, WorkflowLogic.importAcceptances(it, reviews))
+                }
                 MenuAction.Move -> WorkflowWrites.move(d, key, picked, destinations.firstOrNull { it.id == destination }, reason)
                 MenuAction.ReviewRound -> null
             }
@@ -261,27 +275,51 @@ internal fun WorkflowMenuSheet(
             }
             MenuAction.Import -> {
                 OutlinedTextField(
-                    query,
-                    {
-                        query = it.take(200)
-                    },
-                    Modifier.fillMaxWidth(), label = { Text("Search tasks") }, singleLine = true,
+                    query, { query = it.take(200); found = emptyList() },
+                    Modifier.fillMaxWidth(), label = { Text("Find an existing task") }, singleLine = true,
                 )
-                androidx.compose.runtime.LaunchedEffect(query) {
-                    kotlinx.coroutines.delay(300)
-                    found = runCatching { repo.searchTasks(query, picked).results }.getOrDefault(emptyList())
-                        .filter { it.workflowId == null }
-                }
-                found.forEach { t ->
-                    PickRow(t.title, t.id in picked) {
-                        picked = if (t.id in picked) picked - t.id else picked + t.id
+                Text(
+                    "Search runs on the server and shows up to five matches. Orcha checks membership, workers and the whole connected dependency group before saving.",
+                    style = ltype(LType.Meta), color = p.text2,
+                )
+                androidx.compose.runtime.LaunchedEffect(query, picked) {
+                    if (query.isBlank() && picked.isEmpty()) { found = emptyList(); pinned = emptyList(); return@LaunchedEffect }
+                    kotlinx.coroutines.delay(200)
+                    runCatching { repo.searchTasks(query.trim(), picked) }.onSuccess {
+                        found = it.results
+                        pinned = it.selected
                     }
                 }
-                preview?.takeIf { checkedPick == picked }?.taskImpacts?.forEach {
-                    Text(
-                        "• ${it.title}: " + if (it.requiresAcceptance) "needs acceptance before it counts" else if (it.eligible) "can join" else "cannot join",
-                        style = ltype(LType.Meta), color = p.text2,
+                val known = (pinned + found).associateBy { it.id }
+                val note = { t: WorkflowTaskChoiceDto -> WorkflowLogic.importChoiceNote(t.status, t.isRoot, t.workflowId, t.id, members) }
+                if (picked.isNotEmpty()) {
+                    Text("Selected tasks", style = ltype(LType.BodyEmph), color = p.text)
+                    picked.forEachIndexed { i, id ->
+                        val t = known[id] ?: WorkflowTaskChoiceDto(id = id, title = "Selected task ${i + 1}", status = "unknown")
+                        PickRow(t.title, checked = true, note = note(t)) { picked = picked - id; releaseIds = releaseIds - id }
+                    }
+                }
+                found.filter { it.id !in picked }.forEach { t ->
+                    val blocked = WorkflowLogic.importChoiceReason(t.status, t.isRoot, t.workflowId, t.id, members) != null
+                    PickRow(t.title, checked = false, note = note(t), enabled = !blocked) { picked = picked + t.id }
+                }
+                if (found.isEmpty() && query.isNotBlank()) Text("No tasks match this search.", color = p.muted)
+                importPreview?.let { pv ->
+                    ImportImpact(
+                        pv, picked, canRelease, releaseIds,
+                        onInclude = { picked = (picked + pv.requiredTaskIds).distinct() },
+                        onRelease = { id, on -> releaseIds = if (on) releaseIds + id else releaseIds - id },
                     )
+                    if (invalidRelease.isNotEmpty()) {
+                        Text(
+                            "Some saved start choices are no longer available. Remove unavailable start choices",
+                            color = p.accent,
+                            modifier = Modifier.fillMaxWidth().clickable { releaseIds = releaseIds - invalidRelease.toSet() },
+                        )
+                    }
+                    pv.taskImpacts.filter { it.requiresAcceptance }.forEach { t ->
+                        ImportReviewCard(t, reviews[t.id]) { reviews = reviews + (t.id to it) }
+                    }
                 }
             }
             MenuAction.Move -> {
@@ -328,12 +366,92 @@ private fun NumberField(label: String, value: String, onChange: (String) -> Unit
 }
 
 @Composable
-private fun PickRow(title: String, checked: Boolean, onToggle: () -> Unit) {
+private fun PickRow(title: String, checked: Boolean, note: String? = null, enabled: Boolean = true, onToggle: () -> Unit) {
     val p = Orcha.palette
-    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().clickable(onClick = onToggle)) {
-        Checkbox(checked, { onToggle() })
-        Text(title, color = p.text)
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().clickable(enabled = enabled, onClick = onToggle)) {
+        Checkbox(checked, { onToggle() }, enabled = enabled)
+        Column {
+            Text(title, color = if (enabled) p.text else p.muted)
+            note?.let { Text(it, style = ltype(LType.Meta), color = p.text2) }
+        }
     }
+}
+
+/* W11b impact: the whole connected group, per-task state, holds kept, and the optional
+   "Start this task when it is ready" choice (release_task_ids). */
+@Composable
+private fun ImportImpact(
+    preview: WorkflowPreviewDto,
+    selected: List<String>,
+    canRelease: Boolean,
+    releaseIds: List<String>,
+    onInclude: () -> Unit,
+    onRelease: (String, Boolean) -> Unit,
+) {
+    val p = Orcha.palette
+    val missing = preview.requiredTaskIds.filter { it !in selected }
+    val groupCount = (preview.selectedTaskIds + preview.requiredTaskIds).toSet().size
+    Text("Review the complete task group", style = ltype(LType.BodyEmph), color = p.text)
+    Text(
+        "${WorkflowLogic.plural(groupCount, "task")} in the connected group. Threads, results and assignments stay with their tasks. " +
+            if (releaseIds.isNotEmpty()) "Selected tasks may start when ready after saving. Human holds, prerequisites and turn rules still apply."
+            else "No work starts from this save; holds remain in place.",
+        style = ltype(LType.Meta), color = p.text2,
+    )
+    preview.taskImpacts.forEach { t ->
+        Text(t.title, color = p.text)
+        Text(
+            (if (!t.eligible) "Cannot be added" else if (t.preparationState == "draft") "Draft" else "Prepared") +
+                if (t.startHold) " · Awaiting release" else "",
+            style = ltype(LType.Meta), color = p.text2,
+        )
+        t.humanHoldReason?.let { Text("Hold retained: $it", style = ltype(LType.Meta), color = p.text2) }
+        if (t.requiresAcceptance) {
+            Text("This finished task needs explicit review of its exact saved result before import.", style = ltype(LType.Meta), color = p.text2)
+        }
+        if (canRelease || t.id in releaseIds) {
+            val on = t.id in releaseIds
+            val unavailable = !canRelease || !t.releasable || !t.eligible
+            PickRow(
+                "Start this task when it is ready: ${t.title}", checked = on,
+                note = if (unavailable) "Starting this task from import is unavailable in this preview." else null,
+                enabled = on || (!unavailable && t.id in selected),
+            ) { onRelease(t.id, !on) }
+        }
+    }
+    preview.blockers.forEach { Text("• ${it.message}", style = ltype(LType.Meta), color = p.text2) }
+    if (missing.isNotEmpty()) {
+        Text("Adding your selection also requires ${WorkflowLogic.plural(missing.size, "related task")}. Nothing has been added.", color = p.text)
+        Text("Include the whole group and review again", color = p.accent, modifier = Modifier.fillMaxWidth().clickable(onClick = onInclude))
+    }
+}
+
+/* W11b "Review finished result" card (web WorkflowImportReview): accepting pins the exact saved
+   result; any change to it or its criteria clears the acceptance. */
+@Composable
+private fun ImportReviewCard(t: ImportTaskImpactDto, review: WorkflowLogic.ImportReview?, onChange: (WorkflowLogic.ImportReview) -> Unit) {
+    val p = Orcha.palette
+    val source = WorkflowLogic.importSource(t)
+    val same = review?.source == source
+    val unavailable = WorkflowLogic.importResultUnavailable(t)
+    val narrative = review?.narrative.orEmpty()
+    Text("Review finished result: ${t.title}", style = ltype(LType.BodyEmph), color = p.text)
+    Text("This accepts the exact saved result while adding the task. It does not finish the workflow.", style = ltype(LType.Meta), color = p.text2)
+    Text("Done when: ${t.definitionOfDone.ifBlank { "No completion criteria recorded" }}", style = ltype(LType.Meta), color = p.text2)
+    t.description?.let { Text(it, style = ltype(LType.Meta), color = p.text2) }
+    t.resultText?.let { Text(it, color = p.text) }
+    t.completedAt?.let { Text("Completed: ${it.take(16).replace('T', ' ')}", style = ltype(LType.Meta), color = p.text2) }
+    if (unavailable) Text("The exact saved result is unavailable. Refresh the preview before accepting this import.", color = p.text2)
+    OutlinedTextField(
+        narrative, { onChange(WorkflowLogic.ImportReview(source, it.take(4000), accepted = false)) },
+        Modifier.fillMaxWidth(), enabled = !unavailable, minLines = 2,
+        label = { Text("Why this result satisfies ${t.title}") },
+    )
+    PickRow(
+        "I accept this saved result for ${t.title}.", checked = same && review?.accepted == true,
+        enabled = !unavailable && narrative.isNotBlank(),
+    ) { onChange(WorkflowLogic.ImportReview(source, narrative, accepted = !(same && review?.accepted == true))) }
+    if (review != null && !same) Text("The result or its criteria changed. Read this preview and accept it again.", color = p.text2)
 }
 
 /* W22 objectives editor, opened from Workflow settings (web WorkflowObjectiveEditor): current vs

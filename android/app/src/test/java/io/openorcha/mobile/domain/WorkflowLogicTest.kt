@@ -1,8 +1,10 @@
 package io.openorcha.mobile.domain
 
+import io.openorcha.mobile.data.ImportTaskImpactDto
 import io.openorcha.mobile.data.WorkflowAvailableActionDto
 import io.openorcha.mobile.data.WorkflowCapabilityDto
 import io.openorcha.mobile.data.WorkflowDetailDto
+import io.openorcha.mobile.data.WorkflowPreviewDto
 import io.openorcha.mobile.domain.WorkflowLogic.MenuAction
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -103,5 +105,44 @@ class WorkflowLogicTest {
         assertNull(WorkflowLogic.settingsInvalid(v1, "T", "G", "why", listOf("3", "2"), ""))
         assertEquals("Enter positive whole-number limits.", WorkflowLogic.settingsInvalid(v2, "T", "G", "why", listOf("3", "2"), "0"))
         assertEquals("The agent-turn allowance can be at most 1000.", WorkflowLogic.settingsInvalid(v2, "T", "G", "why", listOf("3", "2"), "1001"))
+    }
+
+    private val finished = ImportTaskImpactDto(
+        id = "t1", title = "Spec", status = "completed", eligible = true, requiresAcceptance = true,
+        resultDigest = "a".repeat(64), resultText = "done", definitionOfDone = "spec written",
+    )
+
+    @Test fun importAcceptancePinsTheExactResult() {
+        val pv = WorkflowPreviewDto(taskImpacts = listOf(finished))
+        val ok = WorkflowLogic.ImportReview(WorkflowLogic.importSource(finished), "meets the spec", accepted = true)
+        assertEquals("a".repeat(64), WorkflowLogic.importAcceptances(pv, mapOf("t1" to ok))["t1"]?.reviewedResultDigest)
+        assertFalse(WorkflowLogic.missingImportReview(pv, mapOf("t1" to ok)))
+        // result changed after review, blank narrative, or not ticked: no acceptance
+        val changed = WorkflowPreviewDto(taskImpacts = listOf(finished.copy(resultText = "edited")))
+        assertTrue(WorkflowLogic.missingImportReview(changed, mapOf("t1" to ok)))
+        assertTrue(WorkflowLogic.missingImportReview(pv, mapOf("t1" to ok.copy(narrative = " "))))
+        assertTrue(WorkflowLogic.missingImportReview(pv, mapOf("t1" to ok.copy(accepted = false))))
+    }
+
+    @Test fun importBlockedUntilGroupIsWholeAndReviewed() {
+        val pv = WorkflowPreviewDto(requiredTaskIds = listOf("t1", "t2"), taskImpacts = listOf(finished))
+        assertEquals("Include the whole connected group, then review again.", WorkflowLogic.importBlocked(pv, listOf("t1"), emptyMap(), emptyList()))
+        assertEquals(
+            "Review and accept each finished result before adding it.",
+            WorkflowLogic.importBlocked(pv, listOf("t1", "t2"), emptyMap(), emptyList()),
+        )
+        val ok = WorkflowLogic.ImportReview(WorkflowLogic.importSource(finished), "meets the spec", accepted = true)
+        assertNull(WorkflowLogic.importBlocked(pv, listOf("t1", "t2"), mapOf("t1" to ok), emptyList()))
+    }
+
+    @Test fun importChoiceReasonsAndReleaseChoices() {
+        assertEquals("Already in this workflow", WorkflowLogic.importChoiceReason("todo", false, null, "t1", listOf("t1")))
+        assertEquals("Already in another workflow", WorkflowLogic.importChoiceReason("todo", false, "w2", "t1", emptyList()))
+        assertEquals("Wait for the current work and review to end", WorkflowLogic.importChoiceReason("in_progress", false, null, "t1", emptyList()))
+        assertEquals("Review its saved result before adding", WorkflowLogic.importChoiceNote("completed", false, null, "t1", emptyList()))
+        assertEquals("Will stay held until explicitly released", WorkflowLogic.importChoiceNote("todo", false, null, "t1", emptyList()))
+        val pv = WorkflowPreviewDto(taskImpacts = listOf(finished.copy(releasable = true)))
+        assertEquals(emptyList(), WorkflowLogic.invalidReleaseIds(listOf("t1"), pv, listOf("t1"), canRelease = true))
+        assertEquals(listOf("t1"), WorkflowLogic.invalidReleaseIds(listOf("t1"), pv, listOf("t1"), canRelease = false))
     }
 }

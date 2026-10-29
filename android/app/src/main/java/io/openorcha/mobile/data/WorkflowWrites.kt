@@ -88,11 +88,21 @@ object WorkflowWrites {
     fun addTasks(w: WorkflowDetailDto, key: String, tasks: List<WorkflowNewTaskBody>) =
         WorkflowWrite(wf(w, "tasks"), "add_tasks", key, WorkflowTaskBatchBody(w.revision, key, tasks))
 
-    fun import(w: WorkflowDetailDto, key: String, taskIds: List<String>, previewDigest: String, releaseTaskIds: List<String>) =
-        WorkflowWrite(
-            wf(w, "import"), "import", key,
-            WorkflowImportBody(w.revision, key, taskIds, previewDigest, releaseTaskIds = releaseTaskIds.takeIf { it.isNotEmpty() }),
-        )
+    fun import(
+        w: WorkflowDetailDto,
+        key: String,
+        taskIds: List<String>,
+        previewDigest: String,
+        releaseTaskIds: List<String>,
+        acceptances: Map<String, WorkflowImportAcceptanceBody> = emptyMap(),
+    ) = WorkflowWrite(
+        wf(w, "import"), "import", key,
+        WorkflowImportBody(
+            w.revision, key, taskIds, previewDigest,
+            acceptances = acceptances.takeIf { it.isNotEmpty() },
+            releaseTaskIds = releaseTaskIds.takeIf { it.isNotEmpty() },
+        ),
+    )
 
     fun move(w: WorkflowDetailDto, key: String, taskIds: List<String>, destination: WorkflowDetailDto?, reason: String?) =
         WorkflowWrite(wf(w, "move"), "move", key, WorkflowMoveBody(w.revision, key, taskIds, destination?.id, destination?.revision, reason.clean()))
