@@ -16,7 +16,7 @@ import sys
 import time
 from pathlib import Path
 
-from .job_evidence import context_snapshot
+from .job_evidence import context_snapshot, daemon_stop_requested
 from .job_identity import child_exited, group_live, process_identity
 from .job_store import JobStore, atomic_json
 
@@ -49,6 +49,7 @@ def run(config):
     child = None
     reason = None
     prepared = False
+    stage = 'preparing'
 
     def checkpoint(why):
         atomic_json(directory / 'mechanical.json', {
@@ -81,19 +82,27 @@ def run(config):
         os.fsync(fd)
         os.close(fd)
         with store.open_output(config['job_id'], 'stdout') as out, store.open_output(config['job_id'], 'stderr') as err:
-            child = subprocess.Popen(config['argv'], cwd=config['cwd'], env=minimal_environment(config['env']),
-                                     stdin=subprocess.DEVNULL, stdout=out, stderr=err,
-                                     start_new_session=True, close_fds=True)
+            stage = 'launching'
+            with store.locked():
+                if daemon_stop_requested(directory, identity):
+                    raise RuntimeError('Managed command stopped before launch')
+                child = subprocess.Popen(config['argv'], cwd=config['cwd'], env=minimal_environment(config['env']),
+                                         stdin=subprocess.DEVNULL, stdout=out, stderr=err,
+                                         start_new_session=True, close_fds=True)
             signal.setitimer(signal.ITIMER_REAL, max(0.001, until - time.monotonic()))
             atomic_json(directory / 'process.json', {
                 **identity, 'process': process_identity(child.pid), 'group_id': child.pid,
                 'guard': process_identity(os.getpid()), 'started_at': time.time(),
             })
             selector = selectors.DefaultSelector()
+            stage = 'monitoring'
             selector.register(sys.stdin.fileno(), selectors.EVENT_READ)
             buffer = b''
             while reason is None and not child_exited(child.pid):
                 now = time.monotonic()
+                if daemon_stop_requested(directory, identity):
+                    reason = 'daemon_stop_requested'
+                    break
                 if now >= prepare and not prepared:
                     checkpoint('preparing_for_deadline')
                     prepared = True
@@ -114,10 +123,12 @@ def run(config):
                         until, prepare = control['until'], control['prepare']
                         signal.setitimer(signal.ITIMER_REAL, max(0.001, until - time.monotonic()))
             selector.close()
+            stage = 'checkpointing_exit'
             checkpoint(reason or 'command_exited')
             # Kill remaining descendants too, while the unreaped group leader
             # pins its PID. Commands must not daemonize out of this process group.
             signal_owned_group(child, signal.SIGTERM)
+            stage = 'stopping_group'
             grace = min(time.monotonic() + 1.0, until)
             while time.monotonic() < grace and group_live(child.pid) is True:
                 time.sleep(0.05)
@@ -130,6 +141,7 @@ def run(config):
                 time.sleep(0.05)
             signal.setitimer(signal.ITIMER_REAL, 0)
             blocked = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM, signal.SIGINT, signal.SIGALRM})
+            stage = 'reaping'
             try:
                 code = child.wait(timeout=2)
                 child = None  # Clear before any pending signal handler can run.
@@ -138,6 +150,7 @@ def run(config):
             signal.setitimer(signal.ITIMER_REAL, 0)
             for stream in (out, err):
                 os.fsync(stream.fileno())
+            stage = 'saving_result'
             atomic_json(directory / 'result.json', {
                 **identity, 'exit_code': code, 'signal': -code if code < 0 else None,
                 'reason': reason or 'command_exited', 'termination_verified': verified,
@@ -145,8 +158,9 @@ def run(config):
                 'finished_at': time.time(), 'stdout': 'stdout.log', 'stderr': 'stderr.log',
             })
     except BaseException as exc:
-        atomic_json(directory / 'guard-error.json', {**identity, 'status': 'unknown',
-                                                    'error_type': type(exc).__name__})
+        diagnostic = {**identity, 'status': 'unknown', 'stage': stage,
+                      'error_type': type(exc).__name__, 'errno': getattr(exc, 'errno', None)}
+        atomic_json(directory / 'guard-error.json', diagnostic)
         try:
             checkpoint('guard_error')
         finally:
@@ -159,7 +173,7 @@ def run(config):
                     child = None
                 finally:
                     signal.pthread_sigmask(signal.SIG_SETMASK, blocked)
-            atomic_json(directory / 'guard-error.json', {**identity, 'status': 'unknown'})
+            atomic_json(directory / 'guard-error.json', diagnostic)
     finally:
         signal.setitimer(signal.ITIMER_REAL, 0)
 

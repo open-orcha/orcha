@@ -258,6 +258,9 @@ def spawn(
             persona = persona_result
 
     headless_cwd = candidate.get("headless_cwd")
+    if not dry_run and run_task_id:
+        from .job_guidance import startup_guidance
+        persona = (persona or '') + startup_guidance(headless_cwd, run_task_id)
     log_path = None
     if headless_cwd and not dry_run:
         log_path = (

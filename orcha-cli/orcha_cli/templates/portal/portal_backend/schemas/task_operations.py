@@ -2,6 +2,7 @@
 
 from datetime import datetime
 from typing import Literal, Optional
+from uuid import UUID
 
 from pydantic import BaseModel, Field
 
@@ -10,6 +11,7 @@ from portal_backend.limits import MAX_FEEDBACK_LEN, MAX_PAYLOAD_LEN
 
 class TaskMessage(BaseModel):
     system_notice: bool = Field(default=False, description="Non-waking, deduplicated system status; anonymous daemon only.")
+    system_notice_key: Optional[UUID] = Field(default=None, description="Stable task-scoped retry key for an anonymous system notice; never authorizes a plan or action.")
     author_agent_id: Optional[str] = None
     body: str = Field(..., max_length=MAX_PAYLOAD_LEN)
     # #301: optional attachment refs the client staged via POST .../attachments (uploaded

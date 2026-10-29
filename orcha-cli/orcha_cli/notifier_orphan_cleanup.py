@@ -15,6 +15,7 @@ from typing import Optional
 from . import sandbox as _sandbox
 from . import notifier_embodiment as _embodiment
 from . import notifier_workflow as _workflow
+from . import notifier_managed_jobs
 
 # M7 (remote-runner deferred follow-up, field bug "first chat message dies as
 # 'sandbox container vanished'"): minimum age before the sweep may take a
@@ -153,6 +154,7 @@ def _reconcile_sandbox_run(
         # container gone without a trace (removed out-of-band; the C2 daemon gate in
         # the caller already ruled out "docker down", so None here means GONE) —
         # finish the row so the agent stops reading as busy forever (#342 semantics).
+        notifier_managed_jobs.prepare(api_base, r, services, reason='sandbox_unavailable', stop=True, wait_secs=0)
         ok = services._finish_run(
             api_base, run_id, "killed", -1, log_path,
             _capture_recovered_diff(
@@ -181,6 +183,7 @@ def _reconcile_sandbox_run(
         if _sandbox.past_deadline(state, max_runtime_secs=max_secs):
             # runaway (spec §3.5): stop now; the NEXT sweep observes 'exited' and
             # stamps the row with the container's REAL exit code — never guessed here.
+            notifier_managed_jobs.prepare(api_base, r, services, reason='sandbox_deadline', stop=True)
             _sandbox.stop(sbx)
             if not quiet:
                 print(f"[notifier] sandbox container {sbx} past its {max_secs}s "
@@ -190,6 +193,7 @@ def _reconcile_sandbox_run(
         # Popen handle died with a restart, the run is NOT orphaned — leave it be.
         return 0
     # exited: stamp the row, THEN rm the container (+ its per-run api-config file).
+    notifier_managed_jobs.prepare(api_base, r, services, reason='sandbox_exited', stop=True, wait_secs=0)
     diff = _capture_recovered_diff(
         r, checkout_users, unknown_checkout_users, services
     )
@@ -378,6 +382,7 @@ def reap_orphaned_runs(
         finished = 0
         all_finished = True
         for row in dead:
+            notifier_managed_jobs.prepare(api_base, row, services, reason='worker_missing', stop=True)
             diff = _capture_recovered_diff(
                 row, checkout_users, unknown_checkout_users, services
             )

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 
 from .notifier_reaper_completion import _save_task_result
+from . import notifier_managed_jobs
 
 
 def handle_terminal_result(
@@ -35,6 +36,7 @@ def handle_terminal_result(
         return True
     if now - seen <= services.GRACEFUL_EXIT_SECS:
         return True
+    notifier_managed_jobs.prepare(api_base, worker, services, reason='worker_completed', stop=True)
     services._kill_worker(proc, graceful=True)
     diff = services._capture_diff(
         worker.get("worktree") or worker.get("base_cwd")
@@ -135,6 +137,7 @@ def kill_stalled(
         "runtime": runtime,
         "last_event_type": services._last_event_type(log_path),
     }
+    notifier_managed_jobs.prepare(api_base, worker, services, reason='worker_watchdog', stop=True)
     services._kill_worker(proc, graceful=True)
     diff = services._capture_diff(
         worker.get("worktree") or worker.get("base_cwd")

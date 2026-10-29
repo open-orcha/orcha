@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import time
 
-from . import notifier_managed_limits
+from . import notifier_managed_limits, notifier_managed_jobs
 from . import notifier_reaper_completion as completion
 from . import notifier_reaper_watchdog as watchdog
 
@@ -53,6 +53,11 @@ def reap_workers(
             api_base, aid, worker, live_workers, renew, quiet, services
         ):
             continue
+        if not notifier_managed_jobs.reconcile_renewal(api_base, worker):
+            completion.stop_worker(api_base, aid, worker, live_workers, quiet, services,
+                                   cause='managed_authority_lost')
+            continue
+        notifier_managed_jobs.prepare_if_due(api_base, worker, services, now)
         size = worker.get("last_size", 0)
         if worker.get("log_path"):
             try:

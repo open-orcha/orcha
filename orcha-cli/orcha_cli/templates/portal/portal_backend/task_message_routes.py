@@ -1,6 +1,7 @@
 """Append and page task collaboration messages."""
 
 import json
+import hashlib
 from datetime import datetime
 from typing import Any, Optional
 
@@ -75,14 +76,25 @@ def post_message(tid: str, body: TaskMessage, request: Request):
                     "author agent isn't a member of this task's container — cannot post",
                 )
             author_kind = arow["kind"]
+        if body.system_notice_key and not body.system_notice:
+            raise HTTPException(422, 'A system notice key requires an anonymous system notice')
+        notice_digest = hashlib.sha256(body.body.encode()).hexdigest()
         if body.system_notice:
             if body.author_agent_id or body.attachments:
                 raise HTTPException(403, "System status must be anonymous and have no attachments")
+            if body.system_notice_key:
+                cur.execute('SELECT message_id,body_digest FROM system_notice_receipts '
+                            'WHERE task_id=%s AND notice_key=%s', (tid, str(body.system_notice_key)))
+                receipt = cur.fetchone()
+                if receipt:
+                    if receipt['body_digest'] != notice_digest:
+                        raise HTTPException(409, 'System notice key was already used for different content')
+                    return {'task_id': tid, 'message_id': str(receipt['message_id']), 'deduplicated': True}
             if t["status"] in ("completed", "cancelled"):
                 return {"task_id": tid, "message_id": None, "suppressed": True}
             cur.execute("SELECT id,body FROM task_messages WHERE task_id=%s AND author_id IS NULL ORDER BY created_at DESC,id DESC LIMIT 1", (tid,))
             previous = cur.fetchone()
-            if previous and previous["body"] == body.body:
+            if not body.system_notice_key and previous and previous["body"] == body.body:
                 return {"task_id": tid, "message_id": str(previous["id"]), "deduplicated": True}
         # #301: re-validate any staged attachment refs against disk (re-deriving size/type) so
         # the JSONB only ever holds real, this-task files — never client-fabricated paths.
@@ -96,6 +108,9 @@ def post_message(tid: str, body: TaskMessage, request: Request):
             (tid, body.author_agent_id, body.body, json.dumps(attachments)),
         )
         mid = str(cur.fetchone()["id"])
+        if body.system_notice_key:
+            cur.execute('INSERT INTO system_notice_receipts(task_id,notice_key,message_id,body_digest) '
+                        'VALUES (%s,%s,%s,%s)', (tid, str(body.system_notice_key), mid, notice_digest))
         if body.author_agent_id:
             bump_agent(cur, body.author_agent_id)
         # #271 (harden AI-actor enforcement): the audit actor_type is DERIVED from the resolved

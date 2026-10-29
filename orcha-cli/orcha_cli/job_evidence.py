@@ -3,6 +3,14 @@
 from .job_store import JobStorageError, read_json
 
 
+def daemon_stop_requested(directory, identity):
+    path = directory / 'daemon-stop.json'
+    if not path.exists():
+        return False
+    request = read_json(path)
+    return all(request.get(k) == identity.get(k) for k in ('owner_run_id', 'launch_nonce'))
+
+
 def context_snapshot(directory):
     value = {'completed_steps': [], 'remaining_steps': [], 'received_position': None,
              'handled_position': None, 'pending_messages': [], 'guidance_incomplete': True}
