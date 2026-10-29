@@ -18,6 +18,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -171,6 +172,12 @@ fun WorkspaceScreen(
                         if (w.state.value.openWorkflowId != null) w.refreshDetail() else w.refreshList()
                     }
                 }
+                // W17: Home lists workflows waiting on an owner decision; binding reads the list once per container.
+                androidx.compose.runtime.LaunchedEffect(state.selectedContainer?.id, state.selectedContainer?.humanAgentId) {
+                    workflows?.bind(state.selectedContainer)
+                }
+                val workflowDecisions = workflows?.state?.collectAsState()?.value?.loaded.orEmpty()
+                    .filter { !it.hidden && io.openorcha.mobile.domain.WorkflowLogic.needsDecision(it) }
                 PullToRefreshBox(isRefreshing = state.loading, onRefresh = refreshAll, modifier = Modifier.weight(1f)) {
                 when (state.selectedTab) {
                     WorkspaceTab.Home -> HomeTab(
@@ -179,6 +186,12 @@ fun WorkspaceScreen(
                         onPlanSheet = { planSheetTask = it }, onVerifySheet = { verifySheetTask = it },
                         onOpenGithubHub = onOpenGithubHub,
                         onOpenMetrics = { metricsOpen = true },
+                        ownerDecisions = workflowDecisions,
+                        onOpenWorkflow = { id ->
+                            workflows?.selectSegment(io.openorcha.mobile.ui.WorkflowsSegment.Workflows)
+                            workflows?.openWorkflow(id)
+                            onTab(WorkspaceTab.Workflows)
+                        },
                     )
                     WorkspaceTab.Workflows -> WorkflowsTab(
                         controller = workflows,

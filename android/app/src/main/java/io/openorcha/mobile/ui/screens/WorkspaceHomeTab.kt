@@ -78,9 +78,13 @@ internal fun HomeTab(
     onOpenGithubHub: () -> Unit = {},
     /** Opens Metrics & usage (the usage card under the header). */
     onOpenMetrics: () -> Unit = {},
+    /** W17: workflows waiting on an owner decision (limit reached, stalled, missing outcome, ask owner). */
+    ownerDecisions: List<io.openorcha.mobile.data.WorkflowDetailDto> = emptyList(),
+    onOpenWorkflow: (String) -> Unit = {},
 ) {
     val snapshot = state.snapshot ?: return
-    val needsCount = planApprovals.size + verifications.size + requestsForMe.size
+    val decisions = ownerDecisions.mapNotNull { w -> io.openorcha.mobile.domain.WorkflowLogic.ownerBar(w)?.let { w to it } }
+    val needsCount = planApprovals.size + verifications.size + requestsForMe.size + decisions.size
     val active = homeActiveWork(snapshot.tasks)
     val activity = snapshot.tasks
         .mapNotNull { t -> t.messageSummary?.last?.let { m -> t to m } }
@@ -128,6 +132,15 @@ internal fun HomeTab(
                     }
                     requestsForMe.forEach { req ->
                         NeedsYouRequestRow(req, snapshot.agents) { onOpenRequest(req.id) }
+                    }
+                    decisions.forEach { (w, bar) ->
+                        LRow(
+                            title = bar.second,
+                            subtitle = w.title,
+                            onClick = { onOpenWorkflow(w.id) },
+                            leading = { LStatusGlyph("blocked") },
+                            trailing = { TrailingMeta("Decide", Orcha.palette.warn, null) },
+                        )
                     }
                 }
             }
