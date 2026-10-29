@@ -93,6 +93,9 @@ internal fun WorkflowMenuSheet(
     var picked by remember { mutableStateOf<List<String>>(emptyList()) }
     var preview by remember { mutableStateOf<WorkflowPreviewDto?>(null) }
     var checkedPick by remember { mutableStateOf<List<String>?>(null) }
+    // Move (W24): null = make the tasks standalone
+    var destination by remember { mutableStateOf<String?>(null) }
+    val destinations = s.loaded.filter { it.id != d.id && !it.hidden && it.status in setOf("active", "paused") }
 
     val serverReason = WorkflowLogic.menuReason(d, action, controller.hasHuman)
     val agents = snapshot.agents.filter { it.kind != "human" }
@@ -190,7 +193,7 @@ internal fun WorkflowMenuSheet(
                     ),
                 )
                 MenuAction.Import -> preview?.let { WorkflowWrites.import(d, key, picked, it.previewDigest, emptyList()) }
-                MenuAction.Move -> WorkflowWrites.move(d, key, picked, null, reason)
+                MenuAction.Move -> WorkflowWrites.move(d, key, picked, destinations.firstOrNull { it.id == destination }, reason)
                 MenuAction.ReviewRound -> null
             }
         },
@@ -264,10 +267,21 @@ internal fun WorkflowMenuSheet(
                 }
             }
             MenuAction.Move -> {
-                Text("Tasks to remove from this workflow", style = ltype(LType.BodyEmph), color = p.text)
+                Text("Tasks to move", style = ltype(LType.BodyEmph), color = p.text)
                 d.tasks.forEach { t ->
                     PickRow(t.title, t.id in picked) {
                         picked = if (t.id in picked) picked - t.id else picked + t.id
+                    }
+                }
+                Text("Move to", style = ltype(LType.BodyEmph), color = p.text)
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().clickable { destination = null; checkedPick = null }) {
+                    RadioButton(destination == null, { destination = null; checkedPick = null })
+                    Text("No workflow (standalone tasks)", color = p.text)
+                }
+                destinations.forEach { w ->
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().clickable { destination = w.id; checkedPick = null }) {
+                        RadioButton(destination == w.id, { destination = w.id; checkedPick = null })
+                        Text(w.title, color = p.text)
                     }
                 }
                 ReasonField(reason, required = true) { reason = it }
