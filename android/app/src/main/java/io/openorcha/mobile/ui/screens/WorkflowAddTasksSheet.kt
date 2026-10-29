@@ -10,6 +10,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -42,7 +43,7 @@ internal fun WorkflowAddTasksSheet(
     val repo = controller.repository ?: return
     val agents = snapshot.agents.filter { it.kind != "human" }
     var drafts by remember { mutableStateOf(listOf(NewTaskDraft("n1"))) }
-    var nextKey by remember { mutableStateOf(2) }
+    var nextKey by remember { mutableIntStateOf(2) }
     val existing = d.tasks.filter { it.withdrawnAt == null }
     val problem = WorkflowLogic.addTasksProblem(drafts, existing.map { it.id })
     val serverReason = WorkflowLogic.actionReason(d, "add_tasks", controller.hasHuman)
