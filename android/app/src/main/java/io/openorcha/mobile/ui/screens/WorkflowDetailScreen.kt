@@ -3,6 +3,7 @@ package io.openorcha.mobile.ui.screens
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -226,7 +227,9 @@ private fun WorkflowHeader(
                 "${d.progress.accepted}/${d.progress.total} tasks · ${d.progress.objectivesAccepted}/${d.progress.objectivesTotal} objectives",
                 style = ltype(LType.Meta), color = p.text2,
             )
-            if (d.goalAcceptedRevision == d.goalRevision) LTag("Goal accepted", tint = p.ok) else LTag("Goal needs acceptance", tint = p.warn)
+            if (d.goalAcceptedRevision == d.goalRevision) LTag("Goal accepted", tint = p.ok)
+            // The chip opens the W13 Finish checklist, where the goal is accepted.
+            else LTag("Goal needs acceptance", Modifier.clickable(enabled = !frozen) { onAction(WorkflowLogic.MenuAction.Finish) }, tint = p.warn)
             if (d.semanticsVersion >= 2) Text("Agent turns ${d.turnsUsed} of ${d.turnAllowance}", style = ltype(LType.Meta), color = p.text2)
         }
         if (d.goal.isNotBlank()) {

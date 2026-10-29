@@ -23,6 +23,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -81,8 +82,9 @@ internal fun WorkflowSheetHost(
 /**
  * The shared action sheet (W07/W08). [check] runs the action's check read and returns an
  * error message or null; [confirmEnabled] is the caller's "check matches current inputs";
- * [write] builds the write with this sheet's idempotency key. Danger confirms ask once more
- * in an AlertDialog (Android, design §5).
+ * [write] builds the write with this sheet's idempotency key. [inputs] is every value the
+ * check depends on: a passed check only counts while the inputs are unchanged. Danger confirms
+ * ask once more in an AlertDialog (Android, design §5).
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -96,6 +98,7 @@ internal fun WorkflowActionSheet(
     checkLabel: String? = "Check",
     checkedNote: String? = null,
     check: (suspend () -> String?)? = null,
+    inputs: Any? = null,
     confirmEnabled: Boolean = true,
     disabledHint: String? = null,
     successNotice: String? = null,
@@ -110,23 +113,26 @@ internal fun WorkflowActionSheet(
     val unresolved = s.operation is WorkflowOperation.Sending || s.operation is WorkflowOperation.Uncertain
     var checking by remember { mutableStateOf(false) }
     var checkError by remember { mutableStateOf<String?>(null) }
-    var checked by remember { mutableStateOf(check == null) }
+    var checkedFor by remember { mutableStateOf<Any?>(NotChecked) }
+    val checked = check == null || checkedFor == inputs
     var confirmDanger by remember { mutableStateOf(false) }
+    val unresolvedNow by rememberUpdatedState(unresolved)
     val sheetState = rememberModalBottomSheetState(
         skipPartiallyExpanded = true,
-        confirmValueChange = { it != SheetValue.Hidden || !unresolved },
+        confirmValueChange = { it != SheetValue.Hidden || !unresolvedNow },
     )
     BackHandler(enabled = unresolved) { controller.notify("Still saving — keep this sheet open.") }
 
     fun runCheck() {
         val c = check ?: return
+        val at = inputs
         checking = true
         checkError = null
         scope.launch {
             val error = c()
             checking = false
             checkError = error
-            checked = error == null
+            checkedFor = if (error == null) at else NotChecked
         }
     }
 
@@ -188,6 +194,9 @@ internal fun WorkflowActionSheet(
         )
     }
 }
+
+/** Sentinel for "no passed check yet" — never equal to any sheet's inputs. */
+private object NotChecked
 
 /** The check read, turned into "error message or null" for [WorkflowActionSheet]. */
 internal suspend fun <T> checkRead(read: suspend () -> T, onResult: (T) -> Unit): String? = try {
