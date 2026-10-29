@@ -1,5 +1,7 @@
 package io.openorcha.mobile.data
 
+import io.ktor.http.encodeURLPathPart
+
 /**
  * Builds each [WorkflowWrite] (route + typed body + receipt operation) from the loaded
  * detail, so every sheet sends the revisions it was checked against. Operation names are
@@ -7,6 +9,9 @@ package io.openorcha.mobile.data
  */
 object WorkflowWrites {
     private fun wf(w: WorkflowDetailDto, action: String) = WorkflowPaths.action(w.id, action)
+
+    /** Every id placed in a path is percent-encoded, like [WorkflowPaths]. */
+    private fun seg(id: String) = id.encodeURLPathPart()
 
     /** pause | resume | cancel | finish | hide | restore — all `Mutation`. */
     fun workflowMutation(w: WorkflowDetailDto, action: String, key: String, reason: String? = null) =
@@ -68,19 +73,19 @@ object WorkflowWrites {
     fun withdrawOutsideResult(w: WorkflowDetailDto, t: WorkflowTaskDto, key: String, reason: String?): WorkflowWrite {
         val eid = t.outsideResultId ?: error("no outside result")
         return WorkflowWrite(
-            WorkflowPaths.task(t.id, "external-result/$eid/withdraw"), "withdraw_evidence", key,
+            WorkflowPaths.task(t.id, "external-result/${seg(eid)}/withdraw"), "withdraw_evidence", key,
             WorkflowTaskMutationBody(w.revision, key, t.workRevision, reason.clean()),
         )
     }
 
     fun addEvidence(w: WorkflowDetailDto, t: WorkflowTaskDto, key: String, narrative: String) =
         WorkflowWrite(
-            wf(w, "tasks/${t.id}/evidence"), "add_evidence", key,
+            wf(w, "tasks/${seg(t.id)}/evidence"), "add_evidence", key,
             WorkflowAddEvidenceBody(w.revision, key, t.workRevision, EvidenceBasisDto(narrative.trim())),
         )
 
     fun acceptObjective(w: WorkflowDetailDto, objectiveId: String, key: String, basis: EvidenceBasisDto) =
-        WorkflowWrite(wf(w, "objectives/$objectiveId/accept"), "accept_objective", key, WorkflowAcceptBasisBody(w.revision, key, basis))
+        WorkflowWrite(wf(w, "objectives/${seg(objectiveId)}/accept"), "accept_objective", key, WorkflowAcceptBasisBody(w.revision, key, basis))
 
     fun acceptGoal(w: WorkflowDetailDto, key: String, basis: EvidenceBasisDto) =
         WorkflowWrite(wf(w, "goal/accept"), "accept_goal", key, WorkflowAcceptBasisBody(w.revision, key, basis))
@@ -131,7 +136,7 @@ object WorkflowWrites {
     )
 
     fun editObjective(w: WorkflowDetailDto, objectiveId: String, key: String, title: String, criteria: String, reason: String?) =
-        WorkflowWrite(wf(w, "objectives/$objectiveId"), "edit_objective", key, WorkflowObjectiveEditBody(w.revision, key, title.trim(), criteria.trim(), reason.clean()))
+        WorkflowWrite(wf(w, "objectives/${seg(objectiveId)}"), "edit_objective", key, WorkflowObjectiveEditBody(w.revision, key, title.trim(), criteria.trim(), reason.clean()))
 
     fun transferOwner(w: WorkflowDetailDto, key: String, newOwnerId: String, reason: String?) =
         WorkflowWrite(wf(w, "transfer-owner"), "transfer_owner", key, WorkflowTransferOwnerBody(w.revision, key, newOwnerId, reason.clean()))
@@ -153,7 +158,7 @@ object WorkflowWrites {
     )
 
     fun resolveLoop(w: WorkflowDetailDto, taskId: String, key: String, reason: String?) =
-        WorkflowWrite(wf(w, "review-loops/$taskId/resolve"), "resolve_loop", key, WorkflowMutationBody(w.revision, key, reason.clean()))
+        WorkflowWrite(wf(w, "review-loops/${seg(taskId)}/resolve"), "resolve_loop", key, WorkflowMutationBody(w.revision, key, reason.clean()))
 
     fun loopDecision(
         w: WorkflowDetailDto,
