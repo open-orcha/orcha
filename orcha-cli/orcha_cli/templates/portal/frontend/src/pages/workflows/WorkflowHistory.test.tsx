@@ -116,7 +116,7 @@ it.each([
 it("badges every loop round with its review outcome, and lists no rounds before the loop opens (x03)", async () => {
   const loop = { id: "g1", name: "Draft and review", member_tasks: ["write", "review"], review_task: "review", exit_outcome: "Approved", max_rounds: 5, stall_rule: "findings_and_artifact", current_round: 3, state: "running" };
   const review = exampleTask({ id: "review", title: "Review the post", repeat_group_id: "g1", reported_outcome: null });
-  vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ task_id: "review", outcomes: [], group: { name: "Draft and review", round: 3, max_rounds: 5, state: "running", is_review_step: true, exit_outcome: "Approved",
+  vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ task_id: "review", outcomes: [], group: { name: "Draft and review", round: 3, max_rounds: 5, state: "running", review_task_id: "review", is_review_step: true, exit_outcome: "Approved",
     this_round: { trigger: "return", outcome: "Needs proof", findings: [{ text: "No source for the figure" }] },
     earlier_rounds: [{ round: 1, ended: "return", outcome: null, findings: [] }, { round: 2, ended: "return", outcome: "Changes requested", findings: [{ text: "Too long" }] }] } })));
   render(<MemoryRouter><WorkflowReviewHistory detail={exampleWorkflow({ semantics_version: 2, repeat_groups: [loop], tasks: [review], review_rounds: [] })} /></MemoryRouter>);

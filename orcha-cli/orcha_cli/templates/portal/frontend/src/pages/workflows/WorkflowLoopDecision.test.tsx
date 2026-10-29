@@ -14,7 +14,7 @@ const group = { id: "g1", name: "Draft and review", member_tasks: ["write", "bui
 const task = exampleTask({ awaiting_loop_decision: "limit_reached", repeat_group_id: "g1", outcomes: [{ name: "Approved", kind: "success" }, { name: "Changes requested", kind: "changes" }],
   reported_outcome: { outcome: "Changes requested", findings: [{ text: "Claims no sign-up but the beta needs an invite" }] } });
 const roundContext = (id: string, earlier: { round: number; findings: { text: string }[] }[], previous: { text: string }[]) => ({
-  task_id: id, outcomes: [], group: { name: "Draft and review", round: 3, max_rounds: 3, state: "limit_reached", is_review_step: true, exit_outcome: "Approved",
+  task_id: id, outcomes: [], group: { name: "Draft and review", round: 3, max_rounds: 3, state: "limit_reached", review_task_id: id, is_review_step: true, exit_outcome: "Approved",
     this_round: { trigger: "return", outcome: "Changes requested", findings: previous }, earlier_rounds: earlier } });
 
 it("asks what happens at the limit with what is still open and numbered choices, and sends the new round limit (x04)", async () => {

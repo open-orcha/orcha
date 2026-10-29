@@ -21,6 +21,7 @@ import { WorkflowLoopDecision, WorkflowOwnerBar } from "./WorkflowLoopDecision";
 import { pathDecider, WorkflowRoutePanel } from "./WorkflowRouteSummary";
 import { WorkflowLoopGroup, WorkflowTaskRow, WorkflowTaskRows } from "./WorkflowTaskRows";
 import { WorkflowTaskInspector } from "./WorkflowTaskInspector";
+import { WorkflowRunAgain } from "./WorkflowRunAgain";
 import { WorkflowHide } from "./WorkflowHide";
 import { TASK_ACTION_KEYS, taskActionLabel, taskReason, type TaskActionRequest } from "./WorkflowTaskActions";
 import type { WorkflowActionRequest } from "./WorkflowActions";
@@ -75,7 +76,7 @@ function WorkflowScreen() {
   const [inputOpen, setInputOpen] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [decideId, setDecideId] = useState<string | null>(null);
-  const [menuDialog, setMenuDialog] = useState<"import" | "add_tasks" | "move" | "review_round" | "settings" | "transfer_owner" | "hide" | null>(params.get("addTask") ? "import" : null);
+  const [menuDialog, setMenuDialog] = useState<"run_again" | "import" | "add_tasks" | "move" | "review_round" | "settings" | "transfer_owner" | "hide" | null>(params.get("addTask") ? "import" : null);
   const [actionRequest, setActionRequest] = useState<WorkflowActionRequest | null>(null);
   const [taskRequest, setTaskRequest] = useState<{ taskId: string; action: TaskActionRequest["action"] | "review"; seq: number } | null>(null);
   const requestSeq = useRef(0);
@@ -289,6 +290,8 @@ function WorkflowScreen() {
         {availability === "ready" && writeReason && <p className="wf-bar">{writeReason}</p>}
       </div>}
       {detail.hidden && <p role="status" className="wf-bar">This workflow is hidden. Its tasks, messages and evidence are kept. Restore it from the workflow menu; restoring never starts work.</p>}
+      {!detail.launch_enabled && <p role="status" className="wf-bar">Draft — review the steps and workflow settings, then choose Review start when ready. Nothing runs until you choose Start.</p>}
+      {!detail.launch_enabled && !!detail.copy_notes?.length && <ul className="wf-notice" aria-label="Copied draft notes">{detail.copy_notes.map((note, i) => <li key={i}>{note}</li>)}</ul>}
       <WorkflowOwnerBar detail={detail} viewer={scope.identity} ownerName={actorName(detail.owner_human_id)} onDecide={setDecideId} />
       {decideTask && <WorkflowLoopDecision key={`${decideTask.id}:${decideTask.awaiting_loop_decision}`} detail={detail} task={decideTask} scope={scope} stale={stale} agents={aiAgents} onSaved={saved} onClose={() => setDecideId(null)} />}
       <WorkflowActions detail={detail} scope={scope} verified={verified} stale={stale} onSaved={saved} request={actionRequest} />
@@ -333,6 +336,7 @@ function WorkflowScreen() {
       <WorkflowSettings initialSection={menuDialog === "transfer_owner" ? "ownership" : "settings"} detail={detail} scope={scope} verified={verified} stale={stale} humans={humans} onSaved={saved} control={{ open: menuDialog === "settings" || menuDialog === "transfer_owner", onOpenChange: (o) => setMenuDialog(o ? "settings" : null) }} />
       <WorkflowMove detail={detail} scope={scope} verified={verified} stale={stale} onSaved={saved} control={{ open: menuDialog === "move", onOpenChange: (o) => setMenuDialog(o ? "move" : null) }} />
       <WorkflowReviewEditor detail={detail} scope={scope} verified={verified} stale={stale} agents={aiAgents} onSaved={saved} control={{ open: menuDialog === "review_round", onOpenChange: (o) => setMenuDialog(o ? "review_round" : null) }} />
+      <WorkflowRunAgain detail={detail} scope={scope} verified={verified} stale={stale} onSaved={(result) => navigate(href(result.id), { state: navigationState })} control={{ open: menuDialog === "run_again", onOpenChange: (o) => setMenuDialog(o ? "run_again" : null) }} />
       <WorkflowHide detail={detail} scope={scope} verified={verified} stale={stale} mode={detail.hidden ? "restore" : "hide"} onSaved={(result) => { if (result.hidden) navigate(`/workflows?${new URLSearchParams({ cid, status: "hidden", hiddenNotice: result.id })}`); else saved(); }} control={{ open: menuDialog === "hide", onOpenChange: (o) => setMenuDialog(o ? "hide" : null) }} />
     </>}
   </div></Shell>;

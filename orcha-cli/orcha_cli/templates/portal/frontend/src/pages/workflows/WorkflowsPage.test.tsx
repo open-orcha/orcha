@@ -155,3 +155,45 @@ it("lists a loop's steps together in one bracket even when the server lists anot
   expect(within(loop).getAllByRole("option").map((o) => o.getAttribute("title"))).toEqual(["Write the launch post", "Review the post"]);
   expect(screen.getAllByRole("option").map((o) => o.getAttribute("title"))).toEqual(["Write the launch post", "Review the post", "Publish approval"]);
 });
+
+it("Run again creates a distinct draft, navigates to it, and leaves Start explicit", async () => {
+  authority.human = { id: "kedar", kind: "human", member_role: "owner" };
+  const source = exampleWorkflow({ status: "completed", hidden: true, launch_enabled: true, capability: writeCapability,
+    available_actions: [{ action: "run_again", enabled: true, permission: "workflow_or_project_owner" }] });
+  const draft = exampleWorkflow({ id: "new-draft", title: "Mobile release (run again)", launch_enabled: false,
+    capability: writeCapability, copy_notes: ["Choose an available assignee for Build Android."],
+    available_actions: [{ action: "start", enabled: true }, { action: "patch", enabled: true }] });
+  const writes: string[] = [];
+  const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url === "/openapi.json") return jsonResponse(workflowSpec);
+    if (url.endsWith("/capability")) return jsonResponse(writeCapability);
+    if (init?.method === "POST") { writes.push(url); return jsonResponse(draft); }
+    return jsonResponse(url.includes("new-draft") ? draft : source);
+  });
+  vi.stubGlobal("fetch", fetch);
+  renderPage("/workflows/release?cid=project");
+  await screen.findByRole("heading", { name: "Mobile release", level: 1 });
+  fireEvent.click(screen.getByRole("button", { name: "More workflow actions" }));
+  fireEvent.click(screen.getByRole("menuitem", { name: "Run again…" }));
+  expect(writes).toEqual([]);
+  expect(screen.getByText(/can change its setup before choosing Start/)).toBeVisible();
+  fireEvent.click(screen.getByRole("button", { name: "Create editable draft" }));
+  await screen.findByRole("heading", { name: "Mobile release (run again)", level: 1 });
+  expect(fetch.mock.calls.some(([url]) => String(url) === "/api/workflows/new-draft")).toBe(true);
+  expect(writes).toEqual(["/api/workflows/release/run_again"]);
+  expect(screen.getByRole("button", { name: "Review start" })).toBeEnabled();
+  expect(screen.getByText(/Nothing runs until you choose Start/)).toBeVisible();
+  expect(screen.getByRole("list", { name: "Copied draft notes" })).toHaveTextContent("Choose an available assignee");
+  fireEvent.click(screen.getByRole("button", { name: "More workflow actions" }));
+  expect(screen.getByRole("menuitem", { name: "Workflow settings…" })).not.toHaveAttribute("aria-disabled", "true");
+});
+
+it("Run again follows the server action even for a completed workflow", async () => {
+  authority.human = { id: "kedar", kind: "human", member_role: "owner" };
+  reads(() => exampleWorkflow({ status: "completed", available_actions: [{ action: "run_again", enabled: false, reason: "workflow_owner_required" }] }));
+  renderPage("/workflows/release?cid=project");
+  await screen.findByRole("heading", { name: "Mobile release", level: 1 });
+  fireEvent.click(screen.getByRole("button", { name: "More workflow actions" }));
+  expect(screen.getByRole("menuitem", { name: "Run again…" })).toHaveAttribute("aria-disabled", "true");
+});

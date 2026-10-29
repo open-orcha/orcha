@@ -10,7 +10,7 @@ const review = exampleTask({ id: "review", title: "Review the post", repeat_grou
 it("shows the round, the rule that ends it, what it must address and the earlier rounds", async () => {
   const urls: string[] = [];
   vi.stubGlobal("fetch", vi.fn(async (url: string) => { urls.push(url); return jsonResponse({ task_id: "review", outcomes: review.outcomes, group: {
-    name: "Draft and review", round: 2, max_rounds: 3, state: "open", review_step: "Review the post", is_review_step: true, exit_outcome: "Approved",
+    name: "Draft and review", round: 2, max_rounds: 3, state: "open", review_step: "Review the post", review_task_id: "review", is_review_step: true, exit_outcome: "Approved",
     this_round: { trigger: "return", outcome: "Changes requested", findings: [{ text: "Too long", severity: "major" }], note: "Cut it in half", owner_note: null },
     earlier_rounds: [{ round: 1, ended: "return", findings: [{ text: "Too long" }] }] } }); }));
   render(<WorkflowRoundContext detail={exampleWorkflow({ semantics_version: 2, tasks: [write, review] })} task={review} />);

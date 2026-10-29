@@ -117,6 +117,7 @@ const actionMessages: Record<string, string> = {
   workflow_not_active: "The workflow must be active before this action is available.",
   project_not_active: "The project is not active.",
   workflow_completed: "Completed workflows are read-only.",
+  workflow_not_completed: "Run again is available after a workflow is completed.",
   workflow_terminal: "This workflow has ended. Only permitted recovery actions remain available.",
   workflow_not_started: "Start the workflow before adding work as a participant.",
   prepared_selection_required: "Prepare at least one task first: open a draft task and choose Prepare, then Start can release it.",
@@ -165,7 +166,7 @@ export function availableActionReason(capability: Capability, actions: Available
 }
 
 export function actionReason(detail: WorkflowDetail, action: string, hasHuman: boolean): string | null {
-  if (detail.hidden && action !== "restore") return "Restore this hidden workflow before making changes.";
+  if (detail.hidden && action !== "restore" && action !== "run_again") return "Restore this hidden workflow before making changes.";
   return availableActionReason(detail.capability, detail.available_actions, action, hasHuman);
 }
 

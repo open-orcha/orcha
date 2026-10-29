@@ -547,6 +547,7 @@ class WorkflowDetail(BaseModel):
     id: str
     container_id: str
     title: str
+    copy_notes: list[str] = Field(default_factory=list)
     created_at: datetime | None = None
     goal: str
     owner_human_id: str

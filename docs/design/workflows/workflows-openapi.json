@@ -2454,6 +2454,56 @@
         "x-workflow-operation": "review_round"
       }
     },
+    "/api/workflows/{wid}/run_again": {
+      "post": {
+        "summary": "Workflow Run Again",
+        "operationId": "workflow_run_again_api_workflows__wid__run_again_post",
+        "parameters": [
+          {
+            "name": "wid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Wid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Mutation"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowDetail"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "x-workflow-operation": "run_again"
+      }
+    },
     "/api/workflows/{wid}/start": {
       "post": {
         "summary": "Workflow Start",
@@ -6327,6 +6377,13 @@
             "type": "string",
             "title": "Title"
           },
+          "copy_notes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Copy Notes"
+          },
           "created_at": {
             "anyOf": [
               {
@@ -6682,6 +6739,13 @@
           "title": {
             "type": "string",
             "title": "Title"
+          },
+          "copy_notes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Copy Notes"
           },
           "created_at": {
             "anyOf": [

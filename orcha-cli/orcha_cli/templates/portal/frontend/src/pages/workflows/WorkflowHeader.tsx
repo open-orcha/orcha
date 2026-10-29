@@ -12,13 +12,13 @@ import type { WorkflowDetail } from "./workflowContract.generated";
 import { MODE_LABEL, WorkflowProgressBar, workflowStatusIcon } from "./WorkflowListView";
 
 /** Workflow-level actions in the menu's fixed order (§4.2 callout 4). `hide` is §4.14. */
-export type WorkflowMenuAction = "start" | "pause" | "resume" | "add_tasks" | "import" | "move" | "review_round" | "settings" | "transfer_owner" | "hide" | "cancel" | "finish";
+export type WorkflowMenuAction = "run_again" | "start" | "pause" | "resume" | "add_tasks" | "import" | "move" | "review_round" | "settings" | "transfer_owner" | "hide" | "cancel" | "finish";
 export const WORKFLOW_ACTION_LABEL: Record<WorkflowMenuAction, string> = {
-  start: "Review start", pause: "Pause new starts", resume: "Resume workflow", add_tasks: "Add new tasks…", import: "Add existing tasks…",
+  run_again: "Run again…", start: "Review start", pause: "Pause new starts", resume: "Resume workflow", add_tasks: "Add new tasks…", import: "Add existing tasks…",
   move: "Move or remove tasks…", review_round: "Record review outcome…", settings: "Workflow settings…", transfer_owner: "Transfer ownership…",
   hide: "Hide workflow…", cancel: "Cancel workflow…", finish: "Finish checklist",
 };
-const MENU_ORDER: (WorkflowMenuAction | "separator")[] = ["start", "pause", "resume", "separator", "add_tasks", "import", "move", "review_round", "separator", "settings", "transfer_owner", "separator", "hide", "cancel"];
+const MENU_ORDER: (WorkflowMenuAction | "separator")[] = ["run_again", "start", "pause", "resume", "separator", "add_tasks", "import", "move", "review_round", "separator", "settings", "transfer_owner", "separator", "hide", "cancel"];
 
 /** Settings has no single server action: it is enabled whenever any of its sub-actions is. */
 export function workflowMenuReason(detail: WorkflowDetail, action: WorkflowMenuAction, verified: boolean): string | null {

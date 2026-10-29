@@ -446,7 +446,7 @@ def _task_action(path, operation, body_model, *, allow_agent=False):
     )
 
 
-for name in ("pause", "resume", "cancel", "finish", "hide", "restore"):
+for name in ("pause", "resume", "cancel", "finish", "hide", "restore", "run_again"):
     _workflow_action("/api/workflows/{wid}/" + name, name, model.Mutation)
 _workflow_action("/api/workflows/{wid}", "patch", model.WorkflowPatch, method="PATCH")
 _workflow_action(

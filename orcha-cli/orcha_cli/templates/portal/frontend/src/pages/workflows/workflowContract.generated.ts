@@ -1,5 +1,5 @@
 // Generated from FastAPI OpenAPI slices. DO NOT EDIT.
-// Workflow source SHA-256: fbde7ecdac93124c6a0d1d8f116c62f23748d296abfcac0eacd261cd2cd554a2
+// Workflow source SHA-256: 1b745c2ea2599763b3261608d33acfd24531fa8a81367fa49bb4b9d2962bf4a0
 // Evidence GET source SHA-256: f2a794298f992bd3ff3955fa5d6aefc30a97e373794a3c1e9d03c8f46796853e
 // Regenerate with tools/generate-workflow-contract.mjs and both source files.
 
@@ -443,7 +443,9 @@ export type RoundGroup = {
   "max_rounds": number;
   "state": string;
   "review_step"?: string | null;
+  "review_task_id": string;
   "is_review_step": boolean;
+  "can_review_handoff"?: boolean;
   "exit_outcome": string;
   "this_round": ThisRound;
   "earlier_rounds"?: Array<EarlierRound>;
@@ -597,6 +599,7 @@ export type WorkflowDetail = {
   "id": string;
   "container_id": string;
   "title": string;
+  "copy_notes"?: Array<string>;
   "created_at"?: string | null;
   "goal": string;
   "owner_human_id": string;
@@ -651,6 +654,7 @@ export type WorkflowImpact = {
   "id": string;
   "container_id": string;
   "title": string;
+  "copy_notes"?: Array<string>;
   "created_at"?: string | null;
   "goal": string;
   "owner_human_id": string;
@@ -3126,7 +3130,13 @@ export const workflowSchemas = {
           }
         ]
       },
+      "review_task_id": {
+        "type": "string"
+      },
       "is_review_step": {
+        "type": "boolean"
+      },
+      "can_review_handoff": {
         "type": "boolean"
       },
       "exit_outcome": {
@@ -3148,6 +3158,7 @@ export const workflowSchemas = {
       "round",
       "max_rounds",
       "state",
+      "review_task_id",
       "is_review_step",
       "exit_outcome",
       "this_round"
@@ -3898,6 +3909,12 @@ export const workflowSchemas = {
       "title": {
         "type": "string"
       },
+      "copy_notes": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
       "created_at": {
         "anyOf": [
           {
@@ -4199,6 +4216,12 @@ export const workflowSchemas = {
       },
       "title": {
         "type": "string"
+      },
+      "copy_notes": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
       },
       "created_at": {
         "anyOf": [
@@ -5421,6 +5444,12 @@ export const workflowRoutes = [
     "method": "post",
     "operation": "review_round",
     "body": "ReviewRound"
+  },
+  {
+    "path": "/api/workflows/{wid}/run_again",
+    "method": "post",
+    "operation": "run_again",
+    "body": "Mutation"
   },
   {
     "path": "/api/workflows/{wid}/start",

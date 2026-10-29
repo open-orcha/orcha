@@ -16,6 +16,7 @@ missing.
   renderer process dies; the next click opens a fresh one (GH #347).
 
 ### Added
+- Completed workflows now offer **Run again**, which creates a separate editable draft in the same project. Review its setup and explicitly choose Start; the original workflow and its history are kept (first slice of GH #364).
 - Desktop: a local memory log at
   `~/Library/Application Support/Orcha/logs/memory.jsonl`. A minute after
   launch and then every 10 minutes it records the resident memory of each app

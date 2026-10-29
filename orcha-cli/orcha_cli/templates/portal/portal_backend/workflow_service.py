@@ -479,6 +479,11 @@ class WorkflowService:
             elif kind == "terminal" and w["status"] not in {"completed", "cancelled"}:
                 # GH #350 §4.14: hiding never stops work or evades Finish.
                 return "workflow_not_finished"
+            elif kind == "completed":
+                if w["status"] != "completed":
+                    return "workflow_not_completed"
+                if w["container_status"] != "active":
+                    return "project_not_active"
             return None
 
         def action(
@@ -900,6 +905,10 @@ class WorkflowService:
         agent = bool(person and person["kind"] == "ai")
         workflow_actions = [
             action(
+                "run_again", "workflow_or_project_owner", "completed",
+                first((w.get("semantics_version") == 2 and not routing.flexible_enabled(), "flexible_disabled")),
+            ),
+            action(
                 "start",
                 "workflow_owner",
                 "active",
@@ -981,7 +990,11 @@ class WorkflowService:
             if w.get("hidden_by_human_id")
             else None
         )
+        created = self.one(
+            "SELECT detail FROM workflow_history WHERE workflow_id=%s AND event='workflow_created'", (wid,)
+        )
         w.update(
+            copy_notes=(created["detail"].get("copy_notes", []) if created else []),
             hidden=bool(w.get("hidden_at")),
             hidden_by_alias=hidden_by["alias"] if hidden_by else None,
             capability={
@@ -1393,6 +1406,17 @@ class WorkflowService:
             return prior["result"]
         if operation == "create":
             wid = self.create(cid, actor, body)
+        elif operation == "run_again":
+            from portal_backend.workflow_copy import completed_setup
+
+            source = self.lock(wid, body["expected_revision"])
+            if source["container_id"] != cid:
+                conflict("workflow_unavailable", "Workflow not found.", status=404)
+            person = self.owner(source, actor, project_owner=True)
+            if source["status"] != "completed":
+                conflict("workflow_not_completed", "Only completed workflows can be run again.")
+            draft, setup = completed_setup(self, source, person)
+            wid = self.create(cid, actor, draft, copied_setup=setup)
         else:
             if operation == "move" and body.get("destination_workflow_id"):
                 for lock_id in sorted({wid, body["destination_workflow_id"]}):
@@ -1566,7 +1590,7 @@ class WorkflowService:
             "save_starts_work": False,
         }
 
-    def create(self, cid, actor, body):
+    def create(self, cid, actor, body, *, copied_setup=None):
         p = self.actor(actor, cid)
         if p["kind"] != "human":
             conflict(
@@ -1602,8 +1626,15 @@ class WorkflowService:
                 body.get("turn_allowance", 40),
             ),
         )
+        if copied_setup:
+            self.cur.execute(
+                "UPDATE workflows SET task_limit=%s,round_limit=%s WHERE id=%s",
+                (copied_setup["task_limit"], copied_setup["round_limit"], wid),
+            )
         w = self.workflow(wid)
         created = {"title": w["title"]}
+        if copied_setup:
+            created.update(copied_setup["provenance"])
         if body.get("existing_task_ids"):
             created["original_states"] = self._import(
                 w,
@@ -1613,6 +1644,25 @@ class WorkflowService:
                 body.get("import_acceptances", {}),
             )
         ids = self._add(w, actor, body.get("tasks", []))
+        if copied_setup:
+            from portal_backend.agent_status import log_event
+
+            for spec in body["tasks"]:
+                tid = ids[spec["client_key"]]
+                prepared = bool(spec["definition_of_done"].strip() and spec["assignee_id"])
+                self.cur.execute(
+                    "UPDATE tasks SET preparation_state=%s,created_at=%s WHERE id=%s",
+                    ("prepared" if prepared else "draft", sql.utcnow(), tid),
+                )
+                if copied_setup["autonomy"].get(spec["client_key"]) == "on":
+                    self.cur.execute(
+                        "UPDATE tasks SET autonomy='on',autonomy_revision=autonomy_revision+1,autonomy_changed_at=%s,autonomy_changed_by=%s WHERE id=%s",
+                        (sql.utcnow(), p["id"], tid),
+                    )
+                    log_event(
+                        self.cur, cid, "human", p["id"], "task", tid, "task_autonomy_changed",
+                        {"from": "off", "to": "on", "autonomy_revision": 2, "applies_to": "future_actions_only"},
+                    )
         if routing.wants_flow(body):
             self._save_flow(
                 w, *routing.draft_flow(body.get("tasks", []), body.get("repeat_groups", []), ids)
