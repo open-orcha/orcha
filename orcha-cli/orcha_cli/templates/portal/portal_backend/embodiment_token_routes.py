@@ -39,6 +39,11 @@ def revoke_embodiment_token(token: str):
     is a no-op 200 with revoked=false.
     """
     with db_cursor() as (connection, cur):
+        cur.execute("SELECT run_id FROM embodiment_tokens WHERE run_token=%s", (token,))
+        binding = cur.fetchone()
+        if binding and binding["run_id"]:
+            from portal_backend.workflow_evidence_service import _lock_context
+            _lock_context(cur, binding["run_id"])
         cur.execute(
             """UPDATE embodiment_tokens SET revoked_at=now()
                WHERE run_token=%s AND revoked_at IS NULL""",

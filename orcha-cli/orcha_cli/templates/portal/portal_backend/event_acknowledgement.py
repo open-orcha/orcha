@@ -5,6 +5,19 @@ from portal_backend.event_policy import _WORK_NON_WAKING_EVENTS
 from portal_backend.guards import valid_uuid as _valid_uuid
 
 
+def acknowledge_event_ids(cur, aid, event_ids):
+    """Shared atomic acknowledgement; managed callers validate message pairs first."""
+    if event_ids:
+        cur.execute(
+            f"""INSERT INTO agent_event_acks (agent_id,event_id)
+                SELECT %s,e.id FROM agent_events e
+                WHERE e.event_key=%s AND {sql.in_list('e.id')}
+                ON CONFLICT DO NOTHING""",
+            (aid, aid, sql.list_param(event_ids)),
+        )
+    return _recompute_delivered_floor(cur, aid)
+
+
 def _recompute_delivered_floor(cur, aid: str) -> float:
     """GH #58: advance agent_wake_state.delivered_ts to the CONTIGUOUS floor — the ts just below the
     OLDEST still-unhandled WAKING event past the cursor — never over an unhandled one. So an event a

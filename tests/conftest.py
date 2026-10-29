@@ -58,6 +58,7 @@ TEST_URL = os.environ.get(
 # so a new table added to the schema fails loudly here until it's wired in.
 # (Postgres leg only: the SQLite leg derives its table list from sqlite_master.)
 APP_TABLES = [
+    "managed_message_receipts",
     "conversation_turns", "conversations",
     "agent_wake_state", "agent_reachability", "agent_memory_digests",
     "agent_notification_state", "agent_self_wake", "agent_event_acks",

@@ -10,6 +10,8 @@ from portal_backend.limits import MAX_NAME_LEN
 class WorkerRunStart(BaseModel):
     """Notifier records a spawned worker (status=running)."""
 
+    managed_commands: bool = Field(default=False, description="Require exact-run scheduling controls for this one-shot worker")
+
     wake_kind: str = Field(
         default="ephemeral",
         description="transport: ephemeral | tmux | resident | live | sandbox",

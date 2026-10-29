@@ -2,6 +2,7 @@
 
 from fastapi import HTTPException, Request
 
+from portal_backend.managed_run_auth import lock_agent_runs
 from portal_backend import sql
 from portal_backend.agent_status import log_event
 from portal_backend.application import app
@@ -74,6 +75,7 @@ def wake_claim(aid: str, body: WakeClaim, request: Request):
                 "reason": "wake disabled for this agent (opt-out)",
             }
         lane = resolve_claim_lane(body)
+        lock_agent_runs(cur, aid, lane)
         # Budget hard stop (KG-1 / B07 / PS-17): the wake-scan withholds should_wake from a
         # budget-paused agent, but a caller that goes straight to wake-claim must be refused
         # too — on BOTH lanes. A human-opened live terminal (lease_kind='live') is exempt: it
@@ -100,6 +102,7 @@ def wake_claim(aid: str, body: WakeClaim, request: Request):
                    VALUES (%s, %s, now(), %s)
                    ON CONFLICT (agent_id) DO UPDATE SET
                      conv_lease_until = %s,
+                     conv_run_id = NULL,
                      conv_last_woken_at = now(),
                      conv_lease_kind = EXCLUDED.conv_lease_kind,
                      conv_preempt_requested_at = NULL,
@@ -121,6 +124,7 @@ def wake_claim(aid: str, body: WakeClaim, request: Request):
                    VALUES (%s, %s, now(), %s)
                    ON CONFLICT (agent_id) DO UPDATE SET
                      wake_lease_until = %s,
+                     work_run_id = NULL,
                      last_woken_at = now(),
                      lease_kind = EXCLUDED.lease_kind,
                      preempt_requested_at = NULL,

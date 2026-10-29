@@ -44,6 +44,12 @@ def _lock_context(cur, run_id):
     initial = cur.fetchone()
     if not initial:
         raise HTTPException(404, "Worker run not found")
+    # Managed-command writes and every terminalization share this prefix even
+    # for standalone tasks. Discovering a row is never an eligibility check.
+    from portal_backend.workflow_service import lock_container_graph
+
+    cur.execute("SELECT container_id FROM agents WHERE id=%s", (initial["agent_id"],))
+    lock_container_graph(cur, cur.fetchone()["container_id"])
     task = execution = None
     if initial["task_id"]:
         cur.execute("SELECT * FROM tasks WHERE id=%s", (initial["task_id"],))
@@ -64,6 +70,9 @@ def _lock_context(cur, run_id):
         if len(matches) > 1:
             _conflict("ambiguous_workflow_run")
         execution = matches[0] if matches else None
+    elif task:
+        cur.execute("SELECT * FROM tasks WHERE id=%s" + sql.for_update(), (task["id"],))
+        task = cur.fetchone()
     cur.execute("SELECT * FROM worker_runs WHERE run_id=%s" + sql.for_update(), (run_id,))
     run = cur.fetchone()
     if str(run["task_id"]) != str(initial["task_id"]):

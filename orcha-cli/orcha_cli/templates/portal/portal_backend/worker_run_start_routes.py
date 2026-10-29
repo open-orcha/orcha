@@ -7,7 +7,7 @@ from fastapi import HTTPException, Request
 from portal_backend.agent_status import log_event
 from portal_backend.application import app
 from portal_backend.database import db_cursor
-from portal_backend import stream_signal
+from portal_backend import stream_signal, sql
 from portal_backend.events import publish_event
 from portal_backend.guards import (
     require_agent,
@@ -87,12 +87,25 @@ def start_worker_run(aid: str, body: WorkerRunStart, request: Request):
             ),
         )
         row = cur.fetchone()
+        # Bind the lane under the same graph lock used by claims and retirement.
+        column = "conv_run_id" if body.lane == "conversation" else "work_run_id"
+        cur.execute("SELECT agent_id FROM agent_wake_state WHERE agent_id=%s" + sql.for_update(), (aid,))
+        cur.fetchone()
+        cur.execute(f"INSERT INTO agent_wake_state(agent_id,{column}) VALUES (%s,%s) "
+                    f"ON CONFLICT(agent_id) DO UPDATE SET {column}=EXCLUDED.{column}", (aid, row["run_id"]))
+        if body.managed_commands:
+            if body.lane != "work" or body.wake_kind not in {"ephemeral", "sandbox"} or not body.token_id:
+                raise HTTPException(409, "managed commands require a token-bound one-shot work run")
+            cur.execute("UPDATE worker_runs SET managed_commands=true WHERE run_id=%s", (row["run_id"],))
         if body.token_id:
             cur.execute(
                 """UPDATE embodiment_tokens SET run_id=%s, pid=%s
-                   WHERE run_token=%s AND revoked_at IS NULL""",
-                (row["run_id"], body.pid, body.token_id),
+                   WHERE run_token=%s AND revoked_at IS NULL AND run_id IS NULL
+                     AND agent_id=%s AND lane=%s""",
+                (row["run_id"], body.pid, body.token_id, aid, body.lane),
             )
+            if cur.rowcount != 1:
+                raise HTTPException(409, "worker token already bound or unavailable")
         log_event(
             cur,
             str(agent["container_id"]),
