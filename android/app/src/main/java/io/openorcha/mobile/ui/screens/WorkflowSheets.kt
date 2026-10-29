@@ -71,7 +71,7 @@ internal fun WorkflowSheetHost(
             controller, detail, snapshot, sheet.taskId, sheet.action,
             onClose = { onSheet(WorkflowSheet.Task(sheet.taskId)) },
         )
-        is WorkflowSheet.Menu -> WorkflowMenuSheet(controller, detail, snapshot, sheet.action, onClose = close)
+        is WorkflowSheet.Menu -> WorkflowMenuSheet(controller, detail, snapshot, sheet.action, onClose = close, preselect = sheet.preselect)
         is WorkflowSheet.ResultReview -> WorkflowResultReviewSheet(controller, detail, snapshot, sheet.taskId, onClose = close)
         is WorkflowSheet.Decision -> WorkflowDecisionSheet(controller, detail, snapshot, sheet.taskId, onClose = close)
         is WorkflowSheet.ResolveFindings -> WorkflowResolveSheet(controller, detail, sheet.taskId, onClose = close)

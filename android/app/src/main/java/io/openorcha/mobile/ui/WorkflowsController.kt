@@ -50,6 +50,8 @@ data class WorkflowsState(
     val pendingTaskSheet: String? = null,
     /** W17 member verification: the W09 result review to open once the workflow detail shows. */
     val pendingResultReview: String? = null,
+    /** W16 "Add to {workflow}": the task to preselect in the import sheet once the detail shows. */
+    val pendingImport: String? = null,
     /** Server-resolved membership per task id (see [TaskMembership]). */
     val memberships: Map<String, TaskMembership> = emptyMap(),
     val segment: WorkflowsSegment = WorkflowsSegment.Workflows,
@@ -258,7 +260,14 @@ class WorkflowsController(
         _state.update { it.copy(pendingTaskSheet = taskId) }
     }
 
-    fun consumePendingTaskSheet() = _state.update { it.copy(pendingTaskSheet = null, pendingResultReview = null) }
+    fun consumePendingTaskSheet() = _state.update { it.copy(pendingTaskSheet = null, pendingResultReview = null, pendingImport = null) }
+
+    /** W16 non-member "Add to {workflow}": opens that workflow's import (W11b) with this task picked. */
+    fun openImportWith(workflowId: String, taskId: String) {
+        selectSegment(WorkflowsSegment.Workflows)
+        openWorkflow(workflowId)
+        _state.update { it.copy(pendingImport = taskId) }
+    }
 
     /** W17: a member's verification goes through the W09 result review, not the legacy verify sheet. */
     fun openResultReview(workflowId: String, taskId: String) {

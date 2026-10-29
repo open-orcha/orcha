@@ -62,6 +62,7 @@ internal fun WorkflowMenuSheet(
     snapshot: ContainerSnapshot,
     action: MenuAction,
     onClose: () -> Unit,
+    preselect: List<String> = emptyList(),
 ) {
     if (action == MenuAction.ReviewRound) return WorkflowReviewRoundSheet(controller, detail, snapshot, onClose)
     if (action == MenuAction.AddTasks) return WorkflowAddTasksSheet(controller, detail, snapshot, onClose)
@@ -99,7 +100,7 @@ internal fun WorkflowMenuSheet(
     var pinned by remember { mutableStateOf<List<WorkflowTaskChoiceDto>>(emptyList()) }
     var reviews by remember { mutableStateOf<Map<String, WorkflowLogic.ImportReview>>(emptyMap()) }
     var releaseIds by remember { mutableStateOf<List<String>>(emptyList()) }
-    var picked by remember { mutableStateOf<List<String>>(emptyList()) }
+    var picked by remember { mutableStateOf(preselect) }
     var preview by remember { mutableStateOf<WorkflowPreviewDto?>(null) }
     var checkedPick by remember { mutableStateOf<List<String>?>(null) }
     // Move (W24): null = make the tasks standalone

@@ -1,5 +1,6 @@
 package io.openorcha.mobile.ui.screens
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -102,5 +103,38 @@ internal fun WorkflowMembershipLine(membership: io.openorcha.mobile.ui.TaskMembe
             style = io.openorcha.mobile.ui.components.ltype(io.openorcha.mobile.ui.components.LType.Meta), color = p.muted,
         )
         else -> Unit
+    }
+}
+
+/**
+ * W16 "Workflow membership…" for a standalone task: one "Add to {workflow}" row per loaded
+ * open workflow, with the server's reason when adding is unavailable. Adding opens that
+ * workflow's import check (W11b) with this task picked; nothing is saved from this sheet.
+ */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+internal fun WorkflowMembershipMenuSheet(controller: WorkflowsController, onAdd: (String) -> Unit, onDismiss: () -> Unit) {
+    val p = io.openorcha.mobile.ui.theme.Orcha.palette
+    val s by controller.state.collectAsState()
+    val open = s.loaded.filter { !it.hidden && it.status in setOf("active", "paused") }
+    androidx.compose.material3.ModalBottomSheet(onDismissRequest = onDismiss, containerColor = p.bg) {
+        androidx.compose.foundation.layout.Column(
+            Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 24.dp),
+            verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(10.dp),
+        ) {
+            Text("Workflow membership", style = io.openorcha.mobile.ui.components.ltype(io.openorcha.mobile.ui.components.LType.Headline), color = p.text)
+            Text("This task is not in a workflow.", color = p.text2)
+            if (open.isEmpty()) Text("No open workflow is loaded. Open the Workflows tab to load them.", color = p.muted)
+            open.forEach { w ->
+                val reason = WorkflowLogic.menuReason(w, WorkflowLogic.MenuAction.Import, controller.hasHuman)
+                androidx.compose.foundation.layout.Column(
+                    Modifier.fillMaxWidth().clickable(enabled = reason == null) { onDismiss(); onAdd(w.id) },
+                ) {
+                    Text("Add to ${w.title}", color = if (reason == null) p.accent else p.faint)
+                    reason?.let { Text(it, style = io.openorcha.mobile.ui.components.ltype(io.openorcha.mobile.ui.components.LType.Meta), color = p.muted) }
+                }
+            }
+            io.openorcha.mobile.ui.components.LButton("Close", onDismiss, kind = io.openorcha.mobile.ui.components.LButtonKind.Ghost)
+        }
     }
 }
