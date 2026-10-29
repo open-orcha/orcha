@@ -53,6 +53,9 @@ internal class OrchaViewModel(application: Application) : AndroidViewModel(appli
     override var replyWatchJob: Job? = null
     override val deviceAuthSession = DeviceAuthSession()
 
+    /** Workflows tab state (design #373): list, open detail and unresolved operation outlive tab switches. */
+    val workflows by lazy { WorkflowsController(viewModelScope, api, application) }
+
     override val _uiState = MutableStateFlow(
         OrchaUiState(
             containers = store.load(),
