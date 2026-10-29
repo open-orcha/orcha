@@ -63,7 +63,8 @@ enum class AppRoute {
     GitHubPullDetail,
 }
 
-enum class WorkspaceTab { Home, Tasks, Requests, Agents, Search }
+/** Bottom bar (design #373 §2): Workflows replaces Tasks; the task list moves under it as a segment. */
+enum class WorkspaceTab { Home, Workflows, Requests, Agents, Search }
 
 /** Per-card reachability + glance counts for the Containers home (flow 04 H1). */
 data class ContainerHealth(

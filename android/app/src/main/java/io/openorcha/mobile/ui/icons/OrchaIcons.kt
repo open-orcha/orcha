@@ -70,6 +70,20 @@ object OrchaIcons {
         "M13 12h8",
         "M13 18h8",
     ) }
+    /** lucide "workflow" (rects as paths): the Workflows tab (design §2). */
+    val Workflow: ImageVector by lazy { lucide(
+        "workflow", false,
+        "M5 3h4a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z",
+        "M7 11v4a2 2 0 0 0 2 2h4",
+        "M15 13h4a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-4a2 2 0 0 1-2-2v-4a2 2 0 0 1 2-2z",
+    ) }
+    /** lucide "list-filter": the W01 owner filter. */
+    val Filter: ImageVector by lazy { lucide(
+        "list-filter", false,
+        "M3 6h18",
+        "M7 12h10",
+        "M10 18h4",
+    ) }
     val ChevronRight: ImageVector by lazy { lucide(
         "chevron-right", false,
         "m9 18 6-6-6-6",

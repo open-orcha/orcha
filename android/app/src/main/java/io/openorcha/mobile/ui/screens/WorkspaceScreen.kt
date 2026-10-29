@@ -66,6 +66,8 @@ fun WorkspaceScreen(
     onSearchQueryChange: (String) -> Unit = {},
     /** Project switcher target; null hides the per-project list (only "All projects"). */
     onSwitchProject: ((String) -> Unit)? = null,
+    /** Workflows tab state (design #373); null keeps the tab on its Tasks segment only. */
+    workflows: io.openorcha.mobile.ui.WorkflowsController? = null,
 ) {
     val snapshot = state.snapshot
     val selected = state.selectedContainer
@@ -97,8 +99,8 @@ fun WorkspaceScreen(
                 dotState = dotState,
                 showExecution = snapshot != null,
                 running = running,
-                showCreate = snapshot != null &&
-                    (state.selectedTab == WorkspaceTab.Home || state.selectedTab == WorkspaceTab.Tasks),
+                // The Workflows tab has its own per-segment FAB (New workflow / New task, design §2).
+                showCreate = snapshot != null && state.selectedTab == WorkspaceTab.Home,
                 onBack = onBack,
                 onSwitchProject = onSwitchProject,
                 onAllProjects = onBack,
@@ -114,7 +116,7 @@ fun WorkspaceScreen(
                 selected = state.selectedTab,
                 dests = listOf(
                     WorkspaceNavDest(WorkspaceTab.Home, "Home", OrchaIcons.Home, needsYou.total),
-                    WorkspaceNavDest(WorkspaceTab.Tasks, "Tasks", OrchaIcons.Checklist, 0),
+                    WorkspaceNavDest(WorkspaceTab.Workflows, "Workflows", OrchaIcons.Workflow, 0),
                     WorkspaceNavDest(WorkspaceTab.Requests, "Requests", OrchaIcons.Inbox, requestGroups.badgeCount),
                     WorkspaceNavDest(WorkspaceTab.Agents, "Agents", OrchaIcons.SmartToy, 0),
                     WorkspaceNavDest(WorkspaceTab.Search, "Search", OrchaIcons.Search, 0),
@@ -162,7 +164,14 @@ fun WorkspaceScreen(
                         onAction = { controlsSheetOpen = true },
                     )
                 }
-                PullToRefreshBox(isRefreshing = state.loading, onRefresh = onRefresh, modifier = Modifier.weight(1f)) {
+                val refreshAll = {
+                    onRefresh()
+                    // Pull-to-refresh on the Workflows segment resets the list cursor (W01) or re-reads the open detail.
+                    if (state.selectedTab == WorkspaceTab.Workflows) workflows?.let { w ->
+                        if (w.state.value.openWorkflowId != null) w.refreshDetail() else w.refreshList()
+                    }
+                }
+                PullToRefreshBox(isRefreshing = state.loading, onRefresh = refreshAll, modifier = Modifier.weight(1f)) {
                 when (state.selectedTab) {
                     WorkspaceTab.Home -> HomeTab(
                         state, needsYou.planApprovals, needsYou.verifications, needsYou.requests,
@@ -171,7 +180,14 @@ fun WorkspaceScreen(
                         onOpenGithubHub = onOpenGithubHub,
                         onOpenMetrics = { metricsOpen = true },
                     )
-                    WorkspaceTab.Tasks -> TasksTab(snapshot.tasks, snapshot.agents, onOpenTask, container = state.selectedContainer, onTaskChanged = onRefresh)
+                    WorkspaceTab.Workflows -> WorkflowsTab(
+                        controller = workflows,
+                        snapshot = snapshot,
+                        container = state.selectedContainer,
+                        onOpenTask = onOpenTask,
+                        onCreateTask = onCreateTask,
+                        onTaskChanged = onRefresh,
+                    )
                     WorkspaceTab.Requests -> RequestsTab(snapshot.requests, snapshot.agents, humanId, onOpenRequest)
                     WorkspaceTab.Agents -> AgentsTab(snapshot.agents, onOpenAgent, baseUrl = selected?.baseUrl, containerId = selected?.id)
                     WorkspaceTab.Search -> SearchTab(

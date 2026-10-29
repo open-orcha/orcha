@@ -184,6 +184,7 @@ class MainActivity : ComponentActivity() {
                             onOpenGithubHub = viewModel::showGithubHub,
                             onSearchQueryChange = viewModel::setSearchQuery,
                             onSwitchProject = viewModel::openContainer,
+                            workflows = viewModel.workflows,
                         )
                     }
 

@@ -1,0 +1,387 @@
+package io.openorcha.mobile.ui
+
+import android.content.Context
+import io.openorcha.mobile.data.OrchaApiClient
+import io.openorcha.mobile.data.StoredContainer
+import io.openorcha.mobile.data.WorkflowActivityDto
+import io.openorcha.mobile.data.WorkflowApiException
+import io.openorcha.mobile.data.WorkflowCapabilityDto
+import io.openorcha.mobile.data.WorkflowDetailDto
+import io.openorcha.mobile.data.WorkflowWrite
+import io.openorcha.mobile.data.WorkflowWriteOutcome
+import io.openorcha.mobile.data.WorkflowsRepository
+import io.openorcha.mobile.domain.WorkflowLogic
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+
+/** Workflows tab segments (design §2). */
+enum class WorkflowsSegment { Workflows, Tasks }
+
+/** Workflow detail segments (W03). Route replaces the web's Dependencies tab. */
+enum class WorkflowDetailSegment(val label: String) { Tasks("Tasks"), Route("Route"), Review("Review"), Activity("Activity") }
+
+/** W02 support phases: what the Workflows segment can show before (or instead of) a list. */
+enum class WorkflowSupport { Checking, Supported, Unsupported, Forbidden, Unreachable }
+
+/** The detail-level operation notice (W03): one unresolved write blocks every other action. */
+sealed interface WorkflowOperation {
+    val label: String
+
+    data class Sending(override val label: String) : WorkflowOperation
+    data class Uncertain(override val label: String, val message: String, val write: WorkflowWrite) : WorkflowOperation
+    data class Refused(override val label: String, val message: String) : WorkflowOperation
+}
+
+data class WorkflowsState(
+    val containerId: String? = null,
+    val segment: WorkflowsSegment = WorkflowsSegment.Workflows,
+    val support: WorkflowSupport = WorkflowSupport.Checking,
+    val capability: WorkflowCapabilityDto? = null,
+    val supportMessage: String? = null,
+    // W01 list
+    val loaded: List<WorkflowDetailDto> = emptyList(),
+    val nextCursor: String? = null,
+    val listLoading: Boolean = false,
+    val loadingMore: Boolean = false,
+    /** A refresh failed after data was shown: stale banner, writes disabled. */
+    val listStale: Boolean = false,
+    val filter: WorkflowLogic.Filter = WorkflowLogic.Filter.Open,
+    val query: String = "",
+    val ownerId: String? = null,
+    // hidden list (web §4.14)
+    val hiddenOpen: Boolean = false,
+    val hidden: List<WorkflowDetailDto> = emptyList(),
+    val hiddenLoading: Boolean = false,
+    // W03 detail
+    val openWorkflowId: String? = null,
+    val detail: WorkflowDetailDto? = null,
+    val detailLoading: Boolean = false,
+    val detailStale: Boolean = false,
+    val detailError: String? = null,
+    val detailSegment: WorkflowDetailSegment = WorkflowDetailSegment.Tasks,
+    /** W19 replaces the segment content while open. */
+    val inputOpen: Boolean = false,
+    // W15 activity
+    val activity: List<WorkflowActivityDto> = emptyList(),
+    val activityNextAt: String? = null,
+    val activityNextId: String? = null,
+    val activityLoading: Boolean = false,
+    val activityError: String? = null,
+    val activityLoaded: Boolean = false,
+    val operation: WorkflowOperation? = null,
+    /** One-shot confirmation ("Workflow hidden", …); the screen shows then clears it. */
+    val notice: String? = null,
+    /** "Restore" on the hidden snackbar targets this workflow. */
+    val noticeRestoreId: String? = null,
+)
+
+/**
+ * The Workflows tab's state holder, owned by the view model so the list, the open detail
+ * and an unresolved operation survive tab switches and the task-page round trip. One
+ * [WorkflowsRepository] per bound container (design §8).
+ */
+class WorkflowsController(
+    private val scope: CoroutineScope,
+    private val api: OrchaApiClient,
+    context: Context? = null,
+) {
+    private val prefs = context?.getSharedPreferences("orcha_workflows", Context.MODE_PRIVATE)
+    private val _state = MutableStateFlow(WorkflowsState())
+    val state: StateFlow<WorkflowsState> = _state
+    var repository: WorkflowsRepository? = null
+        private set
+    private var container: StoredContainer? = null
+    private var listJob: Job? = null
+    private var detailJob: Job? = null
+
+    /** Binds to the open container (idempotent). Capability is read once per container session. */
+    fun bind(selected: StoredContainer?) {
+        if (selected == null) return
+        val same = container?.id == selected.id && container?.humanAgentId == selected.humanAgentId
+        container = selected
+        if (same && repository != null) return
+        repository = WorkflowsRepository(api, selected.id, { container?.baseUrl ?: selected.baseUrl }, selected.humanAgentId)
+        val remembered = prefs?.getString("segment:${selected.id}", null)
+            ?.let { runCatching { WorkflowsSegment.valueOf(it) }.getOrNull() }
+        _state.value = WorkflowsState(containerId = selected.id, segment = remembered ?: WorkflowsSegment.Workflows)
+        checkSupport()
+    }
+
+    val hasHuman: Boolean get() = repository?.actorId != null
+    val actorId: String? get() = repository?.actorId
+
+    fun selectSegment(segment: WorkflowsSegment) {
+        _state.update { it.copy(segment = segment) }
+        container?.id?.let { prefs?.edit()?.putString("segment:$it", segment.name)?.apply() }
+    }
+
+    /** W02: capability first; 404 = an older server without workflows. Recovers stale state too. */
+    fun checkSupport() {
+        val repo = repository ?: return
+        listJob?.cancel()
+        _state.update { it.copy(support = WorkflowSupport.Checking, supportMessage = null) }
+        listJob = scope.launch {
+            try {
+                val cap = repo.capability()
+                _state.update { it.copy(capability = cap, support = WorkflowSupport.Supported) }
+                loadList(reset = true)
+            } catch (e: WorkflowApiException) {
+                val support = when (e.status) {
+                    404 -> WorkflowSupport.Unsupported
+                    401, 403 -> WorkflowSupport.Forbidden
+                    else -> WorkflowSupport.Unreachable
+                }
+                _state.update {
+                    it.copy(
+                        support = support,
+                        supportMessage = e.message,
+                        // A server without workflows opens on Tasks (design §2 segment memory).
+                        segment = if (support == WorkflowSupport.Unsupported) WorkflowsSegment.Tasks else it.segment,
+                    )
+                }
+            }
+        }
+    }
+
+    fun setFilter(filter: WorkflowLogic.Filter) {
+        val serverChanged = filter.serverStatus != _state.value.filter.serverStatus
+        _state.update { it.copy(filter = filter) }
+        if (serverChanged) refreshList()
+    }
+
+    fun setQuery(q: String) = _state.update { it.copy(query = q) }
+    fun setOwner(ownerId: String?) = _state.update { it.copy(ownerId = ownerId) }
+
+    /** Pull-to-refresh resets the cursor; a failure after data keeps it and marks it stale. */
+    fun refreshList() {
+        if (_state.value.support != WorkflowSupport.Supported) return checkSupport()
+        listJob?.cancel()
+        listJob = scope.launch { loadList(reset = true) }
+    }
+
+    fun loadMore() {
+        val cursor = _state.value.nextCursor ?: return
+        if (_state.value.loadingMore) return
+        scope.launch { loadList(reset = false, cursor = cursor) }
+    }
+
+    private suspend fun loadList(reset: Boolean, cursor: String? = null) {
+        val repo = repository ?: return
+        _state.update { if (reset) it.copy(listLoading = true) else it.copy(loadingMore = true) }
+        try {
+            val page = repo.list(_state.value.filter.serverStatus, cursor)
+            _state.update {
+                it.copy(
+                    loaded = if (reset) page.workflows else (it.loaded + page.workflows).distinctBy { w -> w.id },
+                    nextCursor = page.nextCursor,
+                    capability = page.capability,
+                    listLoading = false,
+                    loadingMore = false,
+                    listStale = false,
+                )
+            }
+        } catch (e: WorkflowApiException) {
+            _state.update {
+                if (it.loaded.isEmpty() && reset) {
+                    it.copy(listLoading = false, loadingMore = false, support = supportFor(e), supportMessage = e.message)
+                } else {
+                    it.copy(listLoading = false, loadingMore = false, listStale = true)
+                }
+            }
+        }
+    }
+
+    private fun supportFor(e: WorkflowApiException) = when (e.status) {
+        404 -> WorkflowSupport.Unsupported
+        401, 403 -> WorkflowSupport.Forbidden
+        else -> WorkflowSupport.Unreachable
+    }
+
+    fun openHidden(open: Boolean) {
+        _state.update { it.copy(hiddenOpen = open) }
+        if (!open) return
+        val repo = repository ?: return
+        scope.launch {
+            _state.update { it.copy(hiddenLoading = true) }
+            val hidden = runCatching { repo.list(null, null, visibility = "hidden").workflows }.getOrNull()
+            _state.update { it.copy(hiddenLoading = false, hidden = hidden ?: it.hidden) }
+        }
+    }
+
+    // ---- detail ----
+
+    fun openWorkflow(id: String, segment: WorkflowDetailSegment = WorkflowDetailSegment.Tasks) {
+        val cached = _state.value.loaded.firstOrNull { it.id == id } ?: _state.value.detail?.takeIf { it.id == id }
+        _state.update {
+            it.copy(
+                openWorkflowId = id, detail = cached, detailSegment = segment, detailError = null, detailStale = false,
+                inputOpen = false, activity = emptyList(), activityLoaded = false, activityError = null,
+                activityNextAt = null, activityNextId = null,
+                operation = it.operation.takeIf { op -> op is WorkflowOperation.Uncertain && it.openWorkflowId == id },
+            )
+        }
+        refreshDetail()
+    }
+
+    fun closeWorkflow() {
+        if (_state.value.operation is WorkflowOperation.Sending) return
+        detailJob?.cancel()
+        _state.update { it.copy(openWorkflowId = null, detail = null, inputOpen = false, operation = null) }
+    }
+
+    fun refreshDetail() {
+        val id = _state.value.openWorkflowId ?: return
+        val repo = repository ?: return
+        detailJob?.cancel()
+        detailJob = scope.launch {
+            _state.update { it.copy(detailLoading = true) }
+            try {
+                val d = repo.detail(id)
+                applyDetail(d)
+                _state.update { it.copy(detailLoading = false, detailError = null, detailStale = false) }
+                if (_state.value.detailSegment == WorkflowDetailSegment.Activity) loadActivity(reset = true)
+            } catch (e: WorkflowApiException) {
+                _state.update {
+                    if (it.detail == null) it.copy(detailLoading = false, detailError = e.message)
+                    else it.copy(detailLoading = false, detailStale = true)
+                }
+            }
+        }
+    }
+
+    /** A confirmed write or a fresh read replaces the loaded detail (and its list card). */
+    fun applyDetail(d: WorkflowDetailDto) {
+        _state.update { s ->
+            s.copy(
+                detail = if (s.openWorkflowId == d.id) d else s.detail,
+                loaded = s.loaded.map { if (it.id == d.id) d else it },
+                hidden = s.hidden.map { if (it.id == d.id) d else it },
+            )
+        }
+    }
+
+    fun selectDetailSegment(segment: WorkflowDetailSegment) {
+        _state.update { it.copy(detailSegment = segment, inputOpen = false) }
+        if (segment == WorkflowDetailSegment.Activity && !_state.value.activityLoaded) {
+            scope.launch { loadActivity(reset = true) }
+        }
+    }
+
+    fun openInput(open: Boolean) = _state.update { it.copy(inputOpen = open) }
+
+    fun loadEarlierActivity() {
+        if (_state.value.activityNextAt == null || _state.value.activityLoading) return
+        scope.launch { loadActivity(reset = false) }
+    }
+
+    private suspend fun loadActivity(reset: Boolean) {
+        val id = _state.value.openWorkflowId ?: return
+        val repo = repository ?: return
+        _state.update { it.copy(activityLoading = true, activityError = null) }
+        try {
+            val s0 = _state.value
+            val page = repo.activity(id, if (reset) null else s0.activityNextAt, if (reset) null else s0.activityNextId)
+            _state.update {
+                it.copy(
+                    activity = if (reset) page.activity else (it.activity + page.activity).distinctBy { a -> a.id },
+                    activityNextAt = page.nextBeforeAt,
+                    activityNextId = page.nextBeforeId,
+                    activityLoading = false,
+                    activityLoaded = true,
+                )
+            }
+        } catch (e: WorkflowApiException) {
+            _state.update { it.copy(activityLoading = false, activityError = e.message) }
+        }
+    }
+
+    // ---- writes (design §8: revisions + one idempotency key + receipt check) ----
+
+    /** True while a write is sending or uncertain: every action is disabled meanwhile. */
+    val busy: Boolean get() = _state.value.operation.let { it is WorkflowOperation.Sending || it is WorkflowOperation.Uncertain }
+
+    /**
+     * Sends [write]; on success applies the returned detail and calls [onSaved]. Refusals keep
+     * the sheet's drafts (the caller clears its preview). Uncertain replies stay on the notice.
+     */
+    fun send(label: String, write: WorkflowWrite, success: String? = null, onSaved: (WorkflowDetailDto) -> Unit = {}) {
+        val repo = repository ?: return
+        if (busy) return
+        _state.update { it.copy(operation = WorkflowOperation.Sending(label)) }
+        scope.launch {
+            when (val outcome = repo.send(write)) {
+                is WorkflowWriteOutcome.Saved -> saved(outcome.detail, success, onSaved)
+                is WorkflowWriteOutcome.Refused ->
+                    _state.update { it.copy(operation = WorkflowOperation.Refused(label, outcome.message)) }
+                is WorkflowWriteOutcome.Uncertain ->
+                    _state.update { it.copy(operation = WorkflowOperation.Uncertain(label, outcome.message, outcome.write)) }
+            }
+        }
+    }
+
+    private fun saved(d: WorkflowDetailDto, success: String?, onSaved: (WorkflowDetailDto) -> Unit) {
+        applyDetail(d)
+        if (_state.value.loaded.none { it.id == d.id } && !d.hidden) {
+            _state.update { it.copy(loaded = listOf(d) + it.loaded) }
+        }
+        _state.update { it.copy(operation = null, notice = success, detailStale = false) }
+        onSaved(d)
+    }
+
+    /** "Check saved result" on an uncertain write. */
+    fun checkSaved(onSaved: (WorkflowDetailDto) -> Unit = {}) {
+        val op = _state.value.operation as? WorkflowOperation.Uncertain ?: return
+        val repo = repository ?: return
+        _state.update { it.copy(operation = WorkflowOperation.Sending(op.label)) }
+        scope.launch {
+            val receipt = repo.checkReceipt(op.write)
+            if (receipt != null) saved(receipt.detail, "Saved", onSaved)
+            else _state.update {
+                it.copy(operation = op.copy(message = "Orcha has no saved result for this change yet. Retry the same request, or refresh."))
+            }
+        }
+    }
+
+    /** "Retry same request": the SAME write, same idempotency key. */
+    fun retrySame(onSaved: (WorkflowDetailDto) -> Unit = {}) {
+        val op = _state.value.operation as? WorkflowOperation.Uncertain ?: return
+        _state.update { it.copy(operation = null) }
+        send(op.label, op.write, "Saved", onSaved)
+    }
+
+    fun dismissOperation() {
+        if (_state.value.operation is WorkflowOperation.Refused) _state.update { it.copy(operation = null) }
+    }
+
+    fun clearNotice() = _state.update { it.copy(notice = null, noticeRestoreId = null) }
+
+    fun notify(text: String, restoreId: String? = null) = _state.update { it.copy(notice = text, noticeRestoreId = restoreId) }
+
+    /** After hiding: back to the list, the card gone, "Workflow hidden" + Restore. */
+    fun afterHidden(d: WorkflowDetailDto) {
+        _state.update {
+            it.copy(
+                openWorkflowId = null, detail = null, loaded = it.loaded.filterNot { w -> w.id == d.id },
+                notice = "Workflow hidden", noticeRestoreId = d.id,
+            )
+        }
+    }
+
+    /** Snackbar Restore for a just-hidden workflow. */
+    fun restoreHidden(id: String) {
+        val repo = repository ?: return
+        scope.launch {
+            runCatching { repo.detail(id) }.getOrNull()?.let { d ->
+                val key = WorkflowsRepository.newIdempotencyKey()
+                send("Restore workflow", io.openorcha.mobile.data.WorkflowWrites.workflowMutation(d, "restore", key), "Workflow restored") {
+                    _state.update { s -> s.copy(hidden = s.hidden.filterNot { h -> h.id == id }) }
+                    refreshList()
+                }
+            }
+        }
+    }
+}
