@@ -10,6 +10,7 @@ from fastapi.responses import StreamingResponse
 from portal_backend.agent_status import log_event
 from portal_backend.application import app
 from portal_backend.database import db_cursor
+from portal_backend.event_acknowledgement import _ack_events_handled
 from portal_backend.events import (
     install_stream_shutdown_hook,
     publish_event,
@@ -155,6 +156,9 @@ def sweep_expired(cid: str, http_request: Request, actor_agent_id: str = Query(.
                 (human_id, request["id"]),
             )
             stamp_routing(cur, request_id, org_routing)
+            _ack_events_handled(
+                cur, str(request["target_id"]), "request_created", "request_id", request_id
+            )
             log_event(
                 cur,
                 cid,
