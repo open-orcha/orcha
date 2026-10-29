@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import time
 
+from . import notifier_managed_limits
 from . import notifier_reaper_completion as completion
 from . import notifier_reaper_watchdog as watchdog
 
@@ -37,10 +38,17 @@ def reap_workers(
                 services,
             )
             continue
+        notifier_managed_limits.publish_limits(api_base, worker, services)
+        renewal = {"lease_ttl": services.WAKE_LEASE_TTL_SECS, "lane": lane}
+        if worker.get("run_id"):
+            renewal["run_id"] = worker["run_id"]
         renew = services._post_json(
             f"{api_base}/api/agents/{aid}/wake-renew",
-            {"lease_ttl": services.WAKE_LEASE_TTL_SECS, "lane": lane},
+            renewal,
         )
+        if renew and renew.get("renewed"):
+            worker["scheduling_lease_until"] = renew.get("wake_lease_until")
+        worker["lease_renewal_failed"] = not bool(renew and renew.get("renewed"))
         if completion.handle_human_stop(
             api_base, aid, worker, live_workers, renew, quiet, services
         ):

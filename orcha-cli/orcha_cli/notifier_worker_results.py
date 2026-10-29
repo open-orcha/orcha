@@ -132,6 +132,7 @@ def drain_task_failure(
             f"{api_base}/api/agents/{agent_id}/wake-ack",
             {
                 "kind": "worker_drain_failed_released",
+                "run_id": worker.get("run_id"),
                 "release_lease": True,
                 "lane": lane,
             },
@@ -153,7 +154,7 @@ def drain_task_failure(
         )
         services._post_json(
             f"{api_base}/api/agents/{agent_id}/wake-ack",
-            {"kind": kind, "release_lease": True, "lane": lane},
+            {"kind": kind, "release_lease": True, "lane": lane, "run_id": worker.get("run_id")},
         )
 
     services._retire_headless(api_base, live_workers, agent_id)

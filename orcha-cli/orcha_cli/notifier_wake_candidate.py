@@ -127,6 +127,8 @@ def _ack_delivery(
         "release_lease": release_lease,
         "lane": lane,
     }
+    if ephemeral_reaped:
+        body["run_id"] = live_workers[candidate["agent_id"]].get("run_id")
     body.update(
         services.self_wake_ack_fields(
             candidate,

@@ -6,7 +6,7 @@ import sys
 import time
 
 from .notifier_routing_handoff import carry_previous_checkout
-from . import notifier_workflow
+from . import notifier_workflow, notifier_managed_limits
 
 # A move between checkouts never blocks a worker start (#288). When the saved
 # files of the previous checkout cannot be carried into the destination, the
@@ -126,6 +126,7 @@ def _worker_state(
     token,
     prompt,
     sandbox_container_id=None,
+    launch_started_ts=None,
 ):
     """Build the daemon-owned state used by progress and completion reapers."""
     now = time.time()
@@ -149,7 +150,8 @@ def _worker_state(
     }
     return {
         "proc": process,
-        "hard_deadline": now + cap,
+        "hard_deadline": (launch_started_ts or now) + cap,
+        "launch_started_ts": launch_started_ts or now,
         "last_size": 0,
         "last_progress_ts": now,
         "run_id": run_id,
@@ -297,6 +299,7 @@ def spawn(
             "base_cwd": headless_cwd,
             "runtime": candidate.get("model_runtime"),
         }
+    launch_started_ts = time.time()
     _spawn_info: dict = {}
     sent, command, process = services.spawn_headless(
         run_cwd,
@@ -377,9 +380,11 @@ def spawn(
             token=token,
             prompt=prompt,
             sandbox_container_id=_spawn_info.get("sandbox_container_id"),
+            launch_started_ts=launch_started_ts,
         )
         if workflow_launch:
             live_workers[candidate["agent_id"]].update(workflow=True, workflow_generation=workflow_launch["generation"])
+        notifier_managed_limits.publish_limits(api_base, live_workers[candidate["agent_id"]], services)
     elif worktree and not sent:
         services._teardown_worktree(headless_cwd, worktree, branch)
         services._revoke_or_defer(api_base, token)

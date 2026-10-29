@@ -31,7 +31,7 @@ def _save_task_result(api_base, aid, worker, diff, failed_drains, services):
 
 
 def _release_worker(api_base, aid, worker, lane, kind, services, *, task=False):
-    body = {"kind": kind, "release_lease": True, "lane": lane}
+    body = {"kind": kind, "release_lease": True, "lane": lane, "run_id": worker.get("run_id")}
     if task:
         body["delivered_ts"] = None
     services._post_json(
@@ -178,7 +178,7 @@ def handle_human_stop(api_base, aid, worker, live_workers, renew, quiet, service
     notifier_worktree_gc.after_run(api_base, worker, live_workers, quiet=quiet)
     services._post_json(
         f"{api_base}/api/agents/{aid}/wake-ack",
-        {"kind": "worker_human_stopped", "release_lease": True, "lane": lane},
+        {"kind": "worker_human_stopped", "release_lease": True, "lane": lane, "run_id": worker.get("run_id")},
     )
     services._retire_headless(api_base, live_workers, aid)
     if not quiet:

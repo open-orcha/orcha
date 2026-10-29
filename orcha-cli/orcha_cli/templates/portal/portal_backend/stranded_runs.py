@@ -93,6 +93,21 @@ def lease_lapsed_expr(lane: str) -> str:
     return f"(w.{column} IS NULL OR w.{column} <= now())"
 
 
+def managed_job_expr(run_alias="wr"):
+    """Unknown disposition retains the same authority floor as a live command."""
+    return ("EXISTS (SELECT 1 FROM managed_jobs mj WHERE mj.owner_run_id="
+            f"{run_alias}.run_id AND NOT mj.termination_verified)")
+
+
+def managed_activity(cur, run_id):
+    """Read-only activity shared by heartbeat and BOTH reconciliation paths."""
+    cur.execute(f"SELECT {last_activity_expr('work')} AS last_activity "
+                "FROM worker_runs wr JOIN agents a ON a.id=wr.agent_id "
+                "LEFT JOIN agent_wake_state w ON w.agent_id=wr.agent_id "
+                "WHERE wr.run_id=%s", (run_id,))
+    return cur.fetchone()["last_activity"]
+
+
 def reconcile_stranded_runs(cur, cid: str, orphan_secs: float, lane: str) -> list:
     """Orphan one lane's stranded running rows; return what was reconciled."""
     from portal_backend.workflow_service import lock_container_graph
@@ -111,12 +126,15 @@ def reconcile_stranded_runs(cur, cid: str, orphan_secs: float, lane: str) -> lis
                  AND wr.lane = %s
                  AND {lease_lapsed_expr(lane)}
                  AND NOT {turn_owned_expr()}
-                 AND {activity} < CASE WHEN wr.sandbox_container_id IS NULL THEN %s
-                                       ELSE %s END
+                 AND {activity} < CASE WHEN {managed_job_expr()} AND wr.lane='work'
+                     THEN CASE WHEN wr.sandbox_container_id IS NULL THEN %s ELSE %s END
+                     ELSE CASE WHEN wr.sandbox_container_id IS NULL THEN %s ELSE %s END END
            )
            SELECT s.run_id, s.agent_id, s.alias, s.wake_kind, s.idle_seconds
            FROM stranded s""",
-        (cid, lane, sql.ago(orphan_secs), sql.ago(orphan_secs + SANDBOX_STRANDED_EXTRA_SECS)),
+        (cid, lane, sql.ago(max(orphan_secs, STRANDED_RUN_SECS)),
+         sql.ago(max(orphan_secs, STRANDED_RUN_SECS) + SANDBOX_STRANDED_EXTRA_SECS),
+         sql.ago(orphan_secs), sql.ago(orphan_secs + SANDBOX_STRANDED_EXTRA_SECS)),
     )
     stranded = cur.fetchall()
     orphaned = set()

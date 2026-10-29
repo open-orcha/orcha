@@ -278,7 +278,8 @@ async def test_workflow_messages_use_generation_without_ordinary_lease(client, d
     assert db.execute('SELECT handled_at FROM managed_message_receipts')[0]['handled_at'] is None
 
 
-async def test_renewal_and_reaper_serialize_before_eligibility(client, managed, db, monkeypatch):
+@pytest.mark.parametrize("with_job", [False, True])
+async def test_renewal_and_reaper_serialize_before_eligibility(client, managed, db, monkeypatch, with_job):
     from concurrent.futures import ThreadPoolExecutor
     from threading import Event
     from starlette.requests import Request
@@ -286,6 +287,11 @@ async def test_renewal_and_reaper_serialize_before_eligibility(client, managed, 
     from portal_backend.orphan_lease_routes import reap_orphan_leases
     from portal_backend.schemas.wakes import WakeClaim
     await poll(client, managed)
+    if with_job:
+        from test_gh312_managed_jobs import publish, reserve
+        await publish(client, managed, seconds=7200)
+        await reserve(client, managed)
+        db.execute('UPDATE worker_runs SET started_at=%s WHERE run_id=%s', (db.ago(3000), managed['rid']))
     db.execute('UPDATE agents SET last_heartbeat_at=%s WHERE id=%s', (db.ago(3000), managed['aid']))
     db.execute('UPDATE agent_wake_state SET work_last_heartbeat_at=%s,last_woken_at=%s WHERE agent_id=%s',
                (db.ago(3000), db.ago(3000), managed['aid']))
@@ -316,3 +322,11 @@ async def test_renewal_and_reaper_serialize_before_eligibility(client, managed, 
         result = reaped.result(timeout=5)
     assert not result['reaped'] and not result['stranded']
     assert db.execute('SELECT status FROM worker_runs WHERE run_id=%s', (managed['rid'],))[0]['status'] == 'running'
+
+
+@pytest.mark.parametrize("note", [None, "", "   "])
+async def test_non_applicable_requires_explanation_as_validation_response(client, managed, note):
+    response = await client.post(managed['url'] + f'/{uuid4()}/handled',
+                                 headers=managed['headers'],
+                                 json={'outcome': 'not_applicable', 'handling_note': note})
+    assert response.status_code == 422, response.text

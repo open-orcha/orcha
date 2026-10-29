@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from . import notifier_managed_limits
+
 
 
 def checkpoint_and_respawn(
@@ -54,6 +56,7 @@ def checkpoint_and_respawn(
     new_token = services._mint_embodiment_token(api_base, agent_id, "work", "headless")
     persona = services._build_persona(api_base, agent_id, force_fresh=True)
     log_path = _next_log_path(base_cwd, context, services)
+    launch_started_ts = services.time.time()
     _spawn_info: dict = {}
     sent, _command, new_process = services.spawn_headless(
         worktree or base_cwd,
@@ -106,7 +109,8 @@ def checkpoint_and_respawn(
     now = services.time.time()
     live_workers[agent_id] = {
         "proc": new_process,
-        "hard_deadline": now + cap,
+        "hard_deadline": launch_started_ts + cap,
+        "launch_started_ts": launch_started_ts,
         "last_size": 0,
         "last_progress_ts": now,
         "run_id": (run or {}).get("run_id"),
@@ -135,10 +139,12 @@ def checkpoint_and_respawn(
         "sandbox_container_id": _spawn_info.get("sandbox_container_id"),
         "run_token": new_token,
     }
+    notifier_managed_limits.publish_limits(api_base, live_workers[agent_id], services)
     services._post_json(
         f"{api_base}/api/agents/{agent_id}/wake-ack",
         {
             "kind": "worker_checkpoint_respawn",
+            "run_id": live_workers[agent_id].get("run_id"),
             "release_lease": False,
             "lane": worker.get("lane", "work"),
         },
@@ -222,6 +228,7 @@ def _handle_spawn_failure(
         f"{api_base}/api/agents/{agent_id}/wake-ack",
         {
             "kind": "worker_checkpoint_respawn_failed",
+            "run_id": worker.get("run_id"),
             "release_lease": True,
             "lane": worker.get("lane", "work"),
         },

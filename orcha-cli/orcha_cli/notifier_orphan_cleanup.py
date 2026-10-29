@@ -410,14 +410,18 @@ def reap_orphaned_runs(
             else:
                 all_finished = False
         if not live_sibling and all_finished:
-            services._post_json(
-                f"{api_base}/api/agents/{agent_id}/wake-ack",
-                {
-                    "kind": "orphan_run_sweep",
-                    "release_lease": True,
-                    "lane": lane,
-                },
-            )
+            # Only the exact bound owner can release its lane. Trying each dead
+            # row also covers a restart that found several historical orphans.
+            for row in dead:
+                services._post_json(
+                    f"{api_base}/api/agents/{agent_id}/wake-ack",
+                    {
+                        "kind": "orphan_run_sweep",
+                        "run_id": row.get("run_id"),
+                        "release_lease": True,
+                        "lane": lane,
+                    },
+                )
         reaped += finished
         if not quiet:
             if live_sibling:
