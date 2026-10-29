@@ -273,6 +273,8 @@ class WorkflowsController(
 
     /** Membership as known now: a loaded workflow that lists the task wins; otherwise the server lookup's result. */
     fun membership(taskId: String): TaskMembership {
+        // A server without Workflows has no members: the legacy task page stays as it was.
+        if (_state.value.support == WorkflowSupport.Unsupported) return TaskMembership.None
         _state.value.loaded.firstOrNull { w -> w.tasks.any { it.id == taskId } }?.let { return TaskMembership.Member(it) }
         return _state.value.memberships[taskId] ?: TaskMembership.Checking
     }
@@ -296,6 +298,7 @@ class WorkflowsController(
      * as unknown, never as a non-member (design W16).
      */
     fun resolveMembership(taskId: String, force: Boolean = false) {
+        if (_state.value.support == WorkflowSupport.Unsupported) return
         if (_state.value.loaded.any { w -> w.tasks.any { it.id == taskId } }) return
         val known = _state.value.memberships[taskId]
         if (!force && known != null && known !is TaskMembership.Failed) return

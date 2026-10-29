@@ -194,6 +194,7 @@ fun WorkspaceScreen(
                         },
                     )
                     WorkspaceTab.Workflows -> WorkflowsTab(
+                        onChooseActingHuman = onSettings,
                         controller = workflows,
                         snapshot = snapshot,
                         container = state.selectedContainer,

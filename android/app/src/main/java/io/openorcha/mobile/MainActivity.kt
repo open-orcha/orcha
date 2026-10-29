@@ -286,6 +286,12 @@ class MainActivity : ComponentActivity() {
                         },
                         onRefresh = viewModel::refreshRunLog,
                         onStop = viewModel::stopSelectedRun,
+                        membership = run {
+                            val ws = viewModel.workflows.state.collectAsState().value
+                            val tid = state.selectedRun?.taskId
+                            LaunchedEffect(tid) { tid?.let { viewModel.workflows.resolveMembership(it) } }
+                            tid?.let { if (ws.containerId != null) viewModel.workflows.membership(it) else null }
+                        },
                     )
 
                     AppRoute.Conversation -> ConversationScreen(
