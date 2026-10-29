@@ -212,6 +212,17 @@ class MainActivity : ComponentActivity() {
                                 }
                             }
                         },
+                        taskAuthority = state.selectedTask?.let { t ->
+                            {
+                                io.openorcha.mobile.ui.screens.TaskAuthoritySection(
+                                    controller = viewModel.workflows,
+                                    taskId = t.id,
+                                    workflowTask = viewModel.workflows.membershipOf(t.id)?.tasks?.firstOrNull { it.id == t.id },
+                                    isRoot = t.isRoot,
+                                    finished = t.status in setOf("completed", "cancelled"),
+                                )
+                            }
+                        },
                     )
 
                     AppRoute.TaskThread -> TaskThreadScreen(

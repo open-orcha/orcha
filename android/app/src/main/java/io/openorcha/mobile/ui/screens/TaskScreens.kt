@@ -139,6 +139,8 @@ fun TaskDetailScreen(
     workflow: io.openorcha.mobile.data.WorkflowDetailDto? = null,
     /** W16 "Open task controls" → the workflow task sheet (W06). */
     onOpenTaskControls: (() -> Unit)? = null,
+    /** W16 "Task authority" section (autonomy switch, approval history); null hides it. */
+    taskAuthority: (@Composable () -> Unit)? = null,
 ) {
     val p = Orcha.palette
     val task = state.selectedTask
@@ -301,6 +303,7 @@ fun TaskDetailScreen(
                     }
                 }
             }
+            taskAuthority?.let { section -> item(key = "authority") { section() } }
             if (task.status == "needs_verification" && !member) {
                 item(key = "verify") {
                     VerificationCard(
