@@ -9,6 +9,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -66,6 +67,9 @@ internal fun WorkflowMenuSheet(
     if (action == MenuAction.AddTasks) return WorkflowAddTasksSheet(controller, detail, snapshot, onClose)
     var objectiveId by remember { mutableStateOf<String?>(null) }
     objectiveId?.let { oid -> return WorkflowObjectiveSheet(controller, detail, oid) { objectiveId = null } }
+    // W13 acceptance forms: an objective id, or GOAL for the goal.
+    var accepting by remember { mutableStateOf<String?>(null) }
+    accepting?.let { a -> return WorkflowAcceptanceSheet(controller, detail, a.takeIf { it != GOAL }) { accepting = null } }
     val p = Orcha.palette
     val s by controller.state.collectAsState()
     val d = s.detail ?: detail
@@ -77,6 +81,8 @@ internal fun WorkflowMenuSheet(
     var impact by remember { mutableStateOf<WorkflowImpactDto?>(null) }
     var completion by remember { mutableStateOf<WorkflowCompletionDto?>(null) }
     var visibility by remember { mutableStateOf<VisibilityCheckDto?>(null) }
+    // Start (W07): null = the server's default selection (every prepared task).
+    var startPick by remember { mutableStateOf<Set<String>?>(null) }
     // Settings (W22)
     var title by remember { mutableStateOf(d.title) }
     var goal by remember { mutableStateOf(d.goal) }
@@ -111,7 +117,12 @@ internal fun WorkflowMenuSheet(
             ?: WorkflowLogic.menuReason(controller.state.value.detail ?: d, action, controller.hasHuman)
     }
     val check: (suspend () -> String?)? = when (action) {
-        MenuAction.Start -> { { checkRead({ repo.impact(d.id, "start-check") }) { impact = it.impact } } }
+        MenuAction.Start -> {
+            {
+                checkRead({ repo.impact(d.id, "start-check", startPick?.toList().orEmpty()) }) { impact = it.impact }
+                    ?: impact?.let { i -> if (i.tasks.none { it.selected && it.canStart }) "No selected task can start right now." else null }
+            }
+        }
         MenuAction.Cancel -> { { checkRead({ repo.impact(d.id, "cancellation-check") }) { impact = it.impact } } }
         MenuAction.Finish -> {
             {
@@ -156,9 +167,11 @@ internal fun WorkflowMenuSheet(
     val canRelease = d.status == "active" && d.launchEnabled
     val invalidRelease = WorkflowLogic.invalidReleaseIds(releaseIds, importPreview, picked, canRelease)
     val importBlocked = WorkflowLogic.importBlocked(importPreview, picked, reviews, invalidRelease)
-    val startIds = impact?.tasks?.filter { it.selected && it.canStart }?.map { it.taskId }.orEmpty()
+    val startSelection = startPick ?: impact?.tasks?.filter { it.selected }?.map { it.taskId }?.toSet().orEmpty()
+    val unavailableStart = impact?.tasks?.filter { it.taskId in startSelection && !it.canStart }?.map { it.taskId }.orEmpty()
+    val startIds = impact?.tasks?.filter { it.taskId in startSelection && it.canStart }?.map { it.taskId }.orEmpty()
     val inputsValid = when (action) {
-        MenuAction.Start -> impact != null && startIds.isNotEmpty()
+        MenuAction.Start -> impact != null && startIds.isNotEmpty() && unavailableStart.isEmpty()
         MenuAction.Cancel -> impact != null && reason.isNotBlank()
         MenuAction.Finish -> completion?.canFinish == true
         MenuAction.Hide -> visibility != null && (if (d.hidden) visibility?.canRestore == true else visibility?.canHide == true)
@@ -179,9 +192,19 @@ internal fun WorkflowMenuSheet(
         onClose = onClose,
         danger = action.danger,
         check = check,
+        // A passed check counts only for the inputs it ran against (design L109).
+        inputs = when (action) {
+            MenuAction.Start -> startPick
+            MenuAction.Settings -> listOf(title, goal, mode, taskLimit, roundLimit, turns)
+            MenuAction.Import -> picked
+            MenuAction.Move -> listOf(picked, destination)
+            MenuAction.TransferOwner -> newOwner
+            else -> null
+        },
         checkedNote = "Checked against revision ${d.revision}.",
         confirmEnabled = serverReason == null && inputsValid,
-        disabledHint = serverReason ?: settingsInvalid.takeIf { action == MenuAction.Settings }
+        disabledHint = serverReason ?: "Remove unavailable selections first.".takeIf { action == MenuAction.Start && unavailableStart.isNotEmpty() }
+            ?: settingsInvalid.takeIf { action == MenuAction.Settings }
             ?: importBlocked.takeIf { action == MenuAction.Import && picked.isNotEmpty() } ?: "Fill in the fields above, then check again.",
         successNotice = when {
             hiding -> "Workflow hidden."
@@ -211,14 +234,40 @@ internal fun WorkflowMenuSheet(
         },
     ) {
         when (action) {
-            MenuAction.Start, MenuAction.Cancel -> {
-                if (action == MenuAction.Cancel) ReasonField(reason, required = true) { reason = it }
+            MenuAction.Start -> {
+                if (impact == null) Text("Check to see which tasks this releases.", style = ltype(LType.Meta), color = p.muted)
+                impact?.let { i ->
+                    Text("Tasks to release", style = ltype(LType.BodyEmph), color = p.text)
+                    i.tasks.forEach { t ->
+                        val on = t.taskId in startSelection
+                        PickRow(
+                            t.title, checked = on,
+                            note = if (t.canStart) null else (t.refusal?.message ?: t.blockers.firstOrNull()?.message ?: "Cannot start right now."),
+                            enabled = t.canStart || on,
+                        ) { startPick = if (on) startSelection - t.taskId else startSelection + t.taskId }
+                    }
+                    if (unavailableStart.isNotEmpty()) {
+                        Text(
+                            "Remove unavailable selections", color = p.accent,
+                            modifier = Modifier.fillMaxWidth().clickable { startPick = startSelection - unavailableStart.toSet() },
+                        )
+                    }
+                    ImpactCard(i)
+                }
+                if (loops) {
+                    // ReleaseTasks carries no turn allowance in /openapi.json; it is set in Workflow settings.
+                    Text(
+                        "Agent turns ${d.turnsUsed} of ${d.turnAllowance}. Change the allowance in Workflow settings.",
+                        style = ltype(LType.Meta), color = p.text2,
+                    )
+                }
+                ReasonField(reason, required = false) { reason = it }
+            }
+            MenuAction.Cancel -> {
+                ReasonField(reason, required = true) { reason = it }
                 impact?.let { ImpactCard(it) }
             }
-            MenuAction.Finish -> completion?.let { c ->
-                if (c.canFinish) Text("Every required task and the goal are accepted.", color = p.text)
-                else c.blockers.forEach { Text("• ${it.message}", style = ltype(LType.Meta), color = p.text2) }
-            }
+            MenuAction.Finish -> FinishChecklist(d, completion, controller.hasHuman, onAccept = { accepting = it })
             MenuAction.Hide -> visibility?.let { v ->
                 Text("${v.taskCount} tasks · ${v.liveTurns} running", style = ltype(LType.Meta), color = p.text2)
                 v.blockers.forEach { Text("• ${it.message}", style = ltype(LType.Meta), color = p.text2) }
@@ -451,7 +500,11 @@ private fun WorkflowObjectiveSheet(
     val s by controller.state.collectAsState()
     val d = s.detail ?: detail
     val repo = controller.repository ?: return
-    val objective = d.objectives.firstOrNull { it.id == objectiveId } ?: return onClose()
+    val objective = d.objectives.firstOrNull { it.id == objectiveId }
+    if (objective == null) {
+        LaunchedEffect(Unit) { onClose() }
+        return
+    }
     var title by remember { mutableStateOf(objective.title) }
     var criteria by remember { mutableStateOf(objective.criteria) }
     var reason by remember { mutableStateOf("") }
@@ -480,5 +533,51 @@ private fun WorkflowObjectiveSheet(
         OutlinedTextField(reason, { reason = it.take(4000) }, Modifier.fillMaxWidth(), label = { Text("Reason for changing objective") }, minLines = 2)
         Text("Current: ${objective.criteria}", style = ltype(LType.Meta), color = p.text2)
         Text("Proposed: ${criteria.trim()}", style = ltype(LType.Meta), color = p.text)
+    }
+}
+
+private const val GOAL = "goal"
+
+/** W13 Finish checklist: required tasks, objectives and the goal, each with its acceptance state. */
+@Composable
+private fun FinishChecklist(d: WorkflowDetailDto, completion: WorkflowCompletionDto?, hasHuman: Boolean, onAccept: (String) -> Unit) {
+    val p = Orcha.palette
+    Text("Required tasks", style = ltype(LType.BodyEmph), color = p.text)
+    val required = d.tasks.filter { it.withdrawnAt == null }
+    if (required.isEmpty()) Text("No required tasks.", color = p.muted)
+    required.forEach { t ->
+        val accepted = t.acceptance?.workRevision == t.workRevision
+        Text(
+            (if (accepted) "✓ " else "• ") + t.title + if (accepted) " — accepted" else " — not accepted yet",
+            style = ltype(LType.Meta), color = if (accepted) p.text else p.text2,
+        )
+    }
+    Text("Objectives", style = ltype(LType.BodyEmph), color = p.text)
+    if (d.objectives.isEmpty()) Text("No objectives were added to this workflow.", color = p.muted)
+    d.objectives.forEach { o ->
+        if (o.acceptedRevision == o.revision) {
+            Text("✓ ${o.title} — accepted", style = ltype(LType.Meta), color = p.text)
+        } else {
+            val reason = WorkflowLogic.objectiveActionReason(d, o.id, "accept_objective", hasHuman)
+            Text("• ${o.title} — needs acceptance", style = ltype(LType.Meta), color = p.text2)
+            if (reason == null) {
+                Text("Accept objective…", color = p.accent, modifier = Modifier.fillMaxWidth().clickable { onAccept(o.id) })
+            } else Text(reason, style = ltype(LType.Meta), color = p.muted)
+        }
+    }
+    Text("Goal", style = ltype(LType.BodyEmph), color = p.text)
+    if (d.goalAcceptedRevision == d.goalRevision) {
+        Text("✓ Goal accepted", style = ltype(LType.Meta), color = p.text)
+    } else {
+        val reason = WorkflowLogic.actionReason(d, "accept_goal", hasHuman)
+        Text("• Goal needs acceptance", style = ltype(LType.Meta), color = p.text2)
+        if (reason == null) {
+            Text("Accept goal…", color = p.accent, modifier = Modifier.fillMaxWidth().clickable { onAccept(GOAL) })
+        } else Text(reason, style = ltype(LType.Meta), color = p.muted)
+    }
+    when {
+        completion == null -> Text("Check to confirm the workflow can finish.", style = ltype(LType.Meta), color = p.muted)
+        completion.canFinish -> Text("Every required task and the goal are accepted.", color = p.text)
+        else -> completion.blockers.forEach { Text("• ${it.message}", style = ltype(LType.Meta), color = p.text2) }
     }
 }
