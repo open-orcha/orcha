@@ -24,14 +24,14 @@ def startup_guidance(base_cwd, task_id):
             if dispatch.is_file():
                 dispatch_pointer = str(dispatch)
             with store.locked():
-                for directory in sorted(store.root.iterdir()):
-                    if directory.name.startswith('.'):
+                for job_id, record in store.entries():
+                    if record is None:
+                        unavailable = True
                         continue
-                    record = store.read(directory.name)
                     if record.get('task_id') == task_id:
-                        if str(UUID(record['job_id'])) != directory.name:
+                        if str(UUID(record['job_id'])) != job_id:
                             raise JobStorageError('Managed command identity changed')
-                        pointers.append({'job_id': directory.name, 'record': str(directory / 'record.json')})
+                        pointers.append({'job_id': job_id, 'record': str(store.root / job_id / 'record.json')})
     except (OSError, JobStorageError, KeyError, ValueError, TypeError):
         unavailable = True
     return (
