@@ -59,6 +59,10 @@ run({'base_cwd': os.getcwd(), 'cwd': os.getcwd(), 'job_id': sys.argv[1],
     (tmp_path/'guard_test.py').write_text(script)
     cfg = tmp_path/'api.json'
     cfg.write_text('{}')
+    # Mirror a real project's pre-existing config and agent home. Docker
+    # Desktop cannot create a nested file mount through a missing host file.
+    (tmp_path/'.claude'/'orcha.json').write_text('{}')
+    sandbox.ensure_agent_home(tmp_path)
     source = Path(__file__).resolve().parents[2]/'orcha-cli'
     name = sandbox.new_container_name()
     argv = sandbox.build_docker_argv(

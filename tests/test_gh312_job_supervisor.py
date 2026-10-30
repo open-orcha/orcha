@@ -132,6 +132,38 @@ async def test_wait_delivers_guidance_and_explicit_receipt_once(jobs, managed, c
     assert eventually(lambda: result(store, jid))['status'] == 'interrupted'
 
 
+async def test_handoff_keeps_declared_outputs_and_progress_without_log_contents(jobs, tmp_path):
+    api, store, _ = jobs
+    record = start_job(
+        api, store, key='output-handoff', purpose='Check declared output',
+        argv=[sys.executable, '-c', "print('private-output-sentinel',flush=True)"],
+        cwd=tmp_path, ports=[8080], artifacts=['report.json'],
+    )
+    jid = record['job_id']
+    saved = eventually(lambda: result(store, jid))
+    assert saved['exit_code'] == 0
+    checkpoint = read_json(store.job_directory(jid) / 'mechanical.json')
+    assert checkpoint['ports'] == [8080] and checkpoint['artifacts'] == ['report.json']
+    assert checkpoint['output_progress']['stdout']['bytes'] == len('private-output-sentinel\n')
+    assert checkpoint['output_progress']['stdout']['modified_at'] > 0
+    assert 'private-output-sentinel' not in json.dumps(checkpoint)
+    # Retrying the same launch does not alter its original declarations.
+    assert start_job(api, store, key='output-handoff', purpose='Retry', argv=['false'],
+                     cwd=tmp_path, ports=[9090])['job_id'] == jid
+    assert store.read(jid)['ports'] == [8080]
+
+
+@pytest.mark.parametrize('metadata', [{'ports': [0]}, {'ports': [65536]},
+                                    {'artifacts': ['../outside']}, {'artifacts': ['/outside']}])
+def test_invalid_output_declarations_refused_before_reservation(tmp_path, metadata):
+    class NoReservation:
+        def request(self, *args, **kwargs):
+            pytest.fail('Invalid declarations must not create a launch fence')
+    with pytest.raises(ValueError):
+        start_job(NoReservation(), JobStore(tmp_path), key='invalid', purpose='Invalid',
+                  argv=['true'], cwd=tmp_path, **metadata)
+
+
 async def test_supervisor_sigkill_pipe_guard_saves_then_stops(jobs):
     api, store, launch = jobs
     jid = launch('import time;time.sleep(30)')

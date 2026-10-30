@@ -28,6 +28,10 @@ def register(sub, handler):
     start.add_argument('--purpose', required=True, help='brief description without credentials')
     start.add_argument('--max-seconds', type=int, default=7200)
     start.add_argument('--max-transfers', type=int, default=3)
+    start.add_argument('--port', type=int, action='append', default=[],
+                       help='local port used by the command; repeat as needed')
+    start.add_argument('--artifact', action='append', default=[],
+                       help='output path relative to the command directory; saved privately, never uploaded')
     start.add_argument('--isolate', action='store_true',
                        help='macOS: deny shared writes, network, IPC and subprocesses; write only to ORCHA_JOB_SCRATCH')
     start.add_argument('command', nargs=argparse.REMAINDER)
@@ -88,9 +92,19 @@ def summary(store, job):
     return value
 
 
-def start_job(api, store, *, key, purpose, argv, cwd, max_seconds=7200, max_transfers=3, isolate=False):
+def start_job(api, store, *, key, purpose, argv, cwd, max_seconds=7200, max_transfers=3,
+              isolate=False, ports=(), artifacts=()):
     if not argv:
         raise ValueError('A foreground command is required after --')
+    if (len(ports) > 32 or any(type(port) is not int or not 1 <= port <= 65535 for port in ports)
+            or len(artifacts) > 100):
+        raise ValueError('Invalid declared command ports or artifacts')
+    for artifact in artifacts:
+        if (not isinstance(artifact, str) or not artifact or len(artifact) > 1024
+                or Path(artifact).is_absolute() or '..' in Path(artifact).parts
+                or any(ord(character) < 32 for character in artifact)
+                or not (Path(cwd) / artifact).resolve().is_relative_to(Path(cwd).resolve())):
+            raise ValueError('Artifacts must be local paths within the command directory')
     if not Path(cwd).resolve().is_relative_to(store.root.parent.parent):
         raise JobStorageError('Command directory is outside the durable workspace')
     from . import job_isolation
@@ -114,6 +128,7 @@ def start_job(api, store, *, key, purpose, argv, cwd, max_seconds=7200, max_tran
                   'server_version': job['version'], 'owner_run_id': job['owner_run_id'],
                   'workflow_generation': job['workflow_generation'], 'launch_nonce': job['launch_nonce'],
                   'status': 'reserved', 'cwd': str(Path(cwd).resolve()), 'purpose': purpose,
+                  'ports': sorted(set(ports)), 'artifacts': list(dict.fromkeys(artifacts)),
                   'command': command_summary(argv), 'budget_until': job['budget_until'],
                   'max_transfers': job['max_transfers'], 'transfers_used': job['transfers_used'],
                   'launch_claimed': True, 'continuation': contract}
@@ -223,7 +238,7 @@ def cmd_job(args):
             argv = args.command[1:] if args.command[:1] == ['--'] else args.command
             result = start_job(api, store, key=args.key, purpose=args.purpose, argv=argv, cwd=cwd,
                                max_seconds=args.max_seconds, max_transfers=args.max_transfers,
-                               isolate=args.isolate)
+                               isolate=args.isolate, ports=args.port, artifacts=args.artifact)
         elif args.job_action == 'status':
             jobs = api.request('managed-jobs', method='GET')['jobs']
             result = {'jobs': [summary(store, j) for j in jobs if not args.job_id or j['job_id'] == args.job_id]}
