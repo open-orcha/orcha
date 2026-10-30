@@ -20,7 +20,7 @@ from portal_backend.managed_job_service import authority_until, require_job_owne
 from portal_backend.managed_run_auth import conflict, require_managed_run
 from portal_backend.schemas.managed_jobs import (
     ManagedJobAuthority, ManagedJobList, ManagedJobReserve, ManagedJobUpdate,
-    ManagedJobView, ManagedLimitsView, ManagedRunLimits,
+    ManagedJobView, ManagedLimitsView, ManagedRunLimits, ManagedJobReconcile,
 )
 from portal_backend.workflow_evidence_service import _lock_context
 
@@ -173,6 +173,63 @@ def update_managed_job(tid: UUID, jid: UUID, body: ManagedJobUpdate, request: Re
                     'checkpoint_digest=%s,result_digest=%s,termination_verified=%s WHERE job_id=%s RETURNING *',
                     (body.state, body.checkpoint_version, body.checkpoint_digest, body.result_digest,
                      body.termination_verified, str(jid)))
+        job = cur.fetchone()
+        cur.execute('INSERT INTO managed_job_operations(job_id,operation_id,payload_digest) VALUES (%s,%s,%s)',
+                    (str(jid), str(body.operation_id), digest))
+        conn.commit()
+    return job
+
+
+@app.post('/api/tasks/{tid}/managed-jobs/{jid}/reconcile', response_model=ManagedJobView)
+def reconcile_managed_job(tid: UUID, jid: UUID, body: ManagedJobReconcile, request: Request,
+                          x_orcha_run_token: TokenHeader = None):
+    """Import a flushed guard result after its owner has ended, never relaunch.
+
+    The caller verifies the private files under the original supervisor lock.
+    Like checkpoint publication, this API records evidence supplied by the
+    authorized worker; hashes alone are not independent OS termination proof.
+    """
+    digest = hashlib.sha256(body.model_dump_json().encode()).hexdigest()
+    with db_cursor() as (conn, cur):
+        run, task = require_managed_run(cur, str(tid), x_orcha_run_token, request)
+        limits = run_limits(cur, run)
+        if authority_until(cur, run, task, limits) <= sql.utcnow():
+            conflict('managed_authority_expired')
+        # The shared graph/task prefix is already held. Lock the source run
+        # before the job so this serializes with terminalization and adoption.
+        cur.execute('SELECT * FROM worker_runs WHERE run_id=%s' + sql.for_update(),
+                    (str(body.source_owner_run_id),))
+        source = cur.fetchone()
+        if (not source or str(source['task_id']) != str(tid)
+                or source['status'] == 'running' or not source['ended_at']):
+            conflict('managed_source_run_not_ended')
+        cur.execute('SELECT * FROM managed_jobs WHERE job_id=%s AND task_id=%s' + sql.for_update(),
+                    (str(jid), str(tid)))
+        job = cur.fetchone()
+        if not job:
+            conflict('managed_job_unavailable')
+        if (str(job['owner_run_id']) != str(body.source_owner_run_id)
+                or str(job['launch_nonce']) != str(body.launch_nonce)):
+            conflict('managed_recovery_identity_changed')
+        cur.execute('SELECT payload_digest FROM managed_job_operations WHERE job_id=%s AND operation_id=%s',
+                    (str(jid), str(body.operation_id)))
+        operation = cur.fetchone()
+        if operation:
+            if operation['payload_digest'] != digest:
+                conflict('managed_operation_conflict')
+            return job
+        if body.expected_version != job['version'] or body.checkpoint_version <= job['checkpoint_version']:
+            conflict('managed_checkpoint_version_changed')
+        if (job['termination_verified'] and (job['state'] != body.state
+                                             or job['result_digest'] != body.result_digest)):
+            conflict('managed_terminal_evidence_immutable')
+        if job['state'] in {'completed', 'interrupted', 'exhausted'} and job['state'] != body.state:
+            conflict('managed_job_transition_refused')
+        cur.execute('UPDATE managed_jobs SET version=version+1,state=%s,checkpoint_version=%s,'
+                    'checkpoint_digest=%s,result_digest=%s,termination_verified=true '
+                    'WHERE job_id=%s RETURNING *',
+                    (body.state, body.checkpoint_version, body.checkpoint_digest,
+                     body.result_digest, str(jid)))
         job = cur.fetchone()
         cur.execute('INSERT INTO managed_job_operations(job_id,operation_id,payload_digest) VALUES (%s,%s,%s)',
                     (str(jid), str(body.operation_id), digest))

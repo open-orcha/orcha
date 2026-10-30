@@ -43,6 +43,8 @@ def register(sub, handler):
     handled.add_argument('--note', help='explanation without credentials or command output')
     stop = commands.add_parser('stop', help='ask the current supervisor to checkpoint and stop its command')
     stop.add_argument('job_id')
+    recover = commands.add_parser('recover', help='reconcile a saved result from an ended worker; never relaunch')
+    recover.add_argument('job_id')
     parser.set_defaults(func=handler)
 
 
@@ -69,7 +71,7 @@ def summary(store, job):
         result_path = store.job_directory(job['job_id']) / 'result.json'
         if result_path.exists():
             result = read_json(result_path)
-            if result['launch_nonce'] != job['launch_nonce']:
+            if any(result.get(k) != job.get(k) for k in ('job_id', 'owner_run_id', 'launch_nonce')):
                 raise JobStorageError('Managed result belongs to another launch')
             value.update(status=result['status'], exit_code=result['exit_code'],
                          termination_verified=result['termination_verified'], reason=result['reason'])
@@ -81,10 +83,10 @@ def summary(store, job):
 def start_job(api, store, *, key, purpose, argv, cwd, max_seconds=7200, max_transfers=3):
     if not argv:
         raise ValueError('A foreground command is required after --')
-    job = api.request('managed-jobs', {'job_key': str(uuid5(UUID(api.task_id), key)),
-                                     'max_elapsed_secs': max_seconds, 'max_transfers': max_transfers})
     if not Path(cwd).resolve().is_relative_to(store.root.parent.parent):
         raise JobStorageError('Command directory is outside the durable workspace')
+    job = api.request('managed-jobs', {'job_key': str(uuid5(UUID(api.task_id), key)),
+                                     'max_elapsed_secs': max_seconds, 'max_transfers': max_transfers})
     with store.locked():
         directory = store.job_directory(job['job_id'], create=True)
         path = directory / 'record.json'
@@ -210,6 +212,12 @@ def cmd_job(args):
         elif args.job_action == 'handled':
             result = api.request(f'managed-messages/{UUID(args.message_id)}/handled',
                                  {'outcome': args.outcome, 'handling_note': args.note})
+        elif args.job_action == 'recover':
+            from .job_recovery import recover_result
+            job = current_job(api, args.job_id)
+            if job is None:
+                raise JobStorageError('Managed command not found in this task')
+            result = summary(store, recover_result(api, store, job))
         else:
             context = None
             if args.job_action == 'checkpoint' and args.context_file:

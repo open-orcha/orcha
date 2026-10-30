@@ -85,3 +85,20 @@ class ManagedJobAuthority(BaseModel):
     sandbox_until: datetime | None
     budget_until: datetime
     prepare_at: datetime
+
+
+class ManagedJobReconcile(ManagedJobUpdate):
+    """A current worker imports verified evidence from a stopped predecessor.
+
+    This never grants control of a surviving process or spends a transfer. The
+    original owner and launch identity remain part of the immutable result.
+    """
+
+    source_owner_run_id: UUID
+    launch_nonce: UUID
+
+    @model_validator(mode='after')
+    def observed_result(self):
+        if not self.termination_verified or self.state not in {'completed', 'interrupted', 'exhausted'}:
+            raise PydanticCustomError('managed_result_required', 'Recovery requires an observed terminal result')
+        return self

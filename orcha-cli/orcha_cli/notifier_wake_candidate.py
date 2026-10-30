@@ -94,13 +94,19 @@ def _ack_delivery(
     services,
 ):
     """Advance only events actually handled by this delivery path."""
+    from .job_dispatch import capture
+    references_saved = not sent or capture(candidate)
+    if sent and not references_saved:
+        # Keep all notification references retryable if durable capture fails.
+        # wake-ack below never advances the work event cursor.
+        candidate['message_reference_capture_failed'] = True
     ephemeral_reaped = (
         kind == "ephemeral"
         and sent
         and live_workers is not None
         and candidate["agent_id"] in live_workers
     )
-    if sent and not ephemeral_reaped and candidate.get("pending_events"):
+    if sent and references_saved and not ephemeral_reaped and candidate.get("pending_events"):
         # A live-terminal send and `notifier --once` have no completion reaper. A same-task
         # DIRECTIVE is therefore absent from this delivery-safe subset and remains pending until
         # /done or another confirmed completion seam. Older servers do not expose the subset, so
@@ -114,6 +120,10 @@ def _ack_delivery(
             "/events/ack-handled",
             {"event_ids": delivery_ids},
         )
+    if ephemeral_reaped and not references_saved:
+        live_workers[candidate['agent_id']]['handled_event_ids'] = []
+        context = live_workers[candidate['agent_id']].get('respawn_ctx') or {}
+        context['handled_event_ids'] = []
     release_lease = kind == "ephemeral" and not sent
     ack_kind = (
         kind

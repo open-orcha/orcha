@@ -102,7 +102,7 @@ class Supervisor:
                                       start_new_session=True, close_fds=True)
         packet = {k: self.config[k] for k in ('base_cwd', 'job_id', 'launch_nonce', 'argv', 'env', 'cwd')}
         packet.update(owner_run_id=self.record['owner_run_id'], until=self.clock.until,
-                      prepare=self.clock.prepare)
+                      prepare=self.clock.prepare, budget_until=self.clock.budget)
         self.guard.stdin.write(json.dumps(packet).encode() + b'\n')
         self.guard.stdin.flush()
         # Wait for guard startup before sending another packet; the guard's
@@ -126,7 +126,8 @@ class Supervisor:
         if exc.lease_lapsed:
             try:
                 self.confirm()  # A lease lapse alone does not revoke supervision.
-                self.send({'until': self.clock.until, 'prepare': self.clock.prepare})
+                self.send({'until': self.clock.until, 'prepare': self.clock.prepare,
+                           'budget_until': self.clock.budget})
             except JobAPIError as confirmation:
                 if confirmation.fenced:
                     self.stopping = True
@@ -196,13 +197,15 @@ class Supervisor:
                         self.clock.mutations_allowed = False
                         self.checkpoint('stopping')
                     finally:
-                        self.send({'stop': True})
+                        self.send({'stop': True, 'reason': 'budget_exhausted'
+                                   if time.monotonic() >= self.clock.budget else 'supervisor_stop_requested'})
                         self.guard.stdin.close()
                     break
                 if now >= next_contact:
                     try:
                         self.confirm()
-                        self.send({'until': self.clock.until, 'prepare': self.clock.prepare})
+                        self.send({'until': self.clock.until, 'prepare': self.clock.prepare,
+                                   'budget_until': self.clock.budget})
                         if self.clock.mutations_allowed:
                             self.publish_pending()
                             self.controls()
