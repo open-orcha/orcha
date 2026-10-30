@@ -13,6 +13,13 @@ def ensure_message_window(cur, tid, aid, rid, started_at):
     existing = cur.fetchone()
     if existing:
         return existing['started_at']
+    # An accepted task can outlive an unregistered first worker. Its saved
+    # boundary belongs to the task/agent, not to a replaceable scheduling claim.
+    cur.execute('SELECT started_at FROM managed_task_dispatches WHERE task_id=%s AND agent_id=%s',
+                (tid, aid))
+    accepted = cur.fetchone()
+    if accepted:
+        started_at = min(started_at, accepted['started_at'])
     cur.execute("""SELECT m.created_at FROM task_messages m
                    WHERE m.task_id=%s AND (m.author_id IS NULL OR m.author_id<>%s)
                      AND (EXISTS (
