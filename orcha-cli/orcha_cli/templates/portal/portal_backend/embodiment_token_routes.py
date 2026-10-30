@@ -58,6 +58,21 @@ def attribute_token_run_to_task(cur, aid, token, task_id) -> bool:
     """Pin a live run when empty and record its many-to-many task membership."""
     if not token or not task_id:
         return False
+    # Acceptance can commit before the notifier registers the worker. Save the
+    # task's dispatch boundary now: registration (or another accept) may never
+    # happen, and the next successful wake claim replaces the lane's clock.
+    cur.execute(
+        """INSERT INTO managed_task_dispatches (task_id,agent_id,started_at)
+           SELECT t.id, et.agent_id, COALESCE(s.work_dispatch_started_at, now())
+             FROM embodiment_tokens et
+             JOIN tasks t ON t.id=%s AND t.status='in_progress'
+             LEFT JOIN agent_wake_state s ON s.agent_id=et.agent_id
+            WHERE et.run_token=%s AND et.agent_id=%s AND et.lane='work'
+              AND et.revoked_at IS NULL AND et.run_id IS NULL
+              AND et.kind='headless'
+           ON CONFLICT DO NOTHING""",
+        (task_id, token, aid),
+    )
     cur.execute(
         # No UPDATE ... FROM: SQLite's RETURNING can't name the alias, and Postgres would find
         # a bare run_id ambiguous with the joined token row.
