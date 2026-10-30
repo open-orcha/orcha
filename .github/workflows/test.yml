@@ -20,7 +20,7 @@ jobs:
     # timeout-minutes is still a hard stop so a hung/killed session can't idle out
     # the 6h default.
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
 
     # Postgres as a service container (Linux-only, which is fine here). The test
     # suite (tests/conftest.py) reads these URLs, creates a dedicated orcha_test
