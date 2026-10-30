@@ -150,14 +150,20 @@ def abort_reserved(launch):
 
 def confirm_exit(api_base, aid, worker):
     """Only a locally tracked process with a positive exit observation qualifies."""
-    if not worker.get("workflow") or worker.get("sandbox_container_id"):
+    if worker.get("sandbox_container_id") or not worker.get('run_id'):
         return False
     process = worker.get("proc")
     if process is None or process.poll() is None:
         return False
     try:
-        runner_post(f"{api_base}/api/agents/{aid}/runs/{worker['run_id']}/confirm-stopped",
-                    {"generation": worker["workflow_generation"]}, {})
+        if worker.get('workflow'):
+            runner_post(f"{api_base}/api/agents/{aid}/runs/{worker['run_id']}/confirm-stopped",
+                        {"generation": worker["workflow_generation"]}, {})
+        else:
+            if type(process.returncode) is not int or type(process.pid) is not int:
+                return False
+            runner_post(f"{api_base}/api/runs/{worker['run_id']}/managed-stop-observation",
+                        {'process_id': process.pid, 'exit_code': process.returncode}, {})
         return True
     except Exception:
         return False

@@ -88,10 +88,17 @@ def confirm_stopped(cur, execution, *, run_id, generation, terminalize, now=None
     """
     if str(execution.get("run_id")) != str(run_id) or execution["generation"] != generation:
         conflict("stale_generation", "This observation belongs to an earlier worker.")
-    if execution["state"] in {"released", "released_lost", "aborted"}:
-        return {"state": execution["state"]}
+    from portal_backend.worker_stop_observations import record_stop
     now = now or sql.utcnow()
+    if execution["state"] in {"released", "released_lost", "aborted"}:
+        record_stop(cur, run_id, source='workflow_runner', execution_id=execution['id'],
+                    generation=generation, now=now)
+        return {"state": execution["state"]}
     terminalize(cur, run_id, "exited", cause="confirmed_stop")
+    # Terminalization may already have a receipt from finish. This positive
+    # observation is still new evidence, and cannot live only on the reused row.
+    record_stop(cur, run_id, source='workflow_runner', execution_id=execution['id'],
+                generation=generation, now=now)
     cur.execute("SELECT status FROM tasks WHERE id=%s", (execution["task_id"],))
     task = cur.fetchone()
     # A normal exit before acceptance keeps the turn. A checkpoint also keeps it.

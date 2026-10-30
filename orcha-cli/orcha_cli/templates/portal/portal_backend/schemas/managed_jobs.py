@@ -8,6 +8,7 @@ from pydantic import AwareDatetime, BaseModel, Field, model_validator
 from pydantic_core import PydanticCustomError
 
 JobState = Literal['reserved', 'running', 'completed', 'interrupted', 'unknown', 'exhausted']
+ContinuationContract = Literal['stop_before_transfer', 'readonly_single_process_v1']
 
 
 class ManagedRunLimits(BaseModel):
@@ -23,6 +24,7 @@ class ManagedJobReserve(BaseModel):
     job_key: UUID = Field(description='Stable task operation identity; reuse on every retry')
     max_elapsed_secs: int = Field(default=7200, ge=1, le=86400)
     max_transfers: int = Field(default=3, ge=0, le=10)
+    continuation_contract: ContinuationContract = 'stop_before_transfer'
 
 
 class ManagedJobView(BaseModel):
@@ -43,6 +45,22 @@ class ManagedJobView(BaseModel):
     checkpoint_digest: str | None
     result_digest: str | None
     termination_verified: bool
+    continuation_contract: ContinuationContract
+
+
+class HostWorkerStopObserved(BaseModel):
+    process_id: int = Field(gt=0, le=2147483647)
+    exit_code: int = Field(ge=-2147483648, le=2147483647)
+
+
+class WorkerStopObservationView(BaseModel):
+    run_id: UUID
+    execution_id: UUID | None
+    generation: int | None
+    observed_at: datetime
+    source: Literal['host_process', 'workflow_runner']
+    process_id: int | None
+    exit_code: int | None
 
 
 class ManagedJobList(BaseModel):

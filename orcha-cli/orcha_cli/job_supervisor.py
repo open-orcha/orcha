@@ -102,7 +102,8 @@ class Supervisor:
                                       start_new_session=True, close_fds=True)
         packet = {k: self.config[k] for k in ('base_cwd', 'job_id', 'launch_nonce', 'argv', 'env', 'cwd')}
         packet.update(owner_run_id=self.record['owner_run_id'], until=self.clock.until,
-                      prepare=self.clock.prepare, budget_until=self.clock.budget)
+                      prepare=self.clock.prepare, budget_until=self.clock.budget,
+                      continuation_contract=self.record['continuation'])
         self.guard.stdin.write(json.dumps(packet).encode() + b'\n')
         self.guard.stdin.flush()
         # Wait for guard startup before sending another packet; the guard's
