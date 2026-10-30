@@ -12,6 +12,8 @@ import socket
 import subprocess
 from typing import Callable, Optional
 
+from . import notifier_worktree_base
+
 
 MASTER_KEY_ENV = "ORCHA_SECRET_KEY"
 PAIRING_HOST_ENV = "ORCHA_PAIRING_HOST"
@@ -304,6 +306,7 @@ def compose(
                 (orcha_dir.parent / ".claude" / relative).mkdir(parents=True, exist_ok=True)
             except OSError:
                 pass
+        notifier_worktree_base.ensure_runtime_ignored(orcha_dir.parent)  # GH #366
         ensure_key(orcha_dir)
         # A pairing host persisted in the stack's .env outranks LAN discovery
         # (but never an operator's shell env) — see pairing_host_from_env_file.

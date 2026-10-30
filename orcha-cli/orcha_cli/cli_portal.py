@@ -21,7 +21,7 @@ import pathlib
 import shutil
 import sys
 
-from . import cli_project_setup
+from . import cli_project_setup, notifier_worktree_base
 from .cli_env import _append_env_file, _read_env_file_value, _tighten_env_file
 from .cli_runtime_mode import NATIVE, db_path
 
@@ -118,6 +118,7 @@ def _prepare_host_state(project_root: pathlib.Path) -> None:
     cli_project_setup.ensure_secret_key(
         orcha_dir, _read_env_file_value, _append_env_file, _tighten_env_file
     )
+    notifier_worktree_base.ensure_runtime_ignored(project_root)  # GH #366
     cli_project_setup.export_pairing_host(
         cli_project_setup.discover_pairing_host, orcha_dir
     )
