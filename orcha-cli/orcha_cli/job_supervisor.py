@@ -46,6 +46,7 @@ class Supervisor:
         self.stopping = False
         self.transfer = None
         self.transfer_channel = None
+        self.not_started = False
 
     def update(self, **changes):
         self.record = self.store.update(self.job_id, self.record['version'], changes)
@@ -56,6 +57,13 @@ class Supervisor:
             self.transfer.confirm(sent)
         else:
             self.clock.confirm(self.api.heartbeat(self.job_id), sent)
+        if self.record.get('supervisor'):
+            atomic_json(self.directory / 'authority.json', {
+                'job_id': self.job_id, 'owner_run_id': self.record['owner_run_id'],
+                'launch_nonce': self.record['launch_nonce'], 'supervisor': self.record['supervisor'],
+                'confirmed_at_monotonic': sent, 'authority_until_monotonic': self.clock.until,
+                'fixed_until_monotonic': self.clock.fixed, 'budget_until_monotonic': self.clock.budget,
+            })
         return self.clock.mutations_allowed
 
     def checkpoint(self, reason, state=None, result=None):
@@ -93,7 +101,14 @@ class Supervisor:
         path.unlink()
 
     def launch(self):
-        if not self.confirm() or self.record['server_version'] != 0:
+        try:
+            allowed = self.confirm()
+        except JobAPIError:
+            # No checkpoint CAS, guard or command was attempted. This explicit
+            # state (never merely missing process.json) permits a same-key retry.
+            self.not_started = True
+            raise
+        if not allowed or self.record['server_version'] != 0:
             raise JobAPIError(409)
         # A server CAS plus a flushed local launch fence precedes Popen. If
         # either outcome is uncertain, no worker may silently try a new launch.
@@ -190,6 +205,12 @@ class Supervisor:
         except BlockingIOError:
             os.close(lock)
             return
+        # A delayed supervisor from an earlier pre-launch failure cannot claim
+        # a newer attempt even though the server reservation nonce is unchanged.
+        self.record = self.store.read(self.job_id)
+        if self.record.get('launch_attempt') != self.config.get('launch_attempt'):
+            os.close(lock)
+            return
         def stop(signum, frame):
             self.stopping = True
         signal.signal(signal.SIGTERM, stop)
@@ -257,7 +278,7 @@ class Supervisor:
                         self.guard.wait(timeout=5)
                     except subprocess.TimeoutExpired:
                         pass  # Do not signal a recorded/reused process ID.
-                self.update(status='unknown')
+                self.update(status='not_started' if self.not_started else 'unknown')
         finally:
             if self.transfer_channel:
                 self.transfer_channel.close()

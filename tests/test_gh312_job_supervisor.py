@@ -104,6 +104,53 @@ async def test_real_command_one_launch_private_result_and_control_environment(jo
         assert not store.retains_worktree(tmp_path)
 
 
+async def test_first_heartbeat_failure_retries_same_reservation_once(jobs, tmp_path, monkeypatch, db):
+    from fastapi import HTTPException
+    from portal_backend.application import app
+    api, store, launch = jobs
+    route = next(r for r in app.routes if getattr(r, 'path', '').endswith('/{jid}/heartbeat'))
+    original = route.dependant.call
+    def unavailable(*args, **kwargs):
+        raise HTTPException(503, 'Temporary first-contact outage')
+    monkeypatch.setattr(route.dependant, 'call', unavailable)
+    code = "import time;open('launches','a').write('once');time.sleep(.2)"
+    jid = launch(code)
+    eventually(lambda: store.read(jid)['status'] == 'not_started')
+    directory = store.job_directory(jid)
+    assert not (directory / 'process.json').exists()
+    assert not (tmp_path / 'launches').exists()
+    original_record = store.read(jid)
+    assert db.execute('SELECT version,state FROM managed_jobs') == [{'version': 0, 'state': 'reserved'}]
+    monkeypatch.setattr(route.dependant, 'call', original)
+    # A failure may still be releasing its controller lock; a bounded same-key
+    # retry is safe, including concurrent callers after the service returns.
+    eventually(lambda: (launch(code), store.read(jid)['status'] != 'not_started')[1])
+    assert launch(code) == jid
+    assert eventually(lambda: result(store, jid))['exit_code'] == 0
+    assert (tmp_path / 'launches').read_text() == 'once'
+    saved = store.read(jid)
+    assert saved['launch_nonce'] == original_record['launch_nonce']
+    assert saved['budget_until'] == original_record['budget_until']
+    assert saved['launch_attempt'] != original_record['launch_attempt']
+
+
+async def test_uncertain_launch_is_never_retried_from_missing_process_file(jobs, tmp_path, monkeypatch):
+    from fastapi import HTTPException
+    from portal_backend.application import app
+    api, store, launch = jobs
+    route = next(r for r in app.routes if getattr(r, 'path', '').endswith('/{jid}/checkpoint'))
+    def unavailable(*args, **kwargs):
+        raise HTTPException(503, 'Unknown checkpoint commit outcome')
+    monkeypatch.setattr(route.dependant, 'call', unavailable)
+    jid = launch("open('must-not-start','w').write('bad')")
+    eventually(lambda: store.read(jid)['status'] == 'unknown')
+    first = store.read(jid)
+    assert not (store.job_directory(jid) / 'process.json').exists()
+    assert launch("open('must-not-start','w').write('bad')") == jid
+    assert store.read(jid)['launch_attempt'] == first['launch_attempt']
+    assert not (tmp_path / 'must-not-start').exists()
+
+
 async def test_wait_delivers_guidance_and_explicit_receipt_once(jobs, managed, client, db):
     api, store, launch = jobs
     jid = launch('import time;time.sleep(30)')

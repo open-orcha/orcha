@@ -8,6 +8,7 @@ Uncertain evidence retains the launch/worktree fence and prevents respawning.
 from __future__ import annotations
 
 import fcntl
+import math
 import os
 import time
 from uuid import UUID, uuid5
@@ -166,13 +167,37 @@ def reconcile_renewal(api_base, worker):
                     continue  # The command may have completed during the probe.
                 if exc.fenced and not exc.lease_lapsed:
                     return False
+                if clock.until == 0:
+                    restore_authority(store, record, clock)
                 if time.monotonic() >= clock.until:
-                    # A daemon restart has no confirmed deadline in memory; the
-                    # guard retains its own deadline, but do not assume authority.
                     return False
         return True
     except (OSError, ValueError, KeyError, JobStorageError, JobAPIError):
         return False
+
+
+def restore_authority(store, record, clock):
+    """Read a finite confirmation from the still-original, same-boot controller.
+
+    This permits supervision only. It never restores mutation permission, and a
+    changed owner, controller or missing evidence leaves the deadline at zero.
+    """
+    from .job_identity import same_process
+    try:
+        saved = read_json(store.job_directory(record['job_id']) / 'authority.json')
+        if (any(saved.get(k) != record.get(k) for k in
+                ('job_id', 'owner_run_id', 'launch_nonce', 'supervisor'))
+                or not same_process(saved.get('supervisor'))):
+            return
+        bounds = [saved[k] for k in ('authority_until_monotonic', 'fixed_until_monotonic',
+                                     'budget_until_monotonic')]
+        if (not all(isinstance(v, (float, int)) and math.isfinite(v) for v in bounds)
+                or not 0 < saved['confirmed_at_monotonic'] <= time.monotonic()):
+            return
+        clock.until = min(bounds)
+        clock.mutations_allowed = False
+    except (OSError, ValueError, TypeError, KeyError, JobStorageError):
+        return
 
 
 def prepare_if_due(api_base, worker, services, now):
