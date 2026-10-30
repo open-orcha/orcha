@@ -19,6 +19,7 @@ import { Linkified, Md } from "../../components/ui";
 import { Chip, StatusGlyph, normalizePayload } from "../../components/primitives";
 import { shortId, taskByRef } from "../../lib/format";
 import type { Task } from "../../types";
+import { plainPreview } from "../needs/plainPreview";
 
 /** Fields that read as the "headline" of an object payload, in preference order. */
 export const TITLE_KEYS = ["title", "question", "summary", "subject", "message", "body", "text", "prompt", "description", "ask"] as const;
@@ -85,15 +86,14 @@ export function payloadText(p0: unknown): string {
 
 /** Headline for titles/crumbs: first line (and first sentence when long) of payloadText. */
 export function payloadTitle(p: unknown, fallback = "Request"): string {
-  const t = payloadText(p).replace(/\s+/g, " ").trim();
-  if (!t) return fallback;
-  const firstLine = payloadText(p).split(/\n/).find((l) => l.trim())?.trim() ?? t;
+  const firstLine = payloadText(p).split(/\n/).find((l) => l.trim())?.trim() ?? "";
+  const title = plainPreview(firstLine);
+  if (!title) return fallback;
   // first sentence when the prose has more than one; else the line, word-truncated past 110
-  const m = firstLine.match(/^(.{20,110}?[.?!])(\s|$)/);
-  const head = m && m[1].length < firstLine.length ? m[1]
-    : firstLine.length <= 110 ? firstLine
-    : firstLine.slice(0, 100).replace(/\s+\S*$/, "") + "…";
-  return head.replace(/^#+\s*/, "");
+  const m = title.match(/^(.{20,110}?[.?!])(\s|$)/);
+  return m && m[1].length < title.length ? m[1]
+    : title.length <= 110 ? title
+    : title.slice(0, 100).replace(/\s+\S*$/, "") + "…";
 }
 
 /**
@@ -143,7 +143,7 @@ type Titled = { title?: string | null; payload: unknown };
 
 /** List/crumb headline of a request: its display title, else payloadTitle. */
 export function reqTitle(r: Titled, fallback = "Request"): string {
-  const t = (r.title || "").trim();
+  const t = plainPreview((r.title || "").trim());
   return t || payloadTitle(r.payload, fallback);
 }
 
