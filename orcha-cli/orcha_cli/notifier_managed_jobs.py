@@ -19,18 +19,31 @@ from .job_store import JobStore, JobStorageError, atomic_json, read_json, _open_
 
 
 def run_jobs(worker):
+    """Return this run's records from the folder every worker shares.
+
+    Entries that are not command records are skipped. An unreadable or missing
+    record raises only for the run that last observed it as its own unsettled
+    command, so one damaged or stray entry cannot cost other workers authority.
+    """
     base = worker.get('base_cwd') or worker.get('worktree')
     if not base or not worker.get('run_id') or not jobs_root(base).exists():
         return None, []
     store = JobStore(base)
     records = []
+    owned = set(worker.get('managed_job_ids') or ())
+    seen = set()
     with store.locked():
-        for directory in sorted(store.root.iterdir()):
-            if directory.name.startswith('.'):
-                continue
-            record = store.read(directory.name)
+        for job_id, record in store.entries():
+            seen.add(job_id)
+            if record is None:
+                if job_id in owned:
+                    raise JobStorageError('Managed command record is unavailable')
+                continue  # Unattributable; each command's own guard still enforces its limits.
             if record.get('owner_run_id') == worker['run_id']:
                 records.append(record)
+    if owned - seen:
+        raise JobStorageError('Managed command record is missing')
+    worker['managed_job_ids'] = sorted(r['job_id'] for r in records if not settled(r))
     return store, records
 
 

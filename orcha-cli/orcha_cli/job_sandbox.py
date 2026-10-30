@@ -103,7 +103,9 @@ def records(evidence):
         return None, []
     store = JobStore(evidence['workspace'])
     with store.locked():
-        rows = [store.read(d.name) for d in sorted(store.root.iterdir()) if not d.name.startswith('.')]
+        rows = [record for _, record in store.entries()]
+    if None in rows:
+        raise JobStorageError('Managed command record is unavailable')
     return store, [r for r in rows if (r.get('container') or {}).get('name') == evidence['name']]
 
 

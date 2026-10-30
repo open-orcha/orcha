@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import fcntl
 import json
+import logging
 import os
 import stat
 import tempfile
@@ -19,6 +20,16 @@ from .sandbox import workspace_root_for
 
 JOBS_DIRECTORY = ".orcha-jobs"
 TERMINAL_STATES = frozenset({"completed", "interrupted", "exhausted"})
+
+log = logging.getLogger("orcha.jobs")
+_reported: set[tuple[str, str]] = set()
+
+
+def _report_skipped(path: Path, reason: str) -> None:
+    """Log each skipped entry once per process; scans repeat every few seconds."""
+    if (str(path), reason) not in _reported:
+        _reported.add((str(path), reason))
+        log.warning("Skipping %s in managed command storage: %s", path, reason)
 
 
 class JobStorageError(RuntimeError):
@@ -138,6 +149,30 @@ class JobStore:
     def read(self, job_id: str) -> dict:
         return read_json(self.job_directory(job_id) / "record.json")
 
+    def entries(self):
+        """Yield (job_id, record) per command directory; call under locked().
+
+        Hidden names are Orcha's own control files. Any other name that is not a
+        job id (a stray file or folder) cannot belong to a command, so it is
+        logged and skipped, never read. An unreadable record under a job id
+        yields None: the caller decides whom it may affect.
+        """
+        for path in sorted(self.root.iterdir()):
+            if path.name.startswith("."):
+                continue
+            try:
+                job_id = str(UUID(path.name))
+            except ValueError:
+                job_id = None
+            if job_id != path.name:
+                _report_skipped(path, "not a command record")
+                continue
+            try:
+                yield job_id, self.read(job_id)
+            except JobStorageError:
+                _report_skipped(path, "command record is unreadable")
+                yield job_id, None
+
     def open_output(self, job_id: str, stream: str):
         """Append raw command output only to private, ignored local files."""
         if stream not in {"stdout", "stderr"}:
@@ -188,11 +223,10 @@ class JobStore:
     def retains_worktree(self, worktree: str | Path) -> bool:
         """Call under locked(); uncertain/unreadable evidence prevents deletion."""
         worktree = str(Path(worktree).resolve())
-        for directory in self.root.iterdir():
-            if directory.name.startswith("."):
-                continue
+        for _, record in self.entries():
             try:
-                record = self.read(directory.name)
+                if record is None:
+                    return True
                 if not Path(record["cwd"]).resolve().is_relative_to(worktree):
                     continue
                 if (record.get("status") not in TERMINAL_STATES
