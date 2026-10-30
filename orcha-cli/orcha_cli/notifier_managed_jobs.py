@@ -18,12 +18,14 @@ from .job_evidence import context_snapshot, verified_result
 from .job_store import JobStore, JobStorageError, atomic_json, read_json, _open_private, jobs_root
 
 
-def run_jobs(worker):
+def run_jobs(worker, *, renewal=False):
     """Return this run's records from the folder every worker shares.
 
-    Entries that are not command records are skipped. An unreadable or missing
-    record raises only for the run that last observed it as its own unsettled
-    command, so one damaged or stray entry cannot cost other workers authority.
+    Entries that are not command records are always skipped. An unreadable or
+    missing record leaves command disposition unknown, so shutdown, replacement
+    and container removal raise. Only the renewal check isolates it: there it
+    raises just for the run that last observed it as its own unsettled command,
+    so one damaged entry cannot cost other workers their authority.
     """
     base = worker.get('base_cwd') or worker.get('worktree')
     if not base or not worker.get('run_id') or not jobs_root(base).exists():
@@ -36,7 +38,7 @@ def run_jobs(worker):
         for job_id, record in store.entries():
             seen.add(job_id)
             if record is None:
-                if job_id in owned:
+                if not renewal or job_id in owned:
                     raise JobStorageError('Managed command record is unavailable')
                 continue  # Unattributable; each command's own guard still enforces its limits.
             if record.get('owner_run_id') == worker['run_id']:
@@ -153,7 +155,7 @@ def reconcile_renewal(api_base, worker):
     supervisors/guards continue enforcing their own, possibly earlier deadline.
     """
     try:
-        store, records = run_jobs(worker)
+        store, records = run_jobs(worker, renewal=True)
         live = [r for r in records if not settled(reconcile_result(store, r))]
         if not live:
             return True

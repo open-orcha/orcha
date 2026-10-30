@@ -7,9 +7,10 @@ record may cost that worker its authority.
 """
 
 import asyncio
+from types import SimpleNamespace
 from uuid import uuid4
 
-from orcha_cli import notifier_managed_jobs as handoff
+from orcha_cli import notifier_embodiment, notifier_managed_jobs as handoff, sandbox
 from orcha_cli.job_store import JobStore
 from test_gh312_job_supervisor import service, jobs, running, eventually  # noqa: F401
 from test_gh312_managed_messages import managed  # noqa: F401
@@ -80,6 +81,48 @@ def test_unattributable_corrupt_record_is_skipped_by_unobserved_worker(tmp_path,
     worker = {'run_id': str(uuid4()), 'base_cwd': str(tmp_path)}
     assert handoff.reconcile_renewal('http://test', worker)
     assert jid in caplog.text
+
+
+def corrupt(store, jid):
+    (store.job_directory(jid) / 'record.json').write_text('{corrupt')
+
+
+def transport():
+    return SimpleNamespace(_post_json=lambda *a: {'message_id': str(uuid4())})
+
+
+def test_unreadable_record_keeps_stop_and_replacement_uncertain_for_fresh_worker(tmp_path):
+    store = JobStore(tmp_path)
+    worker = {'run_id': str(uuid4()), 'base_cwd': str(tmp_path), 'run_token': 'unused'}
+    corrupt(store, own_job(store, worker['run_id'], tmp_path))
+    # No ownership history yet (fresh worker or notifier restart): unknown is not "no commands".
+    assert not handoff.prepare('http://test', worker, transport(), reason='stop', stop=True, wait_secs=0)
+    assert worker['managed_disposition_unknown']
+    successor = {'run_id': str(uuid4()), 'base_cwd': str(tmp_path), 'run_token': 'unused'}
+    assert not handoff.prepare_replacement('http://test', successor, transport())
+    assert successor['managed_disposition_unknown']
+    assert handoff.reconcile_renewal('http://test', dict(successor))  # Renewal alone stays isolated.
+
+
+def test_unreadable_record_blocks_container_removal(tmp_path, monkeypatch):
+    from test_gh312_job_sandbox import docker_boundary, setup_record
+    store, record, payload = setup_record(tmp_path)
+    corrupt(store, record['job_id'])
+    calls = []
+    monkeypatch.setattr(sandbox, '_docker', docker_boundary(payload, calls))
+    worker = {'run_id': record['owner_run_id'], 'base_cwd': str(tmp_path),
+              'sandbox_container_id': 'orcha-run-test'}
+    notifier_embodiment.reap_sandbox_artifacts(worker, sandbox_mod=sandbox)
+    assert not any(c[0] in {'rm', 'stop'} for c in calls)
+
+
+def test_strays_alone_keep_stop_and_replacement_certain(tmp_path):
+    store = JobStore(tmp_path)
+    add_strays(store)
+    worker = {'run_id': str(uuid4()), 'base_cwd': str(tmp_path), 'run_token': 'unused'}
+    assert handoff.prepare('http://test', worker, transport(), reason='stop', stop=True, wait_secs=0)
+    assert handoff.prepare_replacement('http://test', worker, transport())
+    assert not worker.get('managed_disposition_unknown')
 
 
 def test_worktree_retention_ignores_strays_but_keeps_unreadable_records(tmp_path):
