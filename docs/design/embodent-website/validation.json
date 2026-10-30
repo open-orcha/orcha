@@ -1,0 +1,742 @@
+{
+  "revision": 3,
+  "created": "2026-10-30T16:44:11.936Z",
+  "browser": "Chromium via Playwright",
+  "reports": [
+    {
+      "check": "all exported theme tokens contain color values",
+      "pass": true
+    },
+    {
+      "page": "home",
+      "width": 320,
+      "scroll": 320,
+      "h1": 1,
+      "missingLinks": [],
+      "pass": true
+    },
+    {
+      "page": "installation",
+      "width": 320,
+      "scroll": 320,
+      "h1": 1,
+      "missingLinks": [],
+      "pass": true
+    },
+    {
+      "page": "usage",
+      "width": 320,
+      "scroll": 320,
+      "h1": 1,
+      "missingLinks": [],
+      "pass": true
+    },
+    {
+      "page": "attribution",
+      "width": 320,
+      "scroll": 320,
+      "h1": 1,
+      "missingLinks": [],
+      "pass": true
+    },
+    {
+      "page": "states",
+      "width": 320,
+      "scroll": 320,
+      "h1": 1,
+      "missingLinks": [],
+      "pass": true
+    },
+    {
+      "page": "home",
+      "width": 390,
+      "scroll": 390,
+      "h1": 1,
+      "missingLinks": [],
+      "pass": true
+    },
+    {
+      "page": "installation",
+      "width": 390,
+      "scroll": 390,
+      "h1": 1,
+      "missingLinks": [],
+      "pass": true
+    },
+    {
+      "page": "usage",
+      "width": 390,
+      "scroll": 390,
+      "h1": 1,
+      "missingLinks": [],
+      "pass": true
+    },
+    {
+      "page": "attribution",
+      "width": 390,
+      "scroll": 390,
+      "h1": 1,
+      "missingLinks": [],
+      "pass": true
+    },
+    {
+      "page": "states",
+      "width": 390,
+      "scroll": 390,
+      "h1": 1,
+      "missingLinks": [],
+      "pass": true
+    },
+    {
+      "page": "home",
+      "width": 768,
+      "scroll": 768,
+      "h1": 1,
+      "missingLinks": [],
+      "pass": true
+    },
+    {
+      "page": "installation",
+      "width": 768,
+      "scroll": 768,
+      "h1": 1,
+      "missingLinks": [],
+      "pass": true
+    },
+    {
+      "page": "usage",
+      "width": 768,
+      "scroll": 768,
+      "h1": 1,
+      "missingLinks": [],
+      "pass": true
+    },
+    {
+      "page": "attribution",
+      "width": 768,
+      "scroll": 768,
+      "h1": 1,
+      "missingLinks": [],
+      "pass": true
+    },
+    {
+      "page": "states",
+      "width": 768,
+      "scroll": 768,
+      "h1": 1,
+      "missingLinks": [],
+      "pass": true
+    },
+    {
+      "page": "home",
+      "width": 1024,
+      "scroll": 1024,
+      "h1": 1,
+      "missingLinks": [],
+      "pass": true
+    },
+    {
+      "page": "installation",
+      "width": 1024,
+      "scroll": 1024,
+      "h1": 1,
+      "missingLinks": [],
+      "pass": true
+    },
+    {
+      "page": "usage",
+      "width": 1024,
+      "scroll": 1024,
+      "h1": 1,
+      "missingLinks": [],
+      "pass": true
+    },
+    {
+      "page": "attribution",
+      "width": 1024,
+      "scroll": 1024,
+      "h1": 1,
+      "missingLinks": [],
+      "pass": true
+    },
+    {
+      "page": "states",
+      "width": 1024,
+      "scroll": 1024,
+      "h1": 1,
+      "missingLinks": [],
+      "pass": true
+    },
+    {
+      "page": "home",
+      "width": 1440,
+      "scroll": 1440,
+      "h1": 1,
+      "missingLinks": [],
+      "pass": true
+    },
+    {
+      "page": "installation",
+      "width": 1440,
+      "scroll": 1440,
+      "h1": 1,
+      "missingLinks": [],
+      "pass": true
+    },
+    {
+      "page": "usage",
+      "width": 1440,
+      "scroll": 1440,
+      "h1": 1,
+      "missingLinks": [],
+      "pass": true
+    },
+    {
+      "page": "attribution",
+      "width": 1440,
+      "scroll": 1440,
+      "h1": 1,
+      "missingLinks": [],
+      "pass": true
+    },
+    {
+      "page": "states",
+      "width": 1440,
+      "scroll": 1440,
+      "h1": 1,
+      "missingLinks": [],
+      "pass": true
+    },
+    {
+      "check": "header/footer standalone links are at least 44 by 44 CSS pixels",
+      "width": 320,
+      "theme": "dark",
+      "targets": [
+        {
+          "label": "Installation",
+          "area": "header",
+          "width": 288,
+          "height": 44
+        },
+        {
+          "label": "Usage",
+          "area": "header",
+          "width": 288,
+          "height": 44
+        },
+        {
+          "label": "Open source",
+          "area": "header",
+          "width": 288,
+          "height": 44
+        },
+        {
+          "label": "Installation",
+          "area": "footer",
+          "width": 66.125,
+          "height": 44
+        },
+        {
+          "label": "Usage",
+          "area": "footer",
+          "width": 44,
+          "height": 44
+        },
+        {
+          "label": "Open source",
+          "area": "footer",
+          "width": 78.859375,
+          "height": 44
+        },
+        {
+          "label": "GitHub",
+          "area": "footer",
+          "width": 44,
+          "height": 44
+        }
+      ],
+      "pass": true
+    },
+    {
+      "check": "header/footer standalone links are at least 44 by 44 CSS pixels",
+      "width": 320,
+      "theme": "light",
+      "targets": [
+        {
+          "label": "Installation",
+          "area": "header",
+          "width": 288,
+          "height": 44
+        },
+        {
+          "label": "Usage",
+          "area": "header",
+          "width": 288,
+          "height": 44
+        },
+        {
+          "label": "Open source",
+          "area": "header",
+          "width": 288,
+          "height": 44
+        },
+        {
+          "label": "Installation",
+          "area": "footer",
+          "width": 66.125,
+          "height": 44
+        },
+        {
+          "label": "Usage",
+          "area": "footer",
+          "width": 44,
+          "height": 44
+        },
+        {
+          "label": "Open source",
+          "area": "footer",
+          "width": 78.859375,
+          "height": 44
+        },
+        {
+          "label": "GitHub",
+          "area": "footer",
+          "width": 44,
+          "height": 44
+        }
+      ],
+      "pass": true
+    },
+    {
+      "check": "header/footer standalone links are at least 44 by 44 CSS pixels",
+      "width": 390,
+      "theme": "dark",
+      "targets": [
+        {
+          "label": "Installation",
+          "area": "header",
+          "width": 350,
+          "height": 44
+        },
+        {
+          "label": "Usage",
+          "area": "header",
+          "width": 350,
+          "height": 44
+        },
+        {
+          "label": "Open source",
+          "area": "header",
+          "width": 350,
+          "height": 44
+        },
+        {
+          "label": "Installation",
+          "area": "footer",
+          "width": 66.125,
+          "height": 44
+        },
+        {
+          "label": "Usage",
+          "area": "footer",
+          "width": 44,
+          "height": 44
+        },
+        {
+          "label": "Open source",
+          "area": "footer",
+          "width": 78.859375,
+          "height": 44
+        },
+        {
+          "label": "GitHub",
+          "area": "footer",
+          "width": 44,
+          "height": 44
+        }
+      ],
+      "pass": true
+    },
+    {
+      "check": "header/footer standalone links are at least 44 by 44 CSS pixels",
+      "width": 390,
+      "theme": "light",
+      "targets": [
+        {
+          "label": "Installation",
+          "area": "header",
+          "width": 350,
+          "height": 44
+        },
+        {
+          "label": "Usage",
+          "area": "header",
+          "width": 350,
+          "height": 44
+        },
+        {
+          "label": "Open source",
+          "area": "header",
+          "width": 350,
+          "height": 44
+        },
+        {
+          "label": "Installation",
+          "area": "footer",
+          "width": 66.125,
+          "height": 44
+        },
+        {
+          "label": "Usage",
+          "area": "footer",
+          "width": 44,
+          "height": 44
+        },
+        {
+          "label": "Open source",
+          "area": "footer",
+          "width": 78.859375,
+          "height": 44
+        },
+        {
+          "label": "GitHub",
+          "area": "footer",
+          "width": 44,
+          "height": 44
+        }
+      ],
+      "pass": true
+    },
+    {
+      "check": "header/footer standalone links are at least 44 by 44 CSS pixels",
+      "width": 768,
+      "theme": "dark",
+      "targets": [
+        {
+          "label": "Installation",
+          "area": "header",
+          "width": 704,
+          "height": 44
+        },
+        {
+          "label": "Usage",
+          "area": "header",
+          "width": 704,
+          "height": 44
+        },
+        {
+          "label": "Open source",
+          "area": "header",
+          "width": 704,
+          "height": 44
+        },
+        {
+          "label": "Installation",
+          "area": "footer",
+          "width": 66.125,
+          "height": 44
+        },
+        {
+          "label": "Usage",
+          "area": "footer",
+          "width": 44,
+          "height": 44
+        },
+        {
+          "label": "Open source",
+          "area": "footer",
+          "width": 78.859375,
+          "height": 44
+        },
+        {
+          "label": "GitHub",
+          "area": "footer",
+          "width": 44,
+          "height": 44
+        }
+      ],
+      "pass": true
+    },
+    {
+      "check": "header/footer standalone links are at least 44 by 44 CSS pixels",
+      "width": 768,
+      "theme": "light",
+      "targets": [
+        {
+          "label": "Installation",
+          "area": "header",
+          "width": 704,
+          "height": 44
+        },
+        {
+          "label": "Usage",
+          "area": "header",
+          "width": 704,
+          "height": 44
+        },
+        {
+          "label": "Open source",
+          "area": "header",
+          "width": 704,
+          "height": 44
+        },
+        {
+          "label": "Installation",
+          "area": "footer",
+          "width": 66.125,
+          "height": 44
+        },
+        {
+          "label": "Usage",
+          "area": "footer",
+          "width": 44,
+          "height": 44
+        },
+        {
+          "label": "Open source",
+          "area": "footer",
+          "width": 78.859375,
+          "height": 44
+        },
+        {
+          "label": "GitHub",
+          "area": "footer",
+          "width": 44,
+          "height": 44
+        }
+      ],
+      "pass": true
+    },
+    {
+      "check": "header/footer standalone links are at least 44 by 44 CSS pixels",
+      "width": 1024,
+      "theme": "dark",
+      "targets": [
+        {
+          "label": "Installation",
+          "area": "header",
+          "width": 71.21875,
+          "height": 44
+        },
+        {
+          "label": "Usage",
+          "area": "header",
+          "width": 44,
+          "height": 44
+        },
+        {
+          "label": "Open source",
+          "area": "header",
+          "width": 84.921875,
+          "height": 44
+        },
+        {
+          "label": "Installation",
+          "area": "footer",
+          "width": 66.125,
+          "height": 44
+        },
+        {
+          "label": "Usage",
+          "area": "footer",
+          "width": 44,
+          "height": 44
+        },
+        {
+          "label": "Open source",
+          "area": "footer",
+          "width": 78.859375,
+          "height": 44
+        },
+        {
+          "label": "GitHub",
+          "area": "footer",
+          "width": 44,
+          "height": 44
+        }
+      ],
+      "pass": true
+    },
+    {
+      "check": "header/footer standalone links are at least 44 by 44 CSS pixels",
+      "width": 1024,
+      "theme": "light",
+      "targets": [
+        {
+          "label": "Installation",
+          "area": "header",
+          "width": 71.21875,
+          "height": 44
+        },
+        {
+          "label": "Usage",
+          "area": "header",
+          "width": 44,
+          "height": 44
+        },
+        {
+          "label": "Open source",
+          "area": "header",
+          "width": 84.921875,
+          "height": 44
+        },
+        {
+          "label": "Installation",
+          "area": "footer",
+          "width": 66.125,
+          "height": 44
+        },
+        {
+          "label": "Usage",
+          "area": "footer",
+          "width": 44,
+          "height": 44
+        },
+        {
+          "label": "Open source",
+          "area": "footer",
+          "width": 78.859375,
+          "height": 44
+        },
+        {
+          "label": "GitHub",
+          "area": "footer",
+          "width": 44,
+          "height": 44
+        }
+      ],
+      "pass": true
+    },
+    {
+      "check": "header/footer standalone links are at least 44 by 44 CSS pixels",
+      "width": 1440,
+      "theme": "dark",
+      "targets": [
+        {
+          "label": "Installation",
+          "area": "header",
+          "width": 71.21875,
+          "height": 44
+        },
+        {
+          "label": "Usage",
+          "area": "header",
+          "width": 44,
+          "height": 44
+        },
+        {
+          "label": "Open source",
+          "area": "header",
+          "width": 84.921875,
+          "height": 44
+        },
+        {
+          "label": "Installation",
+          "area": "footer",
+          "width": 66.125,
+          "height": 44
+        },
+        {
+          "label": "Usage",
+          "area": "footer",
+          "width": 44,
+          "height": 44
+        },
+        {
+          "label": "Open source",
+          "area": "footer",
+          "width": 78.859375,
+          "height": 44
+        },
+        {
+          "label": "GitHub",
+          "area": "footer",
+          "width": 44,
+          "height": 44
+        }
+      ],
+      "pass": true
+    },
+    {
+      "check": "header/footer standalone links are at least 44 by 44 CSS pixels",
+      "width": 1440,
+      "theme": "light",
+      "targets": [
+        {
+          "label": "Installation",
+          "area": "header",
+          "width": 71.21875,
+          "height": 44
+        },
+        {
+          "label": "Usage",
+          "area": "header",
+          "width": 44,
+          "height": 44
+        },
+        {
+          "label": "Open source",
+          "area": "header",
+          "width": 84.921875,
+          "height": 44
+        },
+        {
+          "label": "Installation",
+          "area": "footer",
+          "width": 66.125,
+          "height": 44
+        },
+        {
+          "label": "Usage",
+          "area": "footer",
+          "width": 44,
+          "height": 44
+        },
+        {
+          "label": "Open source",
+          "area": "footer",
+          "width": 78.859375,
+          "height": 44
+        },
+        {
+          "label": "GitHub",
+          "area": "footer",
+          "width": 44,
+          "height": 44
+        }
+      ],
+      "pass": true
+    },
+    {
+      "check": "dark links resolve to indigo accent",
+      "pass": true
+    },
+    {
+      "check": "desktop hides phone Menu control",
+      "pass": true
+    },
+    {
+      "check": "phone menu opens and Escape returns focus",
+      "pass": true
+    },
+    {
+      "check": "appearance persists across reload",
+      "pass": true
+    },
+    {
+      "check": "copy failure is announced",
+      "pass": true
+    },
+    {
+      "check": "two times hero/body/button text at phone width",
+      "pass": true
+    },
+    {
+      "check": "copy success announces and copies only selected command (stub clipboard)",
+      "pass": true
+    }
+  ],
+  "errors": [],
+  "passed": 43,
+  "total": 43
+}

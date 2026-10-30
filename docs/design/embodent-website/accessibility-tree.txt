@@ -1,0 +1,17 @@
+- banner:
+  - link "Embodent home":
+    - /url: "?page=home"
+    - text: Embodent
+  - button "Close" [expanded]
+  - navigation "Primary":
+    - link "Installation":
+      - /url: "?page=installation"
+    - link "Usage":
+      - /url: "?page=usage"
+    - link "Open source":
+      - /url: "?page=attribution"
+    - text: Appearance
+    - combobox "Appearance":
+      - option "Dark" [selected]
+      - option "Light"
+      - option "System"

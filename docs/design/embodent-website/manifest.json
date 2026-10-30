@@ -1,0 +1,225 @@
+{
+  "design_revision": 3,
+  "files": [
+    {
+      "path": "README.md",
+      "bytes": 15918,
+      "sha256": "1f1d7a7b8ea82f1b378f54aa12e1ca67aa0f25076c05013f86228d52169e4f78"
+    },
+    {
+      "path": "accessibility-tree.txt",
+      "bytes": 440,
+      "sha256": "a4d5e4816a97e17ceb117623d429ac36f6c3bf0653d334e8909bcdacf0f2f1b0"
+    },
+    {
+      "path": "accessibility-validation.json",
+      "bytes": 1112,
+      "sha256": "61416bf659870316dbe3b4008a08f45fb746dcfd44b60b69a987aa0f1b918248"
+    },
+    {
+      "path": "appearance-event-validation.json",
+      "bytes": 372,
+      "sha256": "609db5dabadb8b8abbe91e6587839033ba83aef351eaf3a1849295d062672c70"
+    },
+    {
+      "path": "assets/LICENSE-project.txt",
+      "bytes": 1075,
+      "sha256": "efe528ce2a58f88d6a3244faff6eabb6add2ffb07c867129a483ad19847680f8"
+    },
+    {
+      "path": "assets/OFL-inter.txt",
+      "bytes": 4477,
+      "sha256": "3b0a5fca3d17942cde889069889dedbbbd075e9b599968c82a95f4d944e9b345"
+    },
+    {
+      "path": "assets/apple-touch-icon.png",
+      "bytes": 3609,
+      "sha256": "fe41cf3efa8f02a3b5829ef19635bcf7223ee212cf9853c9ef15ac3d9086b153"
+    },
+    {
+      "path": "assets/favicon-16.png",
+      "bytes": 338,
+      "sha256": "2bc9d3e7c4a312c6c59f8ef077387410072a762d985a67a38eb169a15e6b8082"
+    },
+    {
+      "path": "assets/favicon-32.png",
+      "bytes": 668,
+      "sha256": "32d67ab537b994de8a626b5dafaffa34ea71639fe5ffc8f73457d750906aba93"
+    },
+    {
+      "path": "assets/favicon.svg",
+      "bytes": 655,
+      "sha256": "13e3a13661f0a08c57f0acc78d6d73378194a4a30a2dcc99eb30c5b1b8e817bb"
+    },
+    {
+      "path": "assets/icon-192.png",
+      "bytes": 3909,
+      "sha256": "3962a444d6bd64bf656dc5b03fe34cd674aece0d89e57622c709952e0bb0b606"
+    },
+    {
+      "path": "assets/icon-512.png",
+      "bytes": 11139,
+      "sha256": "4e2e61103c109ce0febe65a34e5de7d7d643f20b898307dcf0bcdc4c9d66fc2a"
+    },
+    {
+      "path": "assets/icon.png",
+      "bytes": 31924,
+      "sha256": "ae1f5d2deae88cb29fbc9163eb4c1cb57cb59179e9c71d2af35494f1a66daba1"
+    },
+    {
+      "path": "assets/icon.svg",
+      "bytes": 801,
+      "sha256": "24dc627bf7bbb5c1a89c692708048c65449c0931b9f1d7db17985276ed75858e"
+    },
+    {
+      "path": "assets/inter-var-opsz-latin-ext.woff2",
+      "bytes": 133336,
+      "sha256": "5e6d4fe9d9f4bff8b2a2469d25ab19576bb85331e22c6ed51398e16f95d56a9c"
+    },
+    {
+      "path": "assets/inter-var-opsz-latin.woff2",
+      "bytes": 72920,
+      "sha256": "2c295d99e26dcf357d4d01bcf270fd6924b600c9a13dd8c363ef114f4c6976fa"
+    },
+    {
+      "path": "assets/logo-mark-mono.svg",
+      "bytes": 574,
+      "sha256": "098d8271f04aed6583cc99387df04cecd231a4e41901378c32a10cec8a0a5a05"
+    },
+    {
+      "path": "assets/logo-mark.svg",
+      "bytes": 625,
+      "sha256": "5aef569759b608e6fb77a742a30bcde0220f9a021218f1b6de1648a4dbfd8524"
+    },
+    {
+      "path": "assets/social-preview.png",
+      "bytes": 34363,
+      "sha256": "8eaed892ded103272372e0a232e4fe3bc1ba85dd5b0a90831a53778685e82a98"
+    },
+    {
+      "path": "components.md",
+      "bytes": 8817,
+      "sha256": "76de16136779f70aaa422fe58361745813ec19019888a3294d35dc65b239bf24"
+    },
+    {
+      "path": "contrast.json",
+      "bytes": 6880,
+      "sha256": "d3dc0f9a96f34018695c613ef899c0bc5e3828db950046736124dc304e4752a3"
+    },
+    {
+      "path": "native-zoom-check.md",
+      "bytes": 2320,
+      "sha256": "17885f32634a11cd053824a4f39c6dee41a61f624fda2fade7ff2310afe14c64"
+    },
+    {
+      "path": "preview.css",
+      "bytes": 14926,
+      "sha256": "c2de47cf08c0e09c7736dd426da1db589fc03a52cdfcc7703114aa257856fbae"
+    },
+    {
+      "path": "preview.html",
+      "bytes": 23837,
+      "sha256": "554bc5c2b885bdd32bfa25862f74544e9f34214e780d3ba77d7e8aaf9bfea89d"
+    },
+    {
+      "path": "previews/component-states.png",
+      "bytes": 137165,
+      "sha256": "da4cc01b5ff703ba3c3424cb39217daba921691671d7a89758b50d2606c9f00d"
+    },
+    {
+      "path": "previews/download-unavailable.png",
+      "bytes": 230711,
+      "sha256": "6678eeed4e2b7bc87296add1b18a409efb06b53d6e2b598f84d7d65bea5cfd66"
+    },
+    {
+      "path": "previews/home-desktop-dark.png",
+      "bytes": 273567,
+      "sha256": "ea21909ffff35b921839e156ddfa772f96e04f6c98a136aeb47dae82447bb04c"
+    },
+    {
+      "path": "previews/home-desktop-light.png",
+      "bytes": 282700,
+      "sha256": "2f6fc2288fac31364c3bf7f4bb32f15d44cc69d1f9e7b32fe9b5c39df2c5540a"
+    },
+    {
+      "path": "previews/home-phone-dark.png",
+      "bytes": 232623,
+      "sha256": "18332cf1deb24592f0c2ee011d35ba5ff7af4c329ba2032f72dbe654e893ccb9"
+    },
+    {
+      "path": "previews/home-phone-light.png",
+      "bytes": 239498,
+      "sha256": "84525a1b8ed7891ed0974dc936009b47f705a5c6da0cae6cfafae7bde0f0054a"
+    },
+    {
+      "path": "previews/installation-desktop.png",
+      "bytes": 282235,
+      "sha256": "e8a91451a73bd9bdf77c1fe41ff858e0bf84435be622de61ce48b5aacc63dc35"
+    },
+    {
+      "path": "previews/installation-phone.png",
+      "bytes": 238094,
+      "sha256": "b2bbc3030f0fd09aca07e94e3f1425a9f81abcc6125ec62df1bebdf9398d5866"
+    },
+    {
+      "path": "previews/keyboard-focus.png",
+      "bytes": 135642,
+      "sha256": "52bd60005f149433da5c9b9c9c6e896da8451ac800900b37e83910f79bd58cee"
+    },
+    {
+      "path": "previews/open-source-desktop.png",
+      "bytes": 147329,
+      "sha256": "80673738868408ad2fb63afeb55f9853852c64a22aa7901946871091cac5763d"
+    },
+    {
+      "path": "previews/open-source-phone.png",
+      "bytes": 119126,
+      "sha256": "504f1452a8c08d64b67e79ccbcfa183bbaffd6eef4660c03fada4c6fe7d1fc08"
+    },
+    {
+      "path": "previews/phone-menu-open.png",
+      "bytes": 240640,
+      "sha256": "517877a748fcd029aa05eb0aab83ddfbfce34cc3137199f385e16a287c44a3e7"
+    },
+    {
+      "path": "previews/text-size-check.png",
+      "bytes": 352738,
+      "sha256": "45cd1aa1e868ef547290414881b9273fcf21a267cdbf6d93e6cc354ff86b2ef6"
+    },
+    {
+      "path": "previews/usage-desktop.png",
+      "bytes": 394685,
+      "sha256": "e8aa1e9020e6eefb86d6a33536e343913e241f4bb86c04daa92adfbb77dd03c9"
+    },
+    {
+      "path": "previews/usage-phone.png",
+      "bytes": 335099,
+      "sha256": "ee56a7516d7b174a0cd8392857dec03db297754e7d2459125b1245e82c544b75"
+    },
+    {
+      "path": "review-notes.md",
+      "bytes": 12508,
+      "sha256": "5d58aa93ab77973fee3acd5eb84ba8b859e5ac0b1ccd78b22aac05d782d9c832"
+    },
+    {
+      "path": "social-preview.html",
+      "bytes": 824,
+      "sha256": "db8c4901f06f0ada96be7393871872d70d59b009d2a993ed52da3776e9be43e4"
+    },
+    {
+      "path": "tokens.css",
+      "bytes": 1431,
+      "sha256": "7db8012035d39380fbe42bf30d7ab7cedb3909f83f3b5f5388d4837623d2062c"
+    },
+    {
+      "path": "tokens.json",
+      "bytes": 2236,
+      "sha256": "2b196aac9b8a7eb10beab6eb0d6e95ca4d894f366002cafdfa2ff202975163fa"
+    },
+    {
+      "path": "validation.json",
+      "bytes": 15324,
+      "sha256": "e52932665ca79e032cfd83ba499a637f17b3f2c183907763dd22e5744fc9cc18"
+    }
+  ]
+}

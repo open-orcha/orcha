@@ -1,0 +1,46 @@
+{
+  "revision": 2,
+  "method": "Chromium accessibility tree and all-element text enlargement; not a VoiceOver session or native browser text zoom",
+  "checks": [
+    {
+      "check": "logo has Embodent home name",
+      "pass": true
+    },
+    {
+      "check": "closed navigation excludes Installation from accessibility tree",
+      "pass": true
+    },
+    {
+      "check": "menu announces expanded and Dark option selected",
+      "pass": true
+    },
+    {
+      "check": "appearance has an accessible label",
+      "pass": true
+    },
+    {
+      "check": "System appearance follows light OS preference",
+      "pass": true
+    },
+    {
+      "check": "System appearance follows dark OS preference live",
+      "pass": false
+    },
+    {
+      "check": "home all-element text doubled at 390px",
+      "pass": true
+    },
+    {
+      "check": "installation all-element text doubled at 390px",
+      "pass": true
+    },
+    {
+      "check": "usage all-element text doubled at 390px",
+      "pass": true
+    },
+    {
+      "check": "attribution all-element text doubled at 390px",
+      "pass": true
+    }
+  ]
+}

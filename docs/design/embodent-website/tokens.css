@@ -1,0 +1,52 @@
+/* Design handoff. Color values mapped to the implemented Embodent theme. */
+:root {
+  color-scheme: dark;
+  --page: #0E0F10;
+  --panel: #151618;
+  --surface: #19191C;
+  --raised: #1E1F23;
+  --line: #25262A;
+  --control-line: #33353A;
+  --text: #EEEFF1;
+  --muted: #B4B7BE;
+  --subtle: #8A8F98;
+  --accent: #8D93F7;
+  --accent-hover: #A1A6F9;
+  --accent-soft: rgba(141, 147, 247, 0.14);
+  --primary: #5E6AD2;
+  --primary-hover: #5563CC;
+  --on-primary: #FFFFFF;
+  --success: #4CB782;
+  --success-soft: rgba(76, 183, 130, 0.14);
+  --warning: #E2A336;
+  --warning-soft: rgba(226, 163, 54, 0.14);
+  --error: #EE7070;
+  --error-soft: rgba(238, 112, 112, 0.14);
+  --logo: #ECEDF1;
+}
+:root[data-theme="light"] {
+  color-scheme: light;
+  --page: #F4F4F5;
+  --panel: #FFFFFF;
+  --surface: #FFFFFF;
+  --raised: #FFFFFF;
+  --line: #E6E6E9;
+  --control-line: #D5D6DA;
+  --text: #1C1D1F;
+  --muted: #4E525A;
+  --subtle: #62666E;
+  --accent: #505AC9;
+  --accent-hover: #434CB8;
+  --accent-soft: rgba(80, 90, 201, 0.10);
+  --primary: #5E6AD2;
+  --primary-hover: #525DC7;
+  --on-primary: #FFFFFF;
+  --success: #187A4C;
+  --success-soft: rgba(24, 122, 76, 0.10);
+  --warning: #955500;
+  --warning-soft: rgba(149, 85, 0, 0.10);
+  --error: #C23434;
+  --error-soft: rgba(194, 52, 52, 0.09);
+  --logo: #1C1D1F;
+}
+:root { --font: "Inter Variable", system-ui, sans-serif; --radius-control: 6px; --radius-panel: 10px; --max-width: 1200px; --hit: 44px; }
