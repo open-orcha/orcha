@@ -46,8 +46,9 @@ async def until(read, seconds=150):
 
 
 @pytest.mark.parametrize('runtime', ['claude', 'codex'])
+@pytest.mark.parametrize('launch_mode', ['ordinary', 'workflow'])
 async def test_actual_runtime_startup_wait_and_guidance(
-    client, managed, service, make_agent, db, tmp_path, monkeypatch, runtime,
+    client, managed, service, make_agent, db, tmp_path, monkeypatch, runtime, launch_mode,
 ):
     assert shutil.which(runtime), f'{runtime} must be installed for this opt-in test'
     # Only this disposable test identity is inherited by the model program.
@@ -59,11 +60,24 @@ async def test_actual_runtime_startup_wait_and_guidance(
     # symlink without that sibling is not a complete CLI installation.
     if runtime == 'codex':
         monkeypatch.setenv('ORCHA_CODEX_EXEC', str(Path(shutil.which(runtime)).resolve()))
+    workflow_launch = None
+    if launch_mode == 'workflow':
+        from portal_backend import workflow_service
+        from test_workflow_local_launch import Project
+        monkeypatch.setattr(workflow_service, 'WORKFLOWS_INTEGRATED', True)
+        project = Project(client)
+        await project.start('serial', [('check', project.ann, [])])
+        launch = await project.reserve(project.ann, 'check')
+        workflow_launch = {**launch, 'agent_id': project.ann, 'api_base': service[0]}
+        managed = {'rid': launch['run_id'], 'aid': project.ann,
+                   'tid': project.tasks['check'], 'token': None}
+        human = project.owner
+    else:
+        await publish(client, managed, seconds=600)
+        human = (await make_agent('Acceptance owner', kind='human'))['agent_id']
+        await client.post(f"/api/agents/{managed['aid']}/wake-renew",
+                          json={'lease_ttl': 600, 'run_id': managed['rid']})
     db.execute('UPDATE worker_runs SET runtime=%s WHERE run_id=%s', (runtime, managed['rid']))
-    await publish(client, managed, seconds=600)
-    human = (await make_agent('Acceptance owner', kind='human'))['agent_id']
-    await client.post(f"/api/agents/{managed['aid']}/wake-renew",
-                      json={'lease_ttl': 600, 'run_id': managed['rid']})
     config_dir = tmp_path / '.claude'
     config_dir.mkdir(mode=0o700)
     (config_dir / 'orcha.json').write_text(json.dumps({'api_base_url': service[0], 'runtime': 'native'}))
@@ -113,11 +127,23 @@ sys.stdout.write(p.stdout);sys.stderr.write(p.stderr);sys.exit(p.returncode)
     sent, _, process = notifier.spawn_headless(
         str(tmp_path), prompt, flags, False, alias='Managed worker', runtime=runtime,
         system_prompt=startup_guidance(tmp_path, managed['tid']),
-        run_token=managed['token'], log_path=log,
+        run_token=managed['token'], log_path=log, workflow_launch=workflow_launch,
     )
     assert sent and process is not None
     store = JobStore(tmp_path)
     try:
+        if workflow_launch:
+            await until(lambda: db.execute('SELECT status FROM worker_runs WHERE run_id=%s',
+                                            (managed['rid'],))[0]['status'] == 'running', 20)
+            # The real inert bootstrap activates before exec. The notifier
+            # publishes limits after that acknowledgment, just as in production.
+            await publish(client, managed, seconds=600)
+            managed['token'] = db.execute(
+                'SELECT run_token FROM embodiment_tokens WHERE run_id=%s AND revoked_at IS NULL',
+                (managed['rid'],),
+            )[0]['run_token']
+            row = db.execute('SELECT pid FROM worker_runs WHERE run_id=%s', (managed['rid'],))[0]
+            assert row['pid'] == process.pid
         first_wait = await until(lambda: next((r for r in trace_rows(trace)
                                                if r['action'] == 'wait' and r['phase'] == 'start'), None))
         # Exceeds Codex's normal initial shell-tool yield. Receipt latency is
@@ -169,13 +195,15 @@ sys.stdout.write(p.stdout);sys.stderr.write(p.stderr);sys.exit(p.returncode)
             assert waits and all(call.get('timeout', 0) >= 120000 for call in waits)
         from orcha_cli.job_store import atomic_json
         atomic_json(tmp_path / 'acceptance.json', {
-            'runtime': runtime, 'wait_seconds': delivered['time'] - first_wait['time'],
+            'runtime': runtime, 'launch_mode': launch_mode,
+            'wait_seconds': delivered['time'] - first_wait['time'],
             'guidance_delivery_seconds': delivered['time'] - posted_at,
             'command_launches': 1, 'handled_receipts': 1, 'guidance_applications': 1,
             'terminal_status': saved['status'], 'termination_verified': saved['termination_verified'],
         })
     finally:
         # Revoke only the disposable credential; real supervisors stop commands.
-        await client.post(f"/api/embodiment-tokens/{managed['token']}/revoke", json={})
+        if managed['token']:
+            await client.post(f"/api/embodiment-tokens/{managed['token']}/revoke", json={})
         if process.poll() is None:
             await asyncio.to_thread(notifier._kill_worker, process, graceful=True)

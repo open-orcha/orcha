@@ -2,6 +2,7 @@
 
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 import json
 import threading
 import time
@@ -9,7 +10,7 @@ import time
 import pytest
 
 from portal_backend import database, sql
-from portal_backend import orphan_lease_routes, stranded_runs, wake_acknowledgement_routes
+from portal_backend import orphan_lease_routes, wake_acknowledgement_routes
 from portal_backend import worker_run_finish_routes as finish_routes
 from portal_backend.database import db_cursor
 from test_evidence_review_races import new_run, post
@@ -91,19 +92,37 @@ async def test_cleanup_losing_to_finish_has_no_run_transition_or_audit(
                VALUES (%s,%s,'ephemeral',%s,%s,%s,'resident',%s,%s)""",
                (aid, lease if lane == "work" else None, old, old,
                 lease if lane == "conversation" else None, old, old))
-    module = {"lease_release": wake_acknowledgement_routes, "orphan_lease": orphan_lease_routes,
-              "stranded_run": stranded_runs}[path]
+    module = (wake_acknowledgement_routes if path == "lease_release"
+              else orphan_lease_routes)
     selected, proceed = threading.Event(), threading.Event()
-    original = module.terminalize_worker_run
+    original = module.db_cursor
 
-    def scheduled(cur, run_id, *args, **kwargs):
-        # Only timing changes; the real shared lock, terminalizer and routes run.
-        if str(run_id) == rid:
-            selected.set()
-            assert proceed.wait(10)
-        return original(cur, run_id, *args, **kwargs)
+    class SchedulingCursor:
+        def __init__(self, cur):
+            self.cur = cur
+            self.paused = False
 
-    monkeypatch.setattr(module, "terminalize_worker_run", scheduled)
+        def __getattr__(self, name):
+            return getattr(self.cur, name)
+
+        def execute(self, query, params=None):
+            # Cleanup now serializes candidate selection with finish under the
+            # graph lock. Pausing inside terminalize_worker_run holds that lock
+            # and blocks the very finish this test is waiting for. Schedule the
+            # winning finish before cleanup takes its first authority lock.
+            if (not self.paused and " ".join(query.split()).startswith(
+                    "INSERT INTO container_task_graph_guard")):
+                self.paused = True
+                selected.set()
+                assert proceed.wait(10)
+            return self.cur.execute(query, params)
+
+    @contextmanager
+    def scheduled_cursor():
+        with original() as (conn, cur):
+            yield conn, SchedulingCursor(cur)
+
+    monkeypatch.setattr(module, "db_cursor", scheduled_cursor)
 
     def cleanup():
         if path == "lease_release":
