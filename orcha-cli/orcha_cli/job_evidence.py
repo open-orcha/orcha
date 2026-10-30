@@ -24,4 +24,13 @@ def context_snapshot(directory):
     except JobStorageError:
         # Forward task-thread recovery is mandatory after any incomplete snapshot.
         pass
+    try:
+        from .job_dispatch import references
+        record = read_json(directory / 'record.json')
+        value['dispatch_message_refs'] = references(directory, record['task_id'])
+    except (JobStorageError, KeyError, ValueError, TypeError):
+        value['dispatch_message_refs'] = []
+    # Dispatch references are delivery hints, never evidence of handling.
+    if value['dispatch_message_refs']:
+        value['guidance_incomplete'] = True
     return value

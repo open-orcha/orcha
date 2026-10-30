@@ -46,6 +46,7 @@ def run(config):
     identity = {'job_id': config['job_id'], 'launch_nonce': config['launch_nonce'],
                 'owner_run_id': config['owner_run_id']}
     until, prepare = config['until'], config['prepare']
+    budget = config.get('budget_until', float('inf'))
     child = None
     reason = None
     prepared = False
@@ -63,6 +64,8 @@ def run(config):
     def stop_signal(signum, frame):
         nonlocal reason
         reason = 'authority_deadline' if signum == signal.SIGALRM else 'guard_stop_requested'
+        if signum == signal.SIGALRM and time.monotonic() >= budget:
+            reason = 'budget_exhausted'
         # A filesystem failure must still stop the command. Its durable initial
         # checkpoint and launch fence remain available for later reconciliation.
         try:
@@ -118,9 +121,11 @@ def run(config):
                         line, buffer = buffer.split(b'\n', 1)
                         control = json.loads(line)
                         if control.get('stop'):
-                            reason = 'supervisor_stop_requested'
+                            reason = ('budget_exhausted' if control.get('reason') == 'budget_exhausted'
+                                      and time.monotonic() >= budget else 'supervisor_stop_requested')
                             break
                         until, prepare = control['until'], control['prepare']
+                        budget = min(budget, control.get('budget_until', budget))
                         signal.setitimer(signal.ITIMER_REAL, max(0.001, until - time.monotonic()))
             selector.close()
             stage = 'checkpointing_exit'
@@ -154,7 +159,8 @@ def run(config):
             atomic_json(directory / 'result.json', {
                 **identity, 'exit_code': code, 'signal': -code if code < 0 else None,
                 'reason': reason or 'command_exited', 'termination_verified': verified,
-                'status': ('interrupted' if reason else 'completed') if verified else 'unknown',
+                'status': ('exhausted' if reason == 'budget_exhausted' else
+                           ('interrupted' if reason else 'completed') if verified else 'unknown'),
                 'finished_at': time.time(), 'stdout': 'stdout.log', 'stderr': 'stderr.log',
             })
     except BaseException as exc:

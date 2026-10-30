@@ -19,6 +19,7 @@ from portal_backend.wake_context import (
     resolve_context_task_id,
 )
 from portal_backend.wake_decision import decide_wake, triage_eligible
+from portal_backend.wake_message_references import message_references
 from portal_backend.wake_scan_queries import (
     WorkflowParking,
     continuable_run_id,
@@ -255,6 +256,7 @@ def build_wake_candidate(
         "ack_through_ts": ack_through_ts,
         "handled_event_ids": handled_event_ids,
         "delivery_handled_event_ids": delivery_handled_event_ids,
+        "task_message_refs": message_references(cur, aid, handled_event_ids),
         "context_task_id": context_task_id,
         "auto_start_task_ids": auto_tasks,
         "auto_wake_due": auto_wake_due,

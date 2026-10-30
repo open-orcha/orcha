@@ -15,10 +15,14 @@ def startup_guidance(base_cwd, task_id):
         return ''
     command = f'orcha job --task {task_id}'
     pointers = []
+    dispatch_pointer = None
     unavailable = False
     try:
         if jobs_root(base_cwd).exists():
             store = JobStore(base_cwd)
+            dispatch = store.root / '.dispatch' / f'{task_id}.json'
+            if dispatch.is_file():
+                dispatch_pointer = str(dispatch)
             with store.locked():
                 for directory in sorted(store.root.iterdir()):
                     if directory.name.startswith('.'):
@@ -36,7 +40,10 @@ def startup_guidance(base_cwd, task_id):
         'existing reservations and saved results. Reuse the stable operation key on every retry; '
         'never choose a new key to bypass an uncertain, interrupted or exhausted command. '
         'Check its private record and result before continuing; report an uncertain outcome '
-        'and reconcile it before deciding whether a new command is necessary.\n'
+        'and reconcile it before deciding whether a new command is necessary. '
+        f'After an earlier worker ends, use `{command} recover <job-id>` to publish its verified '
+        'saved result. Recovery never launches or takes control of a process; if the original '
+        'supervisor is still finishing, retry recovery later. Missing or uncertain results remain fenced.\n'
         f'Start with `{command} start --key <stable-operation-name> --purpose <brief-safe-description> '
         '-- <executable> <arguments>`. Commands must stay in the foreground and keep descendants '
         'in their process group. The child receives a restricted environment without Orcha/provider tokens. '
@@ -60,6 +67,8 @@ def startup_guidance(base_cwd, task_id):
         'duplicate. Resident/live-terminal sessions do not support this continuation contract.\n'
         'Private recovery pointers (list may be truncated; status lists all task reservations): '
         + json.dumps(pointers[:20])
+        + ('\nPrivate dispatch reference journal (replay the thread; these are not handled receipts): '
+           + json.dumps(dispatch_pointer) if dispatch_pointer else '')
         + ('\nSome local evidence could not be read; preserve its launch fence and working directory.'
            if unavailable else '')
     )
