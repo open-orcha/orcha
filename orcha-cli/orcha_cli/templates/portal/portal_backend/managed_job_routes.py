@@ -142,7 +142,7 @@ def managed_job_heartbeat(tid: UUID, jid: UUID, request: Request,
     """
     with db_cursor() as (_, cur):
         run, task = require_managed_run(cur, str(tid), x_orcha_run_token, request,
-                                       allow_lapsed=True, enrol=False)
+                                       allow_lapsed=True, enrol=False, allow_frozen=True)
         limits = run_limits(cur, run)
         job = require_job_owner(cur, str(tid), str(jid), run)
         now = sql.utcnow()
@@ -159,7 +159,8 @@ def managed_job_heartbeat(tid: UUID, jid: UUID, request: Request,
         return dict(server_time=now, run_id=run['run_id'], job_id=jid,
                     workflow_generation=job['workflow_generation'], token_valid=True,
                     stop_requested=False, on_hold=False, cancelled=False,
-                    lease_until=lease, lease_active=active, mutations_allowed=active,
+                    lease_until=lease, lease_active=active,
+                    mutations_allowed=active and not limits['controls_frozen'],
                     authority_until=until, run_until=limits['run_until'],
                     sandbox_until=limits['sandbox_until'], budget_until=job['budget_until'],
                     prepare_at=prepare)

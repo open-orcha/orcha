@@ -13,7 +13,7 @@ import time
 from uuid import uuid4
 
 from .job_api import AuthorityClock, JobAPI, JobAPIError
-from .job_evidence import context_snapshot, daemon_stop_requested
+from .job_evidence import context_snapshot, daemon_stop_requested, daemon_stop_reason
 from .job_executor import minimal_environment
 from .job_identity import process_identity
 from .job_store import JobStore, atomic_json, read_json, _open_private
@@ -44,13 +44,18 @@ class Supervisor:
         self.clock = AuthorityClock(self.record['owner_run_id'], self.job_id)
         self.guard = None
         self.stopping = False
+        self.transfer = None
+        self.transfer_channel = None
 
     def update(self, **changes):
         self.record = self.store.update(self.job_id, self.record['version'], changes)
 
     def confirm(self):
         sent = time.monotonic()
-        self.clock.confirm(self.api.heartbeat(self.job_id), sent)
+        if self.transfer:
+            self.transfer.confirm(sent)
+        else:
+            self.clock.confirm(self.api.heartbeat(self.job_id), sent)
         return self.clock.mutations_allowed
 
     def checkpoint(self, reason, state=None, result=None):
@@ -97,13 +102,14 @@ class Supervisor:
             raise JobAPIError(409)
         self.update(supervisor=process_identity(os.getpid()), status='reserved')
         self.guard = subprocess.Popen([sys.executable, '-m', 'orcha_cli.job_executor'],
-                                      stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                                      stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                       stderr=subprocess.DEVNULL, env=module_environment(),
                                       start_new_session=True, close_fds=True)
         packet = {k: self.config[k] for k in ('base_cwd', 'job_id', 'launch_nonce', 'argv', 'env', 'cwd')}
         packet.update(owner_run_id=self.record['owner_run_id'], until=self.clock.until,
                       prepare=self.clock.prepare, budget_until=self.clock.budget,
-                      continuation_contract=self.record['continuation'])
+                      continuation_contract=self.record['continuation'],
+                      max_transfers=self.record['max_transfers'], transfers_used=self.record['transfers_used'])
         self.guard.stdin.write(json.dumps(packet).encode() + b'\n')
         self.guard.stdin.flush()
         # Wait for guard startup before sending another packet; the guard's
@@ -136,6 +142,9 @@ class Supervisor:
             self.stopping = True
 
     def send(self, packet):
+        if 'until' in packet:
+            packet = dict(packet, controller_run_id=self.record['owner_run_id'],
+                          transfers_used=self.record['transfers_used'])
         if self.guard and self.guard.poll() is None:
             try:
                 self.guard.stdin.write(json.dumps(packet).encode() + b'\n')
@@ -163,7 +172,7 @@ class Supervisor:
 
     def finish(self, result):
         if (result['launch_nonce'] != self.record['launch_nonce']
-                or result['owner_run_id'] != self.record['owner_run_id']):
+                or result['owner_run_id'] != self.record.get('launch_owner_run_id', self.record['owner_run_id'])):
             raise ValueError('Saved result belongs to another launch')
         self.update(status=result['status'], result_saved=True,
                     termination_verified=result['termination_verified'], result='result.json')
@@ -187,10 +196,19 @@ class Supervisor:
         signal.signal(signal.SIGINT, stop)
         try:
             self.launch()
+            if self.record['continuation'] == 'readonly_single_process_v1':
+                from .job_transfer import TransferChannel
+                self.transfer_channel = TransferChannel(self)
             next_contact = 0.0
             prepared = False
+            preparation_owner = self.record['owner_run_id']
             while self.guard.poll() is None:
                 now = time.monotonic()
+                if self.transfer_channel:
+                    self.transfer_channel.poll()
+                if preparation_owner != self.record['owner_run_id']:
+                    prepared = False
+                    preparation_owner = self.record['owner_run_id']
                 if daemon_stop_requested(self.directory, self.record):
                     self.stopping = True
                 if self.stopping or now >= self.clock.until:
@@ -199,7 +217,9 @@ class Supervisor:
                         self.checkpoint('stopping')
                     finally:
                         self.send({'stop': True, 'reason': 'budget_exhausted'
-                                   if time.monotonic() >= self.clock.budget else 'supervisor_stop_requested'})
+                                   if time.monotonic() >= self.clock.budget else
+                                   ('transfer_budget_exhausted' if daemon_stop_reason(self.directory, self.record) == 'transfer_budget_exhausted'
+                                    else 'supervisor_stop_requested')})
                         self.guard.stdin.close()
                     break
                 if now >= next_contact:
@@ -239,6 +259,8 @@ class Supervisor:
                         pass  # Do not signal a recorded/reused process ID.
                 self.update(status='unknown')
         finally:
+            if self.transfer_channel:
+                self.transfer_channel.close()
             os.close(lock)
 
 

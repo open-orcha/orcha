@@ -3,12 +3,32 @@
 from .job_store import JobStorageError, read_json
 
 
-def daemon_stop_requested(directory, identity):
+def verified_result(directory, record, result):
+    if (any(result.get(k) != record.get(k) for k in ('job_id', 'launch_nonce'))
+            or result.get('owner_run_id') != record.get('launch_owner_run_id', record['owner_run_id'])
+            or not result.get('termination_verified')
+            or result.get('status') not in {'completed', 'interrupted', 'exhausted'}):
+        return False
+    if result.get('termination_source') == 'container_exit':
+        from .job_sandbox import verified_container_result
+        return verified_container_result(directory, record, result)
+    code = result.get('exit_code')
+    return type(code) is int and result.get('signal') == (-code if code < 0 else None)
+
+
+def daemon_stop_reason(directory, identity):
     path = directory / 'daemon-stop.json'
     if not path.exists():
-        return False
+        return None
     request = read_json(path)
-    return all(request.get(k) == identity.get(k) for k in ('owner_run_id', 'launch_nonce'))
+    if (request.get('launch_nonce') == identity.get('launch_nonce')
+            and request.get('owner_run_id') == identity.get('controller_run_id', identity.get('owner_run_id'))):
+        return request.get('reason') or 'daemon_stop_requested'
+    return None
+
+
+def daemon_stop_requested(directory, identity):
+    return daemon_stop_reason(directory, identity) is not None
 
 
 def context_snapshot(directory):

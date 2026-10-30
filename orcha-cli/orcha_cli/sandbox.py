@@ -305,6 +305,7 @@ def build_docker_argv(inner_argv: "Sequence[str]", *, cfg: SandboxConfig, name: 
         "-w", workdir,
         # Not a secret — ride argv (unlike ENV_PASSTHROUGH's client-env keys).
         "-e", f"ORCHA_WORKSPACE_ROOT={workspace}",
+        "-e", f"ORCHA_SANDBOX_CONTAINER={name}",
     ]
     if network:
         argv += ["--network", network]

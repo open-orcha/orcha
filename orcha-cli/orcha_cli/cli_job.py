@@ -47,6 +47,8 @@ def register(sub, handler):
     stop.add_argument('job_id')
     recover = commands.add_parser('recover', help='reconcile a saved result from an ended worker; never relaunch')
     recover.add_argument('job_id')
+    adopt = commands.add_parser('adopt', help='take over a prepared isolated command through its original supervisor')
+    adopt.add_argument('job_id')
     parser.set_defaults(func=handler)
 
 
@@ -73,8 +75,12 @@ def summary(store, job):
         result_path = store.job_directory(job['job_id']) / 'result.json'
         if result_path.exists():
             result = read_json(result_path)
-            if any(result.get(k) != job.get(k) for k in ('job_id', 'owner_run_id', 'launch_nonce')):
+            if (any(result.get(k) != job.get(k) for k in ('job_id', 'launch_nonce'))
+                    or result.get('owner_run_id') != local.get('launch_owner_run_id', job['owner_run_id'])):
                 raise JobStorageError('Managed result belongs to another launch')
+            from .job_evidence import verified_result
+            if not verified_result(store.job_directory(job['job_id']), local, result):
+                raise JobStorageError('Managed command termination is not verified')
             value.update(status=result['status'], exit_code=result['exit_code'],
                          termination_verified=result['termination_verified'], reason=result['reason'])
     except (JobStorageError, KeyError):
@@ -91,6 +97,8 @@ def start_job(api, store, *, key, purpose, argv, cwd, max_seconds=7200, max_tran
     if isolate:
         job_isolation.require_available()
     contract = job_isolation.CONTRACT if isolate else 'stop_before_transfer'
+    from .job_sandbox import launch_identity
+    container = launch_identity(store)
     job = api.request('managed-jobs', {'job_key': str(uuid5(UUID(api.task_id), key)),
                                      'max_elapsed_secs': max_seconds, 'max_transfers': max_transfers,
                                      'continuation_contract': contract})
@@ -109,6 +117,8 @@ def start_job(api, store, *, key, purpose, argv, cwd, max_seconds=7200, max_tran
                   'command': command_summary(argv), 'budget_until': job['budget_until'],
                   'max_transfers': job['max_transfers'], 'transfers_used': job['transfers_used'],
                   'launch_claimed': True, 'continuation': contract}
+        if container:
+            record['container'] = container
         # Serialize against teardown and competing CLI starts. Any crash after
         # this durable reservation retains the fence, including before Popen.
         if not Path(cwd).is_dir():
@@ -222,6 +232,11 @@ def cmd_job(args):
         elif args.job_action == 'handled':
             result = api.request(f'managed-messages/{UUID(args.message_id)}/handled',
                                  {'outcome': args.outcome, 'handling_note': args.note})
+        elif args.job_action == 'adopt':
+            from .job_transfer import transfer_command
+            if current_job(api, args.job_id) is None:
+                raise JobStorageError('Managed command not found in this task')
+            result = transfer_command(store, str(UUID(args.job_id)), 'adopt', api.token)
         elif args.job_action == 'recover':
             from .job_recovery import recover_result
             job = current_job(api, args.job_id)

@@ -72,6 +72,9 @@ async def test_supervisor_crash_result_reconciles_without_relaunch(jobs, managed
     jid = launch("import time;open('starts','a').write('once');time.sleep(60)")
     eventually(lambda: running(store, jid))
     eventually(lambda: store.read(jid).get('supervisor'))
+    # Popen/process identity proves launch, not execution of the child's first
+    # instruction. Wait for the effect this crash-recovery test must preserve.
+    eventually(lambda: (tmp_path/'starts').exists() and (tmp_path/'starts').read_text() == 'once')
     original = store.read(jid)
     os.kill(original['supervisor']['pid'], signal.SIGKILL)
     stopped = eventually(lambda: result(store, jid))

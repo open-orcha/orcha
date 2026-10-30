@@ -33,7 +33,7 @@ def lock_agent_runs(cur, aid, lane):
     return runs, cur.fetchone()
 
 
-def require_managed_run(cur, tid, token, request, *, allow_lapsed=False, enrol=True):
+def require_managed_run(cur, tid, token, request, *, allow_lapsed=False, enrol=True, allow_frozen=False):
     if not token:
         raise HTTPException(403, "work-lane token required")
     cur.execute("SELECT * FROM embodiment_tokens WHERE run_token=%s", (token,))
@@ -92,6 +92,8 @@ def require_managed_run(cur, tid, token, request, *, allow_lapsed=False, enrol=T
     # Once published, fixed caps also fence receipts and other managed effects.
     cur.execute("SELECT * FROM managed_run_limits WHERE run_id=%s", (run["run_id"],))
     limits = cur.fetchone()
+    if limits and limits["controls_frozen"] and not allow_frozen:
+        conflict("managed_worker_controls_frozen")
     if limits and min(d for d in (limits["run_until"], limits["sandbox_until"]) if d) <= sql.utcnow():
         conflict("worker_runtime_limit_reached")
     if enrol and not run["managed_commands"]:

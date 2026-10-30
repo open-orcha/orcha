@@ -16,10 +16,8 @@ def checkpoint_and_respawn(
 ) -> None:
     """Gracefully checkpoint a progressing worker and replace its process."""
     if worker.get("workflow"):
-        # Continuation must use confirm-stopped -> continue-reserve -> bootstrap.
-        # The legacy replacement below mints a token before spawning, so refuse it.
-        worker["workflow_checkpoint_unsupported"] = True
-        worker["respawns"] = services.HARD_CAP_RESPAWN_MAX
+        from .notifier_workflow_checkpoint import checkpoint_and_continue
+        checkpoint_and_continue(api_base, agent_id, worker, live_workers, quiet, services)
         return
     process = worker["proc"]
     context = worker.get("respawn_ctx") or {}
@@ -29,8 +27,7 @@ def checkpoint_and_respawn(
     respawns = worker.get("respawns", 0) + 1
     cap = worker.get("cap", services.HARD_CAP_MIN_SECS)
 
-    jobs_stopped = notifier_managed_jobs.prepare(
-        api_base, worker, services, reason='checkpoint_transfer', stop=True)
+    jobs_stopped = notifier_managed_jobs.prepare_replacement(api_base, worker, services)
     services._kill_worker(process, graceful=True)
     if not jobs_stopped or process.poll() is None:
         # Never replace a worker while a detached command's disposition is
@@ -39,6 +36,7 @@ def checkpoint_and_respawn(
         return
     source_cwd = worktree or base_cwd
     diff = services._capture_diff(source_cwd)
+    exit_confirmed = False
     if services._finish_run(
         api_base,
         worker.get("run_id"),
@@ -50,7 +48,11 @@ def checkpoint_and_respawn(
         # I4: the OLD wake's container, once stamped
         services._reap_sandbox_artifacts(worker)
         from .notifier_workflow import confirm_exit
-        confirm_exit(api_base, agent_id, worker)
+        exit_confirmed = confirm_exit(api_base, agent_id, worker)
+    if worker.get('managed_transfers') and not exit_confirmed:
+        notifier_managed_jobs.prepare(api_base, worker, services, reason='worker_exit_unconfirmed', stop=True)
+        worker['respawns'] = services.HARD_CAP_RESPAWN_MAX
+        return
     current_run = _current_run(api_base, agent_id, worker, services)
     task_id = (
         current_run.get("task_id")
@@ -151,6 +153,7 @@ def checkpoint_and_respawn(
         "run_token": new_token,
     }
     notifier_managed_limits.publish_limits(api_base, live_workers[agent_id], services)
+    notifier_managed_jobs.adopt_replacement(worker, live_workers[agent_id])
     services._post_json(
         f"{api_base}/api/agents/{agent_id}/wake-ack",
         {

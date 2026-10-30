@@ -1385,6 +1385,13 @@
             "should_wake": "bool",
             "task_autonomy": "str",
             "task_autonomy_revision": "int",
+            "task_message_refs": [
+              {
+                "event_id": "int",
+                "message_id": "str",
+                "task_id": "str"
+              }
+            ],
             "tmux_target": "null",
             "triage_hint": "null",
             "wake_enabled": "bool",

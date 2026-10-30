@@ -98,6 +98,7 @@ from portal_backend import (
     verdikt_routes,  # Verdikt QA handoff (mig 058)
     managed_message_routes,
     managed_job_routes,
+    managed_job_transfer_routes,
     wake_acknowledgement_routes,
     wake_backoff_routes,
     wake_lease_claim_routes,
@@ -201,6 +202,7 @@ ROUTE_MODULES = (
     version_routes,
     managed_message_routes,
     managed_job_routes,
+    managed_job_transfer_routes,
     wake_acknowledgement_routes,
     wake_backoff_routes,
     wake_lease_claim_routes,

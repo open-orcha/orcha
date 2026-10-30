@@ -184,7 +184,13 @@ def _reconcile_sandbox_run(
             # runaway (spec §3.5): stop now; the NEXT sweep observes 'exited' and
             # stamps the row with the container's REAL exit code — never guessed here.
             notifier_managed_jobs.prepare(api_base, r, services, reason='sandbox_deadline', stop=True)
-            _sandbox.stop(sbx)
+            from . import job_sandbox
+            _, jobs = notifier_managed_jobs.run_jobs(r)
+            evidence = job_sandbox.inspect_container(sbx, _sandbox) if jobs else None
+            if jobs and (evidence is None or not all(job_sandbox.matches(job, evidence) for job in jobs)):
+                return 0  # A reused name is not the original managed container.
+            job_sandbox.save_before_stop(evidence)
+            _sandbox.stop(evidence['container_id'] if evidence else sbx)
             if not quiet:
                 print(f"[notifier] sandbox container {sbx} past its {max_secs}s "
                       f"max-runtime deadline — docker stop issued; run {run_id} will be "
@@ -194,6 +200,12 @@ def _reconcile_sandbox_run(
         return 0
     # exited: stamp the row, THEN rm the container (+ its per-run api-config file).
     notifier_managed_jobs.prepare(api_base, r, services, reason='sandbox_exited', stop=True, wait_secs=0)
+    from . import job_sandbox
+    _, jobs = notifier_managed_jobs.run_jobs(r)
+    evidence = job_sandbox.inspect_container(sbx, _sandbox) if jobs else None
+    if jobs and (evidence is None or not all(job_sandbox.matches(job, evidence) for job in jobs)
+                 or not job_sandbox.save_after_exit(evidence)):
+        return 0  # Preserve the row/container until exact command disposition is durable.
     diff = _capture_recovered_diff(
         r, checkout_users, unknown_checkout_users, services
     )
@@ -216,7 +228,7 @@ def _reconcile_sandbox_run(
         # (next sweep would probe a GONE container and mis-stamp it 'vanished').
         # The container is already exited, so retrying next sweep is free.
         return 0
-    _sandbox.remove(sbx)                       # never -v: volumes are durable state
+    _sandbox.remove(evidence['container_id'] if evidence else sbx)  # never -v
     if cwd:
         _sandbox.remove_api_config(cwd, sbx)
     if not quiet:
@@ -478,7 +490,13 @@ def reap_orphaned_runs(
                               f"(< {ORPHAN_BOOT_GRACE_SECS:.0f}s boot grace) — orphan "
                               f"stop deferred to a later sweep (M7)")
                     continue
-                _sandbox.stop(name)
+                from . import job_sandbox
+                evidence = job_sandbox.inspect_container(name, _sandbox)
+                job_sandbox.save_before_stop(evidence)
+                _sandbox.stop(evidence['container_id'] if evidence else name)
+                if evidence:
+                    observed = job_sandbox.inspect_container(name, _sandbox, identifier=evidence['container_id'])
+                    job_sandbox.save_after_exit(observed)
                 if not quiet:
                     print(f"[notifier] stopped ORPHAN sandbox container {name} — no open "
                           f"worker_runs row references it (spec §3.5; volumes untouched)")

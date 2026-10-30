@@ -58,7 +58,9 @@ def test_migration_042_exists_and_is_next_sequential():
     # 081 adds explicit review handoffs; 082 flexible workflows (outcomes, routes,
     # repeat groups, rounds, owner decisions, turn allowance).
     # Keep this pin moving with the chain tip so gaps/dupes still fail loudly.
-    assert numbers[-1] == 83, f"083 must be the latest migration, saw {numbers[-1]:03d}"
+    # 084-088 add managed messages/jobs, notices, immutable stop observations,
+    # and bounded command transfers (GH #312).
+    assert numbers[-1] == 88, f"088 must be the latest migration, saw {numbers[-1]:03d}"
 
 
 def test_agents_git_email_column_applied(db):

@@ -153,9 +153,9 @@ def confirm_exit(api_base, aid, worker):
     if worker.get("sandbox_container_id") or not worker.get('run_id'):
         return False
     process = worker.get("proc")
-    if process is None or process.poll() is None:
-        return False
     try:
+        if process is None or not callable(getattr(process, 'poll', None)) or process.poll() is None:
+            return False
         if worker.get('workflow'):
             runner_post(f"{api_base}/api/agents/{aid}/runs/{worker['run_id']}/confirm-stopped",
                         {"generation": worker["workflow_generation"]}, {})

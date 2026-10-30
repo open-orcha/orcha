@@ -58,6 +58,10 @@ def reap_workers(
                                    cause='managed_authority_lost')
             continue
         notifier_managed_jobs.prepare_if_due(api_base, worker, services, now)
+        if (worker.get('respawns', 0) < services.HARD_CAP_RESPAWN_MAX
+                and notifier_managed_jobs.transfer_due(worker, now)):
+            services._checkpoint_and_respawn(api_base, aid, worker, live_workers, quiet)
+            continue
         size = worker.get("last_size", 0)
         if worker.get("log_path"):
             try:
