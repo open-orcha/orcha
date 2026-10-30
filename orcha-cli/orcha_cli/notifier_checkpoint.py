@@ -49,6 +49,8 @@ def checkpoint_and_respawn(
     ):
         # I4: the OLD wake's container, once stamped
         services._reap_sandbox_artifacts(worker)
+        from .notifier_workflow import confirm_exit
+        confirm_exit(api_base, agent_id, worker)
     current_run = _current_run(api_base, agent_id, worker, services)
     task_id = (
         current_run.get("task_id")

@@ -86,16 +86,24 @@ def run(config):
         os.close(fd)
         with store.open_output(config['job_id'], 'stdout') as out, store.open_output(config['job_id'], 'stderr') as err:
             stage = 'launching'
+            argv, env = config['argv'], minimal_environment(config['env'])
+            contract = config.get('continuation_contract', 'stop_before_transfer')
+            if contract != 'stop_before_transfer':
+                from .job_isolation import CONTRACT, launch_arguments
+                if contract != CONTRACT:
+                    raise ValueError('Unsupported command isolation contract')
+                argv, env = launch_arguments(directory, argv, env)
             with store.locked():
                 if daemon_stop_requested(directory, identity):
                     raise RuntimeError('Managed command stopped before launch')
-                child = subprocess.Popen(config['argv'], cwd=config['cwd'], env=minimal_environment(config['env']),
+                child = subprocess.Popen(argv, cwd=config['cwd'], env=env,
                                          stdin=subprocess.DEVNULL, stdout=out, stderr=err,
                                          start_new_session=True, close_fds=True)
             signal.setitimer(signal.ITIMER_REAL, max(0.001, until - time.monotonic()))
             atomic_json(directory / 'process.json', {
                 **identity, 'process': process_identity(child.pid), 'group_id': child.pid,
                 'guard': process_identity(os.getpid()), 'started_at': time.time(),
+                'continuation_contract': contract,
             })
             selector = selectors.DefaultSelector()
             stage = 'monitoring'

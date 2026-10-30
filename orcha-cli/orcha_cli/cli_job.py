@@ -28,6 +28,8 @@ def register(sub, handler):
     start.add_argument('--purpose', required=True, help='brief description without credentials')
     start.add_argument('--max-seconds', type=int, default=7200)
     start.add_argument('--max-transfers', type=int, default=3)
+    start.add_argument('--isolate', action='store_true',
+                       help='macOS: deny shared writes, network, IPC and subprocesses; write only to ORCHA_JOB_SCRATCH')
     start.add_argument('command', nargs=argparse.REMAINDER)
     status = commands.add_parser('status', help='read status and saved exit information without raw logs')
     status.add_argument('job_id', nargs='?')
@@ -80,13 +82,18 @@ def summary(store, job):
     return value
 
 
-def start_job(api, store, *, key, purpose, argv, cwd, max_seconds=7200, max_transfers=3):
+def start_job(api, store, *, key, purpose, argv, cwd, max_seconds=7200, max_transfers=3, isolate=False):
     if not argv:
         raise ValueError('A foreground command is required after --')
     if not Path(cwd).resolve().is_relative_to(store.root.parent.parent):
         raise JobStorageError('Command directory is outside the durable workspace')
+    from . import job_isolation
+    if isolate:
+        job_isolation.require_available()
+    contract = job_isolation.CONTRACT if isolate else 'stop_before_transfer'
     job = api.request('managed-jobs', {'job_key': str(uuid5(UUID(api.task_id), key)),
-                                     'max_elapsed_secs': max_seconds, 'max_transfers': max_transfers})
+                                     'max_elapsed_secs': max_seconds, 'max_transfers': max_transfers,
+                                     'continuation_contract': contract})
     with store.locked():
         directory = store.job_directory(job['job_id'], create=True)
         path = directory / 'record.json'
@@ -101,12 +108,14 @@ def start_job(api, store, *, key, purpose, argv, cwd, max_seconds=7200, max_tran
                   'status': 'reserved', 'cwd': str(Path(cwd).resolve()), 'purpose': purpose,
                   'command': command_summary(argv), 'budget_until': job['budget_until'],
                   'max_transfers': job['max_transfers'], 'transfers_used': job['transfers_used'],
-                  'launch_claimed': True, 'continuation': 'stop_before_transfer'}
+                  'launch_claimed': True, 'continuation': contract}
         # Serialize against teardown and competing CLI starts. Any crash after
         # this durable reservation retains the fence, including before Popen.
         if not Path(cwd).is_dir():
             raise JobStorageError('Command directory is unavailable')
         atomic_json(path, record)
+        if isolate:
+            job_isolation.prepare(directory)
         atomic_json(directory / 'context.json', {'completed_steps': [], 'remaining_steps': []})
         atomic_json(directory / 'guidance.json', {'received_position': None, 'handled_position': None,
                                                 'pending_messages': [], 'has_more': True})
@@ -203,7 +212,8 @@ def cmd_job(args):
         if args.job_action == 'start':
             argv = args.command[1:] if args.command[:1] == ['--'] else args.command
             result = start_job(api, store, key=args.key, purpose=args.purpose, argv=argv, cwd=cwd,
-                               max_seconds=args.max_seconds, max_transfers=args.max_transfers)
+                               max_seconds=args.max_seconds, max_transfers=args.max_transfers,
+                               isolate=args.isolate)
         elif args.job_action == 'status':
             jobs = api.request('managed-jobs', method='GET')['jobs']
             result = {'jobs': [summary(store, j) for j in jobs if not args.job_id or j['job_id'] == args.job_id]}

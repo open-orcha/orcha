@@ -79,6 +79,8 @@ def handle_terminal_result(
         diff,
     ):
         services._reap_sandbox_artifacts(worker)  # I4: completed (lingering) — reap once stamped
+        from .notifier_workflow import confirm_exit
+        confirm_exit(api_base, aid, worker)
     if worker.get("task_worktree"):
         _save_task_result(api_base, aid, worker, diff, failed_drains, services)
     elif worker.get("worktree"):
@@ -153,6 +155,8 @@ def kill_stalled(
     ):
         # I4 (force-rm: takes a still-stopping container down with it, post-stamp)
         services._reap_sandbox_artifacts(worker)
+        from .notifier_workflow import confirm_exit
+        confirm_exit(api_base, aid, worker)
     disposition = services._safe_teardown_worktree(
         worker.get("base_cwd"), worker.get("worktree"), worker.get("branch")
     )

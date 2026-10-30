@@ -21,6 +21,7 @@ from portal_backend.managed_run_auth import conflict, require_managed_run
 from portal_backend.schemas.managed_jobs import (
     ManagedJobAuthority, ManagedJobList, ManagedJobReserve, ManagedJobUpdate,
     ManagedJobView, ManagedLimitsView, ManagedRunLimits, ManagedJobReconcile,
+    HostWorkerStopObserved, WorkerStopObservationView,
 )
 from portal_backend.workflow_evidence_service import _lock_context
 
@@ -69,28 +70,57 @@ def reserve_managed_job(tid: UUID, body: ManagedJobReserve, request: Request,
         limits = run_limits(cur, run)
         if authority_until(cur, run, task, limits) <= sql.utcnow():
             conflict('managed_authority_expired')
+        if body.continuation_contract != 'stop_before_transfer' and run['sandbox_container_id']:
+            conflict('managed_isolation_requires_host')
         cur.execute('SELECT * FROM managed_jobs WHERE task_id=%s AND job_key=%s' + sql.for_update(),
                     (str(tid), str(body.job_key)))
         job = cur.fetchone()
         if job:
             # Return the original reservation/result, never renew its budget or
             # create a second process. The caller must inspect owner and state.
-            if body.max_transfers != job['max_transfers'] or body.max_elapsed_secs != job['max_elapsed_secs']:
+            if (body.max_transfers != job['max_transfers'] or body.max_elapsed_secs != job['max_elapsed_secs']
+                    or body.continuation_contract != job['continuation_contract']):
                 conflict('managed_reservation_conflict')
         else:
             cur.execute('SELECT generation FROM workflow_executions WHERE run_id=%s', (run['run_id'],))
             execution = cur.fetchone()
             now = sql.utcnow()
             cur.execute('INSERT INTO managed_jobs(job_id,task_id,job_key,launch_nonce,owner_run_id,'
-                        'workflow_generation,budget_until,max_transfers,max_elapsed_secs,reserved_at) '
-                        'VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *',
+                        'workflow_generation,budget_until,max_transfers,max_elapsed_secs,reserved_at,continuation_contract) '
+                        'VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *',
                         (str(uuid4()), str(tid), str(body.job_key), str(uuid4()), run['run_id'],
                          execution['generation'] if execution else None,
                          now + timedelta(seconds=body.max_elapsed_secs), body.max_transfers,
-                         body.max_elapsed_secs, now))
+                         body.max_elapsed_secs, now, body.continuation_contract))
             job = cur.fetchone()
         conn.commit()
     return job
+
+
+@app.post('/api/runs/{rid}/managed-stop-observation', response_model=WorkerStopObservationView)
+def observe_host_worker_stop(rid: UUID, body: HostWorkerStopObserved, request: Request):
+    """Local daemon's positive Popen exit observation, separate from finish.
+
+    Like run finish, this uses the existing machine lane. A terminal run alone
+    never creates this receipt. Workflow observations use confirm-stopped.
+    """
+    from portal_backend.worker_stop_observations import record_stop
+    with db_cursor() as (conn, cur):
+        run, task, execution = _lock_context(cur, str(rid))
+        if not task:
+            conflict('managed_task_required')
+        require_machine_lane_member(cur, request, str(task['container_id']))
+        if (task.get('workflow_id') or execution or run['sandbox_container_id']
+                or run['lane'] != 'work' or run['wake_kind'] != 'ephemeral'):
+            conflict('managed_stop_requires_host_worker')
+        if run['status'] == 'running' or not run['ended_at']:
+            conflict('managed_source_run_not_ended')
+        if run['pid'] != body.process_id:
+            conflict('managed_worker_process_changed')
+        receipt = record_stop(cur, str(rid), source='host_process',
+                              process_id=body.process_id, exit_code=body.exit_code)
+        conn.commit()
+        return receipt
 
 
 @app.get('/api/tasks/{tid}/managed-jobs', response_model=ManagedJobList)
