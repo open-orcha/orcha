@@ -120,3 +120,42 @@ class ManagedJobReconcile(ManagedJobUpdate):
         if not self.termination_verified or self.state not in {'completed', 'interrupted', 'exhausted'}:
             raise PydanticCustomError('managed_result_required', 'Recovery requires an observed terminal result')
         return self
+
+
+class ManagedTransferPrepare(BaseModel):
+    transfer_id: UUID
+    expected_version: int = Field(ge=0)
+    launch_nonce: UUID
+    proof_digest: str = Field(pattern=r'^[a-f0-9]{64}$')
+    capability_digest: str = Field(pattern=r'^[a-f0-9]{64}$')
+
+
+class ManagedTransferView(BaseModel):
+    transfer_id: UUID
+    job_id: UUID
+    source_run_id: UUID
+    execution_id: UUID | None
+    generation: int | None
+    launch_nonce: UUID
+    proof_digest: str
+    authority_until: datetime
+    prepared_at: datetime
+    adopted_run_id: UUID | None
+
+
+class ManagedTransferAuthority(BaseModel):
+    server_time: datetime
+    authority_until: datetime
+    budget_until: datetime
+    source_run_id: UUID
+    job_id: UUID
+    transfer_id: UUID
+
+
+class ManagedTransferAdopt(BaseModel):
+    transfer_id: UUID
+    operation_id: UUID
+    expected_version: int = Field(ge=0)
+    launch_nonce: UUID
+    proof_digest: str = Field(pattern=r'^[a-f0-9]{64}$')
+    capability: str = Field(min_length=43, max_length=128, repr=False)

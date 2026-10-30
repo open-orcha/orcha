@@ -108,6 +108,7 @@ def test_build_docker_argv_shape(tmp_path):
     assert "/workspace" not in joined               # the old remap is GONE
     # the spawner-stamped root env the gh wrapper / credential helper read:
     assert f"-e ORCHA_WORKSPACE_ROOT={proj}" in joined
+    assert "-e ORCHA_SANDBOX_CONTAINER=orcha-run-abc" in joined
     # secrets ride the client env, never argv:
     assert "-e ORCHA_RUN_TOKEN" in joined and "ORCHA_RUN_TOKEN=" not in joined
     assert "--network orcha-myproj_default" in joined

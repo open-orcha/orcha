@@ -98,6 +98,25 @@ def reap_sandbox_artifacts(rec: dict, *, sandbox_mod) -> None:
     if not sbx:
         return
     try:
+        from . import job_sandbox, notifier_managed_jobs
+        _, jobs = notifier_managed_jobs.run_jobs(rec)
+        if jobs:
+            evidence = job_sandbox.inspect_container(sbx, sandbox_mod)
+            if evidence is None or not all(job_sandbox.matches(job, evidence) for job in jobs):
+                rec['managed_disposition_unknown'] = True
+                return  # Missing/unprobeable is not positive container exit.
+            job_sandbox.save_before_stop(evidence)
+            if evidence['running']:
+                sandbox_mod.stop(evidence['container_id'])
+            observed = job_sandbox.inspect_container(sbx, sandbox_mod, identifier=evidence['container_id'])
+            if observed is None or not job_sandbox.save_after_exit(observed):
+                rec['managed_disposition_unknown'] = True
+                return
+            sandbox_mod.remove(evidence['container_id'])
+            cwd = rec.get('worktree') or rec.get('base_cwd')
+            if cwd:
+                sandbox_mod.remove_api_config(cwd, sbx)
+            return
         # force=True (`docker rm -f`, never -v — volumes are durable state): the
         # kill paths reach here with a container that may still be RUNNING (the
         # SIGKILL escalation kills only the docker CLIENT). For a hard-capped

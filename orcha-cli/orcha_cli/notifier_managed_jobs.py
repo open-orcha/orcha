@@ -13,7 +13,7 @@ import time
 from uuid import UUID, uuid5
 
 from .job_api import JobAPI, JobAPIError, AuthorityClock
-from .job_evidence import context_snapshot
+from .job_evidence import context_snapshot, verified_result
 from .job_store import JobStore, JobStorageError, atomic_json, read_json, _open_private, jobs_root
 
 
@@ -45,9 +45,7 @@ def reconcile_result(store, record):
         with store.locked():
             record = store.read(record['job_id'])
             result = read_json(directory / 'result.json')
-            if (any(result.get(k) != record.get(k) for k in ('job_id', 'owner_run_id', 'launch_nonce'))
-                    or not result.get('termination_verified')
-                    or result.get('status') not in {'completed', 'interrupted', 'exhausted'}):
+            if not verified_result(directory, record, result):
                 return record
             if record.get('result_saved') and record.get('termination_verified'):
                 return record
@@ -81,7 +79,7 @@ def notice(api_base, store, record, services):
         atomic_json(path, {'key': key, 'delivered': True})
 
 
-def prepare(api_base, worker, services, *, reason, stop=False, wait_secs=5):
+def prepare(api_base, worker, services, *, reason, stop=False, wait_secs=5, retained_jobs=()):
     """Flush evidence before requesting stop; return verified disposition only.
 
     Stopping a worker is still required when disposition is unknown, but its
@@ -98,6 +96,8 @@ def prepare(api_base, worker, services, *, reason, stop=False, wait_secs=5):
             directory = store.job_directory(record['job_id'])
             with store.locked():
                 record = store.read(record['job_id'])
+                if record.get('owner_run_id') != worker['run_id']:
+                    continue  # A stale daemon pass must not stop its successor.
                 atomic_json(directory / 'handoff.json', {
                     **context_snapshot(directory), 'job_id': record['job_id'],
                     'owner_run_id': record['owner_run_id'], 'launch_nonce': record['launch_nonce'],
@@ -105,10 +105,13 @@ def prepare(api_base, worker, services, *, reason, stop=False, wait_secs=5):
                     'record': 'record.json', 'process': 'process.json', 'result': 'result.json',
                     'recovery': 'Inspect the original reservation and saved result before continuing.',
                 })
-                if stop and not settled(record):
+                if stop and not settled(record) and record['job_id'] not in retained_jobs:
                     atomic_json(directory / 'daemon-stop.json', {
                         'owner_run_id': record['owner_run_id'], 'launch_nonce': record['launch_nonce'],
-                        'reason': reason,
+                        'reason': ('transfer_budget_exhausted' if reason == 'checkpoint_transfer'
+                                   and record.get('continuation') == 'readonly_single_process_v1'
+                                   and record.get('transfers_used', 0) >= record.get('max_transfers', 0)
+                                   else reason),
                     })
                     pending.append(record)
             notice(api_base, store, record, services)
@@ -139,6 +142,13 @@ def reconcile_renewal(api_base, worker):
         store, records = run_jobs(worker)
         live = [r for r in records if not settled(reconcile_result(store, r))]
         if not live:
+            return True
+        if worker.get('workflow') and not worker.get('run_token'):
+            # Activation gives the token only to the bootstrap, never to the
+            # notifier. Workflow runs have no ordinary scheduling lease to
+            # reconcile. Their retained supervisors validate current generation
+            # and enforce finite authority independently, including during a
+            # paused or unavailable daemon.
             return True
         clocks = worker.setdefault('managed_authority_clocks', {})
         clients = worker.setdefault('managed_authority_clients', {})
@@ -172,3 +182,57 @@ def prepare_if_due(api_base, worker, services, now):
         deadlines.append(epoch(worker['scheduling_lease_until']))
     if deadlines and now >= min(deadlines) - 65:
         prepare(api_base, worker, services, reason='deadline_approaching')
+
+
+def transfer_due(worker, now):
+    """Start replacement while the old fixed cap still has a full minute left."""
+    if (worker.get('sandbox_container_id')
+            or not worker.get('respawn_ctx')
+            or (not worker.get('workflow') and not worker.get('run_token'))
+            or not worker.get('hard_deadline') or now < worker['hard_deadline'] - 65):
+        return False
+    try:
+        _, records = run_jobs(worker)
+        if worker.get('workflow'):
+            return any(not settled(r) for r in records)
+        return any(r.get('continuation') == 'readonly_single_process_v1'
+                   and r.get('status') == 'running' and r.get('transfer_socket') for r in records)
+    except (OSError, ValueError, JobStorageError):
+        return False
+
+
+def prepare_replacement(api_base, worker, services):
+    """Stop generic jobs first, then freeze eligible retained controllers."""
+    from .job_transfer import transfer_command
+    try:
+        store, records = run_jobs(worker)
+        eligible = [r['job_id'] for r in records if r.get('continuation') == 'readonly_single_process_v1'
+                    and r.get('status') == 'running' and r.get('transfer_socket')
+                    and r.get('transfers_used', 0) < r.get('max_transfers', 0)]
+        if not prepare(api_base, worker, services, reason='checkpoint_transfer', stop=True,
+                       retained_jobs=eligible):
+            return False
+        for jid in eligible:
+            transfer_command(store, jid, 'prepare', worker['run_token'])
+        worker['managed_transfers'] = eligible
+        return True
+    except (OSError, ValueError, KeyError, JobStorageError, JobAPIError):
+        # Freeze cannot be undone. Stop the retained commands and checkpoint the
+        # worker normally only after all command dispositions are verified.
+        worker['managed_transfers'] = []
+        return prepare(api_base, worker, services, reason='transfer_unavailable', stop=True)
+
+
+def adopt_replacement(previous, successor):
+    from .job_transfer import transfer_command
+    try:
+        store, _ = run_jobs(previous)
+        for jid in previous.get('managed_transfers', []):
+            record = reconcile_result(store, store.read(jid))
+            if settled(record):
+                continue  # The successor can import the saved result, no rerun.
+            transfer_command(store, jid, 'adopt', successor['run_token'])
+        return True
+    except (OSError, ValueError, KeyError, JobStorageError, JobAPIError):
+        successor['managed_transfer_needs_recovery'] = True
+        return False  # Original guards retain their old, finite stop deadline.

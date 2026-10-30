@@ -63,7 +63,7 @@ def handle_exited(
         (worker.get("respawn_ctx") or {}).get("model_runtime")
     )
     status = "exited"
-    if runtime == services.RUNTIME_CODEX:
+    if runtime == services.RUNTIME_CODEX and not worker.get('workflow_checkpoint_finished'):
         status = services._codex_exit_status(worker.get("log_path"), proc.returncode)
     is_task_worktree = bool(worker.get("task_worktree"))
     is_task_bound = bool(worker.get("task_bound", is_task_worktree))
@@ -88,7 +88,7 @@ def handle_exited(
         )
         notifier_workflow.confirm_exit(api_base, aid, worker)
         return
-    if services._finish_run(
+    if worker.get('workflow_checkpoint_finished') or services._finish_run(
         api_base,
         worker.get("run_id"),
         status,

@@ -7,7 +7,7 @@ import hashlib
 import os
 from uuid import uuid4
 
-from .job_evidence import context_snapshot
+from .job_evidence import context_snapshot, verified_result
 from .job_store import JobStorageError, _open_private, atomic_json, read_json
 
 
@@ -33,14 +33,22 @@ def recover_result(api, store, job):
             record = store.read(job['job_id'])
             result_path = directory / 'result.json'
             result = read_json(result_path)
-            identity = ('job_id', 'owner_run_id', 'launch_nonce')
+            identity = ('job_id', 'launch_nonce')
             if (any(record.get(k) != job.get(k) or result.get(k) != job.get(k) for k in identity)
+                    or result.get('owner_run_id') != record.get('launch_owner_run_id', record['owner_run_id'])
                     or record.get('task_id') != api.task_id):
                 raise JobStorageError('Saved command result belongs to another launch')
-            if (not result.get('termination_verified')
-                    or result.get('status') not in {'completed', 'interrupted', 'exhausted'}
-                    or type(result.get('exit_code')) is not int
-                    or result.get('signal') != (-result['exit_code'] if result['exit_code'] < 0 else None)):
+            if record['owner_run_id'] != job['owner_run_id']:
+                # A committed adoption can lose its reply and its controller.
+                # The authoritative same-launch owner/count is its receipt;
+                # recover only terminal evidence under the absent-supervisor lock.
+                if (not record.get('launch_owner_run_id')
+                        or job['transfers_used'] <= record.get('transfers_used', 0)
+                        or job['continuation_contract'] != record.get('continuation')):
+                    raise JobStorageError('Saved command ownership needs reconciliation')
+                record.update(owner_run_id=job['owner_run_id'], transfers_used=job['transfers_used'],
+                              workflow_generation=job['workflow_generation'])
+            if not verified_result(directory, record, result):
                 raise JobStorageError('Saved command termination is not verified; do not relaunch')
             result_digest = digest(result_path)
             if job['termination_verified']:

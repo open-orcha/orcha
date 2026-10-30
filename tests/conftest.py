@@ -58,7 +58,7 @@ TEST_URL = os.environ.get(
 # so a new table added to the schema fails loudly here until it's wired in.
 # (Postgres leg only: the SQLite leg derives its table list from sqlite_master.)
 APP_TABLES = [
-    'worker_stop_observations',
+    'worker_stop_observations', 'managed_job_transfers',
     "managed_message_receipts", "managed_run_limits", "managed_jobs", "managed_job_operations", "system_notice_receipts",
     "conversation_turns", "conversations",
     "agent_wake_state", "agent_reachability", "agent_memory_digests",

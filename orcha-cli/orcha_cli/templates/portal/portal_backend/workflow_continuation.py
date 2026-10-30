@@ -81,8 +81,15 @@ def eligible(cur, execution, aid):
         reason = json.loads(run.get('kill_reason') or '{}')
     except (ValueError, TypeError):
         return False
-    return (run['status'] == 'killed' and isinstance(reason, dict)
-            and reason.get('cause') == 'host_process_missing_after_notifier_restart')
+    if run['status'] != 'killed' or not isinstance(reason, dict):
+        return False
+    if reason.get('cause') == 'host_process_missing_after_notifier_restart':
+        return True
+    # The notifier checkpoints and positively stops managed commands before
+    # ending this worker. Keep the ordinary schedule/approval/count gates above;
+    # this is not a new immediate or unbounded restart path.
+    return (reason.get('cause') == 'managed_checkpoint'
+            and bool(one(cur, 'SELECT 1 FROM managed_jobs WHERE owner_run_id=%s LIMIT 1', (run['run_id'],))))
 
 
 def limit_notice(cur, execution):

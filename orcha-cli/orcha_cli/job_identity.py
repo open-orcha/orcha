@@ -41,6 +41,8 @@ def same_process(identity):
 
 def group_live(pgid):
     """Return True/False/None. Unknown evidence must retain the worktree fence."""
+    if sys.platform.startswith('linux'):
+        return linux_group_live(pgid)
     try:
         result = subprocess.run(['ps', '-axo', 'pgid=,stat='], capture_output=True,
                                 text=True, timeout=1, env={'PATH': '/usr/bin:/bin', 'LC_ALL': 'C'})
@@ -52,6 +54,26 @@ def group_live(pgid):
                 return True
         return False
     except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+
+
+def linux_group_live(pgid, proc_root=Path('/proc')):
+    """The runner image has procfs but need not install the external ps tool."""
+    unknown = False
+    try:
+        for entry in proc_root.iterdir():
+            if not entry.name.isdigit():
+                continue
+            try:
+                fields = (entry / 'stat').read_text().rsplit(')', 1)[1].split()
+                if int(fields[2]) == pgid and fields[0] not in {'Z', 'X'}:
+                    return True
+            except FileNotFoundError:
+                continue  # The process exited during enumeration.
+            except (OSError, ValueError, IndexError):
+                unknown = True
+        return None if unknown else False
+    except OSError:
         return None
 
 

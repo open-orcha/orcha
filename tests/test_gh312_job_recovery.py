@@ -87,6 +87,7 @@ async def test_real_guard_result_survives_crash_lost_reply_and_successor_restart
     api, store, launch = jobs
     jid = launch("import time;open('starts','a').write('once');time.sleep(60)")
     eventually(lambda: running(store, jid))
+    eventually(lambda: (tmp_path/'starts').exists() and (tmp_path/'starts').read_text() == 'once')
     os.kill(store.read(jid)['supervisor']['pid'], signal.SIGKILL)
     saved = eventually(lambda: result(store, jid))
     assert saved['termination_verified']

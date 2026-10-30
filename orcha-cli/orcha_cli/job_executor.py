@@ -16,7 +16,7 @@ import sys
 import time
 from pathlib import Path
 
-from .job_evidence import context_snapshot, daemon_stop_requested
+from .job_evidence import context_snapshot, daemon_stop_requested, daemon_stop_reason
 from .job_identity import child_exited, group_live, process_identity
 from .job_store import JobStore, atomic_json
 
@@ -47,6 +47,8 @@ def run(config):
                 'owner_run_id': config['owner_run_id']}
     until, prepare = config['until'], config['prepare']
     budget = config.get('budget_until', float('inf'))
+    transfers_used = config.get('transfers_used', 0)
+    max_transfers = config.get('max_transfers', 3)
     child = None
     reason = None
     prepared = False
@@ -100,11 +102,12 @@ def run(config):
                                          stdin=subprocess.DEVNULL, stdout=out, stderr=err,
                                          start_new_session=True, close_fds=True)
             signal.setitimer(signal.ITIMER_REAL, max(0.001, until - time.monotonic()))
-            atomic_json(directory / 'process.json', {
+            process_record = {
                 **identity, 'process': process_identity(child.pid), 'group_id': child.pid,
                 'guard': process_identity(os.getpid()), 'started_at': time.time(),
                 'continuation_contract': contract,
-            })
+            }
+            atomic_json(directory / 'process.json', process_record)
             selector = selectors.DefaultSelector()
             stage = 'monitoring'
             selector.register(sys.stdin.fileno(), selectors.EVENT_READ)
@@ -112,7 +115,8 @@ def run(config):
             while reason is None and not child_exited(child.pid):
                 now = time.monotonic()
                 if daemon_stop_requested(directory, identity):
-                    reason = 'daemon_stop_requested'
+                    reason = ('budget_exhausted' if daemon_stop_reason(directory, identity) == 'transfer_budget_exhausted'
+                              and transfers_used >= max_transfers else 'daemon_stop_requested')
                     break
                 if now >= prepare and not prepared:
                     checkpoint('preparing_for_deadline')
@@ -128,9 +132,24 @@ def run(config):
                     while b'\n' in buffer:
                         line, buffer = buffer.split(b'\n', 1)
                         control = json.loads(line)
+                        if control.get('probe'):
+                            # Answer over the retained anonymous pipe, never a
+                            # filesystem/PID-only claim. The child is unreaped.
+                            proof = dict(process_record, challenge=control['probe'],
+                                         live=not child_exited(child.pid))
+                            sys.stdout.write(json.dumps(proof) + '\n')
+                            sys.stdout.flush()
+                            continue
+                        if control.get('controller_run_id'):
+                            if control['controller_run_id'] != identity.get('controller_run_id', identity['owner_run_id']):
+                                prepared = False
+                            identity['controller_run_id'] = control['controller_run_id']
+                            transfers_used = max(transfers_used, control.get('transfers_used', transfers_used))
                         if control.get('stop'):
-                            reason = ('budget_exhausted' if control.get('reason') == 'budget_exhausted'
-                                      and time.monotonic() >= budget else 'supervisor_stop_requested')
+                            exhausted = ((control.get('reason') == 'budget_exhausted' and time.monotonic() >= budget)
+                                         or (control.get('reason') == 'transfer_budget_exhausted'
+                                             and transfers_used >= max_transfers))
+                            reason = 'budget_exhausted' if exhausted else 'supervisor_stop_requested'
                             break
                         until, prepare = control['until'], control['prepare']
                         budget = min(budget, control.get('budget_until', budget))

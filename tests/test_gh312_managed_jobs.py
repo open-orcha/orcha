@@ -197,7 +197,7 @@ async def test_fixed_caps_never_extend_and_legacy_wait_cannot_bypass(client, man
 async def test_managed_job_openapi(client):
     spec = (await client.get('/openapi.json')).json()
     paths = {p: methods for p, methods in spec['paths'].items() if 'managed-jobs' in p or 'managed-limits' in p}
-    assert len(paths) == 5
+    assert len(paths) == 8
     for p, methods in paths.items():
         for method in methods.values():
             assert method['responses']['200']['content']['application/json']['schema']['$ref']
