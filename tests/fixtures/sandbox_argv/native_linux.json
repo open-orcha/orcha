@@ -25,6 +25,8 @@
   "<WS>",
   "-e",
   "ORCHA_WORKSPACE_ROOT=<WS>",
+  "-e",
+  "ORCHA_SANDBOX_CONTAINER=orcha-run-000000000000",
   "--network",
   "host",
   "-e",

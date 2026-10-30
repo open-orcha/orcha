@@ -36,6 +36,10 @@ class FakeProc:
         self.killed = True
         self.returncode = -9
     def wait(self, timeout=None):
+        # Popen.wait() returns only after exit (or raises TimeoutExpired).
+        # These cooperative workers exit during the simulated graceful wait.
+        if self.returncode is None:
+            self.returncode = 0
         return self.returncode
 
 
@@ -1283,6 +1287,7 @@ class StubbornProc(FakeProc):
         if not self._waited:
             self._waited = True
             raise TimeoutError("ignored SIGTERM")        # graceful window elapsed → SIGKILL
+        self.returncode = -signal.SIGKILL
         return self.returncode
 
 

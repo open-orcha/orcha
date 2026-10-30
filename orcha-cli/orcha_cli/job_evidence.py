@@ -1,5 +1,7 @@
 """Private snapshots for mechanical recovery; never copy raw logs or argv."""
 
+import stat
+
 from .job_store import JobStorageError, read_json
 
 
@@ -48,9 +50,21 @@ def context_snapshot(directory):
         from .job_dispatch import references
         record = read_json(directory / 'record.json')
         value['dispatch_message_refs'] = references(directory, record['task_id'])
+        value['ports'] = record.get('ports', [])
+        value['artifacts'] = record.get('artifacts', [])
     except (JobStorageError, KeyError, ValueError, TypeError):
         value['dispatch_message_refs'] = []
     # Dispatch references are delivery hints, never evidence of handling.
     if value['dispatch_message_refs']:
         value['guidance_incomplete'] = True
+    value['output_progress'] = {}
+    for stream in ('stdout', 'stderr'):
+        try:
+            metadata = (directory / f'{stream}.log').lstat()
+            if stat.S_ISREG(metadata.st_mode):
+                value['output_progress'][stream] = {
+                    'bytes': metadata.st_size, 'modified_at': metadata.st_mtime,
+                }
+        except OSError:
+            pass
     return value

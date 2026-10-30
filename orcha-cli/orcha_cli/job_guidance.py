@@ -47,6 +47,8 @@ def startup_guidance(base_cwd, task_id):
         f'Start with `{command} start --key <stable-operation-name> --purpose <brief-safe-description> '
         '-- <executable> <arguments>`. Commands must stay in the foreground and keep descendants '
         'in their process group. The child receives a restricted environment without Orcha/provider tokens. '
+        'Declare relevant local ports and relative output paths with repeatable --port and --artifact options; '
+        'these remain private recovery metadata and never upload files. '
         'This is supervision, not a security sandbox. Generic commands stop before worker transfer.\n'
         'For a single-process read-only check on macOS, --isolate enforces no shared writes, '
         'network/IPC or subprocesses, with private output in ORCHA_JOB_SCRATCH. Only that contract '

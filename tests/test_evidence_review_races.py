@@ -73,7 +73,12 @@ async def test_stranded_cleanup_does_not_overwrite_a_successful_finish(make_agen
     db.execute("UPDATE agents SET last_heartbeat_at=%s WHERE id=%s", (sql.ago(3600),aid))
     selected, proceed = threading.Event(), threading.Event()
     class SchedulingCursor:
-        """Pause immediately before the terminal write's lock; SQL is unchanged."""
+        """Let finish win before cleanup takes its first authority lock.
+
+        Cleanup now locks the graph before selecting candidates. Pausing at
+        the later run lock would hold the graph while waiting for finish,
+        creating a deadlock in the test harness itself.
+        """
         def __init__(self, cur):
             self.cur = cur
             self.paused = False
@@ -81,7 +86,8 @@ async def test_stranded_cleanup_does_not_overwrite_a_successful_finish(make_agen
             return getattr(self.cur, name)
         def execute(self, query, params=None):
             text = " ".join(query.split())
-            boundary = ((text.startswith("UPDATE worker_runs SET status") and "status = 'running'" in text)
+            boundary = (text.startswith("INSERT INTO container_task_graph_guard")
+                        or (text.startswith("UPDATE worker_runs SET status") and "status = 'running'" in text)
                         or (text.startswith("SELECT * FROM worker_runs WHERE run_id=") and "FOR UPDATE" in text))
             if boundary and not self.paused:
                 self.paused = True
