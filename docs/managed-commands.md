@@ -31,3 +31,11 @@ After the old worker ends, `recover <job-id>` imports a verified saved result wi
 Records and logs live under the durable workspace's private `.claude/.orcha-jobs/` directory, outside disposable worktrees and excluded from Git, diffs and task attachments. Startup context contains private pointers, not command output or credentials. Do not copy these files into `.orcha/outputs/`. Commands receive a restricted environment without worker/provider tokens, but output may still contain sensitive data read by the command. The isolation contract protects integrity, not confidentiality. Moving recovery to another host requires access to the original durable evidence.
 
 The API's generated OpenAPI schema is the contract for reservation, polling, handled receipts, deadlines, checkpoints, result reconciliation and transfer. Local runner-supplied evidence uses the existing machine trust boundary; the server does not independently probe the operating system.
+
+## Acceptance checks
+
+Follow `docs/orcha-test-runbook.md` for the isolated SQLite and PostgreSQL suites. The `tests/test_gh312_*.py` modules cover message recovery, authority, command supervision, transfer, cleanup and workflow continuation.
+
+To exercise actual installed, locally authenticated Claude and Codex programs, run `ORCHA_TEST_LIVE_RUNTIMES=1 pytest tests/integration/test_gh312_live_runtimes.py` in the test environment. This opt-in test uses model calls and covers ordinary and workflow startup against a disposable service. Keep its raw logs private.
+
+The Docker acceptance modules `tests/integration/test_gh312_sandbox_cli.py` and `tests/integration/test_gh312_sandbox_lifecycle.py` require a running Docker engine and an already-installed Orcha runner image. They exercise the shipped CLI, API, Linux guard, durable mounts and shutdown, with deterministic tool selection; they do not execute Claude or Codex inside the container. They neither start Docker nor pull an image.
