@@ -108,7 +108,12 @@ class Supervisor:
             # state (never merely missing process.json) permits a same-key retry.
             self.not_started = True
             raise
-        if not allowed or self.record['server_version'] != 0:
+        if not allowed:
+            # A successful heartbeat can deny mutations without raising. No
+            # checkpoint or launch was attempted on this path either.
+            self.not_started = True
+            raise JobAPIError(409)
+        if self.record['server_version'] != 0:
             raise JobAPIError(409)
         # A server CAS plus a flushed local launch fence precedes Popen. If
         # either outcome is uncertain, no worker may silently try a new launch.
