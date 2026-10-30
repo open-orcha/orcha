@@ -103,6 +103,11 @@ def _argv_for(tmp_path: pathlib.Path, name: str, *, stub_sleep: bool = False) ->
     workspace.mkdir(exist_ok=True)
     api_cfg = tmp_path / f"{name}.json"
     api_cfg.write_text(json.dumps({"api_base_url": "http://portal:8000"}))
+    # A real project already has this nested mount target. Docker Desktop
+    # cannot create it through the workspace bind mount when it is absent.
+    (workspace / ".claude").mkdir(exist_ok=True)
+    (workspace / ".claude" / "orcha.json").write_text(api_cfg.read_text())
+    sandbox.ensure_agent_home(workspace)
     argv = sandbox.build_docker_argv(
         ["claude", "-p", "x"], cfg=_tiny_cfg(), name=name,
         workspace=str(workspace), network=None, api_config_mount=str(api_cfg),
