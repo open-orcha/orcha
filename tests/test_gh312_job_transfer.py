@@ -17,6 +17,51 @@ from test_gh312_managed_messages import managed
 from test_gh312_managed_jobs import publish, reserve, url, checkpoint_body
 
 
+@pytest.mark.skipif(sys.platform != 'darwin', reason='Enforced host continuation is macOS only')
+@pytest.mark.parametrize('resume', [True, False])
+async def test_unbound_successor_refusal_keeps_original_command_and_allows_new_candidate(
+        client, managed, service, tmp_path, db, resume):
+    import time
+    await publish(client, managed, seconds=120)
+    store = JobStore(tmp_path)
+    api = JobAPI(service[0], managed['token'], managed['tid'])
+    code = "import os,time;from pathlib import Path;(Path(os.environ['ORCHA_JOB_SCRATCH'])/'starts').write_text('once');time.sleep(60)"
+    jid = start_job(api, store, key='early-adoption', purpose='Early adoption', cwd=tmp_path,
+                    argv=[sys.executable, '-c', code], isolate=True)['job_id']
+    try:
+        process = eventually(lambda: running(store, jid))
+        eventually(lambda: store.read(jid).get('transfer_socket'))
+        transfer_command(store, jid, 'prepare', api.token)
+        unbound = (await client.post(f"/api/agents/{managed['aid']}/embodiment-tokens",
+                                     json={'lane': 'work', 'kind': 'headless'})).json()['run_token']
+        with pytest.raises(JobAPIError) as refused:
+            transfer_command(store, jid, 'adopt', unbound)
+        assert refused.value.code == 'run_binding_pending' and refused.value.retryable
+        # Cross the supervisor's regular heartbeat: it must not replay a refused
+        # adopt and interpret that response as revocation of the source command.
+        time.sleep(2.3)
+        assert result(store, jid) is None
+        assert running(store, jid) == process
+        assert store.read(jid)['owner_run_id'] == managed['rid']
+        if not resume:
+            db.execute('UPDATE managed_run_limits SET run_until=%s WHERE run_id=%s',
+                       (db.ago(-1), managed['rid']))
+            assert eventually(lambda: result(store, jid))['termination_verified']
+            assert store.read(jid)['owner_run_id'] == managed['rid']
+            return
+        new = await successor(client, managed)
+        await observed(client, managed, db)
+        transferred = transfer_command(store, jid, 'adopt', new['token'])
+        assert transferred['owner_run_id'] == new['rid']
+        assert transferred['transfers_used'] == 1
+        assert running(store, jid) == process
+        assert (store.job_directory(jid) / 'scratch' / 'starts').read_text() == 'once'
+    finally:
+        for rid in {managed['rid'], store.read(jid)['owner_run_id']}:
+            db.execute('UPDATE worker_runs SET stop_requested_at=%s WHERE run_id=%s', (db.ago(0), rid))
+        eventually(lambda: result(store, jid), seconds=12)
+
+
 async def prepared(client, managed, **options):
     await publish(client, managed)
     job = await reserve(client, managed, continuation_contract='readonly_single_process_v1', **options)

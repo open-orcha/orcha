@@ -100,6 +100,8 @@ def preallocate_run(cur, execution, runner, *, operation_key, payload, now=None)
                    VALUES (%s,%s,%s,'workflow','work','reserved')""",
                 (run_id, runner["agent_id"], execution["task_id"]))
     cur.execute("INSERT INTO worker_run_tasks (run_id,task_id) VALUES (%s,%s) ON CONFLICT DO NOTHING", (run_id, execution["task_id"]))
+    from portal_backend.managed_message_window import ensure_message_window
+    ensure_message_window(cur, execution['task_id'], runner['agent_id'], run_id, now)
     cur.execute("""INSERT INTO workflow_launch_permits
                    (run_id,execution_id,generation,runner_credential_id,operation_key,payload_sha256,permit_sha256,expires_at)
                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *""",

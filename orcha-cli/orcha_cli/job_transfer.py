@@ -79,7 +79,7 @@ class PlannedTransfer:
         response = self.api.request(f'managed-jobs/{s.job_id}/transfer/heartbeat')
         if (response['source_run_id'] != s.record['owner_run_id']
                 or response['transfer_id'] != self.body['transfer_id'] or response['job_id'] != s.job_id):
-            raise JobAPIError(409)
+            raise JobAPIError(409, code='managed_transfer_heartbeat_mismatch')
         s.clock.until = min(s.clock.until, sent + epoch(response['authority_until']) - epoch(response['server_time']))
         s.clock.mutations_allowed = False
 
@@ -100,7 +100,14 @@ class PlannedTransfer:
                 'transfer_id': self.body['transfer_id'], 'operation_id': str(uuid4()),
                 'expected_version': s.record['server_version'], 'launch_nonce': s.record['launch_nonce'],
                 'proof_digest': self.proof, 'capability': self.capability}}
-        job = api.request(f'managed-jobs/{s.job_id}/transfer/adopt', self.adopting['body'])
+        try:
+            job = api.request(f'managed-jobs/{s.job_id}/transfer/adopt', self.adopting['body'])
+        except JobAPIError as exc:
+            if exc.rejected:
+                # A definite refusal did not transfer ownership. Keep checking
+                # the source capability; only an uncertain reply is replayed.
+                self.adopting = None
+            raise
         old_clock = s.clock
         # Preserve the server's ownership receipt even if contact fails before
         # confirming the new deadline, or the command completes in this gap.
@@ -177,7 +184,11 @@ class TransferChannel:
                                 'transfers_used': s.record['transfers_used']}
                 else:
                     raise ValueError('Transfer unavailable')
-            except (OSError, ValueError, KeyError, JobStorageError, JobAPIError):
+            except JobAPIError as exc:
+                response = {'status': 'refused', 'retryable': exc.retryable}
+                if exc.code:
+                    response['code'] = exc.code
+            except (OSError, ValueError, KeyError, JobStorageError):
                 response = {'status': 'refused'}  # No raw errors, tokens or argv.
             try:
                 connection.sendall(json.dumps(response).encode() + b'\n')
@@ -206,5 +217,7 @@ def transfer_command(store, jid, action, token):
             data += block
         response = json.loads(data)
         if response.get('status') not in {'prepared', 'adopted'}:
+            if response.get('retryable') and response.get('code'):
+                raise JobAPIError(409, code=response['code'])
             raise JobStorageError('Command transfer refused; inspect original evidence')
         return response

@@ -12,10 +12,16 @@ from urllib.parse import urlsplit
 
 
 class JobAPIError(RuntimeError):
-    def __init__(self, status=None, *, lease_lapsed=False):
+    def __init__(self, status=None, *, lease_lapsed=False, code=None):
         self.status = status
-        self.lease_lapsed = lease_lapsed
-        self.fenced = status is not None and 400 <= status < 500
+        # Only public, fixed conflict names may cross the private IPC boundary.
+        self.code = code if isinstance(code, str) and code in {
+            'run_binding_pending', 'worker_lease_lapsed', 'managed_transfer_heartbeat_mismatch',
+        } else None
+        self.lease_lapsed = lease_lapsed or self.code == 'worker_lease_lapsed'
+        self.retryable = self.code is not None
+        self.rejected = status is not None and 400 <= status < 500
+        self.fenced = self.rejected and not self.retryable
         super().__init__('Managed command authority refused' if self.fenced
                          else 'Managed command service unavailable; authority was not extended')
 
@@ -52,14 +58,14 @@ class JobAPI:
                 })
                 response = connection.getresponse()
                 if response.status != 200:
-                    lapsed = False
+                    code = None
                     if response.status == 409:
                         try:
                             error_body = json.loads(response.read(8192))
-                            lapsed = error_body.get('detail', {}).get('code') == 'worker_lease_lapsed'
+                            code = error_body.get('detail', {}).get('code')
                         except (ValueError, AttributeError):
                             pass
-                    raise JobAPIError(response.status, lease_lapsed=lapsed)
+                    raise JobAPIError(response.status, code=code)
                 data = response.read(1024 * 1024 + 1)
                 if len(data) > 1024 * 1024:
                     raise JobAPIError()

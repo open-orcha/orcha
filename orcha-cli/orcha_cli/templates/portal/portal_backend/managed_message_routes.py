@@ -13,6 +13,7 @@ from portal_backend.application import app
 from portal_backend.database import db_cursor
 from portal_backend.event_acknowledgement import acknowledge_event_ids
 from portal_backend.managed_run_auth import conflict, require_managed_run
+from portal_backend.managed_message_window import ensure_message_window
 from portal_backend.schemas.managed_messages import (
     ManagedMessageHandle, ManagedMessagePage, ManagedMessagePoll, ManagedMessageReceipt,
 )
@@ -25,22 +26,24 @@ def _event_ids(cur, aid, tid, mid):
     return [row["id"] for row in cur.fetchall()]
 
 
-def _position(cur, tid, aid, *, handled):
+def _position(cur, tid, aid, floor, *, handled):
     # A sparse set of explicit receipts is the source of truth. In particular
     # received position cannot skip an unhandled gap when computing handled.
     condition = "AND r.handled_at IS NOT NULL" if handled else ""
     gap = """AND NOT EXISTS (
         SELECT 1 FROM task_messages older
         WHERE older.task_id=m.task_id
+          AND older.created_at>=%s AND (older.author_id IS NULL OR older.author_id<>%s)
           AND (older.created_at<m.created_at OR (older.created_at=m.created_at AND older.id<m.id))
           AND NOT EXISTS (SELECT 1 FROM managed_message_receipts h
                           WHERE h.task_id=older.task_id AND h.message_id=older.id
                             AND h.agent_id=%s AND h.handled_at IS NOT NULL))""" if handled else ""
     cur.execute("SELECT m.created_at,m.id AS message_id FROM task_messages m "
                 "JOIN managed_message_receipts r ON r.task_id=m.task_id AND r.message_id=m.id "
-                f"WHERE m.task_id=%s AND r.agent_id=%s {condition} {gap} "
+                "WHERE m.task_id=%s AND r.agent_id=%s AND m.created_at>=%s "
+                f"AND (m.author_id IS NULL OR m.author_id<>%s) {condition} {gap} "
                 "ORDER BY m.created_at DESC,m.id DESC LIMIT 1",
-                (tid, aid, aid) if handled else (tid, aid))
+                (tid, aid, floor, aid, floor, aid, aid) if handled else (tid, aid, floor, aid))
     return cur.fetchone()
 
 
@@ -56,15 +59,17 @@ def poll_managed_messages(tid: UUID, body: ManagedMessagePoll, request: Request,
     with db_cursor() as (conn, cur):
         run, task = require_managed_run(cur, tid, x_orcha_run_token, request)
         aid, rid = str(run["agent_id"]), str(run["run_id"])
+        floor = ensure_message_window(cur, tid, aid, rid, run['started_at'])
         cur.execute("""SELECT m.id AS message_id,m.created_at,m.author_id,m.body,
                               COALESCE(m.attachments, '[]') AS attachments,
                               a.alias AS author_alias,a.kind AS author_kind,a.member_role AS author_role
                        FROM task_messages m LEFT JOIN agents a ON a.id=m.author_id
-                       WHERE m.task_id=%s AND NOT EXISTS (
+                       WHERE m.task_id=%s AND m.created_at>=%s
+                         AND (m.author_id IS NULL OR m.author_id<>%s) AND NOT EXISTS (
                            SELECT 1 FROM managed_message_receipts r
                            WHERE r.task_id=m.task_id AND r.message_id=m.id AND r.agent_id=%s
                              AND r.handled_at IS NOT NULL)
-                       ORDER BY m.created_at,m.id LIMIT %s""", (tid, aid, body.limit + 1))
+                       ORDER BY m.created_at,m.id LIMIT %s""", (tid, floor, aid, aid, body.limit + 1))
         rows = cur.fetchall()
         messages = []
         for row in rows[:body.limit]:
@@ -76,8 +81,8 @@ def poll_managed_messages(tid: UUID, body: ManagedMessagePoll, request: Request,
                                  operation_key=f"task-message:{tid}:{mid}"))
         result = dict(task_id=tid, run_id=rid, task=task, messages=messages,
                       has_more=len(rows) > body.limit,
-                      received_position=_position(cur, tid, aid, handled=False),
-                      handled_position=_position(cur, tid, aid, handled=True))
+                      received_position=_position(cur, tid, aid, floor, handled=False),
+                      handled_position=_position(cur, tid, aid, floor, handled=True))
         conn.commit()
     return result
 
@@ -94,6 +99,7 @@ def handle_managed_message(tid: UUID, mid: UUID, body: ManagedMessageHandle, req
     with db_cursor() as (conn, cur):
         run, _ = require_managed_run(cur, tid, x_orcha_run_token, request)
         aid, rid = str(run["agent_id"]), str(run["run_id"])
+        floor = ensure_message_window(cur, tid, aid, rid, run['started_at'])
         cur.execute("SELECT * FROM managed_message_receipts "
                     "WHERE task_id=%s AND agent_id=%s AND message_id=%s", (tid, aid, mid))
         receipt = cur.fetchone()
@@ -108,7 +114,7 @@ def handle_managed_message(tid: UUID, mid: UUID, body: ManagedMessageHandle, req
                         "WHERE task_id=%s AND agent_id=%s AND message_id=%s",
                         (rid, body.outcome, body.handling_note, tid, aid, mid))
         acknowledge_event_ids(cur, aid, _event_ids(cur, aid, tid, mid))
-        position = _position(cur, tid, aid, handled=True)
+        position = _position(cur, tid, aid, floor, handled=True)
         conn.commit()
     return dict(message_id=mid, outcome=body.outcome, already_handled=already_handled,
                 handled_position=position)

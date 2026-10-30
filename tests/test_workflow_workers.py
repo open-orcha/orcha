@@ -253,6 +253,7 @@ async def test_api_reserve_real_scheduler_replay_activate_and_serial_capacity(tu
     # Begin with no execution: the real scheduler, not this test, must reserve it.
     db.execute("DELETE FROM workflow_launch_permits WHERE execution_id=%s", (turn["eid"],))
     db.execute("DELETE FROM workflow_executions WHERE id=%s", (turn["eid"],))
+    db.execute("DELETE FROM managed_message_windows WHERE first_run_id=%s", (turn["launch"]["run_id"],))
     db.execute("DELETE FROM worker_runs WHERE run_id=%s", (turn["launch"]["run_id"],))
     db.execute("UPDATE tasks SET status='ready' WHERE id=%s", (turn["tid"],))
     body = {"task_id": turn["tid"], "expected_workflow_revision": 1, "expected_work_revision": 1, "operation_key": "api"}

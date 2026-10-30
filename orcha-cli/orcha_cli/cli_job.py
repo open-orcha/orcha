@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
 import os
 import subprocess
@@ -13,7 +14,7 @@ from uuid import UUID, uuid4, uuid5
 
 from .job_api import JobAPI, JobAPIError
 from .job_identity import same_process
-from .job_store import JobStore, JobStorageError, atomic_json, command_summary, read_json
+from .job_store import JobStore, JobStorageError, atomic_json, command_summary, read_json, _open_private
 from .job_supervisor import module_environment
 from .job_executor import minimal_environment
 
@@ -119,19 +120,31 @@ def start_job(api, store, *, key, purpose, argv, cwd, max_seconds=7200, max_tran
     with store.locked():
         directory = store.job_directory(job['job_id'], create=True)
         path = directory / 'record.json'
+        previous = None
         if path.exists():
-            return summary(store, job)
+            previous = store.read(job['job_id'])
+            if not retry_unstarted(directory, previous, job):
+                return summary(store, job)
         if job['version'] != 0 or job['state'] != 'reserved':
             return {'job_id': job['job_id'], 'status': 'unknown',
                     'reason': 'Existing launch has no local evidence; do not relaunch'}
-        record = {'job_id': job['job_id'], 'task_id': api.task_id, 'version': 0,
+        record = {'job_id': job['job_id'], 'task_id': api.task_id,
+                  'version': previous['version'] + 1 if previous else 0,
                   'server_version': job['version'], 'owner_run_id': job['owner_run_id'],
                   'workflow_generation': job['workflow_generation'], 'launch_nonce': job['launch_nonce'],
                   'status': 'reserved', 'cwd': str(Path(cwd).resolve()), 'purpose': purpose,
                   'ports': sorted(set(ports)), 'artifacts': list(dict.fromkeys(artifacts)),
                   'command': command_summary(argv), 'budget_until': job['budget_until'],
                   'max_transfers': job['max_transfers'], 'transfers_used': job['transfers_used'],
-                  'launch_claimed': True, 'continuation': contract}
+                  'launch_claimed': True, 'continuation': contract,
+                  'launch_attempt': str(uuid4())}
+        if previous:
+            # Retrying requires fresh argv, but cannot change the reserved
+            # contract, original declarations, directory or absolute budget.
+            for name in ('cwd', 'purpose', 'ports', 'artifacts', 'command', 'continuation'):
+                record[name] = previous[name]
+            if record['cwd'] != str(Path(cwd).resolve()) or record['continuation'] != contract:
+                raise JobStorageError('Retry must use the original command directory and isolation')
         if container:
             record['container'] = container
         # Serialize against teardown and competing CLI starts. Any crash after
@@ -145,6 +158,7 @@ def start_job(api, store, *, key, purpose, argv, cwd, max_seconds=7200, max_tran
         atomic_json(directory / 'guidance.json', {'received_position': None, 'handled_position': None,
                                                 'pending_messages': [], 'has_more': True})
         config = {'base_cwd': str(store.root.parent.parent), 'job_id': job['job_id'],
+                  'launch_attempt': record['launch_attempt'],
                   'launch_nonce': job['launch_nonce'], 'cwd': record['cwd'], 'argv': argv,
                   'env': minimal_environment(os.environ), 'api_base': api.url.geturl(), 'token': api.token}
         proc = subprocess.Popen([sys.executable, '-m', 'orcha_cli.job_supervisor'],
@@ -156,6 +170,27 @@ def start_job(api, store, *, key, purpose, argv, cwd, max_seconds=7200, max_tran
         except (OSError, ValueError):
             raise JobStorageError('Launch outcome is uncertain; inspect this reservation') from None
     return summary(store, job)
+
+
+def retry_unstarted(directory, record, job):
+    """Only an explicit pre-contact failure permits another supervisor attempt.
+
+    Absence of process evidence alone never proves that a launch did not happen.
+    The supervisor lock excludes an attempt still finishing its failure path.
+    """
+    if (record.get('status') != 'not_started' or job['state'] != 'reserved' or job['version'] != 0
+            or any(record.get(k) != job.get(k) for k in ('task_id', 'owner_run_id', 'launch_nonce'))
+            or any((directory / name).exists() for name in ('process.json', 'result.json', 'publication.json'))):
+        return False
+    lock = _open_private(directory / 'supervisor.lock', os.O_RDWR | os.O_CREAT)
+    try:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return False
+        return True
+    finally:
+        os.close(lock)
 
 
 def current_job(api, job_id, *, timeout=None):

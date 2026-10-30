@@ -101,6 +101,32 @@ async def test_notifier_reconciles_lapsed_lease_but_stops_for_hold(jobs, managed
     assert not await asyncio.to_thread(handoff.reconcile_renewal, service[0], worker)
 
 
+async def test_restarted_notifier_uses_original_finite_confirmation(jobs, managed, service, monkeypatch):
+    import time
+    from orcha_cli.job_api import JobAPI, JobAPIError
+    api, store, launch = jobs
+    jid = launch('import time;time.sleep(60)')
+    directory = store.job_directory(jid)
+    eventually(lambda: (directory / 'authority.json').exists())
+    saved = read_json(directory / 'authority.json')
+    def unavailable(*args, **kwargs):
+        raise JobAPIError()
+    monkeypatch.setattr(JobAPI, 'heartbeat', unavailable)
+    worker = worker_record(managed, store)
+    assert handoff.reconcile_renewal(service[0], worker)
+    clock = worker['managed_authority_clocks'][jid]
+    assert clock.until == saved['authority_until_monotonic']
+    assert not clock.mutations_allowed
+    assert not result(store, jid)
+    # A daemon restart or repeated transport failure never grants more time.
+    clock.until = time.monotonic() - 1
+    assert not handoff.reconcile_renewal(service[0], worker)
+    # A different controller/boot cannot reuse a persisted monotonic deadline.
+    saved['supervisor']['boot'] = 'a different boot'
+    atomic_json(directory / 'authority.json', saved)
+    assert not handoff.reconcile_renewal(service[0], worker_record(managed, store))
+
+
 async def test_stale_daemon_stop_does_not_control_current_job(jobs, managed):
     api, store, launch = jobs
     jid = launch('import time;time.sleep(1)')

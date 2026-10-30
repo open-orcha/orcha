@@ -25,7 +25,8 @@ async def managed(client, make_agent, make_task, db):
 
 
 def messages(db, managed, count=3):
-    stamp = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    stamp = db.execute('SELECT started_at FROM managed_message_windows WHERE task_id=%s AND agent_id=%s',
+                        (managed['tid'], managed['aid']))[0]['started_at']
     ids = [str(UUID(int=i)) for i in range(1, count + 1)]
     for mid in ids:
         db.execute('INSERT INTO task_messages(id,task_id,body,created_at) VALUES (%s,%s,%s,%s)',
@@ -44,6 +45,55 @@ async def handle(client, managed, mid):
                                  headers=managed['headers'], json={'outcome': 'applied'})
     assert response.status_code == 200, response.text
     return response.json()
+
+
+async def test_history_and_own_posts_do_not_wake_waiter_or_pin_handled_position(client, managed, db):
+    from datetime import timedelta
+    floor = db.execute('SELECT started_at FROM managed_message_windows')[0]['started_at']
+    for author, stamp in [(None, floor-timedelta(days=1)), (managed['aid'], floor)]:
+        db.execute('INSERT INTO task_messages(id,task_id,author_id,body,created_at) VALUES (%s,%s,%s,%s,%s)',
+                   (str(uuid4()), managed['tid'], author, 'Old history or my own progress', stamp))
+    assert (await poll(client, managed))['messages'] == []
+    mid = messages(db, managed, 1)[0]
+    assert [m['message_id'] for m in (await poll(client, managed))['messages']] == [mid]
+    assert (await handle(client, managed, mid))['handled_position']['message_id'] == mid
+    assert (await poll(client, managed))['messages'] == []
+    assert len(db.execute('SELECT * FROM managed_message_receipts')) == 1
+
+
+async def test_initial_dispatch_preserves_triggering_and_eventless_startup_messages(
+        client, make_agent, make_task, db):
+    from portal_backend.database import db_cursor
+    from portal_backend.events import publish_event
+    aid = (await make_agent('Starting worker'))['agent_id']
+    tid = (await make_task('Startup guidance', 'Preserve instructions', assignee_alias='Starting worker'))['id']
+    db.execute("UPDATE tasks SET status='in_progress' WHERE id=%s", (tid,))
+    old, trigger, during = (str(uuid4()) for _ in range(3))
+    for mid, stamp in [(old, db.ago(86400)), (trigger, db.ago(60))]:
+        db.execute('INSERT INTO task_messages(id,task_id,body,created_at) VALUES (%s,%s,%s,%s)',
+                   (mid, tid, 'Instruction', stamp))
+    with db_cursor() as (conn, cur):
+        cur.execute('SELECT container_id FROM agents WHERE id=%s', (aid,))
+        publish_event(cur, str(cur.fetchone()['container_id']), aid, 'task_message',
+                      {'task_id': tid, 'message_id': trigger})
+        conn.commit()
+    token = (await client.post(f'/api/agents/{aid}/embodiment-tokens',
+                               json={'lane': 'work', 'kind': 'headless'})).json()['run_token']
+    assert (await client.post(f'/api/agents/{aid}/wake-claim', json={})).json()['claimed']
+    db.execute('INSERT INTO task_messages(id,task_id,body) VALUES (%s,%s,%s)', (during, tid, 'During spawn'))
+    run = await client.post(f'/api/agents/{aid}/runs', json={'task_id': tid, 'token_id': token})
+    assert run.status_code == 201, run.text
+    # Dispatch acknowledgement and a crash before the first poll must not hide
+    # the triggering message or advance the persisted window on replacement.
+    event = db.execute("SELECT id FROM agent_events WHERE event_name='task_message' AND event_key=%s", (aid,))[0]['id']
+    await client.post(f'/api/agents/{aid}/events/ack-handled', json={'event_ids': [event]})
+    first = {'aid': aid, 'tid': tid, 'rid': run.json()['run_id'], 'token': token}
+    from test_gh312_job_recovery import successor
+    new = await successor(client, first)
+    page = await client.post(f'/api/tasks/{tid}/managed-messages/poll', headers=new['headers'], json={})
+    assert page.status_code == 200, page.text
+    assert {m['message_id'] for m in page.json()['messages']} == {trigger, during}
+    assert str(db.execute('SELECT first_run_id FROM managed_message_windows WHERE task_id=%s', (tid,))[0]['first_run_id']) == first['rid']
 
 
 async def test_poll_replays_and_handled_cursor_never_crosses_gap(client, managed, db):

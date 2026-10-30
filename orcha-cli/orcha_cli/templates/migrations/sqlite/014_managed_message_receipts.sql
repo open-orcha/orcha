@@ -19,4 +19,12 @@ CREATE TABLE managed_message_receipts (
 );
 CREATE INDEX managed_message_receipts_pending
     ON managed_message_receipts(task_id,agent_id) WHERE handled_at IS NULL;
+-- Capture the first dispatch boundary once; replacement never moves past a gap.
+CREATE TABLE managed_message_windows (
+    task_id UUID NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    agent_id UUID NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    first_run_id UUID NOT NULL REFERENCES worker_runs(run_id),
+    started_at TIMESTAMPTZ NOT NULL,
+    PRIMARY KEY (task_id,agent_id)
+);
 INSERT OR IGNORE INTO schema_migrations(version) VALUES ('014_managed_message_receipts.sql'),('084_managed_message_receipts.sql');
