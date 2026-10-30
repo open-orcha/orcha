@@ -106,14 +106,17 @@ def start_worker_run(aid: str, body: WorkerRunStart, request: Request):
             )
             if cur.rowcount != 1:
                 raise HTTPException(409, "worker token already bound or unavailable")
-        if task_id and body.lane == 'work' and body.wake_kind in {'ephemeral', 'sandbox'}:
+        if body.lane == 'work' and body.wake_kind in {'ephemeral', 'sandbox'}:
             from portal_backend.managed_message_window import ensure_message_window
-            # The process is spawned before registration. Include messages
-            # since its scheduling claim, including ones without an event.
-            cur.execute('SELECT last_woken_at FROM agent_wake_state WHERE agent_id=%s', (aid,))
+            # Capture even taskless runs. Wake acknowledgements can change
+            # last_woken_at before registration, so only the claim clock is safe.
+            cur.execute('SELECT work_dispatch_started_at FROM agent_wake_state WHERE agent_id=%s', (aid,))
             lane = cur.fetchone()
-            floor = min(row['started_at'], lane['last_woken_at']) if lane and lane['last_woken_at'] else row['started_at']
-            ensure_message_window(cur, task_id, aid, row['run_id'], floor)
+            claimed_at = lane['work_dispatch_started_at'] if lane else None
+            floor = min(row['started_at'], claimed_at) if claimed_at else row['started_at']
+            cur.execute('UPDATE worker_runs SET dispatch_started_at=%s WHERE run_id=%s', (floor, row['run_id']))
+            if task_id:
+                ensure_message_window(cur, task_id, aid, row['run_id'], floor)
         log_event(
             cur,
             str(agent["container_id"]),

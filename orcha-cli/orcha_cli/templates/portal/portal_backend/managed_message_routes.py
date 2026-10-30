@@ -59,7 +59,7 @@ def poll_managed_messages(tid: UUID, body: ManagedMessagePoll, request: Request,
     with db_cursor() as (conn, cur):
         run, task = require_managed_run(cur, tid, x_orcha_run_token, request)
         aid, rid = str(run["agent_id"]), str(run["run_id"])
-        floor = ensure_message_window(cur, tid, aid, rid, run['started_at'])
+        floor = ensure_message_window(cur, tid, aid, rid, run.get('dispatch_started_at') or run['started_at'])
         cur.execute("""SELECT m.id AS message_id,m.created_at,m.author_id,m.body,
                               COALESCE(m.attachments, '[]') AS attachments,
                               a.alias AS author_alias,a.kind AS author_kind,a.member_role AS author_role
@@ -99,7 +99,7 @@ def handle_managed_message(tid: UUID, mid: UUID, body: ManagedMessageHandle, req
     with db_cursor() as (conn, cur):
         run, _ = require_managed_run(cur, tid, x_orcha_run_token, request)
         aid, rid = str(run["agent_id"]), str(run["run_id"])
-        floor = ensure_message_window(cur, tid, aid, rid, run['started_at'])
+        floor = ensure_message_window(cur, tid, aid, rid, run.get('dispatch_started_at') or run['started_at'])
         cur.execute("SELECT * FROM managed_message_receipts "
                     "WHERE task_id=%s AND agent_id=%s AND message_id=%s", (tid, aid, mid))
         receipt = cur.fetchone()

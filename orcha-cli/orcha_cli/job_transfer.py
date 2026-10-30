@@ -96,16 +96,18 @@ class PlannedTransfer:
         if self.adopting and not hmac.compare_digest(self.adopting['token'], token):
             raise JobStorageError('An earlier adoption needs reconciliation')
         if not self.adopting:
-            self.adopting = {'token': token, 'body': {
+            self.adopting = {'token': token, 'uncertain': False, 'body': {
                 'transfer_id': self.body['transfer_id'], 'operation_id': str(uuid4()),
                 'expected_version': s.record['server_version'], 'launch_nonce': s.record['launch_nonce'],
                 'proof_digest': self.proof, 'capability': self.capability}}
         try:
             job = api.request(f'managed-jobs/{s.job_id}/transfer/adopt', self.adopting['body'])
         except JobAPIError as exc:
-            if exc.rejected:
-                # A definite refusal did not transfer ownership. Keep checking
-                # the source capability; only an uncertain reply is replayed.
+            if not exc.rejected:
+                self.adopting['uncertain'] = True
+            elif not self.adopting['uncertain']:
+                # Only a refusal before ANY ambiguous attempt proves ownership
+                # stayed with the source. Later refusals cannot undo a commit.
                 self.adopting = None
             raise
         old_clock = s.clock

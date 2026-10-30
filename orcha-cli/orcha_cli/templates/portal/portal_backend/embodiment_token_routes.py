@@ -69,10 +69,17 @@ def attribute_token_run_to_task(cur, aid, token, task_id) -> bool:
               AND wr.status='running' AND wr.task_id IS NULL
               AND EXISTS (SELECT 1 FROM tasks t
                            WHERE t.id=%s AND t.status='in_progress')
-        RETURNING run_id""",
+        RETURNING run_id, started_at, dispatch_started_at, lane, wake_kind""",
         (task_id, token, aid, task_id),
     )
-    pinned = cur.fetchone() is not None
+    pinned_run = cur.fetchone()
+    pinned = pinned_run is not None
+    if pinned_run and pinned_run['lane'] == 'work' and pinned_run['wake_kind'] in {'ephemeral', 'sandbox'}:
+        from portal_backend.managed_message_window import ensure_message_window
+        # Seed on attribution, not first poll: a crash immediately after binding
+        # must leave the original startup boundary for the replacement.
+        ensure_message_window(cur, task_id, aid, pinned_run['run_id'],
+                              pinned_run['dispatch_started_at'] or pinned_run['started_at'])
     cur.execute(
         """INSERT INTO worker_run_tasks (run_id, task_id)
            SELECT wr.run_id, %s

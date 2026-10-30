@@ -120,12 +120,13 @@ def wake_claim(aid: str, body: WakeClaim, request: Request):
         else:
             cur.execute(
                 """INSERT INTO agent_wake_state
-                     (agent_id, wake_lease_until, last_woken_at, lease_kind)
-                   VALUES (%s, %s, now(), %s)
+                     (agent_id, wake_lease_until, last_woken_at, work_dispatch_started_at, lease_kind)
+                   VALUES (%s, %s, now(), now(), %s)
                    ON CONFLICT (agent_id) DO UPDATE SET
                      wake_lease_until = %s,
                      work_run_id = NULL,
                      last_woken_at = now(),
+                     work_dispatch_started_at = now(),
                      lease_kind = EXCLUDED.lease_kind,
                      preempt_requested_at = NULL,
                      preempt_for = NULL
