@@ -97,7 +97,7 @@ def resolve_actor(cur, request, cid, *, allow_agent=False):
     token = request.headers.get("X-Orcha-Run-Token")
     if allow_agent and token:
         cur.execute(
-            "SELECT agent_id FROM embodiment_tokens WHERE run_token=%s AND revoked_at IS NULL AND lane='work'",
+            "SELECT agent_id, run_id FROM embodiment_tokens WHERE run_token=%s AND revoked_at IS NULL AND lane='work'",
             (token,),
         )
         row = cur.fetchone()
@@ -109,7 +109,8 @@ def resolve_actor(cur, request, cid, *, allow_agent=False):
             )
         aid = str(row["agent_id"])
         require_work_lane(cur, aid, token, request)
-        actor = service.WorkflowActor(aid, True, True)
+        run_id = row["run_id"] and str(row["run_id"])
+        actor = service.WorkflowActor(aid, True, True, run_id)
         service.WorkflowService(cur, HOOKS).actor(actor, cid)
         return actor
     if token:

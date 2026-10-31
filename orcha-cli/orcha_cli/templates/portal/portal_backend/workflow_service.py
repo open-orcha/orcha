@@ -101,6 +101,7 @@ class WorkflowActor:
     id: str
     verified: bool
     work_lane: bool = False
+    run_id: str | None = None
 
 
 class WorkflowHooks:
@@ -1596,22 +1597,35 @@ class WorkflowService:
             "save_starts_work": False,
         }
 
-    def draft_owner(self, cid, agent, named_id):
+    def draft_owner(self, cid, agent, named_id, run_id=None):
         """GH #391: the person who owns a workflow an agent drafts at someone's request.
 
-        The agent may name them; otherwise it is whoever requested the agent's current
-        task. Never guessed: no live non-viewer human member means a clear refusal."""
-        owner_id = named_id
-        if not owner_id:
-            task = self.one(
+        The agent may name them; otherwise it is whoever requested the task this work
+        session runs for (or the agent's only in-progress task when the session is not
+        bound to one). Never guessed: no single live non-viewer human means a refusal."""
+        owner_id = None
+        if named_id:
+            try:
+                owner_id = str(UUID(str(named_id)))
+            except ValueError:
+                pass  # malformed input is a clear refusal, never a database error
+        else:
+            run = run_id and self.one(
+                """SELECT t.created_by_agent_id FROM worker_runs r
+                   JOIN tasks t ON t.id=r.task_id
+                   WHERE r.run_id=%s AND r.agent_id=%s AND t.container_id=%s""",
+                (run_id, agent["id"], cid),
+            )
+            tasks = [run] if run else self.rows(
                 """SELECT t.created_by_agent_id FROM tasks t
                    JOIN agent_tasks a ON a.task_id=t.id
                    WHERE a.agent_id=%s AND a.assignment_status IN ('assigned','accepted','working')
                      AND t.status='in_progress' AND t.is_root=false AND t.container_id=%s
-                   ORDER BY t.started_at DESC NULLS LAST, t.created_at DESC LIMIT 1""",
+                   LIMIT 2""",
                 (agent["id"], cid),
             )
-            owner_id = task and task["created_by_agent_id"]
+            if len(tasks) == 1:  # several unbound in-progress tasks: ask, don't guess
+                owner_id = tasks[0]["created_by_agent_id"]
         owner = owner_id and self.one(
             "SELECT * FROM agents WHERE id=%s AND container_id=%s AND kind='human' AND terminated_at IS NULL AND member_role<>'viewer'",
             (owner_id, cid),
@@ -1650,7 +1664,9 @@ class WorkflowService:
                     "A person must bring existing tasks into a workflow.",
                     status=403,
                 )
-            drafter, p = p, self.draft_owner(cid, p, body.get("for_human_id"))
+            drafter, p = p, self.draft_owner(
+                cid, p, body.get("for_human_id"), actor.run_id
+            )
             actor = WorkflowActor(p["id"], True)
         project = self.one("SELECT status FROM containers WHERE id=%s", (cid,))
         if project["status"] != "active":
