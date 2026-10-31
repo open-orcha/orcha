@@ -13,24 +13,32 @@ from test_workflows import setup_workflow, uid  # noqa: F401  (fixture)
 
 @pytest.fixture
 def agent(setup_workflow, monkeypatch):
-    """The fixture's Worker with a work-lane token and a task that Other asked for."""
+    """The fixture's Worker in a work session running a task that Other asked for."""
     cid, _, worker, other, hooks, _ = setup_workflow
     monkeypatch.setattr(workflow_routes, "HOOKS", hooks)
-    token, task = uid(), uid()
+    token, task, run = uid(), uid(), uid()
     with db_cursor() as (_, cur):
+        add_task(cur, cid, worker, task, other)
         cur.execute(
-            "INSERT INTO embodiment_tokens(run_token,agent_id,lane,kind) VALUES (%s,%s,'work','headless')",
-            (token, worker),
+            "INSERT INTO worker_runs(run_id,agent_id,task_id) VALUES (%s,%s,%s)",
+            (run, worker, task),
         )
         cur.execute(
-            "INSERT INTO tasks(id,container_id,title,description,definition_of_done,status,created_by_agent_id,started_at) VALUES (%s,%s,'Draft it','','done','in_progress',%s,now())",
-            (task, cid, other),
-        )
-        cur.execute(
-            "INSERT INTO agent_tasks(agent_id,task_id,assignment_status) VALUES (%s,%s,'working')",
-            (worker, task),
+            "INSERT INTO embodiment_tokens(run_token,agent_id,lane,kind,run_id) VALUES (%s,%s,'work','headless',%s)",
+            (token, worker, run),
         )
     return {"X-Orcha-Run-Token": token}
+
+
+def add_task(cur, cid, worker, task, requester):
+    cur.execute(
+        "INSERT INTO tasks(id,container_id,title,description,definition_of_done,status,created_by_agent_id,started_at) VALUES (%s,%s,'Draft it','','done','in_progress',%s,now())",
+        (task, cid, requester),
+    )
+    cur.execute(
+        "INSERT INTO agent_tasks(agent_id,task_id,assignment_status) VALUES (%s,%s,'working')",
+        (worker, task),
+    )
 
 
 def draft_body(worker, **extra):
@@ -112,7 +120,7 @@ async def test_agent_can_name_the_person_and_only_a_real_member_counts(client, s
                 "INSERT INTO agents(id,container_id,alias,role,kind,member_role,terminated_at) VALUES (%s,%s,%s,'test',%s,%s,%s)",
                 (aid, c, f"M{aid[:4]}", kind, role, "2026-01-01" if terminated else None),
             )
-    for bad in (worker, viewer, outsider, gone, uid()):
+    for bad in (worker, viewer, outsider, gone, uid(), "not-a-member-id"):
         r = await client.post(url, json=draft_body(worker, for_human_id=bad), headers=agent)
         assert r.status_code == 422, (bad, r.text)
         assert r.json()["detail"]["code"] == "draft_owner_required"
@@ -127,6 +135,34 @@ async def test_without_a_named_or_requesting_person_the_agent_is_refused(client,
     r = await client.post(f"/api/containers/{cid}/workflows", json=draft_body(worker), headers=agent)
     assert r.status_code == 422 and r.json()["detail"]["code"] == "draft_owner_required"
     assert rows("SELECT 1 FROM workflows WHERE container_id=%s", (cid,)) == []
+
+
+@pytest.mark.asyncio
+async def test_default_owner_comes_from_the_sessions_own_task(client, setup_workflow, agent):
+    """Review r1: a newer unrelated task must not decide who owns the draft."""
+    cid, owner, worker, other, _, _ = setup_workflow
+    url = f"/api/containers/{cid}/workflows"
+    with db_cursor() as (_, cur):  # a newer task, asked for by someone else, also in progress
+        add_task(cur, cid, worker, uid(), owner.id)
+    r = await client.post(url, json=draft_body(worker), headers=agent)
+    assert r.status_code == 201 and r.json()["owner_human_id"] == other, r.text
+
+    # A session bound to no task may default only when exactly one task is in progress.
+    resident = uid()
+    with db_cursor() as (_, cur):
+        cur.execute(
+            "INSERT INTO embodiment_tokens(run_token,agent_id,lane,kind) VALUES (%s,%s,'work','resident')",
+            (resident, worker),
+        )
+    headers = {"X-Orcha-Run-Token": resident}
+    ambiguous = await client.post(url, json=draft_body(worker), headers=headers)
+    assert ambiguous.status_code == 422 and ambiguous.json()["detail"]["code"] == "draft_owner_required"
+    with db_cursor() as (_, cur):
+        cur.execute("UPDATE tasks SET status='needs_verification' WHERE created_by_agent_id=%s", (other,))
+    single = await client.post(url, json=draft_body(worker), headers=headers)
+    assert single.status_code == 201 and single.json()["owner_human_id"] == owner.id, single.text
+    named = await client.post(url, json=draft_body(worker, for_human_id=other), headers=headers)
+    assert named.status_code == 201 and named.json()["owner_human_id"] == other
 
 
 @pytest.mark.asyncio

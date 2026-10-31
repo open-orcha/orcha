@@ -17,7 +17,7 @@ This is a workspace-local API recipe. The source of truth is `.claude/orcha.json
 1. **Read `.claude/orcha.json`** for `api_base_url` and `current_container_id`. You need the work-session token in `$ORCHA_RUN_TOKEN`; without it the server answers `403` (a chat-only session cannot draft: ask for a task instead).
 
 2. **Find the person and the steps.** The draft belongs to a human project member who is not a viewer:
-   - Default: the person who requested your current task. Leave `for_human_id` out.
+   - Default: the person who requested the task this session is running. Leave `for_human_id` out. (A session not tied to a task defaults only when you have exactly one task in progress.)
    - If you were asked on behalf of someone else, set `for_human_id` to that member's id (`GET <api_base_url>/api/containers/<cid>`, `alias` and `id` of the humans).
    - If neither is clear the server answers `422 draft_owner_required`. Ask; do not guess.
 
