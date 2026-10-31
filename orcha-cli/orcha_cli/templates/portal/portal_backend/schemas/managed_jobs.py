@@ -25,6 +25,14 @@ class ManagedJobReserve(BaseModel):
     max_elapsed_secs: int = Field(default=7200, ge=1, le=86400)
     max_transfers: int = Field(default=3, ge=0, le=10)
     continuation_contract: ContinuationContract = 'stop_before_transfer'
+    continue_after_exit: bool = False
+    continuation_capability_digest: str | None = Field(default=None, pattern=r'^[a-f0-9]{64}$')
+
+    @model_validator(mode='after')
+    def explicit_continuation(self):
+        if self.continue_after_exit != bool(self.continuation_capability_digest):
+            raise PydanticCustomError('managed_continuation_capability', 'Explicit continuation requires its original capability digest')
+        return self
 
 
 class ManagedJobView(BaseModel):

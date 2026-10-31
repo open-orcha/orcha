@@ -75,7 +75,19 @@ def wake_claim(aid: str, body: WakeClaim, request: Request):
                 "reason": "wake disabled for this agent (opt-out)",
             }
         lane = resolve_claim_lane(body)
+        if body.completion:
+            from portal_backend.job_monitor_service import one
+            from portal_backend.workflow_evidence_service import _lock_context
+            source = one(cur, 'SELECT owner_run_id FROM managed_jobs WHERE job_id=%s AND task_id=%s',
+                         (str(body.completion.job_id), str(body.completion.task_id)))
+            if not source or lane != 'work' or body.lease_kind != 'ephemeral':
+                return dict(agent_id=aid, claimed=False, reason='Command completion is no longer eligible.')
+            _lock_context(cur, source['owner_run_id'])
         lock_agent_runs(cur, aid, lane)
+        if body.completion:
+            from portal_backend.job_monitor_service import completion_eligible
+            if not completion_eligible(cur, aid, body.completion, locked=True):
+                return dict(agent_id=aid, claimed=False, reason='Command completion is no longer eligible.')
         # Budget hard stop (KG-1 / B07 / PS-17): the wake-scan withholds should_wake from a
         # budget-paused agent, but a caller that goes straight to wake-claim must be refused
         # too — on BOTH lanes. A human-opened live terminal (lease_kind='live') is exempt: it
@@ -205,6 +217,11 @@ def wake_claim(aid: str, body: WakeClaim, request: Request):
                     else None
                 ),
             }
+        if body.completion:
+            from portal_backend.job_monitor_service import consume_attempt, one
+            task = one(cur, 'SELECT workflow_id FROM tasks WHERE id=%s', (str(body.completion.task_id),))
+            if not task['workflow_id']:
+                consume_attempt(cur, body.completion)
         log_event(
             cur,
             str(agent["container_id"]),

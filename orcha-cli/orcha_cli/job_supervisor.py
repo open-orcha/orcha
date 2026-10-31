@@ -47,6 +47,7 @@ class Supervisor:
         self.transfer = None
         self.transfer_channel = None
         self.not_started = False
+        self.detached = False
 
     def update(self, **changes):
         self.record = self.store.update(self.job_id, self.record['version'], changes)
@@ -56,7 +57,19 @@ class Supervisor:
         if self.transfer:
             self.transfer.confirm(sent)
         else:
-            self.clock.confirm(self.api.heartbeat(self.job_id), sent)
+            try:
+                if self.detached:
+                    raise JobAPIError(409)
+                self.clock.confirm(self.api.heartbeat(self.job_id), sent)
+            except JobAPIError as exc:
+                if not self.record.get('continue_after_exit') or not exc.fenced:
+                    raise
+                # Only the retained original supervisor uses the narrow grant.
+                # It never restores worker mutation permission or a run token.
+                response = self.api.request(f'job-monitors/{self.job_id}/continuation-heartbeat', {
+                    'launch_nonce':self.record['launch_nonce'], 'capability':self.config['continuation_capability']})
+                self.clock.confirm(response, sent)
+                self.detached = True
         if self.record.get('supervisor'):
             atomic_json(self.directory / 'authority.json', {
                 'job_id': self.job_id, 'owner_run_id': self.record['owner_run_id'],
@@ -150,6 +163,18 @@ class Supervisor:
 
     def reconcile_contact_error(self, exc):
         self.clock.mutations_allowed = False
+        if exc.fenced and self.record.get('continue_after_exit') and not self.transfer:
+            try:
+                # Worker exit can race the launch checkpoint or pending
+                # publication, not just the periodic heartbeat. Revalidate the
+                # original finite grant before choosing to stop the guard.
+                self.confirm()
+                self.send({'until':self.clock.until,'prepare':self.clock.prepare,'budget_until':self.clock.budget})
+                return
+            except JobAPIError as confirmation:
+                if confirmation.fenced:
+                    self.stopping = True
+                return
         if exc.lease_lapsed:
             try:
                 self.confirm()  # A lease lapse alone does not revoke supervision.
@@ -202,6 +227,9 @@ class Supervisor:
             # Local terminal evidence remains immutable and available even when
             # ownership was revoked before authoritative publication.
             pass
+        if self.record.get('monitor_enabled'):
+            from .job_monitor import publish_from_supervisor
+            publish_from_supervisor(self)
 
     def run(self):
         lock = _open_private(self.directory / 'supervisor.lock', os.O_RDWR | os.O_CREAT)

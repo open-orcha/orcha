@@ -101,6 +101,11 @@ async def test_real_command_one_launch_private_result_and_control_environment(jo
         assert 'private-control-fixture' not in path.read_text()
         assert 'private-provider-fixture' not in path.read_text()
     with store.locked():
+        assert store.retains_worktree(tmp_path)  # Delivery alone cannot release recovery context.
+    from orcha_cli.cli_job import handle_result
+    outcome = eventually(lambda: api.request('job-outcomes/poll', {})['outcomes'])
+    handle_result(api, store, jid, outcome[0]['revision'], 'applied', 'Checked the saved exit result.')
+    with store.locked():
         assert not store.retains_worktree(tmp_path)
 
 

@@ -223,6 +223,15 @@ class JobStore:
     def retains_worktree(self, worktree: str | Path) -> bool:
         """Call under locked(); uncertain/unreadable evidence prevents deletion."""
         worktree = str(Path(worktree).resolve())
+        for path in self.root.glob('.reservation-*.json'):
+            try:
+                reservation = read_json(path)
+                if Path(reservation['cwd']).resolve().is_relative_to(worktree):
+                    if not reservation.get('job_id'):
+                        return True
+                    self.read(reservation['job_id'])
+            except (JobStorageError, KeyError, TypeError, OSError):
+                return True
         for _, record in self.entries():
             try:
                 if record is None:
@@ -231,11 +240,26 @@ class JobStore:
                     continue
                 if (record.get("status") not in TERMINAL_STATES
                         or not record.get("termination_verified")
-                        or not record.get("result_saved")):
+                        or not record.get("result_saved")
+                        or (record.get('monitor_enabled') and not self.result_handled(record))):
                     return True
             except (JobStorageError, KeyError, TypeError, OSError):
                 return True
         return False
+
+    def result_handled(self, record):
+        """An exact local receipt releases only delivery retention, never ownership."""
+        import hashlib
+        try:
+            directory = self.job_directory(record['job_id'])
+            receipt = read_json(directory / 'handled-outcome.json')
+            return (receipt.get('job_id') == record['job_id']
+                    and receipt.get('launch_nonce') == record['launch_nonce']
+                    and receipt.get('termination_verified') is True
+                    and receipt.get('result_digest') == hashlib.sha256(
+                        (directory / 'result.json').read_bytes()).hexdigest())
+        except (JobStorageError, KeyError, TypeError, OSError):
+            return False
 
 
 def command_summary(argv: list[str]) -> str:

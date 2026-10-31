@@ -1,6 +1,7 @@
 """Generated OpenAPI contracts for the workflow runner handshake."""
 
 from pydantic import BaseModel, Field
+from portal_backend.schemas.job_monitors import CompletionReason
 
 
 class WorkflowReserve(BaseModel):
@@ -27,6 +28,7 @@ class WorkflowActivate(BaseModel):
 
 
 class WorkflowContinue(BaseModel):
+    completion: CompletionReason | None = None
     automatic_schedule_id: str | None = Field(default=None, description="Exact automatic schedule to validate and consume under the reservation locks")
     operation_key: str = Field(min_length=1, max_length=200)
 

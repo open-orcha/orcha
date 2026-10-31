@@ -75,6 +75,9 @@ def tick(
 ):
     """Run one scan-and-wake pass and return the public summary."""
     holds = agent_hold_until if agent_hold_until is not None else {}
+    if not dry_run:
+        from .notifier_job_monitors import tick as monitor_jobs
+        monitor_jobs(api_base, container_id, base_cwd, services)
     scan = services._get_json(
         f"{api_base}/api/containers/{container_id}/wake-scan"
         f"?cooldown={cooldown}&min_idle={min_idle}"
