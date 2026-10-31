@@ -99,3 +99,7 @@ class CompletionReason(BaseModel):
     job_id: UUID
     outcome_revision: int = Field(ge=1)
     operation_id: UUID
+
+
+class UnlaunchedAttempt(BaseModel):
+    released: bool

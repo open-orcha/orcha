@@ -188,6 +188,17 @@ def _worker_state(
     }
 
 
+def _release_unlaunched(api_base, candidate, services):
+    """No worker started for this admission; a lost release keeps the attempt spent."""
+    completion = candidate.get("completion")
+    if completion:
+        services._post_json(
+            f"{api_base}/api/tasks/{completion['task_id']}/job-monitors/"
+            f"{completion['job_id']}/unlaunched-wake",
+            completion,
+        )
+
+
 def spawn(
     api_base,
     candidate,
@@ -220,6 +231,8 @@ def spawn(
             },
         )
         if not (claim and claim.get("claimed")):
+            if claim is None:
+                _release_unlaunched(api_base, candidate, services)
             reason = (claim or {}).get("reason", "claim failed (unreachable)")
             if not quiet:
                 print(f"[notifier] skip {candidate['alias']} — single-flight: {reason}")
@@ -334,6 +347,8 @@ def spawn(
             services._teardown_worktree(headless_cwd, worktree, branch)
         if not dry_run:
             services._revoke_or_defer(api_base, token)
+            if not workflow_launch:
+                _release_unlaunched(api_base, candidate, services)
         if not quiet:
             print(
                 f"[notifier] cap-deferred wake for {candidate.get('alias')}: "
