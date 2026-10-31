@@ -67,15 +67,22 @@ def publish(api, store, job, outcome=None):
     try:
         response = api.request(f"job-monitors/{job['job_id']}/observe", body)
     except JobAPIError as exc:
-        # The server checks its operation receipt BEFORE this exact refusal,
-        # proving this body did not commit. Reconcile against the next registry
-        # page and retain the rejected body for diagnostics; never rotate after
-        # a timeout or an ownership/launch mismatch.
-        if exc.code == 'managed_checkpoint_version_changed':
+        # The server checks its operation receipt BEFORE these exact refusals,
+        # proving this body did not commit. Retain the rejected body for
+        # diagnostics and rebuild from the registry; never rotate after a
+        # timeout, and never across launches. An owner refusal rotates only
+        # once the registry names the newer same-launch owner (e.g. a committed
+        # adoption); evidence is then rechecked against that owner, once.
+        stale_owner = (exc.code == 'managed_recovery_identity_changed'
+                       and body['launch_nonce'] == job['launch_nonce']
+                       and body['owner_run_id'] != job['owner_run_id'])
+        if exc.code == 'managed_checkpoint_version_changed' or stale_owner:
             with store.locked():
                 if path.exists() and read_json(path) == body:
                     atomic_json(store.root/f".rejected-observation-{body['operation_id']}.json", body)
                     path.unlink()
+            if stale_owner:
+                return publish(api, store, job, outcome)
         raise
     with store.locked():
         atomic_json(receipt_path, response)
