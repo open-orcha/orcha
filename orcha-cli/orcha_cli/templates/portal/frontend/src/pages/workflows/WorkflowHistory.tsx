@@ -38,6 +38,7 @@ function activityNotes(entry: Activity): ReactNode[] {
     notes.push(<span key="pause" className="wf-tl-note is-warn"><Icon name="alert" cls="v2-ico" />{LOOP_PAUSES[entry.detail.result]}</span>);
   if (entry.event === "workflow_outcome_missing") notes.push(<span key="missing" className="wf-tl-note is-warn"><Icon name="alert" cls="v2-ico" />This step declares outcomes but none was reported. The owner picks one before the workflow continues.</span>);
   if (entry.event === "workflow_loop_decided") notes.push(<span key="decided" className="wf-tl-note">{LOOP_DECISIONS[String(entry.detail.chosen)] ?? String(entry.detail.chosen)}{typeof entry.detail.original_outcome === "string" && entry.detail.original_outcome ? ` The reported outcome “${entry.detail.original_outcome}” is kept in the record.` : ""}</span>);
+  if (entry.event === "workflow_created" && typeof entry.detail.drafted_for === "string") notes.push(<span key="drafted" className="wf-tl-note">Drafted by {String(entry.detail.drafted_by ?? entry.actor_alias)} for {entry.detail.drafted_for}. Nothing has started; only the owner can prepare, release or start it.</span>);
   if (typeof entry.detail.reason === "string" && entry.detail.reason) notes.push(<span key="reason" className="wf-tl-note">{entry.detail.reason}</span>);
   if (typeof entry.detail.warning === "string") notes.push(<span key="warning" className="wf-tl-note is-warn"><Icon name="alert" cls="v2-ico" />{entry.detail.warning}</span>);
   return notes;
