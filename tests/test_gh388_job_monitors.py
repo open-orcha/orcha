@@ -114,7 +114,7 @@ async def test_monitor_openapi_and_public_payload_exclude_capabilities(client, m
         assert private not in response.text
     spec = (await client.get('/openapi.json')).json()
     paths = {p:m for p,m in spec['paths'].items() if '/job-monitors' in p or '/job-outcomes' in p}
-    assert len(paths) == 8
+    assert len(paths) == 9 and any(p.endswith('/unlaunched-wake') for p in paths)
     for methods in paths.values():
         for method in methods.values():
             assert method['responses']['200']['content']['application/json']['schema']['$ref']

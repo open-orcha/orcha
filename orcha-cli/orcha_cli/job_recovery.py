@@ -7,7 +7,7 @@ import hashlib
 import os
 from uuid import uuid4
 
-from .job_evidence import context_snapshot, verified_result
+from .job_evidence import committed_adoption, context_snapshot, verified_result
 from .job_store import JobStorageError, _open_private, atomic_json, read_json
 
 
@@ -42,9 +42,7 @@ def recover_result(api, store, job):
                 # A committed adoption can lose its reply and its controller.
                 # The authoritative same-launch owner/count is its receipt;
                 # recover only terminal evidence under the absent-supervisor lock.
-                if (not record.get('launch_owner_run_id')
-                        or job['transfers_used'] <= record.get('transfers_used', 0)
-                        or job['continuation_contract'] != record.get('continuation')):
+                if not committed_adoption(record, job):
                     raise JobStorageError('Saved command ownership needs reconciliation')
                 record.update(owner_run_id=job['owner_run_id'], transfers_used=job['transfers_used'],
                               workflow_generation=job['workflow_generation'])

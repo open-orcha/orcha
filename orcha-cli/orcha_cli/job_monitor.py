@@ -9,7 +9,7 @@ import time
 from uuid import uuid4
 
 from .job_api import JobAPI, JobAPIError, epoch
-from .job_evidence import verified_result
+from .job_evidence import committed_adoption, verified_result
 from .job_identity import same_process
 from .job_store import JobStorageError, atomic_json, read_json
 
@@ -18,14 +18,17 @@ def evidence(store, job, *, grace_seconds=10):
     """Return verified terminal evidence, an uncertainty, or no action yet."""
     try:
         record = store.read(job['job_id'])
-        if any(record.get(k) != job[k] for k in ('task_id', 'launch_nonce', 'owner_run_id')):
-            return None  # Adoption must be reconciled by the original controller.
+        if any(record.get(k) != job[k] for k in ('task_id', 'launch_nonce')):
+            raise JobStorageError('Saved record belongs to another launch')
         directory = store.job_directory(job['job_id'])
         try:
             result = read_json(directory / 'result.json')
         except JobStorageError:
             result = None
-        if result and verified_result(directory, record, result):
+        # A committed adoption can lose its reply and controller; its same-launch
+        # guard result is still verified. Other owner changes stay unverified.
+        same_owner = record.get('owner_run_id') == job['owner_run_id'] or committed_adoption(record, job)
+        if same_owner and result and verified_result(directory, record, result):
             return dict(state=result['status'], termination_verified=True,
                         result_digest=hashlib.sha256((directory / 'result.json').read_bytes()).hexdigest())
         process = read_json(directory / 'process.json')
