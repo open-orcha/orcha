@@ -62,6 +62,8 @@ def set_container_status(cid: str, body: ContainerStatusUpdate, request: Request
         body.actor_agent_id = _trusted_actor(cur, request, cid, body.actor_agent_id)
         _require_kind(cur, body.actor_agent_id, ("human",))  # Orcha#30
         old = c["status"]
+        from portal_backend.workflow_service import lock_container_graph
+        lock_container_graph(cur, cid)
         completed_clause = ""
         params = [body.status, cid]
         if body.status in ("completed", "cancelled", "failed"):
@@ -69,6 +71,12 @@ def set_container_status(cid: str, body: ContainerStatusUpdate, request: Request
         cur.execute(
             f"UPDATE containers SET status=%s{completed_clause} WHERE id=%s", params
         )
+        if body.status != 'active':
+            cur.execute('''UPDATE managed_job_monitors SET revoked_at=COALESCE(revoked_at,now()),
+                stop_reason=COALESCE(stop_reason,'project_unavailable'),
+                suppress_wake=(suppress_wake OR %s) WHERE job_id IN
+                (SELECT j.job_id FROM managed_jobs j JOIN tasks t ON t.id=j.task_id WHERE t.container_id=%s)''',
+                (body.status in {'completed','cancelled','failed'}, cid))
         log_event(
             cur,
             cid,

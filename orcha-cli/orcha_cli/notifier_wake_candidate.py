@@ -27,6 +27,8 @@ def _skipped_record(candidate, event, *, command, tier):
 
 def _grade_ephemeral(api_base, candidate, event, context, quiet, services):
     """Return a skipped result when grading can safely avoid a full boot."""
+    if candidate.get('completion'):
+        return None  # Durable result handling requires the task worker.
     verdict = services.decide_wake_tier(
         candidate, triage_fn=context["triage"]
     )

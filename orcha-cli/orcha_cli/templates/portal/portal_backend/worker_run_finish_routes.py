@@ -118,6 +118,9 @@ def finish_worker_run(run_id: str, body: WorkerRunFinish, request: Request):
                 and not transition.workflow_linked):
             record_run_outcome(cur, existing, body)
             requeue_interrupted_run(cur, existing, body)
+        if transition.changed:
+            from portal_backend.job_monitor_service import notify_exhausted
+            notify_exhausted(cur, row)
         # Live chat: a container-wide (never agent-targeted — it must not wake anyone)
         # event so open portals re-read runs/turns now instead of on their next poll.
         cur.execute("SELECT container_id FROM agents WHERE id=%s", (row["agent_id"],))
@@ -181,14 +184,21 @@ def stop_worker_run(run_id: str, body: WorkerRunStop, request: Request):
                 cur, request, str(run_container["container_id"]), body.actor_agent_id
             )
         require_kind(cur, body.actor_agent_id, ("human",))
+        from portal_backend.workflow_evidence_service import _lock_context
+        from portal_backend.job_monitor_service import revoke_run
+        _lock_context(cur, run_id)
+        stopped_jobs = revoke_run(cur, run_id)
         if row["status"] != "running":
+            conn.commit()
             return {
                 "run_id": run_id,
-                "stop_requested": False,
+                "stop_requested": bool(stopped_jobs),
+                "managed_jobs_stop_requested": stopped_jobs,
                 "status": row["status"],
                 "already_finished": True,
             }
         if row["stop_requested_at"] is not None:
+            conn.commit()
             return {
                 "run_id": run_id,
                 "stop_requested": True,

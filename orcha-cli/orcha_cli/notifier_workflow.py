@@ -120,6 +120,8 @@ def reserve_candidate(api_base, candidate):
         schedule_id = candidate.get("automatic_schedule_id")
         body = ({"operation_key": f"auto-continue:{previous_run}", "automatic_schedule_id": schedule_id}
                 if schedule_id else {"operation_key": f"continue:{previous_run}"})
+        if candidate.get('completion'):
+            body = {'operation_key':f'auto-continue:{previous_run}', 'completion':candidate['completion']}
     else:
         url = f"{api_base}/api/agents/{aid}/runs/reserve"
         body = {"task_id": task_id, "expected_workflow_revision": candidate.get("workflow_revision"),

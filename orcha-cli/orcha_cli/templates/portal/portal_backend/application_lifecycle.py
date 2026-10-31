@@ -41,7 +41,10 @@ async def too_long_or_invalid(request: Request, exc: RequestValidationError):
                     ),
                 },
             )
-    return JSONResponse(status_code=422, content={"detail": exc.errors()})
+    errors = exc.errors()
+    if '/job-monitors/' in request.url.path and request.url.path.endswith('/continuation-heartbeat'):
+        errors = [{k:v for k,v in error.items() if k not in {'input','ctx'}} for error in errors]
+    return JSONResponse(status_code=422, content={"detail": errors})
 
 
 def start_local_index_warmer() -> None:

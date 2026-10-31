@@ -35,6 +35,8 @@ def register(sub, handler):
                        help='output path relative to the command directory; saved privately, never uploaded')
     start.add_argument('--isolate', action='store_true',
                        help='macOS: deny shared writes, network, IPC and subprocesses; write only to ORCHA_JOB_SCRATCH')
+    start.add_argument('--continue-after-exit', action='store_true',
+                       help='explicit finite continuation of an isolated ordinary host command after the worker exits')
     start.add_argument('command', nargs=argparse.REMAINDER)
     status = commands.add_parser('status', help='read status and saved exit information without raw logs')
     status.add_argument('job_id', nargs='?')
@@ -44,6 +46,14 @@ def register(sub, handler):
     checkpoint = commands.add_parser('checkpoint', help='save private reasoning and request a mechanical checkpoint')
     checkpoint.add_argument('job_id')
     checkpoint.add_argument('--context-file', help='JSON with completed_steps and remaining_steps')
+    yielded = commands.add_parser('yield', help='save progress and wait for command completion without a model worker')
+    yielded.add_argument('job_id')
+    yielded.add_argument('--context-file', required=True)
+    result_handled = commands.add_parser('result-handled', help='handle one exact saved result or resolve uncertainty')
+    result_handled.add_argument('job_id')
+    result_handled.add_argument('--revision', type=int, required=True)
+    result_handled.add_argument('--disposition', choices=['applied', 'uncertainty_resolved'], required=True)
+    result_handled.add_argument('--note', required=True, help='brief safe explanation without logs or credentials')
     handled = commands.add_parser('handled', help='explicitly acknowledge guidance after handling it')
     handled.add_argument('message_id')
     handled.add_argument('--outcome', choices=['applied', 'not_applicable'], required=True)
@@ -94,7 +104,7 @@ def summary(store, job):
 
 
 def start_job(api, store, *, key, purpose, argv, cwd, max_seconds=7200, max_transfers=3,
-              isolate=False, ports=(), artifacts=()):
+              isolate=False, ports=(), artifacts=(), continue_after_exit=False):
     if not argv:
         raise ValueError('A foreground command is required after --')
     if (len(ports) > 32 or any(type(port) is not int or not 1 <= port <= 65535 for port in ports)
@@ -114,10 +124,33 @@ def start_job(api, store, *, key, purpose, argv, cwd, max_seconds=7200, max_tran
     contract = job_isolation.CONTRACT if isolate else 'stop_before_transfer'
     from .job_sandbox import launch_identity
     container = launch_identity(store)
-    job = api.request('managed-jobs', {'job_key': str(uuid5(UUID(api.task_id), key)),
+    if continue_after_exit and (not isolate or container):
+        raise ValueError('Continuation requires an isolated ordinary host command')
+    job_key = str(uuid5(UUID(api.task_id), key))
+    registration = store.root / f'.reservation-{job_key}.json'
+    with store.locked():
+        if not registration.exists():
+            atomic_json(registration, {'task_id':api.task_id, 'cwd':str(Path(cwd).resolve()),
+                                       'continuation':contract, 'job_id':None})
+        saved_registration = read_json(registration)
+        if saved_registration['cwd'] != str(Path(cwd).resolve()) or saved_registration['continuation'] != contract:
+            raise JobStorageError('Retry must use the original command directory and isolation')
+    capability = None
+    if continue_after_exit:
+        import secrets
+        path = store.root / f'.continuation-{job_key}.json'
+        with store.locked():
+            if not path.exists():
+                atomic_json(path, {'capability':secrets.token_urlsafe(32)})
+            capability = read_json(path)['capability']
+    import hashlib
+    job = api.request('managed-jobs', {'job_key': job_key,
                                      'max_elapsed_secs': max_seconds, 'max_transfers': max_transfers,
+                                     'continue_after_exit':continue_after_exit,
+                                     'continuation_capability_digest':hashlib.sha256(capability.encode()).hexdigest() if capability else None,
                                      'continuation_contract': contract})
     with store.locked():
+        atomic_json(registration, {**saved_registration, 'job_id':job['job_id']})
         directory = store.job_directory(job['job_id'], create=True)
         path = directory / 'record.json'
         previous = None
@@ -137,6 +170,8 @@ def start_job(api, store, *, key, purpose, argv, cwd, max_seconds=7200, max_tran
                   'command': command_summary(argv), 'budget_until': job['budget_until'],
                   'max_transfers': job['max_transfers'], 'transfers_used': job['transfers_used'],
                   'launch_claimed': True, 'continuation': contract,
+                  'reserved_at':job.get('reserved_at'), 'monitor_enabled':True,
+                  'continue_after_exit':continue_after_exit,
                   'launch_attempt': str(uuid4())}
         if previous:
             # Retrying requires fresh argv, but cannot change the reserved
@@ -161,6 +196,8 @@ def start_job(api, store, *, key, purpose, argv, cwd, max_seconds=7200, max_tran
                   'launch_attempt': record['launch_attempt'],
                   'launch_nonce': job['launch_nonce'], 'cwd': record['cwd'], 'argv': argv,
                   'env': minimal_environment(os.environ), 'api_base': api.url.geturl(), 'token': api.token}
+        if capability:
+            config['continuation_capability'] = capability
         proc = subprocess.Popen([sys.executable, '-m', 'orcha_cli.job_supervisor'],
                                 stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                                 env=module_environment(), start_new_session=True, close_fds=True)
@@ -222,12 +259,21 @@ def wait_for_job(api, store, job_id, seconds):
         save_guidance(store, job_id, page)
         if page['messages']:
             return {'reason': 'guidance', **page, 'job': summary(store, job)}
+        outcomes = api.request('job-outcomes/poll', {}, timeout=max(0.01, deadline-time.monotonic()))
+        if outcomes['outcomes']:
+            return {'reason':'command_outcome', **outcomes, 'job':summary(store,job), 'task':page['task']}
         value = summary(store, job)
         if value['status'] in {'completed', 'interrupted', 'exhausted', 'unknown'}:
             return {'reason': 'job_status', 'job': value, 'task': page['task']}
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             break
+        if page.get('run_id') != job['owner_run_id']:
+            # A successor may monitor, handle or explicitly yield without
+            # pretending to own the original command's controller.
+            time.sleep(min(2, max(0, remaining)))
+            job = current_job(api, job_id, timeout=max(0.01, deadline-time.monotonic()))
+            continue
         authority = api.heartbeat(job_id, timeout=remaining)
         if not authority['mutations_allowed']:
             return {'reason': 'scheduling_lease_lapsed', 'job': value, 'task': page['task']}
@@ -239,6 +285,8 @@ def wait_for_job(api, store, job_id, seconds):
 
 
 def request_control(api, store, job_id, action, context=None):
+    if action == 'stop':
+        return api.request(f'job-monitors/{job_id}/stop', {})
     authority = api.heartbeat(job_id)
     if not authority['mutations_allowed']:
         raise JobAPIError(409)
@@ -261,6 +309,59 @@ def request_control(api, store, job_id, action, context=None):
     return {'job_id': job_id, 'requested': action}
 
 
+def yield_command(api, store, job_id, context):
+    import hashlib
+    if (not isinstance(context, dict) or set(context) != {'completed_steps','remaining_steps'}
+            or any(not isinstance(v, list) or len(v)>100 or any(not isinstance(s,str) or len(s)>2000 for s in v)
+                   for v in context.values())):
+        raise ValueError('Yield requires bounded completed_steps and remaining_steps')
+    job = current_job(api, job_id)
+    if job is None:
+        raise JobStorageError('Managed command not found in this task')
+    with store.locked():
+        record = store.read(job_id)
+        if any(record.get(k) != job[k] for k in ('task_id','launch_nonce')):
+            raise JobStorageError('Managed command identity changed')
+        path = store.job_directory(job_id) / 'context.json'
+        atomic_json(path, context)
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    receipt = api.request(f'job-monitors/{job_id}/yield', {'context_digest':digest})
+    return {'job_id':job_id, 'waiting':True, 'receipt':receipt,
+            'guidance':'Progress is saved. Exit this worker; completion or new guidance will resume the task.'}
+
+
+def handle_result(api, store, job_id, revision, disposition, note):
+    import hashlib
+    job = current_job(api, job_id)
+    if job is None:
+        raise JobStorageError('Managed command not found in this task')
+    digest = None
+    if disposition == 'applied':
+        from .job_evidence import verified_result
+        directory = store.job_directory(job_id)
+        record, result = store.read(job_id), read_json(directory / 'result.json')
+        if not verified_result(directory, record, result):
+            raise JobStorageError('Original command result is not verified')
+        digest = hashlib.sha256((directory / 'result.json').read_bytes()).hexdigest()
+    receipt = api.request(f'job-outcomes/{job_id}/handled', dict(revision=revision,
+        result_digest=digest, disposition=disposition, note=note))
+    # A successful receipt only releases delivery retention. The existing
+    # positive-termination fence still applies, including handled uncertainty.
+    try:
+        with store.locked():
+            record = store.read(job_id)
+            # Acknowledgement can race the supervisor's final checkpoint reply.
+            # Keep its receipt separate from the controller's versioned record.
+            atomic_json(store.job_directory(job_id)/'handled-outcome.json', {
+                'job_id':job_id, 'launch_nonce':record['launch_nonce'],
+                'revision':revision, 'result_digest':digest,
+                'termination_verified':bool(receipt['termination_verified']),
+            })
+    except JobStorageError:
+        pass
+    return receipt
+
+
 def cmd_job(args):
     try:
         task_id = str(UUID(args.task or ''))
@@ -273,15 +374,21 @@ def cmd_job(args):
             argv = args.command[1:] if args.command[:1] == ['--'] else args.command
             result = start_job(api, store, key=args.key, purpose=args.purpose, argv=argv, cwd=cwd,
                                max_seconds=args.max_seconds, max_transfers=args.max_transfers,
-                               isolate=args.isolate, ports=args.port, artifacts=args.artifact)
+                               isolate=args.isolate, ports=args.port, artifacts=args.artifact,
+                               continue_after_exit=args.continue_after_exit)
         elif args.job_action == 'status':
             jobs = api.request('managed-jobs', method='GET')['jobs']
             result = {'jobs': [summary(store, j) for j in jobs if not args.job_id or j['job_id'] == args.job_id]}
+            result.update(api.request('job-outcomes/poll', {}))
         elif args.job_action == 'wait':
             result = wait_for_job(api, store, args.job_id, args.seconds)
         elif args.job_action == 'handled':
             result = api.request(f'managed-messages/{UUID(args.message_id)}/handled',
                                  {'outcome': args.outcome, 'handling_note': args.note})
+        elif args.job_action == 'result-handled':
+            result = handle_result(api, store, str(UUID(args.job_id)), args.revision, args.disposition, args.note)
+        elif args.job_action == 'yield':
+            result = yield_command(api, store, str(UUID(args.job_id)), json.loads(Path(args.context_file).read_text()))
         elif args.job_action == 'adopt':
             from .job_transfer import transfer_command
             if current_job(api, args.job_id) is None:

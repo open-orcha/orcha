@@ -150,6 +150,7 @@ def _worker_state(
     }
     return {
         "proc": process,
+        "completion": candidate.get('completion'),
         "hard_deadline": (launch_started_ts or now) + cap,
         "launch_started_ts": launch_started_ts or now,
         "last_size": 0,
@@ -215,6 +216,7 @@ def spawn(
                 "kind": "ephemeral",
                 "event": event,
                 "lane": lane,
+                **({'completion':candidate['completion']} if candidate.get('completion') else {}),
             },
         )
         if not (claim and claim.get("claimed")):
