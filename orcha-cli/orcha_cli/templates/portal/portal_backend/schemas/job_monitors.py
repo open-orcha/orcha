@@ -101,5 +101,9 @@ class CompletionReason(BaseModel):
     operation_id: UUID
 
 
+class UnlaunchedRelease(CompletionReason):
+    admission_id: UUID = Field(description='The exact admission this launcher was granted')
+
+
 class UnlaunchedAttempt(BaseModel):
     released: bool

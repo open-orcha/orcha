@@ -23,9 +23,9 @@ from portal_backend.job_monitor_service import (
 )
 from portal_backend.managed_run_auth import conflict, require_managed_run
 from portal_backend.schemas.job_monitors import (
-    CompletionReason, ContinuationHeartbeat, HandleOutcome, JobMonitor, JobObservation,
+    ContinuationHeartbeat, HandleOutcome, JobMonitor, JobObservation,
     JobOutcome, JobStop, JobStopReceipt, JobWaitReceipt, JobYield, MonitorPage,
-    ObservationReceipt, OutcomePage, RunJobWait, UnlaunchedAttempt,
+    ObservationReceipt, OutcomePage, RunJobWait, UnlaunchedAttempt, UnlaunchedRelease,
 )
 from portal_backend.schemas.managed_jobs import ManagedJobAuthority
 
@@ -130,15 +130,15 @@ def reconcile_monitor(tid: UUID, jid: UUID, request: Request):
 
 
 @app.post('/api/tasks/{tid}/job-monitors/{jid}/unlaunched-wake', response_model=UnlaunchedAttempt)
-def release_unlaunched_wake(tid: UUID, jid: UUID, body: CompletionReason, request: Request):
+def release_unlaunched_wake(tid: UUID, jid: UUID, body: UnlaunchedRelease, request: Request):
     """Original notifier reports that its admitted completion wake started no worker."""
     from portal_backend.job_monitor_service import release_unlaunched_attempt
     if body.task_id != tid or body.job_id != jid:
         conflict('managed_completion_mismatch')
     with db_cursor() as (conn, cur):
-        _, task, _, _ = lock_monitor(cur, str(tid), str(jid))
+        _, task, _, monitor = lock_monitor(cur, str(tid), str(jid))
         require_machine_lane_member(cur, request, str(task['container_id']))
-        released = release_unlaunched_attempt(cur, body)
+        released = release_unlaunched_attempt(cur, body, monitor['agent_id'])
         conn.commit()
         return dict(released=released)
 

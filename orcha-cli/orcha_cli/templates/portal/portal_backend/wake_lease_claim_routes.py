@@ -217,11 +217,15 @@ def wake_claim(aid: str, body: WakeClaim, request: Request):
                     else None
                 ),
             }
+        admission_id = None
         if body.completion:
             from portal_backend.job_monitor_service import consume_attempt, one
             task = one(cur, 'SELECT workflow_id FROM tasks WHERE id=%s', (str(body.completion.task_id),))
             if not task['workflow_id']:
-                consume_attempt(cur, body.completion)
+                admission_id = consume_attempt(cur, body.completion, body.admission_id)
+                if not admission_id:  # A reused launch identity never admits a free start.
+                    conn.rollback()
+                    return dict(agent_id=aid, claimed=False, reason='Command completion is no longer eligible.')
         log_event(
             cur,
             str(agent["container_id"]),
@@ -246,6 +250,8 @@ def wake_claim(aid: str, body: WakeClaim, request: Request):
         "lease_kind": row["lease_kind"],
         "wake_lease_until": row["wake_lease_until"].isoformat(),
     }
+    if admission_id:
+        response["admission_id"] = admission_id
     if body.lease_kind == "live":
         response["cold"] = True
         response["session_id"] = None

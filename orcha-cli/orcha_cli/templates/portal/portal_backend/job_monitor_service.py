@@ -6,7 +6,7 @@ outcome never consumes it; only exact current-worker handling does that.
 
 import hashlib
 from datetime import timedelta
-from uuid import UUID, uuid5
+from uuid import UUID, uuid4, uuid5
 
 from portal_backend import sql
 from portal_backend.managed_run_auth import conflict
@@ -227,38 +227,45 @@ def completion_eligible(cur, aid, reason, *, locked=False):
     return True
 
 
-def consume_attempt(cur, reason):
-    cur.execute('''INSERT INTO managed_job_wake_receipts(job_id,outcome_revision,operation_id)
-        VALUES (%s,%s,%s) ON CONFLICT DO NOTHING RETURNING operation_id''',
-        (str(reason.job_id), reason.outcome_revision, str(reason.operation_id)))
+def consume_attempt(cur, reason, admission_id=None):
+    """Record one admitted launch; returns its identity, or None when nothing was admitted."""
+    admission_id = str(admission_id or uuid4())
+    cur.execute('''INSERT INTO managed_job_wake_receipts(admission_id,job_id,outcome_revision,operation_id)
+        VALUES (%s,%s,%s,%s) ON CONFLICT DO NOTHING RETURNING admission_id''',
+        (admission_id, str(reason.job_id), reason.outcome_revision, str(reason.operation_id)))
     if not cur.fetchone():
-        return
+        return None
     outcome = latest_outcome(cur, str(reason.job_id))
     cur.execute('''UPDATE managed_job_outcomes SET attempts=attempts+1,next_attempt_at=%s
         WHERE job_id=%s AND revision=%s''',
         (sql.utcnow() + timedelta(seconds=(30, 120, 300)[outcome['attempts']]), str(reason.job_id), reason.outcome_revision))
+    return admission_id
 
 
-def release_unlaunched_attempt(cur, reason):
+def release_unlaunched_attempt(cur, reason, agent_id):
     """Return an admission that started no worker (host capacity or lost claim reply).
 
-Only the latest admission is returned, and never once any work-lane worker has
-started for the agent since it; a lost release keeps the attempt spent.
+Only the exact launch identity granted to this agent can be returned, only while
+it is the latest admission, and never once any work-lane worker has started for
+the agent since it. A returned identity stays recorded, so a replay or another
+launcher's refusal can never release a later admission; a lost release keeps
+the attempt spent.
 """
-    receipt = one(cur, '''SELECT admitted_at FROM managed_job_wake_receipts WHERE job_id=%s
-        AND outcome_revision=%s AND operation_id=%s''',
-        (str(reason.job_id), reason.outcome_revision, str(reason.operation_id)))
+    receipt = one(cur, '''SELECT admitted_at FROM managed_job_wake_receipts WHERE admission_id=%s
+        AND job_id=%s AND outcome_revision=%s AND operation_id=%s AND released_at IS NULL''',
+        (str(reason.admission_id), str(reason.job_id), reason.outcome_revision, str(reason.operation_id)))
     outcome = latest_outcome(cur, str(reason.job_id))
-    if (not receipt or not outcome or outcome['revision'] != reason.outcome_revision or outcome['attempts'] < 1
+    if (str(reason.agent_id) != str(agent_id) or not receipt or not outcome
+            or outcome['revision'] != reason.outcome_revision or outcome['attempts'] < 1
             or reason.operation_id != uuid5(UUID(str(reason.job_id)),
                                             f"completion:{outcome['revision']}:{outcome['attempts'] - 1}")):
         return False
     started = one(cur, '''SELECT started_at FROM worker_runs WHERE agent_id=%s AND lane='work'
-        ORDER BY started_at DESC LIMIT 1''', (str(reason.agent_id),))
+        ORDER BY started_at DESC LIMIT 1''', (str(agent_id),))
     if started and started['started_at'] >= receipt['admitted_at']:
         return False
-    cur.execute('''DELETE FROM managed_job_wake_receipts WHERE job_id=%s AND outcome_revision=%s
-        AND operation_id=%s''', (str(reason.job_id), reason.outcome_revision, str(reason.operation_id)))
+    cur.execute('UPDATE managed_job_wake_receipts SET released_at=%s WHERE admission_id=%s',
+                (sql.utcnow(), str(reason.admission_id)))
     cur.execute('''UPDATE managed_job_outcomes SET attempts=attempts-1 WHERE job_id=%s AND revision=%s
         AND attempts=%s''', (str(reason.job_id), reason.outcome_revision, outcome['attempts']))
     return True
