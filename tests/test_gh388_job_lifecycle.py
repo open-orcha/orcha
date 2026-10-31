@@ -306,3 +306,75 @@ def test_handled_result_keeps_checkout_until_saved_remaining_work_releases_it(tm
     assert not retained()
     context.write_text('{not json')
     assert retained()
+
+
+async def test_registry_publishes_guard_result_after_committed_adoption_loses_controller(
+        client, managed, service, tmp_path, db, transport, monkeypatch):
+    import os
+    import signal
+    from fastapi import HTTPException
+    from portal_backend.application import app
+    from orcha_cli.job_identity import same_process
+    from orcha_cli.job_store import JobStorageError
+    from orcha_cli.job_transfer import transfer_command
+    from test_gh312_job_transfer import observed
+    from test_gh312_job_recovery import successor
+    from test_gh388_job_monitors import finish_worker as finish
+    await publish(client, managed, seconds=120)
+    api = JobAPI(service[0], managed['token'], managed['tid'])
+    store = JobStore(tmp_path)
+    jid = start_job(api, store, key='lost-controller', purpose='Adoption crash recovery', cwd=tmp_path,
+                    argv=[sys.executable, '-c', 'import time;time.sleep(60)'], isolate=True)['job_id']
+    try:
+        await asyncio.to_thread(eventually, lambda: store.read(jid).get('transfer_socket'))
+        await asyncio.to_thread(transfer_command, store, jid, 'prepare', api.token)
+        new = await successor(client, managed)
+        await observed(client, managed, db)
+        route = next(r for r in app.routes if getattr(r, 'path', '').endswith('/transfer/adopt'))
+        original = route.dependant.call
+
+        def crash_after_commit(*args, **kwargs):
+            original(*args, **kwargs)
+            identity = store.read(jid)['supervisor']
+            assert same_process(identity)
+            os.kill(identity['pid'], signal.SIGKILL)
+            raise HTTPException(503, 'Temporary test response loss')
+
+        monkeypatch.setattr(route.dependant, 'call', crash_after_commit)
+        with pytest.raises((JobStorageError, OSError)):
+            await asyncio.to_thread(transfer_command, store, jid, 'adopt', new['token'])
+        saved = await asyncio.to_thread(eventually, lambda: result(store, jid))
+        assert saved['termination_verified'] and saved['owner_run_id'] == managed['rid']
+        before = store.read(jid)
+        assert before['owner_run_id'] == managed['rid']
+        await finish(client, new)
+        cid = str(db.execute('SELECT container_id FROM agents WHERE id=%s', (managed['aid'],))[0]['container_id'])
+        notifier_job_monitors._last_pass.clear()
+        await asyncio.to_thread(notifier_job_monitors.tick, service[0], cid, str(tmp_path), transport)
+        outcomes = db.execute('SELECT * FROM managed_job_outcomes')
+        assert outcomes and outcomes[-1]['termination_verified']
+        digest = hashlib.sha256((store.job_directory(jid)/'result.json').read_bytes()).hexdigest()
+        assert outcomes[-1]['result_digest'] == digest
+        assert str(db.execute('SELECT owner_run_id FROM managed_jobs')[0]['owner_run_id']) == new['rid']
+        assert store.read(jid) == before  # Nothing adopted, signalled or relaunched locally.
+    finally:
+        db.execute('UPDATE worker_runs SET stop_requested_at=%s', (db.ago(0),))
+        await asyncio.to_thread(eventually, lambda: result(store, jid), seconds=12)
+
+
+def test_unverifiable_owner_change_publishes_actionable_uncertainty(tmp_path):
+    from uuid import uuid4
+    from orcha_cli.job_monitor import evidence
+    store = JobStore(tmp_path)
+    jid, nonce, tid, old, new = (str(uuid4()) for _ in range(5))
+    store.reserve(jid, dict(cwd=str(tmp_path), launch_nonce=nonce, owner_run_id=old, task_id=tid,
+        status='completed', termination_verified=True, result_saved=True, transfers_used=0, continuation=None))
+    atomic_json(store.job_directory(jid)/'result.json', dict(job_id=jid, launch_nonce=nonce, owner_run_id=old,
+        termination_verified=True, status='completed', exit_code=0, signal=None))
+    job = dict(job_id=jid, task_id=tid, launch_nonce=nonce, owner_run_id=new, transfers_used=1,
+               continuation_contract=None, reserved_at='2026-01-01T00:00:00+00:00')
+    # Without the same-launch adoption receipt the saved result cannot be attributed.
+    assert evidence(store, job) == dict(state='unknown', termination_verified=False, result_digest=None)
+    store.update(jid, store.read(jid)['version'], {'launch_owner_run_id': old})
+    assert evidence(store, job)['termination_verified']
+    assert evidence(store, {**job, 'transfers_used': 0})['termination_verified'] is False

@@ -5,6 +5,13 @@ import stat
 from .job_store import JobStorageError, read_json
 
 
+def committed_adoption(record, job):
+    """The server's same-launch owner/count receipt after a lost adoption reply."""
+    return (bool(record.get('launch_owner_run_id'))
+            and job['transfers_used'] > record.get('transfers_used', 0)
+            and job['continuation_contract'] == record.get('continuation'))
+
+
 def verified_result(directory, record, result):
     if (any(result.get(k) != record.get(k) for k in ('job_id', 'launch_nonce'))
             or result.get('owner_run_id') != record.get('launch_owner_run_id', record['owner_run_id'])
