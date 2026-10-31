@@ -14,6 +14,7 @@ export function WorkflowRail({ detail, ownerName, cid, className }: { detail: Wo
   return <PropertyRail label="Workflow properties" className={`wf-rail${className ? ` ${className}` : ""}`}>
     <PropertySection title="Properties">
       <Property label="Owner"><span className="wf-owner"><Avatar alias={ownerName} kind="human" size={16} decorative />{ownerName}</span></Property>
+      {detail.drafted_by_alias && <Property label="Drafted by"><span className="wf-owner"><Avatar alias={detail.drafted_by_alias} kind="ai" size={16} decorative />{detail.drafted_by_alias}</span></Property>}
       <Property label="Status"><StatusIcon status={workflowStatusIcon(detail)} label={workflowLabel(detail)} showLabel /></Property>
       <Property label="How work runs" hint={MODE_LABEL[detail.execution_mode].long}>{MODE_LABEL[detail.execution_mode].short}</Property>
       <Property label="Tasks">{detail.progress.accepted} of {detail.progress.total} accepted</Property>

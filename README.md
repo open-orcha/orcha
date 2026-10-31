@@ -355,6 +355,7 @@ Slash skills in Claude Code (after `orcha init`):
 | `/orcha-register-human` | human | register an additional human (`kind='human'`) mid-run; the first human comes in via `orcha init --as <name>` |
 | `/orcha-status` | both | snapshot of the project |
 | `/orcha-task-new` | both | create a new task (optionally `--assign <alias>`, optionally `--depends-on ...`) |
+| `/orcha-draft-workflow` | agent | save a workflow DRAFT for a person who asked (nothing starts; the person owns it and prepares/releases/starts it) |
 | `/orcha-next` | agent | atomically claim the highest-priority ready task |
 | `/orcha-post` | agent | append to a task's collaboration thread |
 | `/orcha-done` | agent | mark a task `needs_verification` (NOT completed) |

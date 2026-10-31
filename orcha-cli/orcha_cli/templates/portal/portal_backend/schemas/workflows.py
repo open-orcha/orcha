@@ -148,6 +148,10 @@ class WorkflowDraft(Input):
     semantics_version: Literal[1, 2] | None = None
     repeat_groups: list[RepeatGroup] = Field(default_factory=list, max_length=5)
     turn_allowance: int = Field(default=40, ge=1, le=1000)
+    # GH #391: an agent saving a draft for a person names that person here (a current
+    # human, non-viewer project member). Omitted: the person who requested the agent's
+    # current task. Ignored by preview; a person creating their own workflow omits it.
+    for_human_id: str | None = None
 
 
 class WorkflowCreate(WorkflowDraft):
@@ -578,6 +582,9 @@ class WorkflowDetail(BaseModel):
     hidden_at: datetime | None = None
     hidden_by_human_id: str | None = None
     hidden_by_alias: str | None = None
+    # GH #391: the agent that saved this draft for the owner (None when a person made it).
+    drafted_by_agent_id: str | None = None
+    drafted_by_alias: str | None = None
     hidden_reason: str | None = None
     evidence_capability: IntegrationCapability = Field(
         default_factory=IntegrationCapability

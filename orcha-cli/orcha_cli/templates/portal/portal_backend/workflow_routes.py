@@ -262,7 +262,7 @@ def search_workflow_tasks(
 def preview_workflow(cid: str, body: model.WorkflowDraft, request: Request):
     with db_cursor(readonly=True) as (_, cur):
         require_member_read(cur, request, cid)
-        resolve_actor(cur, request, cid)
+        resolve_actor(cur, request, cid, allow_agent=True)
         svc = service.WorkflowService(cur, HOOKS)
         return svc.preview_draft(cid, body.model_dump(mode="json"))
 
@@ -275,7 +275,9 @@ def preview_workflow(cid: str, body: model.WorkflowDraft, request: Request):
 def create_workflow(cid: str, body: model.WorkflowCreate, request: Request):
     service.require_capability()
     with db_cursor() as (_, cur):
-        actor = resolve_actor(cur, request, cid)
+        # GH #391: a work-session agent may save a DRAFT for a person (create() enforces
+        # draft-only and a human owner); every other workflow write stays human-only.
+        actor = resolve_actor(cur, request, cid, allow_agent=True)
         return service.WorkflowService(cur, HOOKS).mutate(
             cid, actor, "create", body.model_dump(mode="json")
         )
