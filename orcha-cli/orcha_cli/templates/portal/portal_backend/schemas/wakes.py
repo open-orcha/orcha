@@ -101,6 +101,8 @@ class WakeClaim(BaseModel):
 
     run_id: Optional[UUID] = Field(default=None, description="Exact worker renewing this lane; never renew a successor")
     completion: CompletionReason | None = None
+    admission_id: Optional[UUID] = Field(
+        default=None, description="Launcher-chosen identity of a completion admission; returned when admitted")
 
     lease_ttl: float = Field(
         default=300.0,

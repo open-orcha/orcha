@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 import time
+import uuid
 
 from .notifier_routing_handoff import carry_previous_checkout
 from . import notifier_workflow, notifier_managed_limits
@@ -188,14 +189,14 @@ def _worker_state(
     }
 
 
-def _release_unlaunched(api_base, candidate, services):
-    """No worker started for this admission; a lost release keeps the attempt spent."""
+def _release_unlaunched(api_base, candidate, services, admission_id):
+    """No worker started for this exact admission; a lost release keeps the attempt spent."""
     completion = candidate.get("completion")
-    if completion:
+    if completion and admission_id:
         services._post_json(
             f"{api_base}/api/tasks/{completion['task_id']}/job-monitors/"
             f"{completion['job_id']}/unlaunched-wake",
-            completion,
+            {**completion, "admission_id": admission_id},
         )
 
 
@@ -219,6 +220,8 @@ def spawn(
     )
     claim_ttl = services.WAKE_LEASE_TTL_SECS if live_workers is not None else cap
     lane = "work"
+    # Each launcher owns its admission; only that identity can ever return it.
+    admission_id = str(uuid.uuid4()) if candidate.get("completion") else None
     if not dry_run:
         claim = services._post_json(
             f"{api_base}/api/agents/{candidate['agent_id']}/wake-claim",
@@ -227,12 +230,13 @@ def spawn(
                 "kind": "ephemeral",
                 "event": event,
                 "lane": lane,
-                **({'completion':candidate['completion']} if candidate.get('completion') else {}),
+                **({'completion':candidate['completion'], 'admission_id':admission_id}
+                   if candidate.get('completion') else {}),
             },
         )
         if not (claim and claim.get("claimed")):
             if claim is None:
-                _release_unlaunched(api_base, candidate, services)
+                _release_unlaunched(api_base, candidate, services, admission_id)
             reason = (claim or {}).get("reason", "claim failed (unreachable)")
             if not quiet:
                 print(f"[notifier] skip {candidate['alias']} — single-flight: {reason}")
@@ -348,7 +352,7 @@ def spawn(
         if not dry_run:
             services._revoke_or_defer(api_base, token)
             if not workflow_launch:
-                _release_unlaunched(api_base, candidate, services)
+                _release_unlaunched(api_base, candidate, services, admission_id)
         if not quiet:
             print(
                 f"[notifier] cap-deferred wake for {candidate.get('alias')}: "

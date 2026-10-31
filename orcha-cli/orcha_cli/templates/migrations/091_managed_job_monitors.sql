@@ -47,12 +47,17 @@ CREATE TABLE managed_job_waits (
     context_digest TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- One row per admitted launch; a returned admission keeps its row so its
+-- identity can never release a later admission of the same attempt.
 CREATE TABLE managed_job_wake_receipts (
+    admission_id UUID PRIMARY KEY,
     job_id UUID NOT NULL,
     outcome_revision INTEGER NOT NULL,
     operation_id UUID NOT NULL,
     admitted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    PRIMARY KEY(job_id,outcome_revision,operation_id),
+    released_at TIMESTAMPTZ,
     FOREIGN KEY(job_id,outcome_revision) REFERENCES managed_job_outcomes(job_id,revision) ON DELETE CASCADE
 );
+CREATE UNIQUE INDEX managed_job_wake_receipts_live ON managed_job_wake_receipts(job_id,outcome_revision,operation_id)
+    WHERE released_at IS NULL;
 CREATE INDEX managed_job_monitors_agent ON managed_job_monitors(agent_id,job_id);

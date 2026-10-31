@@ -306,31 +306,39 @@ async def test_capacity_refusal_returns_attempt_without_relaxing_launch_bound(
     assert len(refusals) == 3
     assert not db.execute("SELECT 1 FROM worker_runs WHERE status='running'")
     assert db.execute('SELECT attempts FROM managed_job_outcomes')[0]['attempts'] == 0
-    assert not db.execute('SELECT 1 FROM managed_job_wake_receipts')
+    assert not db.execute('SELECT 1 FROM managed_job_wake_receipts WHERE released_at IS NULL')
     release = monitor_url(managed, job, 'unlaunched-wake')
-    # A lost claim reply is returned once; a replay is a no-op.
+    # A lost claim reply is returned once, only by its own launch identity.
     db.execute('UPDATE managed_job_outcomes SET next_attempt_at=%s', (db.ago(1),))
     db.execute('UPDATE agent_wake_state SET wake_lease_until=%s', (db.ago(1),))
     c = await candidate(client, managed, db)
     claim_url = f"/api/agents/{managed['aid']}/wake-claim"
-    assert (await client.post(claim_url, json={'completion': c['completion']})).json()['claimed']
-    assert (await client.post(release, json=c['completion'])).json() == {'released': True}
-    assert (await client.post(release, json=c['completion'])).json() == {'released': False}
+    admission = str(uuid4())
+    claim = (await client.post(claim_url, json={'completion': c['completion'], 'admission_id': admission})).json()
+    assert claim['claimed'] and claim['admission_id'] == admission
+    assert (await client.post(release, json=c['completion'])).status_code == 422
+    other = {**c['completion'], 'admission_id': str(uuid4())}
+    assert (await client.post(release, json=other)).json() == {'released': False}
+    mine = {**c['completion'], 'admission_id': admission}
+    assert (await client.post(release, json=mine)).json() == {'released': True}
+    assert (await client.post(release, json=mine)).json() == {'released': False}
     assert db.execute('SELECT attempts FROM managed_job_outcomes')[0]['attempts'] == 0
     # Once a worker starts, the admission is a durable launch and is never returned.
     db.execute('UPDATE managed_job_outcomes SET next_attempt_at=%s', (db.ago(1),))
     db.execute('UPDATE agent_wake_state SET wake_lease_until=%s', (db.ago(1),))
     c = await candidate(client, managed, db)
     assert c['completion'], c
-    assert (await client.post(claim_url, json={'completion': c['completion']})).json()['claimed']
+    claim = (await client.post(claim_url, json={'completion': c['completion']})).json()
+    assert claim['claimed'] and claim['admission_id']
     token = (await client.post(f"/api/agents/{managed['aid']}/embodiment-tokens",
         json={'lane': 'work', 'kind': 'headless'})).json()['run_token']
     run = await client.post(f"/api/agents/{managed['aid']}/runs", json={'task_id': managed['tid'],
         'token_id': token, 'wake_event': 'managed_command_completion'})
     assert run.status_code == 201, run.text
-    assert (await client.post(release, json=c['completion'])).json() == {'released': False}
+    started = {**c['completion'], 'admission_id': claim['admission_id']}
+    assert (await client.post(release, json=started)).json() == {'released': False}
     assert db.execute('SELECT attempts FROM managed_job_outcomes')[0]['attempts'] == 1
-    mismatched = {**c['completion'], 'job_id': str(uuid4())}
+    mismatched = {**started, 'job_id': str(uuid4())}
     assert (await client.post(release, json=mismatched)).status_code == 409
 
 
