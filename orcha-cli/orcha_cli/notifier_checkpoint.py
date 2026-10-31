@@ -20,6 +20,13 @@ def checkpoint_and_respawn(
         checkpoint_and_continue(api_base, agent_id, worker, live_workers, quiet, services)
         return
     process = worker["proc"]
+    getter = getattr(services, '_get_json', None)
+    wait = getter(f"{api_base}/api/runs/{worker.get('run_id')}/job-wait") if getter else None
+    if worker.get('completion') or worker.get('wake_event') == 'managed_command_completion' or (wait and wait.get('waiting')):
+        # Reaper records exit and releases the lane. Only the scheduler may
+        # spend another durable completion attempt; waiting spends none.
+        services._kill_worker(process, graceful=True)
+        return
     context = worker.get("respawn_ctx") or {}
     base_cwd = worker.get("base_cwd")
     worktree = worker.get("worktree")

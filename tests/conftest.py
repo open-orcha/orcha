@@ -60,6 +60,8 @@ TEST_URL = os.environ.get(
 APP_TABLES = [
     'managed_message_windows', 'managed_task_dispatches',
     'worker_stop_observations', 'managed_job_transfers',
+    'managed_job_wake_receipts', 'managed_job_waits', 'managed_job_monitor_operations',
+    'managed_job_outcomes', 'managed_job_monitors',
     "managed_message_receipts", "managed_run_limits", "managed_jobs", "managed_job_operations", "system_notice_receipts",
     "conversation_turns", "conversations",
     "agent_wake_state", "agent_reachability", "agent_memory_digests",

@@ -40,6 +40,8 @@ def cancel_task(tid: str, body: TaskCancel, request: Request):
         raise HTTPException(400, "actor_agent_id is not a valid UUID")
     with db_cursor() as (conn, cur):
         t = _require_task(cur, tid)
+        from portal_backend.workflow_service import lock_container_graph
+        lock_container_graph(cur, t['container_id'])
         workflow_service = None
         if t.get('workflow_id'):
             from portal_backend.workflow_service import WorkflowService
@@ -102,6 +104,9 @@ def cancel_task(tid: str, body: TaskCancel, request: Request):
             "UPDATE tasks SET status='cancelled', completed_at=now() WHERE id=%s",
             (tid,),
         )
+        cur.execute('''UPDATE managed_job_monitors SET revoked_at=COALESCE(revoked_at,now()),
+            stop_reason=COALESCE(stop_reason,'task_cancelled'),suppress_wake=true
+            WHERE job_id IN (SELECT job_id FROM managed_jobs WHERE task_id=%s)''', (tid,))
         cur.execute("DELETE FROM agent_self_wake WHERE task_id=%s", (tid,))
         # Mig 068: cancelling ends a running Verdikt auto-fix loop
         from portal_backend.verdikt_autofix import end_for_person as _end_autofix

@@ -165,12 +165,19 @@ def continue_worker(aid: str, rid: str, body: WorkflowContinue, request: Request
     with db_cursor() as (_, cur):
         _lane(cur, request, aid)
         runner, _, _, e = _runner_run(cur, aid, rid)
-        payload = {"previous_run_id": rid, **body.model_dump(exclude_none=True)}
+        payload = {"previous_run_id": rid, **body.model_dump(exclude_none=True, mode='json')}
         # Receipt replay must precede stale-schedule validation and must not consume a replacement.
         receipt = launch_receipt(cur, runner, body.operation_key, payload)
         if receipt:
             return receipt
-        if body.automatic_schedule_id:
+        if body.completion:
+            from portal_backend.job_monitor_service import completion_eligible, consume_attempt
+            if (str(body.completion.task_id) != str(e['task_id'])
+                    or body.operation_key != f'auto-continue:{rid}'
+                    or not completion_eligible(cur, aid, body.completion, locked=True)):
+                conflict('automatic_completion_not_allowed', 'This command completion is not eligible to continue.')
+            consume_attempt(cur, body.completion)
+        elif body.automatic_schedule_id:
             from portal_backend.workflow_continuation import reserve_refusal
             refused = reserve_refusal(cur, e, aid, body.automatic_schedule_id, rid)
             if body.operation_key != f"auto-continue:{rid}":

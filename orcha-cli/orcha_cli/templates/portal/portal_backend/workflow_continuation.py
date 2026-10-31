@@ -127,6 +127,9 @@ def limit_notice(cur, execution):
 
 def schedule(cur, execution_id, aid):
     e = one(cur, 'SELECT * FROM workflow_executions WHERE id=%s', (execution_id,))
+    from portal_backend.job_monitor_service import task_waiting
+    if e and task_waiting(cur, str(e['task_id']), aid):
+        return
     if not eligible(cur, e, aid):
         return
     existing = one(cur, 'SELECT * FROM agent_self_wake WHERE agent_id=%s AND task_id=%s', (aid, e['task_id']))

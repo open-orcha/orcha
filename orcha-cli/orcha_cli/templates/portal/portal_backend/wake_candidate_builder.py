@@ -11,6 +11,7 @@ from portal_backend.drain_classification import (
 from portal_backend.event_policy import _NON_WAKING_EVENTS, _WORK_NON_WAKING_EVENTS
 from portal_backend.stale_wake_events import stale_pending_events
 from portal_backend.model_policy import resolve_reasoning_effort
+from portal_backend.job_monitor_service import select_completion, waiting_event_ids, has_pending_monitor_work
 from portal_backend.self_wake_selection import select_due_self_wake
 from portal_backend.wake_context import (
     filter_context_content,
@@ -63,7 +64,7 @@ def build_wake_candidate(
     parked = set(ready) - set(auto_tasks)
     parked_rows = False
     obsolete = stale_pending_events(cur, aid, delivered_ts)
-    held_event_ids = set(obsolete)
+    held_event_ids = set(obsolete) | waiting_event_ids(cur, aid, delivered_ts)
     if pending:
         parked_event_ids, parked_tasks, pending, newest = parked_pending_events(
             cur,
@@ -123,11 +124,12 @@ def build_wake_candidate(
             is_parked=parking.parked,
         )
     )
-    if pending:
-        selected_schedule.pop("automatic_schedule_id", None)
     if wake_task_id is not None and parking.parked(wake_task_id):
         wake_task_id = None
+    completion = select_completion(cur, aid)
     initial_task_id = auto_tasks[0] if auto_tasks else wake_task_id
+    if initial_task_id is None and completion:
+        initial_task_id = str(completion.task_id)
     context_task_id = resolve_context_task_id(
         cur,
         aid,
@@ -142,12 +144,23 @@ def build_wake_candidate(
         directive_bucket=_DRAIN_DIRECTIVE,
         parked_task_ids=parked,
     )
+    if completion and str(completion.task_id) != str(context_task_id):
+        completion = None
     prompt_messages, notifications = filter_context_content(
         directed,
         notifications,
         context_task_id,
         is_cross_task=_is_cross_task_drain_row,
     )
+    # Use source events, not display types (a prompt renders as "directed").
+    # Only guidance retained for this task may turn an automatic continuation
+    # into a human-directed one; a different task's guidance stays pending.
+    human_instruction = any(n.get('actor_kind') == 'human' and n.get('event_name') in
+                            {'prompt', 'task_message', 'request_answered', 'request_created'}
+                            for n in notifications)
+    if pending and human_instruction:
+        selected_schedule.pop('automatic_schedule_id', None)
+        completion = None
     handled_event_ids, delivery_handled_event_ids = collect_handled_event_id_sets(
         cur,
         aid,
@@ -167,6 +180,8 @@ def build_wake_candidate(
     delivery_handled_event_ids = [eid for eid in delivery_handled_event_ids if eid not in obsolete]
 
     auto_interval = agent["auto_wake_interval_secs"]
+    if has_pending_monitor_work(cur, aid):
+        auto_interval = None  # Monitor polling and durable retries replace idle-only model wakes.
     wake_enabled = agent["wake_enabled"]
     in_cooldown = bool(agent["in_cooldown"])
     lease_active = bool(agent["lease_active"])
@@ -183,7 +198,7 @@ def build_wake_candidate(
         auto_interval=auto_interval,
         secs_since_woken=agent["secs_since_woken"],
         pending_task_request=pending_task_request,
-        self_wake_due=self_wake_due,
+        self_wake_due=self_wake_due or bool(completion),
         work_idle_seconds=agent["work_idle_seconds"],
         min_idle=min_idle,
         in_cooldown=in_cooldown,
@@ -195,7 +210,7 @@ def build_wake_candidate(
     triage_hint = None
     # A triage close advances the delivery cursor past every row it saw, which would skip
     # a parked task's held rows; with any held, the wake takes the full path instead.
-    if not parked_rows and triage_eligible(
+    if not completion and not parked_rows and triage_eligible(
         should_wake=should_wake,
         pending_task_request=pending_task_request,
         self_wake_due=self_wake_due,
@@ -240,6 +255,7 @@ def build_wake_candidate(
             if continue_run_id:
                 workflow_launch["workflow_continue_run_id"] = continue_run_id
     return {
+        'completion': completion.model_dump(mode='json') if completion else None,
         **workflow_launch,
         **selected_schedule,
         "agent_id": aid,
@@ -247,7 +263,7 @@ def build_wake_candidate(
         "should_wake": should_wake,
         "reason": reason,
         "pending_events": pending,
-        "latest_event": latest,
+        "latest_event": 'managed_command_completion' if completion else latest,
         "prompt_messages": prompt_messages,
         "wake_task_id": wake_task_id,
         "notifications": notifications,

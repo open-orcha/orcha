@@ -6,6 +6,10 @@ from portal_backend.events import publish_event
 
 
 def requeue_interrupted_run(cur, run, body):
+    from portal_backend.job_monitor_service import register_unexpected_waits, task_waiting
+    register_unexpected_waits(cur, run)
+    if run.get('wake_event') == 'managed_command_completion':
+        return  # The pending outcome owns bounded retry; never mint a fresh directive.
     if body.status != "killed" or run.get("lane") != "work" or run.get("stop_requested_at"):
         return
     try:
@@ -17,6 +21,8 @@ def requeue_interrupted_run(cur, run, body):
     aid, tid = str(run["agent_id"]), run.get("task_id")
     if not tid:
         return  # taskless requests/events are left pending by the unsuccessful run
+    if task_waiting(cur, str(tid), aid, source_run_id=run['run_id']):
+        return
     cur.execute(
         """SELECT t.container_id, t.title FROM tasks t JOIN agent_tasks a ON a.task_id=t.id
            WHERE t.id=%s AND a.agent_id=%s AND t.status IN ('ready','in_progress')

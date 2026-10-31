@@ -6,6 +6,7 @@ from uuid import UUID
 from pydantic import BaseModel, Field
 
 from portal_backend.limits import MAX_NAME_LEN, MAX_PAYLOAD_LEN
+from portal_backend.schemas.job_monitors import CompletionReason
 
 
 class WakeAck(BaseModel):
@@ -99,6 +100,9 @@ class WakeClaim(BaseModel):
     """R2.4: the daemon's atomic single-flight claim before spawning a headless worker."""
 
     run_id: Optional[UUID] = Field(default=None, description="Exact worker renewing this lane; never renew a successor")
+    completion: CompletionReason | None = None
+    admission_id: Optional[UUID] = Field(
+        default=None, description="Launcher-chosen identity of a completion admission; returned when admitted")
 
     lease_ttl: float = Field(
         default=300.0,

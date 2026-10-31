@@ -93,6 +93,8 @@ def reserve_managed_job(tid: UUID, body: ManagedJobReserve, request: Request,
                          now + timedelta(seconds=body.max_elapsed_secs), body.max_transfers,
                          body.max_elapsed_secs, now, body.continuation_contract))
             job = cur.fetchone()
+        from portal_backend.job_monitor_service import register_monitor
+        register_monitor(cur, run, task, job, body, limits)
         conn.commit()
     return job
 
@@ -145,6 +147,10 @@ def managed_job_heartbeat(tid: UUID, jid: UUID, request: Request,
                                        allow_lapsed=True, enrol=False, allow_frozen=True)
         limits = run_limits(cur, run)
         job = require_job_owner(cur, str(tid), str(jid), run)
+        cur.execute('SELECT revoked_at FROM managed_job_monitors WHERE job_id=%s', (str(jid),))
+        monitor = cur.fetchone()
+        if monitor and monitor['revoked_at']:
+            conflict('managed_job_stop_requested')
         now = sql.utcnow()
         until = authority_until(cur, run, task, limits, job)
         if until <= now:
@@ -207,6 +213,8 @@ def update_managed_job(tid: UUID, jid: UUID, body: ManagedJobUpdate, request: Re
         job = cur.fetchone()
         cur.execute('INSERT INTO managed_job_operations(job_id,operation_id,payload_digest) VALUES (%s,%s,%s)',
                     (str(jid), str(body.operation_id), digest))
+        from portal_backend.job_monitor_service import record_outcome
+        record_outcome(cur, job)
         conn.commit()
     return job
 
@@ -264,5 +272,7 @@ def reconcile_managed_job(tid: UUID, jid: UUID, body: ManagedJobReconcile, reque
         job = cur.fetchone()
         cur.execute('INSERT INTO managed_job_operations(job_id,operation_id,payload_digest) VALUES (%s,%s,%s)',
                     (str(jid), str(body.operation_id), digest))
+        from portal_backend.job_monitor_service import record_outcome
+        record_outcome(cur, job)
         conn.commit()
     return job

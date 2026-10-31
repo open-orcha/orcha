@@ -106,6 +106,13 @@ def prepare(api_base, worker, services, *, reason, stop=False, wait_secs=5, reta
         store, records = run_jobs(worker)
         if not records:
             return True
+        if (stop and reason in {'worker_exited','worker_missing'}
+                and any(r.get('continue_after_exit') for r in records)
+                and not worker.get('workflow') and not worker.get('sandbox_container_id')):
+            # A machine-lane observation of this exact exit. Retain only grants
+            # authorized before launch, under their original fixed deadline.
+            exiting = services._post_json(f"{api_base}/api/runs/{worker['run_id']}/job-exit", {})
+            retained_jobs = set(retained_jobs) | set((exiting or {}).get('retained_job_ids', []))
         pending = []
         for record in records:
             record = reconcile_result(store, record)
@@ -236,6 +243,7 @@ def transfer_due(worker, now):
         if worker.get('workflow'):
             return any(not settled(r) for r in records)
         return any(r.get('continuation') == 'readonly_single_process_v1'
+                   and not r.get('continue_after_exit')
                    and r.get('status') == 'running' and r.get('transfer_socket') for r in records)
     except (OSError, ValueError, JobStorageError):
         return False
@@ -247,6 +255,7 @@ def prepare_replacement(api_base, worker, services):
     try:
         store, records = run_jobs(worker)
         eligible = [r['job_id'] for r in records if r.get('continuation') == 'readonly_single_process_v1'
+                    and not r.get('continue_after_exit')
                     and r.get('status') == 'running' and r.get('transfer_socket')
                     and r.get('transfers_used', 0) < r.get('max_transfers', 0)]
         if not prepare(api_base, worker, services, reason='checkpoint_transfer', stop=True,

@@ -11,15 +11,21 @@ from datetime import datetime
 from urllib.parse import urlsplit
 
 
+RETRYABLE_CODES = frozenset({
+    'run_binding_pending', 'worker_lease_lapsed', 'managed_transfer_heartbeat_mismatch',
+    'managed_checkpoint_version_changed',
+})
+DEFINITIVE_CODES = frozenset({'managed_recovery_identity_changed'})
+
+
 class JobAPIError(RuntimeError):
     def __init__(self, status=None, *, lease_lapsed=False, code=None):
         self.status = status
         # Only public, fixed conflict names may cross the private IPC boundary.
-        self.code = code if isinstance(code, str) and code in {
-            'run_binding_pending', 'worker_lease_lapsed', 'managed_transfer_heartbeat_mismatch',
-        } else None
+        # A definitive refusal names a fence; it is never retryable.
+        self.code = code if isinstance(code, str) and code in RETRYABLE_CODES | DEFINITIVE_CODES else None
         self.lease_lapsed = lease_lapsed or self.code == 'worker_lease_lapsed'
-        self.retryable = self.code is not None
+        self.retryable = self.code in RETRYABLE_CODES
         self.rejected = status is not None and 400 <= status < 500
         self.fenced = self.rejected and not self.retryable
         super().__init__('Managed command authority refused' if self.fenced
@@ -27,11 +33,11 @@ class JobAPIError(RuntimeError):
 
 
 class JobAPI:
-    def __init__(self, base, token, task_id, *, timeout=2.0):
+    def __init__(self, base, token, task_id, *, timeout=2.0, machine=False):
         url = urlsplit(base)
         if url.scheme not in {'http', 'https'} or not url.hostname or url.username or url.password:
             raise ValueError('Invalid managed command service address')
-        if not token:
+        if not token and not machine:
             raise JobAPIError(403)
         self.url, self.token, self.task_id = url, token, task_id
         self.timeout = timeout
@@ -53,9 +59,10 @@ class JobAPI:
                 factory = http.client.HTTPSConnection if self.url.scheme == 'https' else http.client.HTTPConnection
                 connection = factory(self.url.hostname, self.url.port, timeout=duration)
                 path = self.url.path.rstrip('/') + f'/api/tasks/{self.task_id}/' + suffix
-                connection.request(method, path, body=json.dumps(body or {}), headers={
-                    'Content-Type': 'application/json', 'X-Orcha-Run-Token': self.token,
-                })
+                headers = {'Content-Type': 'application/json'}
+                if self.token:
+                    headers['X-Orcha-Run-Token'] = self.token
+                connection.request(method, path, body=json.dumps(body or {}), headers=headers)
                 response = connection.getresponse()
                 if response.status != 200:
                     code = None

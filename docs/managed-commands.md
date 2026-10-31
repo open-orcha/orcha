@@ -34,6 +34,37 @@ Sandbox commands use the path-identical workspace mount for durable files. They 
 
 After the old worker ends, `recover <job-id>` imports a verified saved result without launching or taking control of a process. If the original supervisor is still finishing, retry later. Missing evidence requires reconciliation; a saved identifier alone never authorizes signaling an unrelated process.
 
+## Save progress and resume on command completion
+
+Every new reservation registers a durable monitor in the same transaction. The original supervisor publishes results promptly; the existing notifier also walks the server registry after restart and on bounded five-second passes. Registration is independent of the worker's lifetime and local directory discovery. A missing record produces one actionable uncertainty, preserves the launch fence, and remains monitored for stronger evidence.
+
+An ordinary host worker can explicitly authorize an isolated macOS command to continue after it exits:
+
+```sh
+orcha job --task <task-id> start --key readonly-check --purpose "Read-only check" --isolate --continue-after-exit -- <executable> <arguments>
+orcha job --task <task-id> yield <job-id> --context-file <private-progress.json>
+```
+
+The progress file contains `completed_steps` and `remaining_steps`, each a list of short descriptions. A successful yield saves the file and registers the task's wait before the model worker exits. The original supervisor retains control; the next worker does not adopt or relaunch it merely to inspect progress. An unexpected exit is also covered for a command explicitly authorized at launch. Generic commands, workflow commands and container commands keep stop-and-recover behavior. Ordinary test suites usually need subprocesses and therefore cannot use the isolated continuation contract.
+
+The execution deadline is no later than both the original published worker deadline and the original command budget. A replacement worker, successful heartbeat or lifted hold never extends or restores that authority. The human's original run-stop control still stops continuing commands after the model run ends. The current assigned worker can use `stop <job-id>` without taking ownership. Pause, holds, task changes and cancellation retain their existing controls. Explicit stop suppresses automatic resumption for that command's result, while leaving it available for authorized inspection.
+
+Completion uses the ordinary scheduler and repeats exact task admission checks at the wake claim. Workflow completion remains an automatic continuation and consumes the existing workflow allowance. A running worker sees outcomes through `status` or `wait`; another worker is not launched beside it. Wait registrations suppress idle-only wakes and source-run recovery, while new guidance and answers remain actionable. Each job has its own wait, so one completed command does not erase another command's wait.
+
+`status` reports pending outcome revisions. Check the original private result, including its exit code, and explicitly record how it was used:
+
+```sh
+orcha job --task <task-id> result-handled <job-id> --revision <revision> --disposition applied --note "Used the verified result."
+```
+
+Handling a result does not release the original checkout while saved `remaining_steps` still depend on it, such as ignored build artifacts. When the saved remaining work no longer needs that checkout, add `--release-checkout`; the release is bound to the exact saved progress file, so later saved steps retain the checkout again. Repeating the same handling command replays its receipt.
+
+For missing or unverifiable evidence, use `--disposition uncertainty_resolved` with a concise explanation. This handles the warning without proving termination or releasing the launch fence. Later verified evidence has a new revision. Reading, receiving a notification, or cleanly exiting the worker never handles an outcome. Lost replies replay the same durable receipt; conflicting handling is refused. Arbitrary downstream effects still require their own stable operation and reconciliation.
+
+Completion-only admission is limited to three attempts per outcome, with increasing delay. Blocked outcomes and exhausted results remain saved for review. Healthy-host latency includes the monitor pass (target five seconds), scheduler interval (default two seconds), remaining idle/cooldown gates (default thirty/fifteen seconds), and any retry delay. Workflow continuation also retains its 120-second not-before gate. A blocked task has no finite resume promise. The active wait command's fifteen-second guidance target is separate from completion-wake latency.
+
+The monitor API accepts evidence on the existing machine trust boundary even after worker-token revocation, pause or execution expiry. It cannot launch, adopt, assign or complete work. Continuing execution requires a separate job-scoped capability held only in private storage and the original supervisor. Neither that capability nor command output enters scheduler payloads. Required private context and checkouts remain protected until handling, in addition to the existing positive-termination checks.
+
 Records and logs live under the durable workspace's private `.claude/.orcha-jobs/` directory, outside disposable worktrees and excluded from Git, diffs and task attachments. Startup context contains private pointers, not command output or credentials. Do not copy these files into `.orcha/outputs/`. Commands receive a restricted environment without worker/provider tokens, but output may still contain sensitive data read by the command. The isolation contract protects integrity, not confidentiality. Moving recovery to another host requires access to the original durable evidence.
 
 The API's generated OpenAPI schema is the contract for reservation, polling, handled receipts, deadlines, checkpoints, result reconciliation and transfer. Local runner-supplied evidence uses the existing machine trust boundary; the server does not independently probe the operating system.
@@ -41,6 +72,7 @@ The API's generated OpenAPI schema is the contract for reservation, polling, han
 ## Acceptance checks
 
 Follow `docs/orcha-test-runbook.md` for the isolated SQLite and PostgreSQL suites. The `tests/test_gh312_*.py` modules cover message recovery, authority, command supervision, transfer, cleanup and workflow continuation.
+The `tests/test_gh388_*.py` modules exercise completion registration, late publication, exact handling, explicit continuation, waiting, notifier recovery and task/workflow admission.
 
 To exercise actual installed, locally authenticated Claude and Codex programs, run `ORCHA_TEST_LIVE_RUNTIMES=1 pytest tests/integration/test_gh312_live_runtimes.py` in the test environment. This opt-in test uses model calls and covers ordinary and workflow startup against a disposable service. Keep its raw logs private.
 
