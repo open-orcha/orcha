@@ -308,6 +308,7 @@ def test_handled_result_keeps_checkout_until_saved_remaining_work_releases_it(tm
     assert retained()
 
 
+@pytest.mark.skipif(sys.platform != 'darwin', reason='Adoption requires the enforced macOS contract')
 async def test_registry_publishes_guard_result_after_committed_adoption_loses_controller(
         client, managed, service, tmp_path, db, transport, monkeypatch):
     import os
