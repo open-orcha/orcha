@@ -17,6 +17,7 @@ from test_gh312_job_transfer import prepared, observed
 from test_gh312_job_recovery import successor
 from test_gh388_job_monitors import finish_worker, candidate, observation, monitor_url
 
+@pytest.mark.skipif(sys.platform != 'darwin', reason='Adoption requires the enforced macOS contract')
 @pytest.mark.parametrize('lost_reply', [False, True])
 async def test_pending_observation_reconciles_owner_change(client, managed, service, tmp_path, db, monkeypatch,
                                                         lost_reply):
