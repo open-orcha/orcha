@@ -39,6 +39,13 @@ def require_transfer_safe(cur, task, source, transfer):
     if (source['stop_requested_at'] or task.get('human_hold_by')
             or task.get('awaiting_loop_decision') or task_completion_blockers(task)):
         conflict('managed_transfer_stopped')
+    # GH #388: a post-exit stop leaves the ended run's history untouched and
+    # records the disposition on the job monitor instead. Every suppressing
+    # revocation (explicit stop, cancellation, finished project) is final.
+    cur.execute('SELECT suppress_wake FROM managed_job_monitors WHERE job_id=%s', (transfer['job_id'],))
+    monitor = cur.fetchone()
+    if monitor and monitor['suppress_wake']:
+        conflict('managed_transfer_stopped')
     cur.execute('SELECT a.terminated_at,c.status FROM agents a JOIN containers c ON c.id=a.container_id '
                 'WHERE a.id=%s', (source['agent_id'],))
     agent = cur.fetchone()

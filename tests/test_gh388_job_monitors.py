@@ -198,6 +198,28 @@ async def test_post_exit_stop_revokes_grant_without_reopening_run(client,managed
     assert not (await candidate(client,managed,db))['completion']
 
 
+@pytest.mark.parametrize('route',['run','job'])
+async def test_post_exit_stop_refuses_prepared_transfer_heartbeat_and_adoption(client,managed,db,make_agent,route):
+    from test_gh312_job_recovery import successor
+    from test_gh312_job_transfer import prepared, observed, adoption
+    job, secret, _, transfer = await prepared(client, managed)
+    new = await successor(client, managed)
+    await observed(client, managed, db)  # The source run has ended; its history stays exited.
+    human = (await make_agent('Stop owner', kind='human'))['agent_id']
+    target = (f"/api/runs/{managed['rid']}/stop" if route == 'run'
+              else monitor_url(managed, job, 'stop'))
+    response = await client.post(target, json={'actor_agent_id': str(human)})
+    assert response.status_code == 200, response.text
+    source = db.execute('SELECT status,stop_requested_at FROM worker_runs WHERE run_id=%s', (managed['rid'],))[0]
+    assert source['status'] != 'running' and source['stop_requested_at'] is None
+    heartbeat = await client.post(url(managed, job, 'transfer/heartbeat'), headers={'X-Orcha-Run-Token': secret})
+    assert heartbeat.status_code == 409 and 'managed_transfer_stopped' in heartbeat.text, heartbeat.text
+    adopted = await client.post(url(managed, job, 'transfer/adopt'), headers=new['headers'],
+                                json=adoption(job, secret, transfer))
+    assert adopted.status_code == 409 and 'managed_transfer_stopped' in adopted.text, adopted.text
+    assert str(db.execute('SELECT owner_run_id FROM managed_jobs')[0]['owner_run_id']) == managed['rid']
+
+
 @pytest.mark.parametrize('gate',['hold','revision','assignment','verification','stop','budget','project'])
 async def test_stale_completion_claim_never_spends_attempt(client,managed,db,gate):
     db.execute("UPDATE tasks SET autonomy='on' WHERE id=%s",(managed['tid'],))
