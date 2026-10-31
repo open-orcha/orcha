@@ -7,6 +7,7 @@ import pytest
 
 from test_gh312_managed_messages import managed
 from test_gh312_managed_jobs import checkpoint_body, publish, reserve, url
+from test_gh312_job_supervisor import service  # noqa: F401 (fixture)
 
 
 def monitor_url(m, job, action):
@@ -277,6 +278,60 @@ async def test_three_unhandled_completion_runs_exhaust_without_event_fallback(cl
     requests=db.execute("SELECT * FROM requests WHERE originating_task_id=%s",(managed['tid'],))
     assert len(requests)==1
     assert db.execute('SELECT handled_at FROM managed_job_outcomes')[0]['handled_at'] is None
+
+
+async def test_capacity_refusal_returns_attempt_without_relaxing_launch_bound(
+        client, managed, db, service, tmp_path, monkeypatch):
+    from orcha_cli import notifier, notifier_wake_worker
+    db.execute("UPDATE tasks SET autonomy='on' WHERE id=%s", (managed['tid'],))
+    await publish(client, managed)
+    job = await reserve(client, managed)
+    await finish_worker(client, managed)
+    assert (await client.post(monitor_url(managed, job, 'observe'), json=observation(job))).status_code == 200
+    refusals = []
+    def full_host(*args, **kwargs):
+        kwargs['spawn_info']['deferred'] = True
+        refusals.append(True)
+        return False, 'Host concurrency capacity is full', None
+    monkeypatch.setattr(notifier, 'spawn_headless', full_host)
+    for _ in range(3):
+        db.execute('UPDATE managed_job_outcomes SET next_attempt_at=%s', (db.ago(1),))
+        db.execute('UPDATE agent_wake_state SET wake_lease_until=%s', (db.ago(1),))
+        c = await candidate(client, managed, db)
+        assert c['completion'] and c['should_wake'], c
+        c['headless_cwd'] = str(tmp_path)
+        assert notifier_wake_worker.spawn(service[0], c, prompt='Inspect saved result.',
+            event='managed_command_completion', dry_run=False, quiet=True, lease_ttl=120,
+            live_workers={}, services=notifier) is None
+    assert len(refusals) == 3
+    assert not db.execute("SELECT 1 FROM worker_runs WHERE status='running'")
+    assert db.execute('SELECT attempts FROM managed_job_outcomes')[0]['attempts'] == 0
+    assert not db.execute('SELECT 1 FROM managed_job_wake_receipts')
+    release = monitor_url(managed, job, 'unlaunched-wake')
+    # A lost claim reply is returned once; a replay is a no-op.
+    db.execute('UPDATE managed_job_outcomes SET next_attempt_at=%s', (db.ago(1),))
+    db.execute('UPDATE agent_wake_state SET wake_lease_until=%s', (db.ago(1),))
+    c = await candidate(client, managed, db)
+    claim_url = f"/api/agents/{managed['aid']}/wake-claim"
+    assert (await client.post(claim_url, json={'completion': c['completion']})).json()['claimed']
+    assert (await client.post(release, json=c['completion'])).json() == {'released': True}
+    assert (await client.post(release, json=c['completion'])).json() == {'released': False}
+    assert db.execute('SELECT attempts FROM managed_job_outcomes')[0]['attempts'] == 0
+    # Once a worker starts, the admission is a durable launch and is never returned.
+    db.execute('UPDATE managed_job_outcomes SET next_attempt_at=%s', (db.ago(1),))
+    db.execute('UPDATE agent_wake_state SET wake_lease_until=%s', (db.ago(1),))
+    c = await candidate(client, managed, db)
+    assert c['completion'], c
+    assert (await client.post(claim_url, json={'completion': c['completion']})).json()['claimed']
+    token = (await client.post(f"/api/agents/{managed['aid']}/embodiment-tokens",
+        json={'lane': 'work', 'kind': 'headless'})).json()['run_token']
+    run = await client.post(f"/api/agents/{managed['aid']}/runs", json={'task_id': managed['tid'],
+        'token_id': token, 'wake_event': 'managed_command_completion'})
+    assert run.status_code == 201, run.text
+    assert (await client.post(release, json=c['completion'])).json() == {'released': False}
+    assert db.execute('SELECT attempts FROM managed_job_outcomes')[0]['attempts'] == 1
+    mismatched = {**c['completion'], 'job_id': str(uuid4())}
+    assert (await client.post(release, json=mismatched)).status_code == 409
 
 
 async def test_completion_while_worker_active_is_received_without_competitor(client,managed,db):

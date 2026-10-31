@@ -239,6 +239,31 @@ def consume_attempt(cur, reason):
         (sql.utcnow() + timedelta(seconds=(30, 120, 300)[outcome['attempts']]), str(reason.job_id), reason.outcome_revision))
 
 
+def release_unlaunched_attempt(cur, reason):
+    """Return an admission that started no worker (host capacity or lost claim reply).
+
+Only the latest admission is returned, and never once any work-lane worker has
+started for the agent since it; a lost release keeps the attempt spent.
+"""
+    receipt = one(cur, '''SELECT admitted_at FROM managed_job_wake_receipts WHERE job_id=%s
+        AND outcome_revision=%s AND operation_id=%s''',
+        (str(reason.job_id), reason.outcome_revision, str(reason.operation_id)))
+    outcome = latest_outcome(cur, str(reason.job_id))
+    if (not receipt or not outcome or outcome['revision'] != reason.outcome_revision or outcome['attempts'] < 1
+            or reason.operation_id != uuid5(UUID(str(reason.job_id)),
+                                            f"completion:{outcome['revision']}:{outcome['attempts'] - 1}")):
+        return False
+    started = one(cur, '''SELECT started_at FROM worker_runs WHERE agent_id=%s AND lane='work'
+        ORDER BY started_at DESC LIMIT 1''', (str(reason.agent_id),))
+    if started and started['started_at'] >= receipt['admitted_at']:
+        return False
+    cur.execute('''DELETE FROM managed_job_wake_receipts WHERE job_id=%s AND outcome_revision=%s
+        AND operation_id=%s''', (str(reason.job_id), reason.outcome_revision, str(reason.operation_id)))
+    cur.execute('''UPDATE managed_job_outcomes SET attempts=attempts-1 WHERE job_id=%s AND revision=%s
+        AND attempts=%s''', (str(reason.job_id), reason.outcome_revision, outcome['attempts']))
+    return True
+
+
 def select_completion(cur, aid):
     from portal_backend.schemas.job_monitors import CompletionReason
     cur.execute('''SELECT j.task_id,m.*,o.revision,o.attempts FROM managed_job_monitors m
