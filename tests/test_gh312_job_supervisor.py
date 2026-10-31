@@ -96,10 +96,17 @@ async def test_real_command_one_launch_private_result_and_control_environment(jo
     record = store.read(jid)
     assert record['result_saved'] and record['termination_verified']
     assert 'private-log-fixture' in (store.job_directory(jid)/'stdout.log').read_text()
+    # The supervisor may still be removing its publication file; let it finish,
+    # and skip any file that disappears between listing and reading.
+    eventually(lambda: not (store.job_directory(jid)/'publication.json').exists())
     for path in store.root.rglob('*.json'):
-        assert 'private-log-fixture' not in path.read_text()
-        assert 'private-control-fixture' not in path.read_text()
-        assert 'private-provider-fixture' not in path.read_text()
+        try:
+            text = path.read_text()
+        except FileNotFoundError:
+            continue
+        assert 'private-log-fixture' not in text
+        assert 'private-control-fixture' not in text
+        assert 'private-provider-fixture' not in text
     with store.locked():
         assert store.retains_worktree(tmp_path)  # Delivery alone cannot release recovery context.
     from orcha_cli.cli_job import handle_result
