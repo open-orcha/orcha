@@ -241,7 +241,8 @@ class JobStore:
                 if (record.get("status") not in TERMINAL_STATES
                         or not record.get("termination_verified")
                         or not record.get("result_saved")
-                        or (record.get('monitor_enabled') and not self.result_handled(record))):
+                        or (record.get('monitor_enabled') and (not self.result_handled(record)
+                                                               or self.remaining_work(record)))):
                     return True
             except (JobStorageError, KeyError, TypeError, OSError):
                 return True
@@ -260,6 +261,26 @@ class JobStore:
                         (directory / 'result.json').read_bytes()).hexdigest())
         except (JobStorageError, KeyError, TypeError, OSError):
             return False
+
+
+    def remaining_work(self, record):
+        """Saved next steps keep the original checkout until a digest-bound release."""
+        import hashlib
+        try:
+            directory = self.job_directory(record['job_id'])
+            path = directory / 'context.json'
+            if not path.exists():
+                return False
+            steps = read_json(path).get('remaining_steps')
+            if not isinstance(steps, list):
+                return True
+            if not steps:
+                return False
+            receipt = read_json(directory / 'handled-outcome.json')
+            return not (receipt.get('checkout_released') is True
+                        and receipt.get('context_digest') == hashlib.sha256(path.read_bytes()).hexdigest())
+        except (JobStorageError, KeyError, TypeError, OSError, AttributeError):
+            return True
 
 
 def command_summary(argv: list[str]) -> str:

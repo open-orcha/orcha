@@ -57,6 +57,8 @@ Completion uses the ordinary scheduler and repeats exact task admission checks a
 orcha job --task <task-id> result-handled <job-id> --revision <revision> --disposition applied --note "Used the verified result."
 ```
 
+Handling a result does not release the original checkout while saved `remaining_steps` still depend on it, such as ignored build artifacts. When the saved remaining work no longer needs that checkout, add `--release-checkout`; the release is bound to the exact saved progress file, so later saved steps retain the checkout again. Repeating the same handling command replays its receipt.
+
 For missing or unverifiable evidence, use `--disposition uncertainty_resolved` with a concise explanation. This handles the warning without proving termination or releasing the launch fence. Later verified evidence has a new revision. Reading, receiving a notification, or cleanly exiting the worker never handles an outcome. Lost replies replay the same durable receipt; conflicting handling is refused. Arbitrary downstream effects still require their own stable operation and reconciliation.
 
 Completion-only admission is limited to three attempts per outcome, with increasing delay. Blocked outcomes and exhausted results remain saved for review. Healthy-host latency includes the monitor pass (target five seconds), scheduler interval (default two seconds), remaining idle/cooldown gates (default thirty/fifteen seconds), and any retry delay. Workflow continuation also retains its 120-second not-before gate. A blocked task has no finite resume promise. The active wait command's fifteen-second guidance target is separate from completion-wake latency.

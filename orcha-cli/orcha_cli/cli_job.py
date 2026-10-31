@@ -54,6 +54,8 @@ def register(sub, handler):
     result_handled.add_argument('--revision', type=int, required=True)
     result_handled.add_argument('--disposition', choices=['applied', 'uncertainty_resolved'], required=True)
     result_handled.add_argument('--note', required=True, help='brief safe explanation without logs or credentials')
+    result_handled.add_argument('--release-checkout', action='store_true',
+                                help='saved remaining steps no longer need the original checkout')
     handled = commands.add_parser('handled', help='explicitly acknowledge guidance after handling it')
     handled.add_argument('message_id')
     handled.add_argument('--outcome', choices=['applied', 'not_applicable'], required=True)
@@ -330,7 +332,7 @@ def yield_command(api, store, job_id, context):
             'guidance':'Progress is saved. Exit this worker; completion or new guidance will resume the task.'}
 
 
-def handle_result(api, store, job_id, revision, disposition, note):
+def handle_result(api, store, job_id, revision, disposition, note, release_checkout=False):
     import hashlib
     job = current_job(api, job_id)
     if job is None:
@@ -352,10 +354,15 @@ def handle_result(api, store, job_id, revision, disposition, note):
             record = store.read(job_id)
             # Acknowledgement can race the supervisor's final checkpoint reply.
             # Keep its receipt separate from the controller's versioned record.
+            # Saved remaining steps keep the checkout unless this exact context is released.
+            context = store.job_directory(job_id)/'context.json'
             atomic_json(store.job_directory(job_id)/'handled-outcome.json', {
                 'job_id':job_id, 'launch_nonce':record['launch_nonce'],
                 'revision':revision, 'result_digest':digest,
                 'termination_verified':bool(receipt['termination_verified']),
+                'checkout_released':bool(release_checkout),
+                'context_digest':(hashlib.sha256(context.read_bytes()).hexdigest()
+                                  if release_checkout and context.exists() else None),
             })
     except JobStorageError:
         pass
@@ -386,7 +393,8 @@ def cmd_job(args):
             result = api.request(f'managed-messages/{UUID(args.message_id)}/handled',
                                  {'outcome': args.outcome, 'handling_note': args.note})
         elif args.job_action == 'result-handled':
-            result = handle_result(api, store, str(UUID(args.job_id)), args.revision, args.disposition, args.note)
+            result = handle_result(api, store, str(UUID(args.job_id)), args.revision, args.disposition, args.note,
+                                   release_checkout=args.release_checkout)
         elif args.job_action == 'yield':
             result = yield_command(api, store, str(UUID(args.job_id)), json.loads(Path(args.context_file).read_text()))
         elif args.job_action == 'adopt':

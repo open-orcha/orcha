@@ -269,3 +269,40 @@ async def test_handling_before_final_checkpoint_reply_does_not_mutate_controller
     await asyncio.to_thread(eventually, lambda: not (store.job_directory(jid)/'publication.json').exists())
     assert not any(read_json(p)['reason'] == 'supervisor_error'
                    for p in store.job_directory(jid).glob('checkpoint-*.json'))
+
+
+def test_handled_result_keeps_checkout_until_saved_remaining_work_releases_it(tmp_path):
+    from uuid import uuid4
+    store = JobStore(tmp_path)
+    jid, nonce, rid = (str(uuid4()) for _ in range(3))
+    store.reserve(jid, dict(cwd=str(tmp_path), launch_nonce=nonce, owner_run_id=rid, task_id=str(uuid4()),
+        status='completed', termination_verified=True, result_saved=True, monitor_enabled=True))
+    directory = store.job_directory(jid)
+    atomic_json(directory/'result.json', dict(job_id=jid, launch_nonce=nonce, owner_run_id=rid,
+        termination_verified=True, status='completed', exit_code=0, signal=None))
+    context = directory/'context.json'
+    atomic_json(context, dict(completed_steps=['Read the test result.'],
+        remaining_steps=['Continue using the ignored build artifacts in this original checkout.']))
+
+    class SavedOutcome:  # Only the server acknowledgement is substituted.
+        def request(self, suffix, body=None, method='POST', timeout=None):
+            if suffix == 'managed-jobs':
+                return {'jobs': [{'job_id': jid}]}
+            return {'termination_verified': True, **body}
+
+    def retained():
+        with store.locked():
+            return store.retains_worktree(tmp_path)
+
+    handle_result(SavedOutcome(), store, jid, 1, 'applied', 'Used the verified result.')
+    assert store.result_handled(store.read(jid))
+    assert retained(), 'handling released a checkout still needed by saved remaining work'
+    handle_result(SavedOutcome(), store, jid, 1, 'applied', 'Used the verified result.', release_checkout=True)
+    assert not retained()
+    # A later save of new remaining work is not covered by the earlier release.
+    atomic_json(context, dict(completed_steps=[], remaining_steps=['Rebuild from the cached objects.']))
+    assert retained()
+    atomic_json(context, dict(completed_steps=['Done.'], remaining_steps=[]))
+    assert not retained()
+    context.write_text('{not json')
+    assert retained()
