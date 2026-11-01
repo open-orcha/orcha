@@ -346,8 +346,14 @@ async def test_saved_cleanup_restores_old_execution_and_latest_retry(client, con
     assert 'get' in spec['paths']['/api/containers/{cid}/agent-worktrees/cleanup']
 
 
-async def test_saved_cleanup_requires_project_membership(client, container, trust_proxy):
-    assert (await client.get(f"/api/containers/{container['id']}/agent-worktrees/cleanup", headers=MALLORY)).status_code == 403
+async def test_saved_cleanup_requires_project_membership(client, container, make_agent, trust_proxy):
+    await _members(client, container['id'], make_agent)
+    url = f"/api/containers/{container['id']}/agent-worktrees/cleanup"
+    assert (await client.get(url, headers=MALLORY)).status_code == 403
+    for member in (OCTO, HUBOT, VERA):
+        response = await client.get(url, headers=member)
+        assert response.status_code == 200
+        assert response.json() == {'actions': []}
 
 
 async def test_project_cleanup_context_retains_task_without_live_run(client, container, make_agent, make_task):
