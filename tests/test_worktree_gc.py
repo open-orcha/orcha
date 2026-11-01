@@ -605,7 +605,7 @@ def _cli(argv, capsys):
     return code, capsys.readouterr().out
 
 
-def test_cli_dry_run_then_clean(project, capsys):
+def test_cli_offline_preview_cannot_authorize_removal(project, capsys):
     clean = _worktree(project, "Atlas-12", "orcha/wk-Atlas-1790000000030")
     out = _worktree(project, "Probe-12", "orcha/wk-Probe-1790000000031")
     (out / "notes.md").write_text("n")
@@ -625,14 +625,14 @@ def test_cli_dry_run_then_clean(project, capsys):
 
     code, text = _cli(["worktrees", "clean", "--json", "--offline", "--project", str(project)], capsys)
     res = json.loads(text)
-    assert {e["name"] for e in res["removed"]} == {"Atlas-12", "Probe-12"}
-    assert not clean.exists() and not out.exists() and ahead.exists()
+    assert code == 1 and not res["ok"] and "verify active tasks" in res["error"]
+    assert clean.exists() and out.exists() and ahead.exists()
 
     code, text = _cli(["worktrees", "remove", str(ahead), "--offline", "--project", str(project)], capsys)
-    assert code == 1 and "--confirm-unmerged" in text and ahead.exists()
+    assert code == 1 and "verify active tasks" in text and ahead.exists()
     code, text = _cli(["worktrees", "remove", str(ahead), "--offline", "--keep-branch",
                        "--confirm-unmerged", "orcha/wk-Ferry-1790000000032", "--project", str(project)], capsys)
-    assert code == 0 and not ahead.exists()
+    assert code == 1 and ahead.exists()
     assert "orcha/wk-Ferry-1790000000032" in _branches(project)
 
 

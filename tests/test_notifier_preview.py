@@ -193,6 +193,23 @@ def test_a_removed_worktree_is_rebuilt_from_its_branch_and_cleaned_up(repo):
     assert not os.path.exists(temp)
 
 
+@pytest.mark.parametrize("protection", ["hold", "lock"])
+def test_preview_teardown_keeps_human_retention_instructions(repo, protection):
+    gone = repo["base"] + "/.orcha-worktrees/task-gone"
+    claim = _claim(repo, worktree=gone)
+    _, temp = npv.resolve_checkout(claim, repo["base"])
+    if protection == "hold":
+        pathlib.Path(temp, ".orcha-keep").write_text("Keep this evidence")
+    else:
+        _git(["worktree", "unlock", temp], repo["base"])
+        _git(["worktree", "lock", "--reason", "Keep this evidence", temp], repo["base"])
+    npv._remove_worktree(repo["base"], temp)
+    assert pathlib.Path(temp, "index.html").is_file()
+    with pytest.raises(npv.PreviewError, match="protected"):
+        npv.resolve_checkout(claim, repo["base"])
+    assert pathlib.Path(temp, "index.html").is_file()
+
+
 # ------------------------------------------------------------------ real processes
 
 def test_preview_starts_on_a_free_port_reports_ready_and_is_killed_after_the_run(repo):
