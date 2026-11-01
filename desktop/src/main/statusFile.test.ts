@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
-import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { execFileSync, spawnSync } from 'node:child_process'
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { createRequire } from 'node:module'
@@ -96,6 +97,7 @@ describe('buildStatus', () => {
 
 const EXEC = '/Applications/Embodent.app/Contents/MacOS/Embodent'
 const HELPER = '/Applications/Embodent.app/Contents/MacOS/orcha-status-writer'
+const STATUS_WRITER_REL = path.join('Contents', 'MacOS', 'orcha-status-writer')
 
 describe('status writer helper (GH #397)', () => {
   it('is looked up next to the packaged macOS executable only', () => {
@@ -163,7 +165,9 @@ describe('StatusFileWriter', () => {
 describe('mac sign hook (GH #397)', () => {
   const require = createRequire(import.meta.url)
   const hook = require('../../scripts/macSign.cjs') as {
+    (opts: object): Promise<void>
     withStatusWriterEntitlements: (f: (p: string) => object) => (p: string) => { entitlements?: string }
+    presignStatusWriter: (opts: object, run?: (cmd: string, args: string[]) => void) => boolean
     MAIN_ENTITLEMENTS: string
   }
   const app = '/build/mac-universal/Embodent.app'
@@ -187,4 +191,72 @@ describe('mac sign hook (GH #397)', () => {
     expect(inherit).not.toContain('application-groups')
     expect(readFileSync(hook.MAIN_ENTITLEMENTS, 'utf8')).toContain('<string>FX6LQ4M698.orcha</string>')
   })
+
+  it('gives the helper a preliminary signature with the build identity before the real pass', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'presign-'))
+    const helper = path.join(dir, 'Contents', 'MacOS', 'orcha-status-writer')
+    const run = vi.fn()
+    expect(hook.presignStatusWriter({ app: dir, identity: 'ABC123' }, run)).toBe(false) // no helper packed
+    mkdirSync(path.dirname(helper), { recursive: true })
+    writeFileSync(helper, '')
+    expect(hook.presignStatusWriter({ app: dir }, run)).toBe(false) // unsigned build
+    expect(run).not.toHaveBeenCalled()
+    expect(hook.presignStatusWriter({ app: dir, identity: 'ABC123', keychain: '/tmp/k.keychain' }, run)).toBe(true)
+    expect(run).toHaveBeenCalledWith('/usr/bin/codesign', ['--force', '--sign', 'ABC123', '--timestamp=none', '--keychain', '/tmp/k.keychain', helper], { stdio: 'pipe' })
+  })
+
+  // The real thing: two thin apps built from the compiled helpers, merged by @electron/universal
+  // exactly like `dist:mac`, then signed (ad-hoc) through this hook and electron-builder's per-file
+  // options. Without the presign, codesign fails on the main executable ("code object is not
+  // signed at all", subcomponent orcha-status-writer).
+  it.runIf(process.platform === 'darwin')('signs a combined Intel + Apple Silicon app with the helper inside', { timeout: 180_000 }, async () => {
+    const desktop = path.join(__dirname, '..', '..')
+    const built = (arch: string) => path.join(desktop, 'resources', 'status-writer', arch, 'orcha-status-writer')
+    if (!existsSync(built('arm64')) || !existsSync(built('x64')))
+      execFileSync(process.execPath, [path.join(desktop, 'scripts', 'build-status-writer.mjs')], { stdio: 'pipe' })
+    const { makeUniversalApp } = require('@electron/universal')
+    const { MacTargetHelper } = require('app-builder-lib/out/mac/MacTargetHelper')
+    const root = mkdtempSync(path.join(os.tmpdir(), 'universal-sign-'))
+    const nestedRuntime = path.join('Contents', 'Resources', 'orcha-runtime', 'python', 'bin', 'python3.12')
+    for (const arch of ['arm64', 'x64']) {
+      const contents = path.join(root, `${arch}.app`, 'Contents')
+      for (const f of ['MacOS/Probe', 'MacOS/orcha-status-writer', 'Resources/orcha-runtime/python/bin/python3.12']) {
+        mkdirSync(path.dirname(path.join(contents, f)), { recursive: true })
+        copyFileSync(built(arch), path.join(contents, f))
+      }
+      mkdirSync(path.join(contents, 'Resources', 'app'), { recursive: true })
+      writeFileSync(path.join(contents, 'Resources', 'app', 'package.json'), '{"name":"probe","version":"1.0.0"}')
+      writeFileSync(
+        path.join(contents, 'Info.plist'),
+        '<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>CFBundleExecutable</key><string>Probe</string>' +
+          '<key>CFBundleIdentifier</key><string>io.openorcha.sign-probe</string><key>CFBundlePackageType</key><string>APPL</string></dict></plist>'
+      )
+    }
+    const app = path.join(root, 'universal.app')
+    await makeUniversalApp({ x64AppPath: path.join(root, 'x64.app'), arm64AppPath: path.join(root, 'arm64.app'), outAppPath: app, force: true })
+    const helper = path.join(app, STATUS_WRITER_REL)
+    expect(execFileSync('/usr/bin/lipo', ['-archs', helper], { encoding: 'utf8' }).trim().split(' ').sort()).toEqual(['arm64', 'x86_64'])
+
+    const config = {
+      entitlements: hook.MAIN_ENTITLEMENTS,
+      entitlementsInherit: path.join(desktop, 'resources', 'entitlements.mac.inherit.plist'),
+      hardenedRuntime: true
+    }
+    const optionsForFile = await MacTargetHelper.prototype.getOptionsForFile.call(
+      { packager: { resourceList: [], platformSpecificBuildOptions: {} } },
+      app,
+      false,
+      config
+    )
+    await hook({ app, platform: 'darwin', identity: '-', identityValidation: false, preAutoEntitlements: false, preEmbedProvisioningProfile: false, gatekeeperAssess: false, optionsForFile })
+
+    execFileSync('/usr/bin/codesign', ['--verify', '--deep', '--strict', app], { stdio: 'pipe' })
+    const claimsGroup = (f: string) => execFileSync('/usr/bin/codesign', ['-d', '--entitlements', '-', '--xml', f], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).includes('application-groups')
+    expect(claimsGroup(app)).toBe(true)
+    expect(claimsGroup(helper)).toBe(true)
+    expect(claimsGroup(path.join(app, nestedRuntime))).toBe(false)
+    // Ad-hoc signed, so no team owns the group: both slices must refuse to write (exit 3).
+    for (const arch of ['arm64', 'x86_64']) expect(spawnSync('/usr/bin/arch', [`-${arch}`, helper], { input: '{"v":3}' }).status).toBe(3)
+  })
 })
+
