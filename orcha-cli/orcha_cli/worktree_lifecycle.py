@@ -10,7 +10,7 @@ from pathlib import Path
 import time
 
 from .job_store import atomic_json, read_json, _private_directory
-from .worktree_cleanup_scan import common_dir, identity
+from .worktree_cleanup_scan import CleanupError, checked_git, common_dir, identity
 
 
 @contextmanager
@@ -41,6 +41,19 @@ def recently_provisioned(root, path):
         return True
 
 
+def record_provisioned(root, path, branch=None):
+    """Reserve a checkout until its caller can publish live activity. Hold locked()."""
+    atomic_json(lease_path(root, path), {"at": time.time(), "path": path})
+    try:
+        known = read_json(root / "known.json") if (root / "known.json").exists() else {}
+        known[path] = {"identity": identity(path), "branch": branch,
+                       "head": checked_git(path, "rev-parse", "HEAD")}
+        atomic_json(root / "known.json", known)
+    except (OSError, CleanupError):
+        # Missing history prevents orphan cleanup, never provisioning.
+        pass
+
+
 def provisioning(fn):
     """Also reserve reused paths until the worker/session can publish its run."""
     @functools.wraps(fn)
@@ -48,7 +61,6 @@ def provisioning(fn):
         if not base_cwd:
             return fn(base_cwd, *args, **kwargs)
         # Non-Git projects still use the original provisioning fallback.
-        from .worktree_cleanup_scan import CleanupError
         try:
             common_dir(base_cwd)
         except CleanupError:
@@ -56,16 +68,7 @@ def provisioning(fn):
         with locked(base_cwd) as root:
             result = fn(base_cwd, *args, **kwargs)
             if result[0]:
-                atomic_json(lease_path(root, result[0]), {"at": time.time(), "path": result[0]})
-                try:
-                    known = read_json(root / "known.json") if (root / "known.json").exists() else {}
-                    from .worktree_cleanup_scan import checked_git
-                    known[result[0]] = {"identity": identity(result[0]), "branch": result[1],
-                                       "head": checked_git(result[0], "rev-parse", "HEAD")}
-                    atomic_json(root / "known.json", known)
-                except (OSError, CleanupError):
-                    # Missing history prevents orphan cleanup, never provisioning.
-                    pass
+                record_provisioned(root, result[0], result[1])
             return result
     return wrapped
 

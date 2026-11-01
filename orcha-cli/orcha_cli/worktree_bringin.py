@@ -228,7 +228,8 @@ class _TempWorktree:
 
     def __enter__(self):
         self.path = tempfile.mkdtemp(prefix="orcha-bringin-")
-        code, out = _git(["worktree", "add", "--detach", "--no-checkout", self.path, self.commit],
+        code, out = _git(["worktree", "add", "--lock", "--reason", "Orcha merge rehearsal",
+                         "--detach", "--no-checkout", self.path, self.commit],
                          self.base_cwd)
         if code != 0:
             shutil.rmtree(self.path, ignore_errors=True)
