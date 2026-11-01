@@ -383,6 +383,87 @@ def test_recovery_after_removal_does_not_remove_new_work(project, monkeypatch):
     assert (wt / 'new-work.txt').is_file()
 
 
+@pytest.mark.parametrize("saved_status", ["executing", "done"])
+def test_recovered_receipt_releases_claim_after_second_interruption(project, monkeypatch, saved_status):
+    from uuid import uuid4
+    from orcha_cli.job_store import JobStore, JobStorageError, atomic_json, read_json
+
+    wt = _worktree(project, "twice-interrupted", "twice-interrupted", scaffold=False)
+    plan = cleanup.preview(project, inactive)
+    git = cleanup.gc.git
+
+    def interrupt_after_removal(args, *pos, **kwargs):
+        result = git(args, *pos, **kwargs)
+        if args[:2] == ["worktree", "remove"] and result[0] == 0:
+            raise KeyboardInterrupt("first interruption: removal finished")
+        return result
+
+    monkeypatch.setattr(cleanup.gc, "git", interrupt_after_removal)
+    with pytest.raises(KeyboardInterrupt):
+        cleanup.execute(project, plan["plan_id"], inactive)
+    monkeypatch.setattr(cleanup.gc, "git", git)
+
+    def interrupt_after_receipt(result):
+        if result["removed"]:
+            raise KeyboardInterrupt("second interruption: recovered receipt persisted")
+
+    with pytest.raises(KeyboardInterrupt):
+        cleanup.execute(project, plan["plan_id"], inactive, progress=interrupt_after_receipt)
+    store = JobStore(project)
+    assert store.cleanup_retains(wt)
+    target = scan.common_dir(project) / "orcha/worktree-cleanup" / (plan["plan_id"] + ".json")
+    saved = read_json(target)
+    assert saved["items"][0]["outcome"] == "removed"
+    assert saved["status"] == "executing"
+    # Older code could mark this interrupted plan done without clearing the claim.
+    saved["status"] = saved_status
+    atomic_json(target, saved)
+
+    with cleanup.lifecycle.operation(project, plan["plan_id"]):
+        with pytest.raises(cleanup.CleanupError, match="already running"):
+            cleanup.execute(project, plan["plan_id"], inactive)
+        assert store.cleanup_retains(wt)
+    with pytest.raises(JobStorageError, match="reserved this checkout"):
+        store.reserve(str(uuid4()), {"cwd": str(wt), "status": "reserved"})
+
+    # Manually reused paths must never be removed again while reconciling receipts.
+    _git(["worktree", "add", str(wt), "twice-interrupted"], project)
+    (wt / "new-work.txt").write_text("new work after removal")
+
+    def unexpected_activity(rows):
+        pytest.fail("terminal replay must not start another removal")
+
+    done = cleanup.execute(project, plan["plan_id"], unexpected_activity)
+    assert done["status"] == "done" and len(done["removed"]) == 1
+    assert not store.cleanup_retains(wt)
+    with cleanup.lifecycle.locked(project):
+        assert cleanup.lifecycle.checkout_available(project, wt)
+    assert store.reserve(str(uuid4()), {"cwd": str(wt), "status": "reserved"})
+    assert cleanup.execute(project, plan["plan_id"], unexpected_activity) == done
+    assert (wt / "new-work.txt").read_text() == "new work after removal"
+
+
+@pytest.mark.parametrize("same_owner", [True, False])
+def test_terminal_kept_receipt_releases_only_its_own_claim(project, same_owner):
+    from uuid import uuid4
+    from orcha_cli.job_store import JobStore, atomic_json, read_json
+
+    wt = _worktree(project, "kept-receipt", "kept-receipt", scaffold=False)
+    plan = cleanup.preview(project, inactive)
+    owner = plan["plan_id"] if same_owner else str(uuid4())
+    with pytest.raises(KeyboardInterrupt), cleanup.lifecycle.operation(project, owner):
+        with cleanup.lifecycle.cleanup_claim(project, str(wt), owner):
+            raise KeyboardInterrupt("leave a durable reservation")
+    target = scan.common_dir(project) / "orcha/worktree-cleanup" / (plan["plan_id"] + ".json")
+    saved = read_json(target)
+    saved["items"][0]["outcome"] = "kept"
+    saved["status"] = "done"
+    atomic_json(target, saved)
+    assert cleanup.execute(project, plan["plan_id"], inactive)["status"] == "done"
+    assert JobStore(project).cleanup_retains(wt) is not same_owner
+    assert (wt / "README.md").exists()
+
+
 def test_dependency_cache_does_not_hide_private_config_or_foreign_repo(project):
     wt = _worktree(project, 'cache', 'cache', scaffold=False)
     cache = wt / 'node_modules'

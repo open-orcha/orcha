@@ -218,6 +218,11 @@ def _execute(base, plan_id, activity, *, operation_fd, progress=None):
             raise CleanupError("The preview belongs to another project")
         if plan["status"] not in ("ready", "executing", "done"):
             raise CleanupError("A complete preview must be confirmed first")
+        # A crash can persist a terminal receipt before cleanup_claim releases its
+        # fence. Reconcile even completed plans before taking either replay shortcut.
+        lifecycle.release_completed_claims(base, plan_id, [
+            row["path"] for row in plan["items"] if row.get("outcome") in ("removed", "kept")
+        ])
         if plan["status"] == "done":
             return public(plan)
         plan["status"] = "executing"
