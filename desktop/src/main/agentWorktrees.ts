@@ -8,6 +8,7 @@
 import path from 'node:path'
 import type {
   AgentWorktree,
+  ProjectCleanupResult,
   AgentWorktreeCleanResult,
   ProjectWorktrees,
   WorktreeCleanRequest
@@ -39,12 +40,12 @@ async function cliJson(run: Run, args: string[], cwd: string): Promise<Record<st
 const sumReclaimable = (items: AgentWorktree[]): number =>
   items.reduce((n, i) => n + (i.state === 'clean' || i.state === 'has-output' ? i.size_bytes ?? 0 : 0), 0)
 
-/** The known projects that have a .orcha-worktrees folder (the rest are skipped quietly). */
+/** Every known project: linked worktrees can live entirely outside the managed folder. */
 export function worktreeProjects(
   projects: KnownFolder[],
-  hasWorktreesDir: (folder: string) => boolean
+  _hasWorktreesDir: (folder: string) => boolean
 ): Array<KnownFolder & { folder: string }> {
-  return projects.filter((p): p is KnownFolder & { folder: string } => !!p.folder && hasWorktreesDir(p.folder))
+  return projects.filter((p): p is KnownFolder & { folder: string } => !!p.folder)
 }
 
 /** One project's worktrees, through `orcha worktrees list` (several seconds on a busy project:
@@ -141,4 +142,22 @@ export async function removeOne(folder: string, wtPath: string, run: Run): Promi
     reason: typeof res.reason === 'string' ? res.reason : typeof res.error === 'string' ? res.error : '',
     branchNote: typeof res.branch_note === 'string' ? res.branch_note : null
   }
+}
+
+
+/** All project cleanup policy lives in the CLI; the renderer supplies only an operation id. */
+export async function projectCleanup(raw: unknown, projects: KnownFolder[], run: Run): Promise<ProjectCleanupResult> {
+  const req = (raw ?? {}) as Record<string, unknown>
+  const folder = knownFolder(projects, req.folder)
+  if (!['preview', 'execute', 'status'].includes(String(req.phase)) ||
+      typeof req.planId !== 'string' || !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(req.planId)) {
+    throw { code: 'INVALID_WORKTREE' } as const
+  }
+  const args = ['worktrees', String(req.phase)]
+  if (req.phase === 'preview') args.push('--plan-id', req.planId)
+  else args.push(req.planId)
+  args.push('--json', '--project', folder)
+  const result = await cliJson(run, args, folder)
+  if (!result || result.ok !== true) throw { code: 'WORKTREE_CLI', message: result?.error ?? CLI_OUTDATED }
+  return result as unknown as ProjectCleanupResult
 }

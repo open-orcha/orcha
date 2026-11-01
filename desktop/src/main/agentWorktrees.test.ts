@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import {
   CLI_OUTDATED,
+  projectCleanup,
   cleanAgentWorktrees,
   isAgentWorktreePath,
   knownFolder,
@@ -58,7 +59,7 @@ describe('agent worktrees (desktop → orcha worktrees --json)', () => {
   })
 
   it('lists the projects with worktrees, then scans one project on its own (Settings shows each as it lands)', async () => {
-    expect(worktreeProjects(PROJECTS, (f) => f === B)).toEqual([PROJECTS[1]])
+    expect(worktreeProjects(PROJECTS, (f) => f === B)).toEqual([PROJECTS[0], PROJECTS[1]])
     const run = vi.fn(async () => ({ stdout: JSON.stringify({ ok: true, items }) }))
     const out = await scanProjectWorktrees({ ...PROJECTS[0], folder: A }, run)
     expect(run.mock.calls.map((c) => (c as unknown as [string, string[]])[1].join(' '))).toEqual([`worktrees list --json --project ${A}`])
@@ -98,4 +99,18 @@ describe('agent worktrees (desktop → orcha worktrees --json)', () => {
       code: 'WORKTREE_CLI', message: CLI_OUTDATED
     })
   })
+})
+
+
+it('binds project cleanup to a known project and the exact preview id, with no path selections', async () => {
+  const planId = '11111111-2222-3333-4444-555555555555'
+  const run = vi.fn(async () => ({ stdout: JSON.stringify({ ok: true, plan_id: planId, status: 'ready' }) }))
+  await projectCleanup({ folder: A, phase: 'preview', planId }, PROJECTS, run)
+  await projectCleanup({ folder: A, phase: 'execute', planId }, PROJECTS, run)
+  expect(run.mock.calls.map(c => (c as unknown as [string, string[]])[1])).toEqual([
+    ['worktrees', 'preview', '--plan-id', planId, '--json', '--project', A],
+    ['worktrees', 'execute', planId, '--json', '--project', A]
+  ])
+  await expect(projectCleanup({ folder: '/foreign', phase: 'execute', planId }, PROJECTS, run)).rejects.toMatchObject({ code: 'INVALID_WORKTREE' })
+  await expect(projectCleanup({ folder: A, phase: 'execute', planId: '../other' }, PROJECTS, run)).rejects.toMatchObject({ code: 'INVALID_WORKTREE' })
 })

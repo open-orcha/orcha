@@ -34,7 +34,7 @@ export function nodeRun(env: NodeJS.ProcessEnv): (cmd: string, args: string[], c
   return (cmd, args, cwd) =>
     new Promise((resolve, reject) => {
       // `orcha` resolves like everywhere else in the app: bundled runtime first (GH #258 D3).
-      execFile(cmd === 'orcha' ? orchaBin() : cmd, args, { cwd, env, encoding: 'utf8', maxBuffer: MAX_BUFFER, timeout: 180_000, killSignal: 'SIGKILL' }, (err, stdout, stderr) =>
+      execFile(cmd === 'orcha' ? orchaBin() : cmd, args, { cwd, env, encoding: 'utf8', maxBuffer: MAX_BUFFER, timeout: cmd === 'orcha' && args[0] === 'worktrees' && ['preview', 'execute'].includes(args[1]) ? 0 : 180_000, killSignal: 'SIGKILL' }, (err, stdout, stderr) =>
         err ? reject(Object.assign(err, { stderr })) : resolve({ stdout })
       )
     })
