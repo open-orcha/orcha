@@ -46,6 +46,13 @@ extraResources:
   - from: resources/trayTemplate@2x.png
     to: trayTemplate@2x.png
 
+# GH #397: the native helper that writes the widget's status.json into the app's App Group
+# container (native/status-writer, built per arch by scripts/build-status-writer.mjs in
+# predist). The universal build lipos the x64 and arm64 copies.
+extraFiles:
+  - from: resources/status-writer/${arch}/orcha-status-writer
+    to: MacOS/orcha-status-writer
+
 directories:
   output: dist
   buildResources: resources
@@ -67,9 +74,11 @@ mac:
   hardenedRuntime: true
   gatekeeperAssess: false
   entitlements: resources/entitlements.mac.plist
-  # Nested code gets the same hardened-runtime set minus the widget App Group, which
-  # only the main app needs (GH #397).
+  # Nested code gets the same hardened-runtime set minus the widget App Group (GH #397).
+  # The one exception is Contents/MacOS/orcha-status-writer, which writes into the group
+  # container: scripts/macSign.cjs signs it with the main entitlements above.
   entitlementsInherit: resources/entitlements.mac.inherit.plist
+  sign: ./scripts/macSign.cjs
   notarize: true
   target:
     - dmg

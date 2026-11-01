@@ -6,5 +6,7 @@ dist/
 resources/orcha-templates/
 # Bundled Python + orcha CLI, built by scripts/build-orcha-runtime.mjs (GH #258).
 resources/orcha-runtime/
+# Native widget-file helper, built by scripts/build-status-writer.mjs (GH #397).
+resources/status-writer/
 electron-builder.local.yml
 dist-local/

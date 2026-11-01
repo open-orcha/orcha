@@ -1,15 +1,9 @@
 import { describe, it, expect, vi } from 'vitest'
+import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import {
-  appGroupFromEntitlements,
-  bundleFromExecPath,
-  buildStatus,
-  resolveStatusTarget,
-  statusTarget,
-  StatusFileWriter,
-  writeStatusFile
-} from './statusFile'
+import { createRequire } from 'node:module'
+import { buildStatus, outcomeFromExit, runStatusWriter, statusWriterPath, StatusFileWriter, type WriteOutcome } from './statusFile'
 import type { StackAttention } from './attention'
 import type { AttentionItem, Stack } from '../shared/types'
 
@@ -100,120 +94,97 @@ describe('buildStatus', () => {
   })
 })
 
-const ENTITLED = `<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict>
-<key>com.apple.security.cs.allow-jit</key><true/>
-<key>com.apple.security.application-groups</key>
-<array><string>FX6LQ4M698.other</string><string>FX6LQ4M698.orcha</string></array>
-</dict></plist>`
-// What the shipped 2.2.0 app reports: hardened-runtime keys only, no group.
-const NOT_ENTITLED = `<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict>
-<key>com.apple.security.cs.allow-jit</key><true/><key>com.apple.security.device.audio-input</key><true/>
-</dict></plist>`
 const EXEC = '/Applications/Embodent.app/Contents/MacOS/Embodent'
-const target = statusTarget('FX6LQ4M698.orcha')
-const denied = (code: string): NodeJS.ErrnoException => Object.assign(new Error(code), { code })
-const okFs = () => ({
-  mkdir: vi.fn().mockResolvedValue(undefined),
-  writeFile: vi.fn().mockResolvedValue(undefined),
-  rename: vi.fn().mockResolvedValue(undefined)
-})
+const HELPER = '/Applications/Embodent.app/Contents/MacOS/orcha-status-writer'
 
-describe('app group resolution (GH #397)', () => {
-  it('reads the <team>.orcha group from the signed entitlements', () => {
-    expect(appGroupFromEntitlements(ENTITLED)).toBe('FX6LQ4M698.orcha')
-    expect(appGroupFromEntitlements(NOT_ENTITLED)).toBeNull()
-    expect(appGroupFromEntitlements('')).toBeNull()
+describe('status writer helper (GH #397)', () => {
+  it('is looked up next to the packaged macOS executable only', () => {
+    expect(statusWriterPath('darwin', EXEC)).toBe(HELPER)
+    expect(statusWriterPath('darwin', '/usr/local/bin/electron')).toBeNull() // dev: not in a bundle
+    expect(statusWriterPath('linux', EXEC)).toBeNull()
   })
 
-  it('puts the file in that group container', () => {
-    expect(target.dir).toBe(path.join(os.homedir(), 'Library', 'Group Containers', 'FX6LQ4M698.orcha'))
-    expect(target.file).toBe(path.join(target.dir, 'status.json'))
+  it('maps helper exit codes to outcomes', () => {
+    expect(outcomeFromExit(0)).toBe('ok')
+    expect(outcomeFromExit(3)).toBe('unavailable') // no group this signing team owns
+    expect(outcomeFromExit('ENOENT')).toBe('unavailable') // helper missing
+    expect(outcomeFromExit(4)).toBe('denied')
+    for (const c of [1, 2, null, 'ETIMEDOUT']) expect(outcomeFromExit(c)).toBe('failed')
   })
 
-  it('finds the .app bundle around the executable', () => {
-    expect(bundleFromExecPath(EXEC)).toBe('/Applications/Embodent.app')
-    expect(bundleFromExecPath('/usr/local/bin/node')).toBeNull()
-  })
-
-  it('resolves a target only for an entitled macOS app', async () => {
-    const read = vi.fn().mockResolvedValue(ENTITLED)
-    await expect(resolveStatusTarget({ platform: 'darwin', execPath: EXEC, readEntitlements: read })).resolves.toEqual(target)
-    expect(read).toHaveBeenCalledWith('/Applications/Embodent.app')
-    const none = (xml: string) => resolveStatusTarget({ platform: 'darwin', execPath: EXEC, readEntitlements: async () => xml })
-    await expect(none(NOT_ENTITLED)).resolves.toBeNull()
-    await expect(
-      resolveStatusTarget({ platform: 'darwin', execPath: EXEC, readEntitlements: () => Promise.reject(new Error('codesign failed')) })
-    ).resolves.toBeNull()
-    await expect(resolveStatusTarget({ platform: 'linux', execPath: EXEC, readEntitlements: read })).resolves.toBeNull()
-    expect(read).toHaveBeenCalledTimes(1)
-  })
-})
-
-describe('writeStatusFile', () => {
-  it('mkdirs the group container and writes atomically (tmp then rename)', async () => {
-    const fs = okFs()
-    const status = buildStatus([stack], [item], new Map([['orcha-acme-ehr', stackDetail]]), new Date('2026-06-11T22:00:00Z'))
-    await expect(writeStatusFile(status, target, fs)).resolves.toBe('ok')
-    expect(fs.mkdir).toHaveBeenCalledWith(target.dir, { recursive: true })
-    const [tmpPath, body] = fs.writeFile.mock.calls[0]
-    expect(String(tmpPath)).toBe(`${target.file}.tmp`)
-    expect(JSON.parse(body as string)).toEqual(status)
-    expect(fs.rename).toHaveBeenCalledWith(`${target.file}.tmp`, target.file)
-  })
-
-  it('swallows write failures (widget data is best-effort)', async () => {
-    const fs = { mkdir: vi.fn().mockRejectedValue(new Error('disk full')), writeFile: vi.fn(), rename: vi.fn() }
-    await expect(writeStatusFile(buildStatus([], [], new Map(), new Date()), target, fs)).resolves.toBe('failed')
-  })
-
-  it('reports a macOS refusal as denied', async () => {
-    for (const code of ['EPERM', 'EACCES']) {
-      const fs = { mkdir: vi.fn().mockRejectedValue(denied(code)), writeFile: vi.fn(), rename: vi.fn() }
-      await expect(writeStatusFile(buildStatus([], [], new Map(), new Date()), target, fs)).resolves.toBe('denied')
+  it('pipes the JSON to a real helper process on stdin and reads its exit code', async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'status-writer-'))
+    const helper = path.join(dir, 'fake-writer')
+    const out = path.join(dir, 'stdin.json')
+    const fake = (code: number) => {
+      writeFileSync(helper, `#!/bin/sh\ncat > '${out}'\nexit ${code}\n`)
+      chmodSync(helper, 0o755)
     }
+    fake(0)
+    await expect(runStatusWriter(helper, '{"v":3}')).resolves.toBe('ok')
+    expect(readFileSync(out, 'utf8')).toBe('{"v":3}')
+    fake(4)
+    await expect(runStatusWriter(helper, '{}')).resolves.toBe('denied')
+    fake(3)
+    await expect(runStatusWriter(helper, '{}')).resolves.toBe('unavailable')
+    await expect(runStatusWriter(path.join(dir, 'missing'), '{}')).resolves.toBe('unavailable')
   })
 })
 
 describe('StatusFileWriter', () => {
   const status = () => buildStatus([], [], new Map(), new Date())
 
-  it('never touches Group Containers when the app is not entitled', async () => {
-    const fs = okFs()
-    const resolve = vi.fn().mockResolvedValue(null)
-    const writer = new StatusFileWriter(resolve, fs, vi.fn())
-    for (let i = 0; i < 5; i++) await writer.write(status())
-    expect(resolve).toHaveBeenCalledTimes(1)
-    expect(fs.mkdir).not.toHaveBeenCalled()
-    expect(fs.writeFile).not.toHaveBeenCalled()
-  })
-
-  it('treats a failed lookup as not entitled', async () => {
-    const fs = okFs()
-    const writer = new StatusFileWriter(() => Promise.reject(new Error('boom')), fs, vi.fn())
+  it('never runs anything without a packaged helper (dev builds, non-macOS)', async () => {
+    const run = vi.fn()
+    const writer = new StatusFileWriter(null, run, vi.fn())
     await writer.write(status())
-    expect(fs.mkdir).not.toHaveBeenCalled()
+    expect(run).not.toHaveBeenCalled()
   })
 
-  it('writes every poll when entitled, resolving the target once', async () => {
-    const fs = okFs()
-    const resolve = vi.fn().mockResolvedValue(target)
-    const writer = new StatusFileWriter(resolve, fs, vi.fn())
+  it('hands every poll to the helper while it succeeds', async () => {
+    const run = vi.fn().mockResolvedValue('ok')
+    const writer = new StatusFileWriter(HELPER, run, vi.fn())
     for (let i = 0; i < 3; i++) await writer.write(status())
-    expect(resolve).toHaveBeenCalledTimes(1)
-    expect(fs.rename).toHaveBeenCalledTimes(3)
+    expect(run).toHaveBeenCalledTimes(3)
+    expect(run.mock.calls[0][0]).toBe(HELPER)
+    expect(JSON.parse(run.mock.calls[0][1])).toEqual(JSON.parse(JSON.stringify(status())))
   })
 
-  it('stops for the session after the first denial, but keeps going after other errors', async () => {
+  it.each<WriteOutcome>(['unavailable', 'denied'])('stops for the session after %s, but keeps going after transient errors', async (final) => {
     const warn = vi.fn()
-    const fs = okFs()
-    fs.mkdir.mockRejectedValueOnce(new Error('disk full')).mockRejectedValueOnce(denied('EPERM'))
-    const writer = new StatusFileWriter(async () => target, fs, warn)
-    await writer.write(status()) // transient failure: retried next poll
-    await writer.write(status()) // denied: stop
-    for (let i = 0; i < 3; i++) await writer.write(status())
-    expect(fs.mkdir).toHaveBeenCalledTimes(2)
-    expect(fs.writeFile).not.toHaveBeenCalled()
+    const run = vi.fn<() => Promise<WriteOutcome>>().mockResolvedValueOnce('failed').mockRejectedValueOnce(new Error('spawn')).mockResolvedValueOnce(final)
+    const writer = new StatusFileWriter(HELPER, run, warn)
+    for (let i = 0; i < 6; i++) await writer.write(status())
+    expect(run).toHaveBeenCalledTimes(3)
     expect(warn).toHaveBeenCalledTimes(1)
-    expect(warn.mock.calls[0][0]).toContain('denied')
+  })
+})
+
+describe('mac sign hook (GH #397)', () => {
+  const require = createRequire(import.meta.url)
+  const hook = require('../../scripts/macSign.cjs') as {
+    withStatusWriterEntitlements: (f: (p: string) => object) => (p: string) => { entitlements?: string }
+    MAIN_ENTITLEMENTS: string
+  }
+  const app = '/build/mac-universal/Embodent.app'
+  const base = (p: string) => ({ entitlements: p === app ? 'main.plist' : 'inherit.plist', hardenedRuntime: true })
+  const route = hook.withStatusWriterEntitlements(base)
+
+  it('signs only the status writer with the main (group) entitlements', () => {
+    expect(route(`${app}/Contents/MacOS/orcha-status-writer`)).toEqual({ entitlements: hook.MAIN_ENTITLEMENTS, hardenedRuntime: true })
+    expect(hook.MAIN_ENTITLEMENTS.endsWith(path.join('resources', 'entitlements.mac.plist'))).toBe(true)
+    expect(route(app).entitlements).toBe('main.plist')
+    for (const nested of [
+      `${app}/Contents/Frameworks/Embodent Helper (Renderer).app`,
+      `${app}/Contents/Resources/orcha-runtime/python/bin/python3.12`,
+      `${app}/Contents/Resources/app.asar.unpacked/node_modules/node-pty/prebuilds/darwin-arm64/spawn-helper`
+    ])
+      expect(route(nested).entitlements).toBe('inherit.plist')
+  })
+
+  it('keeps the group out of the inherit set', () => {
+    const inherit = readFileSync(path.join(__dirname, '..', '..', 'resources', 'entitlements.mac.inherit.plist'), 'utf8')
+    expect(inherit).not.toContain('application-groups')
+    expect(readFileSync(hook.MAIN_ENTITLEMENTS, 'utf8')).toContain('<string>FX6LQ4M698.orcha</string>')
   })
 })

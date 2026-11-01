@@ -14,13 +14,13 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json && tsc --noEmit -p tsconfig.integration.json",
     "prebuild": "node scripts/ensure-electron.mjs && node scripts/fix-node-pty.mjs",
-    "predist:mac": "node scripts/ensure-electron.mjs && node scripts/fix-node-pty.mjs && node scripts/build-orcha-runtime.mjs --clean",
-    "predist:mac:arm64": "node scripts/ensure-electron.mjs && node scripts/fix-node-pty.mjs && node scripts/build-orcha-runtime.mjs",
+    "predist:mac": "node scripts/ensure-electron.mjs && node scripts/fix-node-pty.mjs && node scripts/build-orcha-runtime.mjs --clean && node scripts/build-status-writer.mjs",
+    "predist:mac:arm64": "node scripts/ensure-electron.mjs && node scripts/fix-node-pty.mjs && node scripts/build-orcha-runtime.mjs && node scripts/build-status-writer.mjs",
     "dist:mac": "electron-vite build && electron-builder --mac --universal",
     "dist:mac:arm64": "electron-vite build && electron-builder --mac --arm64",
     "postinstall": "node scripts/fix-node-pty.mjs",
     "dist:dir": "electron-vite build && electron-builder --mac --dir -c.mac.notarize=false",
-    "predist:dir": "node scripts/ensure-electron.mjs && node scripts/fix-node-pty.mjs"
+    "predist:dir": "node scripts/ensure-electron.mjs && node scripts/fix-node-pty.mjs && node scripts/build-status-writer.mjs"
   },
   "license": "MIT",
   "dependencies": {

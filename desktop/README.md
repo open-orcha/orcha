@@ -190,13 +190,17 @@ the sandboxed widget reads it via the shared app group `FX6LQ4M698.orcha`.
 macOS requires the group id to be prefixed with the signing cert's REAL
 TeamIdentifier (the certificate's OU field) — note this can differ from the
 team id the cert's display name shows, which cost us a debugging session.
-The app and the widget must be signed by the same team. The app only writes
-the file when its own signature carries that group
-(`resources/entitlements.mac.plist`), read once at startup with `codesign`.
-Dev builds and builds without the entitlement write nothing, and after one
-denied write the app stops trying until relaunch. Writing into a group the
-app isn't entitled to is what made macOS keep asking "would like to access
-data from other apps" (GH #397).
+The app and the widget must be signed by the same team. The Electron process
+never touches Group Containers itself: it pipes the JSON to a small native
+helper, `Contents/MacOS/orcha-status-writer` (`native/status-writer`, built by
+`scripts/build-status-writer.mjs` in `predist`). The helper is signed with the
+group entitlement (`scripts/macSign.cjs`), checks that its own signing team owns
+`<team>.orcha`, gets the folder from `containerURL(forSecurityApplicationGroupIdentifier:)`
+and writes the file atomically. Dev builds have no helper and write nothing; an
+ad-hoc or other-team signature owns no group and writes nothing; after one denied
+write the app stops trying until relaunch. Writing into a group the app doesn't
+own is what made macOS keep asking "would like to access data from other apps"
+(GH #397).
 Keep the Orcha desktop app running — the widget shows OFFLINE when the file is
 older than 2 minutes.
 
