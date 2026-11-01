@@ -5,7 +5,7 @@ import { ProjectWorktreeCleanup } from "./ProjectWorktreeCleanup";
 const calls: Array<Record<string, unknown>> = [];
 const response = (data: unknown) => ({ ok: true, status: 200, json: async () => data });
 async function startPreview() {
-  const button = screen.getByText("Preview project-wide cleanup");
+  const button = screen.getByRole("button", { name: "Preview project-wide cleanup" });
   await waitFor(() => expect(button).toBeEnabled());
   fireEvent.click(button);
 }
@@ -73,7 +73,7 @@ it("resumes polling a saved running attempt without creating a new plan", async 
   render(<ProjectWorktreeCleanup cid="project" humanId="owner" locked={false} />);
   await screen.findByText("Retry interrupted cleanup");
   expect(fetcher).toHaveBeenCalledWith("/api/containers/project/agent-worktrees/actions/running-action");
-  expect(screen.getByText("Preview project-wide cleanup")).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Preview project-wide cleanup" })).toBeDisabled();
 });
 
 it("keeps new previews disabled until saved state can be read", async () => {
@@ -84,10 +84,21 @@ it("keeps new previews disabled until saved state can be read", async () => {
   }));
   render(<ProjectWorktreeCleanup cid="project" humanId="owner" locked={false} />);
   await screen.findByText("Reload saved cleanup");
-  expect(screen.getByText("Preview project-wide cleanup")).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Preview project-wide cleanup" })).toBeDisabled();
   unavailable = false;
   fireEvent.click(screen.getByText("Reload saved cleanup"));
-  await waitFor(() => expect(screen.getByText("Preview project-wide cleanup")).toBeEnabled());
+  await waitFor(() => expect(screen.getByRole("button", { name: "Preview project-wide cleanup" })).toBeEnabled());
+});
+
+it.each([{}, { actions: null }])("keeps cleanup unavailable when saved state is malformed: %j", async (data) => {
+  const fetcher = vi.fn(async () => response(data));
+  vi.stubGlobal("fetch", fetcher);
+  render(<ProjectWorktreeCleanup cid="project" humanId="owner" locked={false} />);
+  await screen.findByText("Reload saved cleanup");
+  const preview = screen.getByRole("button", { name: "Preview project-wide cleanup" });
+  expect(preview).toBeDisabled();
+  fireEvent.click(preview);
+  expect(fetcher).toHaveBeenCalledTimes(1);
 });
 
 it("keeps multiple saved plans accessible and forgets them when the project changes", async () => {
@@ -102,6 +113,6 @@ it("keeps multiple saved plans accessible and forgets them when the project chan
   fireEvent.click(screen.getByText("Retry interrupted cleanup"));
   await waitFor(() => expect(calls[0].plan_id).toBe("older"));
   view.rerender(<ProjectWorktreeCleanup cid="other" humanId="owner" locked={false} />);
-  await waitFor(() => expect(screen.getByText("Preview project-wide cleanup")).toBeEnabled());
+  await waitFor(() => expect(screen.getByRole("button", { name: "Preview project-wide cleanup" })).toBeEnabled());
   expect(screen.queryByText("Retry interrupted cleanup")).toBeNull();
 });
