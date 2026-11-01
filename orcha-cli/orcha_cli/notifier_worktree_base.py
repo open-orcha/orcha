@@ -40,33 +40,86 @@ def safe_ref(alias) -> str:
     return slug or "agent"
 
 
-def ensure_exclude(base_cwd, services: Any) -> None:
-    """Keep live worker worktrees out of the base checkout's index."""
-    return_code, git_dir = services._run_git(
-        ["rev-parse", "--git-common-dir"], cwd=base_cwd
-    )
-    if return_code != 0:
-        return
+def _exclude_file(base_cwd, run_git) -> pathlib.Path | None:
+    """The repository's local exclude file (shared by all its worktrees), or None."""
+    return_code, git_dir = run_git(["rev-parse", "--git-common-dir"], cwd=base_cwd)
+    if return_code != 0 or not git_dir.strip():
+        return None
     git_dir = git_dir.strip()
-    exclude = (
+    return (
         pathlib.Path(
             git_dir if os.path.isabs(git_dir) else os.path.join(base_cwd, git_dir)
         )
         / "info"
         / "exclude"
     )
+
+
+def _add_excludes(exclude: pathlib.Path, header: str, patterns) -> None:
+    """Append the patterns `exclude` lacks, under one `# orcha: <header>` comment."""
+    exclude.parent.mkdir(parents=True, exist_ok=True)
+    existing = exclude.read_text() if exclude.exists() else ""
+    missing = [p for p in patterns if p not in existing.split()]
+    if not missing:
+        return
+    with open(exclude, "a") as output:
+        prefix = "" if existing.endswith("\n") or not existing else "\n"
+        output.write(prefix + f"# orcha: {header}\n" + "".join(f"{p}\n" for p in missing))
+
+
+def ensure_exclude(base_cwd, services: Any) -> None:
+    """Keep live worker worktrees out of the base checkout's index."""
+    exclude = _exclude_file(base_cwd, services._run_git)
+    if exclude is None:
+        return
     try:
-        exclude.parent.mkdir(parents=True, exist_ok=True)
-        existing = exclude.read_text() if exclude.exists() else ""
-        if ".orcha-worktrees/" not in existing.split():
-            with open(exclude, "a") as output:
-                prefix = "" if existing.endswith("\n") or not existing else "\n"
-                output.write(
-                    prefix
-                    + "# orcha: isolated headless-worker worktrees (never commit)\n"
-                    ".orcha-worktrees/\n"
-                )
+        _add_excludes(
+            exclude, "isolated headless-worker worktrees (never commit)", [".orcha-worktrees/"]
+        )
     except OSError:
+        pass
+
+
+# GH #366: Orcha's runtime state inside a project folder, kept out of `git status` and
+# `git add -A`. `.orcha/` (the stack: database, `.env` with the master key, GitHub tokens,
+# logs) belongs to Orcha, so it ignores itself, like `.orcha/outputs`. `.claude/` belongs to
+# the project, so its hidden `.orcha-*` files (notifier heartbeat, pid and log files,
+# attachments, wake logs, file locks) go in the repository's local exclude file instead.
+ORCHA_DIR_GITIGNORE = (
+    "# Orcha runtime state (database, secrets, logs): never commit. Ignores itself too.\n*\n"
+)
+RUNTIME_EXCLUDES = ("/.claude/.orcha-*",)
+
+
+def ensure_runtime_ignored(project_root, run_git=run_git) -> None:
+    """Hide Orcha's runtime state in a project from Git (GH #366). Never raises.
+
+    Writes `.orcha/.gitignore` only when there is none, and RUNTIME_EXCLUDES to the
+    repository's `info/exclude` (local, never a tracked file) only when the project folder
+    is the top of its own repository: a parent repository is never changed (GH #301).
+    Tracked files stay tracked. Every start re-checks both, so existing projects catch up.
+
+    The stack ignores itself from inside its own folder, so its secrets stay out of any
+    repository that sees it, including a parent one this function may not change, and
+    before the project has a repository at all."""
+    root = pathlib.Path(project_root)
+    gitignore = root / ".orcha" / ".gitignore"
+    try:
+        if gitignore.parent.is_dir() and not gitignore.exists():
+            gitignore.write_text(ORCHA_DIR_GITIGNORE)
+    except OSError:
+        pass
+    try:
+        if not (root / ".git").exists():  # no repository of its own
+            return
+        exclude = _exclude_file(str(root), run_git)
+        if exclude is not None:
+            _add_excludes(
+                exclude,
+                "runtime files: heartbeat, pids, logs, attachments (never commit)",
+                RUNTIME_EXCLUDES,
+            )
+    except Exception:  # best-effort: starting a project must never fail on this
         pass
 
 

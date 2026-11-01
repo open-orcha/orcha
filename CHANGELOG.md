@@ -14,6 +14,14 @@ missing.
 - Failed automatic runs now wait 30 then 60 seconds before retrying, pause after three failures, and raise one Needs you request with the cause. Activity shows the actual provider error and lets a human resume after fixing it. Unfinished task runs lost in a notifier restart are requeued once; stopped, completed, and reassigned work is left alone. Desktop version: 1.2.1.
 - Desktop: the menu-bar popover no longer stays an empty dark panel after its
   renderer process dies; the next click opens a fresh one (GH #347).
+- Orcha's runtime files no longer show up in a project's `git status`. On every
+  project start, `.orcha/` (the stack's database, the `.env` with the master key,
+  GitHub tokens, logs) gets a `.gitignore` that ignores the folder, and the hidden
+  `.claude/.orcha-*` files (notifier heartbeat, pid and log files, attachments,
+  wake logs) are added to the repository's local `.git/info/exclude`. `git add -A`
+  no longer stages the stack's secrets, and Claude Code sessions started afterwards
+  no longer show the heartbeat and portal log as changed after nearly every
+  command. Nothing tracked is touched (GH #366).
 
 ### Added
 - Completed workflows now offer **Run again**, which creates a separate editable draft in the same project. Review its setup and explicitly choose Start; the original workflow and its history are kept (first slice of GH #364).
