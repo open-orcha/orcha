@@ -1,74 +1,48 @@
 import { execFile } from 'node:child_process'
-import { promises as nodeFs } from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
 import type { AgentSummary, StackAttention } from './attention'
 import { isDecisionItem, type AttentionItem, type Stack } from '../shared/types'
 
-/** App Group shared with the native WidgetKit extension: `<signing team>.orcha`
- *  (FX6LQ4M698.orcha; the widget declares the same id). macOS only lets an app use a
- *  group container its own signature is entitled to. Touching anyone else's (e.g. the
- *  old N2597TV587.orcha) raises the "would like to access data from other apps" prompt,
- *  again and again (GH #397). So the group is never hardcoded here: it is read
- *  from the running app's entitlements once, and with no matching entitlement
- *  (dev builds, older signed builds) the status file is not written at all. */
-export const APP_GROUP_SUFFIX = '.orcha'
+/** The widget reads status.json from the App Group `<signing team>.orcha` (FX6LQ4M698.orcha).
+ *  On macOS 15+ touching a group container this app's signature does not own (e.g. the old
+ *  N2597TV587.orcha, or any hand-built path) raises the "would like to access data from other
+ *  apps" prompt, again and again (GH #397). So this process never touches Group Containers:
+ *  it pipes the JSON to the bundled native helper Contents/MacOS/orcha-status-writer
+ *  (native/status-writer), which is signed with the group entitlement, checks that its own
+ *  signing team owns the group, gets the folder from containerURL(forSecurityApplication-
+ *  GroupIdentifier:) and writes it. Dev builds have no helper, so nothing is written. */
+export const STATUS_WRITER_NAME = 'orcha-status-writer'
 
-export interface StatusTarget {
-  dir: string
-  file: string
+/** The helper next to the running executable (…/X.app/Contents/MacOS/), or null when this
+ *  is not a packaged macOS app. */
+export function statusWriterPath(platform: NodeJS.Platform, execPath: string): string | null {
+  if (platform !== 'darwin') return null
+  const macosDir = path.dirname(execPath)
+  if (path.basename(macosDir) !== 'MacOS' || !path.resolve(macosDir, '..', '..').endsWith('.app')) return null
+  return path.join(macosDir, STATUS_WRITER_NAME)
 }
 
-export function statusTarget(groupId: string, home = os.homedir()): StatusTarget {
-  const dir = path.join(home, 'Library', 'Group Containers', groupId)
-  return { dir, file: path.join(dir, 'status.json') }
+/** ok: written · failed: transient, try again next poll · unavailable: no helper or no owned
+ *  group (never will be this session) · denied: macOS refused access. */
+export type WriteOutcome = 'ok' | 'failed' | 'unavailable' | 'denied'
+
+/** Helper exit code -> outcome (codes are documented in native/status-writer/main.swift). */
+export function outcomeFromExit(code: number | string | null | undefined): WriteOutcome {
+  if (code === 0) return 'ok'
+  if (code === 3 || code === 'ENOENT' || code === 'EACCES') return 'unavailable'
+  if (code === 4) return 'denied'
+  return 'failed'
 }
 
-/** The `<team>.orcha` group from a `codesign --entitlements - --xml` plist, if any. */
-export function appGroupFromEntitlements(xml: string): string | null {
-  const m = /<key>com\.apple\.security\.application-groups<\/key>\s*<array>([\s\S]*?)<\/array>/.exec(xml)
-  if (!m) return null
-  for (const g of m[1].matchAll(/<string>([^<]*)<\/string>/g)) {
-    const id = g[1].trim()
-    if (id.endsWith(APP_GROUP_SUFFIX) && id.length > APP_GROUP_SUFFIX.length) return id
-  }
-  return null
-}
-
-/** The .app bundle around the running executable (…/X.app/Contents/MacOS/X). */
-export function bundleFromExecPath(execPath: string): string | null {
-  const bundle = path.resolve(execPath, '..', '..', '..')
-  return bundle.endsWith('.app') ? bundle : null
-}
-
-/** Reads the running app's own signed entitlements (never another app's data). */
-export function readOwnEntitlements(bundle: string): Promise<string> {
-  return new Promise((resolve, reject) =>
-    execFile('/usr/bin/codesign', ['-d', '--entitlements', '-', '--xml', bundle], { encoding: 'utf8', timeout: 5000 }, (err, stdout) =>
-      err ? reject(err) : resolve(stdout)
+/** Runs the helper once with the JSON on stdin. */
+export function runStatusWriter(helper: string, json: string): Promise<WriteOutcome> {
+  return new Promise((resolve) => {
+    const child = execFile(helper, [], { timeout: 10_000 }, (err) =>
+      resolve(outcomeFromExit(err ? ((err as NodeJS.ErrnoException & { code?: number | string }).code ?? null) : 0))
     )
-  )
-}
-
-export interface ResolveDeps {
-  platform: NodeJS.Platform
-  execPath: string
-  readEntitlements(bundle: string): Promise<string>
-}
-
-/** Where this app may write the widget file, or null when it isn't entitled to a group. */
-export async function resolveStatusTarget(
-  deps: ResolveDeps = { platform: process.platform, execPath: process.execPath, readEntitlements: readOwnEntitlements }
-): Promise<StatusTarget | null> {
-  if (deps.platform !== 'darwin') return null
-  const bundle = bundleFromExecPath(deps.execPath)
-  if (!bundle) return null
-  try {
-    const group = appGroupFromEntitlements(await deps.readEntitlements(bundle))
-    return group ? statusTarget(group) : null
-  } catch {
-    return null
-  }
+    child.stdin?.on('error', () => {}) // helper exited before reading (e.g. unavailable)
+    child.stdin?.end(json)
+  })
 }
 
 export interface WidgetStatus {
@@ -87,12 +61,6 @@ export interface WidgetStatus {
   }>
   /** What's actually waiting on the human — capped so the file stays small. */
   attention: Array<{ projectShort: string; kind: AttentionItem['kind']; title: string }>
-}
-
-export interface StatusFs {
-  mkdir(dir: string, opts: { recursive: boolean }): Promise<unknown>
-  writeFile(file: string, data: string): Promise<unknown>
-  rename(from: string, to: string): Promise<unknown>
 }
 
 const ATTENTION_MAX = 8
@@ -132,47 +100,24 @@ export function buildStatus(
   }
 }
 
-/** A refusal from macOS (privacy/sandbox), as opposed to a transient disk error. */
-const isDenied = (err: unknown): boolean => {
-  const code = (err as NodeJS.ErrnoException | null)?.code
-  return code === 'EPERM' || code === 'EACCES'
-}
-
-/** Best-effort atomic write — the widget shows stale-data state on its own.
- *  Resolves 'denied' when macOS refused access, so the caller can stop trying. */
-export async function writeStatusFile(status: WidgetStatus, target: StatusTarget, fs: StatusFs = nodeFs): Promise<'ok' | 'denied' | 'failed'> {
-  try {
-    await fs.mkdir(target.dir, { recursive: true })
-    await fs.writeFile(`${target.file}.tmp`, JSON.stringify(status))
-    await fs.rename(`${target.file}.tmp`, target.file)
-    return 'ok'
-  } catch (err) {
-    // best-effort: never let widget plumbing break the app
-    return isDenied(err) ? 'denied' : 'failed'
-  }
-}
-
-/** Writes the widget file on every poll, but only into the app's own entitled group,
- *  and gives up for the rest of the session after the first denial, so macOS is
- *  never asked again until relaunch. */
+/** Hands the widget file to the helper on every poll, and stops for the rest of the
+ *  session once the helper is missing, the app owns no group, or macOS refused access, so
+ *  macOS is never asked again until relaunch. */
 export class StatusFileWriter {
-  private target: Promise<StatusTarget | null> | null = null
   private stopped = false
 
   constructor(
-    private resolve: () => Promise<StatusTarget | null> = () => resolveStatusTarget(),
-    private fs: StatusFs = nodeFs,
+    private helper: string | null = statusWriterPath(process.platform, process.execPath),
+    private run: (helper: string, json: string) => Promise<WriteOutcome> = runStatusWriter,
     private warn: (msg: string) => void = (msg) => console.warn(`[orcha-desktop] ${msg}`)
   ) {}
 
   async write(status: WidgetStatus): Promise<void> {
-    if (this.stopped) return
-    this.target ??= this.resolve().catch(() => null)
-    const target = await this.target
-    if (!target || this.stopped) return
-    if ((await writeStatusFile(status, target, this.fs)) === 'denied') {
+    if (this.stopped || !this.helper) return
+    const outcome = await this.run(this.helper, JSON.stringify(status)).catch((): WriteOutcome => 'failed')
+    if (outcome === 'unavailable' || outcome === 'denied') {
       this.stopped = true
-      this.warn(`widget status file: access to ${target.dir} denied; not retrying this session`)
+      this.warn(`widget status file: ${outcome === 'denied' ? 'access denied' : 'no app group this build owns'}; not writing this session`)
     }
   }
 }

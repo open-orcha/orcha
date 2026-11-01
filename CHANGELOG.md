@@ -13,9 +13,10 @@ missing.
 ### Fixed
 - Desktop: the Mac app no longer keeps showing the macOS "would like to access data
   from other apps" prompt. It used to write the widget's status file into another
-  team's App Group folder every 15 seconds. Now it writes only to the App Group its own
-  signature is entitled to (`FX6LQ4M698.orcha`, shared with the widget), and stops for
-  the session if macOS denies access. Desktop version: 2.2.1 (GH #397).
+  team's App Group folder every 15 seconds. Now a small bundled helper, signed for the
+  App Group (`FX6LQ4M698.orcha`, shared with the widget), asks macOS for that folder and
+  writes the file; builds whose signing team does not own the group write nothing, and
+  the app stops for the session if macOS denies access. Desktop version: 2.2.1 (GH #397).
 - Failed automatic runs now wait 30 then 60 seconds before retrying, pause after three failures, and raise one Needs you request with the cause. Activity shows the actual provider error and lets a human resume after fixing it. Unfinished task runs lost in a notifier restart are requeued once; stopped, completed, and reassigned work is left alone. Desktop version: 1.2.1.
 - Desktop: the menu-bar popover no longer stays an empty dark panel after its
   renderer process dies; the next click opens a fresh one (GH #347).
