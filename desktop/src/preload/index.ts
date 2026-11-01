@@ -97,6 +97,7 @@ import type {
   ProjectWorktrees,
   WorktreeProject,
   AgentWorktreeCleanResult,
+  ProjectCleanupResult,
   WizardVariant
 } from '../shared/types'
 
@@ -130,6 +131,7 @@ const api: OrchaDesktopApi = {
   storageWorktrees: () => invoke<ProjectWorktrees[]>('orcha:storage:worktrees'),
   storageWorktreeProjects: () => invoke<WorktreeProject[]>('orcha:storage:worktreeProjects'),
   storageProjectWorktrees: (folder) => invoke<ProjectWorktrees>('orcha:storage:projectWorktrees', folder),
+  storageProjectCleanup: (req) => invoke<ProjectCleanupResult>('orcha:storage:projectCleanup', req),
   storageCleanWorktrees: (req) => invoke<AgentWorktreeCleanResult>('orcha:storage:worktreesClean', req),
   revealWorktree: (folder, p) => invoke<void>('orcha:storage:revealWorktree', folder, p),
   listAttention: () => invoke<AttentionItem[]>('orcha:listAttention'),

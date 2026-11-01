@@ -34,7 +34,8 @@ def register(sub, handler) -> None:
              "changes into main or update it from main (#288; use --dry-run first)",
     )
     p.add_argument("action", nargs="?", default="list",
-                   choices=("list", "clean", "remove", "save-output", "bring-in", "update-from-main"))
+                   choices=("list", "clean", "remove", "save-output", "bring-in", "update-from-main",
+                            "preview", "execute", "status"))
     p.add_argument("path", nargs="?", default=None,
                    help="worktree path — or, for bring-in / update-from-main, a task id prefix or "
                         "agent alias")
@@ -58,6 +59,7 @@ def register(sub, handler) -> None:
     p.add_argument("--keep-branch", action="store_true", help="remove: keep the branch")
     p.add_argument("--confirm-unmerged", default=None, metavar="BRANCH",
                    help="remove: required for a worktree with unmerged commits (its branch name)")
+    p.add_argument("--plan-id", default=None, help="preview: stable operation id for progress polling")
     p.add_argument("--offline", action="store_true", help="don't contact the portal")
     p.set_defaults(func=handler)
 
@@ -201,8 +203,42 @@ def _print_bring_in(out: dict) -> None:
 def cmd_worktrees(args) -> None:
     root = _project_root(args.project)
     api, cid = _portal(root, args.offline)
+    if args.action in ("preview", "execute", "status"):
+        from . import worktree_cleanup as cleanup
+        from .job_store import JobStorageError
+        from .worktree_cleanup_activity import provider
+        activity = provider(api, cid, ngc._default_post)
+        try:
+            if args.action == "preview":
+                out = cleanup.preview(root, activity, plan_id=getattr(args, "plan_id", None))
+            elif not args.path:
+                raise cleanup.CleanupError("Supply the identifier from a completed preview")
+            elif args.action == "status":
+                out = cleanup.status(root, args.path)
+            else:
+                out = cleanup.execute(root, args.path, activity)
+        except (OSError, ValueError, JobStorageError, cleanup.CleanupError) as exc:
+            out = {"ok": False, "error": str(exc)}
+        if args.json:
+            print(json.dumps(out))
+        elif not out.get("ok"):
+            print("Not done: " + out.get("error", "cleanup failed"))
+        else:
+            print(f"{out['status']}: {out['scanned']} of {out['total']} folders checked; "
+                  f"{out['candidate_count']} eligible, {len(out['removed'])} removed")
+            for row in out["items"]:
+                print(f"  {row['path']}: {row.get('outcome') or row['state']} — {row['reason']}")
+            if out['status'] == 'ready':
+                print(f"Confirm this preview: orcha worktrees execute {out['plan_id']}")
+        if not out.get("ok"):
+            sys.exit(1)
+        return
     busy = _busy_from_portal(api, cid)
-    if busy is None:  # configured portal didn't answer → offline, process check only
+    if busy is None:
+        if args.action in ("clean", "remove") and not args.dry_run:
+            msg = "The portal could not verify active tasks; start it before cleanup"
+            print(json.dumps({"ok": False, "error": msg}) if args.json else msg)
+            sys.exit(1)
         api, cid, busy = None, None, set()
     rows = gc.inventory(str(root), busy=busy, measure=True)
     if rows is None:

@@ -381,6 +381,23 @@ def run_action(api_base, cid, project_cwd, action: dict, busy: set[str], *, quie
     """Carry out one claimed request; returns the result body reported back."""
     kind = action.get("action")
     upload = upload or upload_deliverable(api_base)
+    if (action.get("options") or {}).get("project_cleanup"):
+        from . import worktree_cleanup as cleanup
+        from .job_store import JobStorageError
+        from .worktree_cleanup_activity import provider
+
+        options = action["options"]
+        activity = provider(api_base, cid, post, busy)
+        def progress(result):
+            post(f"{api_base}/api/agent-worktrees/actions/{action['id']}/progress", {"result": result})
+        try:
+            if options["phase"] == "preview":
+                result = cleanup.preview(project_cwd, activity, plan_id=options["plan_id"], progress=progress)
+            else:
+                result = cleanup.execute(project_cwd, options["plan_id"], activity, progress=progress)
+            return {"status": "done" if result["ok"] else "failed", "result": result, "error": result.get("error")}
+        except (OSError, ValueError, JobStorageError, cleanup.CleanupError) as exc:
+            return {"status": "failed", "error": str(exc)[:2000]}
     if kind == "refresh":
         return {"status": "done", "result": {"refreshed": True}}
     if kind in ("bring_in", "update_from_main"):
@@ -434,6 +451,10 @@ def bulk_clean(project_cwd, rows, contexts, busy, *, include_output=True, unmerg
                  "size_bytes": row.get("size_bytes"), "reason": row.get("reason")}
         if state in (gc.STATE_IN_USE, gc.STATE_NOT_QUORATE):
             out["skipped"].append(entry)
+            continue
+        ctx = contexts.get(row["path"]) or {}
+        if ctx.get("running") or ctx.get("task_status") == "in_progress":
+            out["kept"].append(dict(entry, reason="an in-progress task still needs this checkout"))
             continue
         allow_unmerged = keep_branch = False
         if state == gc.STATE_UNMERGED:
