@@ -70,14 +70,17 @@ def release_completed_claims(base, owner, paths):
     store = JobStore(base)
     with store.locked():
         for path in paths:
-            resolved = str(Path(path).resolve())
-            claim = store.root / ('.cleanup-' + hashlib.sha256(resolved.encode()).hexdigest() + '.json')
+            # Preview paths are already absolute, canonical identities. Re-resolving
+            # after removal could follow a replacement symlink and select a different
+            # checkout's claim instead of the one this terminal receipt completed.
+            saved_path = str(path)
+            claim = store.root / ('.cleanup-' + hashlib.sha256(saved_path.encode()).hexdigest() + '.json')
             if not claim.exists():
                 continue
             saved = read_json(claim)
             if saved.get('owner') != owner:
                 continue
-            if saved.get('path') != resolved:
+            if saved.get('path') != saved_path:
                 raise CleanupError("The cleanup reservation does not match this checkout")
             claim.unlink()
         _sync_directory(store.root)
@@ -89,13 +92,15 @@ def cleanup_claim(base, path, owner):
 
     A process crash leaves the durable claim. Only the same plan, holding its
     exclusive operation lock, can resume it. No age-based expiry permits reuse.
+    Use the canonical path persisted in the preview, even if it was replaced.
     """
     store = JobStore(base)
-    claim = store.root / ('.cleanup-' + hashlib.sha256(str(Path(path).resolve()).encode()).hexdigest() + '.json')
+    saved_path = str(path)
+    claim = store.root / ('.cleanup-' + hashlib.sha256(saved_path.encode()).hexdigest() + '.json')
     with locked(base), store.locked():
         if store.cleanup_retains(path, owner=owner) or store.retains_worktree(path):
             raise CleanupError("Another cleanup or managed command still needs this checkout")
-        atomic_json(claim, {"path": str(Path(path).resolve()), "owner": owner})
+        atomic_json(claim, {"path": saved_path, "owner": owner})
     try:
         yield
     except BaseException as exc:
