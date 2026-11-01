@@ -94,12 +94,13 @@ _LIVE_BRANCH = re.compile(r"^orcha/live-(?P<agent>.+)$")
 
 # ------------------------------------------------------------------ git plumbing
 
-def git(args, cwd, timeout: float = GIT_TIMEOUT) -> tuple[int, str]:
+def git(args, cwd, timeout: float = GIT_TIMEOUT, *, pass_fds=()) -> tuple[int, str]:
     """Run git without optional locks (so inspection never rewrites an index) — never raises."""
     try:
         p = subprocess.run(
             ["git", "--no-optional-locks", *args], cwd=cwd, capture_output=True, text=True,
             encoding="utf-8", errors="surrogateescape", timeout=timeout, check=False,
+            pass_fds=pass_fds,
         )
         return p.returncode, p.stdout if p.returncode == 0 else (p.stdout + p.stderr)
     except (OSError, subprocess.SubprocessError, ValueError) as exc:
