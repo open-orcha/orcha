@@ -9,7 +9,7 @@ import os
 from pathlib import Path
 import time
 
-from .job_store import atomic_json, read_json, _private_directory
+from .job_store import JobStore, atomic_json, read_json, _private_directory, _sync_directory
 from .worktree_cleanup_scan import CleanupError, checked_git, common_dir, identity
 
 
@@ -52,6 +52,41 @@ def record_provisioned(root, path, branch=None):
     except (OSError, CleanupError):
         # Missing history prevents orphan cleanup, never provisioning.
         pass
+
+
+def checkout_available(base, path):
+    """Called under the lifecycle lock, before provisioning writes to this path."""
+    store = JobStore(base)
+    with store.locked():
+        return not store.cleanup_retains(path)
+
+
+@contextmanager
+def cleanup_claim(base, path, owner):
+    """Reserve only this checkout; slow I/O never holds either project-wide lock.
+
+    A process crash leaves the durable claim. Only the same plan, holding its
+    exclusive operation lock, can resume it. No age-based expiry permits reuse.
+    """
+    store = JobStore(base)
+    claim = store.root / ('.cleanup-' + hashlib.sha256(str(Path(path).resolve()).encode()).hexdigest() + '.json')
+    with locked(base), store.locked():
+        if store.cleanup_retains(path, owner=owner) or store.retains_worktree(path):
+            raise CleanupError("Another cleanup or managed command still needs this checkout")
+        atomic_json(claim, {"path": str(Path(path).resolve()), "owner": owner})
+    try:
+        yield
+    except BaseException as exc:
+        if not isinstance(exc, Exception):
+            raise  # Preserve the fence on interruption; the same plan recovers it.
+        with store.locked():
+            claim.unlink()
+            _sync_directory(store.root)
+        raise
+    else:
+        with store.locked():
+            claim.unlink()
+            _sync_directory(store.root)
 
 
 def provisioning(fn):

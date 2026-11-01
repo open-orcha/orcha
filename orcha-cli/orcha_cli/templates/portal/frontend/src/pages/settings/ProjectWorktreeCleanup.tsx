@@ -17,7 +17,8 @@ interface CleanupResult {
   items: Array<{ path: string; name: string; state: string; reason: string; outcome?: string;
     unmerged_commits?: number | null; output_count?: number; discarded_caches?: string[]; saved_to?: string }>;
 }
-interface Action { id: string; status: string; result: CleanupResult | null; error?: string | null }
+interface Action { id: string; status: string; result: CleanupResult | null; error?: string | null;
+  options?: { phase: "preview" | "execute"; plan_id: string } }
 
 export function ProjectWorktreeCleanup({ cid, humanId, locked }: {
   cid: string; humanId?: string; locked: boolean;
@@ -45,13 +46,14 @@ export function ProjectWorktreeCleanup({ cid, humanId, locked }: {
     void poll();
     return () => { cancelled = true; clearTimeout(timer); };
   }, [base, action?.id, pending, starting]);
-  async function start(phase: "preview" | "execute") {
+  async function start(phase: "preview" | "execute", retry = false) {
     if (locked || !humanId) return;
     setStarting(true);
     setError(null);
     try {
       setAction(await sendJSON<Action>("POST", `${base}/cleanup`, {
-        phase, actor_agent_id: humanId, ...(phase === "execute" ? { plan_id: action?.result?.plan_id } : {}),
+        phase, actor_agent_id: humanId, ...((retry || phase === "execute")
+          ? { plan_id: action?.options?.plan_id ?? action?.result?.plan_id } : {}),
       }));
     } catch (e) { setError(settingsErrText(e)); }
     finally { setStarting(false); }
@@ -65,6 +67,9 @@ export function ProjectWorktreeCleanup({ cid, humanId, locked }: {
     </Button>
     {pending && <StatusLine tone="muted">{result ? `Checked ${result.scanned} of ${result.total} folders` : "Waiting for the host to scan…"}</StatusLine>}
     {(error || action?.error || result?.error) && <StatusLine tone="err">{error || action?.error || result?.error}</StatusLine>}
+    {!pending && action?.status === "failed" && action.options &&
+      <Button size="sm" variant="secondary" disabled={locked}
+        onClick={() => void start(action.options!.phase, true)}>Retry interrupted cleanup</Button>}
     {result && <>
       <p>{result.candidate_count} eligible folders · {formatSize(result.candidate_bytes)} before saving files
         {result.unknown_sizes ? ` · ${result.unknown_sizes} sizes unavailable` : ""}.

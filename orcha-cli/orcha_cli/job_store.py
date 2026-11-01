@@ -184,6 +184,8 @@ class JobStore:
     def reserve(self, job_id: str, record: dict) -> dict:
         """Durably register before launch; retries never overwrite an existing job."""
         with self.locked():
+            if self.cleanup_retains(record.get("cwd")):
+                raise JobStorageError("Cleanup has reserved this checkout; retry after it finishes")
             if not record.get("cwd") or not Path(record["cwd"]).is_dir():
                 raise JobStorageError("Managed command working directory is unavailable")
             directory = self.job_directory(job_id, create=True)
@@ -219,6 +221,21 @@ class JobStore:
             record.update(version=version, checkpoint=str(path))
             atomic_json(directory / "record.json", record)
             return record
+
+    def cleanup_retains(self, cwd, *, owner=None) -> bool:
+        """Call under locked(); durable per-checkout claims fence new starts, not updates."""
+        if not cwd:
+            return True
+        for path in self.root.glob('.cleanup-*.json'):
+            try:
+                claim = read_json(path)
+                candidate = Path(claim['path']).resolve()
+                if (Path(cwd).resolve().is_relative_to(candidate)
+                        and (owner is None or claim['owner'] != owner)):
+                    return True
+            except (JobStorageError, KeyError, TypeError, OSError):
+                return True
+        return False
 
     def retains_worktree(self, worktree: str | Path) -> bool:
         """Call under locked(); uncertain/unreadable evidence prevents deletion."""
@@ -298,11 +315,17 @@ def worktree_teardown_guard(base_cwd, worktree):
     if not base_cwd or not worktree or not Path(base_cwd).is_dir():
         yield None
         return
+    from .worktree_gc import retention_hold
+
+    hold = retention_hold(worktree)
+    if hold:
+        yield hold
+        return
     stack = ExitStack()
     try:
         store = JobStore(base_cwd)
         stack.enter_context(store.locked())
-        retained = store.retains_worktree(worktree)
+        retained = store.cleanup_retains(worktree) or store.retains_worktree(worktree)
     except (OSError, JobStorageError):
         stack.close()
         yield "managed command evidence could not be checked"

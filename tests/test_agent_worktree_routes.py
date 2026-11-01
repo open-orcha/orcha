@@ -13,6 +13,7 @@ import pytest
 
 from test_evidence_verdikt import HUBOT, MALLORY, OCTO, VERA, _members
 from conftest import ts_ago
+from test_worktree_gc import project, _worktree
 
 BASE = "/Users/dev/acme"
 WT = f"{BASE}/.orcha-worktrees"
@@ -323,3 +324,94 @@ async def test_project_cleanup_context_retains_task_without_live_run(client, con
     assert res.status_code == 200, res.text
     assert res.json()['complete'] is True
     assert path in res.json()['busy_worktrees']
+
+
+@pytest.mark.parametrize("phase", ["preview", "execute"])
+async def test_project_cleanup_retries_failed_host_attempt_with_original_plan(
+        client, container, make_agent, db, project, monkeypatch, phase):
+    import asyncio
+    from types import SimpleNamespace
+    from urllib.parse import urlsplit
+    from orcha_cli import notifier_worktree_gc as host
+    from orcha_cli import worktree_cleanup as cleanup
+    from orcha_cli import worktree_cleanup_activity as activity
+
+    cid = container['id']
+    human = (await make_agent('retry-owner', kind='human'))['agent_id']
+    base = f'/api/containers/{cid}/agent-worktrees'
+    wt = _worktree(project, 'retry', 'feature/retry', scaffold=False)
+    loop = asyncio.get_running_loop()
+    run = activity.subprocess.run
+
+    def process_lookup(args, *pos, **kw):
+        if args[0] == 'lsof':
+            return SimpleNamespace(returncode=0, stdout='')
+        return run(args, *pos, **kw)
+
+    monkeypatch.setattr(activity.subprocess, 'run', process_lookup)
+
+    def post(url, body):
+        response = asyncio.run_coroutine_threadsafe(client.post(urlsplit(url).path, json=body), loop).result(5)
+        assert response.status_code < 300, response.text
+        return response.json()
+
+    async def perform(action):
+        return await asyncio.to_thread(host.run_action, 'http://test', cid, str(project), action, set(), post=post)
+
+    async def finish(action, result):
+        return await client.post(f"/api/agent-worktrees/actions/{action['id']}/result", json=result)
+
+    preview = (await client.post(base + '/cleanup', json={'actor_agent_id': human})).json()
+    plan_id = preview['options']['plan_id']
+    preview = (await client.post(base + '/claim', json={})).json()['actions'][0]
+    if phase == 'preview':
+        # A failed saved preview must be rebuilt, rather than returned forever.
+        failed = cleanup.preview(project, lambda rows: None, plan_id=plan_id)
+        await finish(preview, {'status': 'failed', 'result': failed})
+        original = preview
+    else:
+        await finish(preview, await perform(preview))
+        original = (await client.post(base + '/cleanup', json={
+            'phase': 'execute', 'plan_id': plan_id, 'actor_agent_id': human})).json()
+        original = (await client.post(base + '/claim', json={})).json()['actions'][0]
+        git = cleanup.gc.git
+
+        class StoppedHost(BaseException):
+            pass
+
+        def interrupted(args, *pos, **kw):
+            result = git(args, *pos, **kw)
+            if args[:2] == ['worktree', 'remove'] and result[0] == 0:
+                raise StoppedHost()
+            return result
+
+        monkeypatch.setattr(cleanup.gc, 'git', interrupted)
+        with pytest.raises(StoppedHost):
+            await perform(original)
+        monkeypatch.setattr(cleanup.gc, 'git', git)
+        assert not wt.exists()
+        db.execute(f"UPDATE agent_worktree_actions SET claimed_at={ts_ago(3600)} WHERE id=%s", (original['id'],))
+        await client.post(base + '/claim', json={'peek': True})
+
+    request = {'phase': phase, 'plan_id': plan_id, 'actor_agent_id': human}
+    retry = (await client.post(base + '/cleanup', json=request)).json()
+    assert retry['id'] != original['id']
+    assert retry['options']['plan_id'] == plan_id
+    assert (await client.post(base + '/cleanup', json=request)).json()['id'] == retry['id']
+    claimed = (await client.post(base + '/claim', json={})).json()['actions'][0]
+    # A still-running old host cannot overlap recovery, even after its queue lease timed out.
+    with cleanup.lifecycle.operation(project, plan_id):
+        fenced = await perform(claimed)
+        assert fenced['status'] == 'failed' and 'already running' in fenced['error']
+    await finish(original, {'status': 'done', 'result': {'status': 'old report'}})
+    assert (await client.get(base + '/actions/' + retry['id'])).json()['status'] == 'claimed'
+    result = await perform(claimed)
+    assert result['status'] == 'done', result
+    assert result['result']['status'] == ('ready' if phase == 'preview' else 'done')
+    if phase == 'execute':
+        assert len(result['result']['removed']) == 1
+        assert result['result']['removed'][0]['reason'] == 'Recovered the saved removal result'
+    else:
+        assert wt.exists()
+    await finish(claimed, result)
+    assert (await client.post(base + '/cleanup', json=request)).json()['id'] == retry['id']
