@@ -19,5 +19,16 @@
   <!-- Dictation: hardened runtime blocks the microphone without this (TCC then never prompts). -->
   <key>com.apple.security.device.audio-input</key>
   <true/>
+  <!--
+    Widget bridge (GH #397): the App Group the WidgetKit extension shares with the app.
+    It must be prefixed with the signing TeamIdentifier (the Developer ID team). The app
+    reads this entitlement at startup and only writes there; without it, it writes
+    nothing. Main app only: nested helpers/the Python sidecar sign with
+    entitlements.mac.inherit.plist, which has no group.
+  -->
+  <key>com.apple.security.application-groups</key>
+  <array>
+    <string>FX6LQ4M698.orcha</string>
+  </array>
 </dict>
 </plist>

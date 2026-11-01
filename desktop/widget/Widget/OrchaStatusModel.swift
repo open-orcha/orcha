@@ -3,7 +3,7 @@ import Foundation
 import WidgetKit
 import os
 
-private let appGroupId = "N2597TV587.orcha"
+private let appGroupId = "FX6LQ4M698.orcha"
 private let logger = Logger(subsystem: "io.openorcha.widget", category: "provider")
 
 struct OrchaStatus: Codable {

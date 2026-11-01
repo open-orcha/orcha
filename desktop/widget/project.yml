@@ -5,7 +5,7 @@ options:
     macOS: "14.0"
 settings:
   base:
-    DEVELOPMENT_TEAM: N2597TV587
+    DEVELOPMENT_TEAM: FX6LQ4M698
     CODE_SIGN_STYLE: Automatic
     SWIFT_VERSION: "5.9"
 targets:
@@ -25,7 +25,7 @@ targets:
       path: HostApp/OrchaWidgets.entitlements
       properties:
         com.apple.security.app-sandbox: true
-        com.apple.security.application-groups: [N2597TV587.orcha]
+        com.apple.security.application-groups: [FX6LQ4M698.orcha]
     dependencies:
       - target: OrchaStatusWidget
         embed: true
@@ -48,4 +48,4 @@ targets:
       path: Widget/OrchaStatusWidget.entitlements
       properties:
         com.apple.security.app-sandbox: true
-        com.apple.security.application-groups: [N2597TV587.orcha]
+        com.apple.security.application-groups: [FX6LQ4M698.orcha]

@@ -67,7 +67,9 @@ mac:
   hardenedRuntime: true
   gatekeeperAssess: false
   entitlements: resources/entitlements.mac.plist
-  entitlementsInherit: resources/entitlements.mac.plist
+  # Nested code gets the same hardened-runtime set minus the widget App Group, which
+  # only the main app needs (GH #397).
+  entitlementsInherit: resources/entitlements.mac.inherit.plist
   notarize: true
   target:
     - dmg
