@@ -14,7 +14,7 @@ import { ToastProvider } from "../../components/ui";
 import { SnapshotProvider } from "../../state/SnapshotProvider";
 import type { OrchaRequest, Snapshot } from "../../types";
 import { RequestsPage, relWhen, requestActions, _resetPendingAnswers } from "./RequestsPage";
-import { payloadSearchText, payloadText, payloadTitle } from "./requestPayload";
+import { payloadSearchText, payloadText, payloadTitle, reqTitle } from "./requestPayload";
 
 const T0 = Date.now();
 const iso = (minsFromNow: number) => new Date(T0 + minsFromNow * 60_000).toISOString();
@@ -92,6 +92,14 @@ describe("payload helpers (D4)", () => {
     expect(payloadTitle(long)).toBe("Should we run the migration now?");
     expect(payloadTitle("x".repeat(30) + " " + "y".repeat(120)).endsWith("…")).toBe(true);
   });
+  it("shows link text in request list titles before truncating", () => {
+    const link = `[LearnChat repair proposal](https://github.com/open-orcha/orcha/pull/${"3".repeat(120)})`;
+    const headline = `The ${link} protects parent tasks`;
+    expect(payloadTitle(headline)).toBe("The LearnChat repair proposal protects parent tasks");
+    expect(reqTitle({ payload: headline })).toBe("The LearnChat repair proposal protects parent tasks");
+    expect(reqTitle({ title: headline, payload: "Other details" })).toBe("The LearnChat repair proposal protects parent tasks");
+    expect(reqTitle({ title: "Plain title", payload: headline })).toBe("Plain title");
+  });
   it("search text covers nested values", () => {
     expect(payloadSearchText({ a: { b: ["needle"] } })).toContain("needle");
   });
@@ -130,6 +138,20 @@ describe("requestActions (truthful gates)", () => {
 });
 
 describe("RequestsPage round 1", () => {
+  it("shows link text instead of markdown in the request row", async () => {
+    const headline = "The [LearnChat repair proposal](https://github.com/open-orcha/orcha/pull/303) protects parent tasks";
+    const snapshot = { ...RAW, requests: [{ ...RAW.requests[0], payload: headline }] };
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/containers") return { ok: true, status: 200, json: async () => [{ id: "c1", status: "active" }] } as Response;
+      if (url.startsWith("/api/containers/c1")) return { ok: true, status: 200, json: async () => snapshot } as Response;
+      return { ok: true, status: 200, json: async () => ({}) } as Response;
+    }));
+    mount();
+    await waitFor(() => expect(document.querySelector(".rq-row .rq-title")?.textContent)
+      .toBe("The LearnChat repair proposal protects parent tasks"));
+  });
+
   it("object payloads render as prose + fields, never [object Object] or JSON", async () => {
     mount("/requests?req=r1");
     await waitFor(() => expect(detail()).toBeTruthy());
