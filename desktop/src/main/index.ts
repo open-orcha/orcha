@@ -21,7 +21,7 @@ import { createPlanUsagePublisher } from './usage/planUsagePublisher'
 import { createPlanUsageDisplaySync, DISPLAY_POLL_MS, type PlanUsageDisplaySync } from './usage/planUsageDisplay'
 import { createScanClient, readClaudeCredentials, readUsagePrefsFile, writeUsagePrefsFile } from './usage/usageHost'
 import { formatResetIn, peakWindow, trayUsageTitle, USAGE_CHANNELS, type UsageSnapshot } from '../shared/usage'
-import { buildStatus, writeStatusFile } from './statusFile'
+import { buildStatus, StatusFileWriter } from './statusFile'
 import { startMemoryLog } from './memoryLog'
 import { dockerExec, killPendingProbes } from './dockerExec'
 import { dockerPublishedPorts, pickFreePort } from './portPicker'
@@ -2056,6 +2056,8 @@ app.whenReady().then(() => {
         path: '/'
       })
   })
+  // Widget bridge: writes only into the app group this build is entitled to (GH #397).
+  const statusWriter = new StatusFileWriter()
   poller = new AttentionPoller({
     listStacks,
     fetchStackAttention,
@@ -2067,7 +2069,7 @@ app.whenReady().then(() => {
       // Badge = decisions only (plans, verifications, requests); follow-ups are listed in
       // the popover but never counted (V2 arch §3.3, desktop decision).
       tray?.update(items.filter(isDecisionItem).length)
-      void writeStatusFile(buildStatus(stacks, items, details, new Date()))
+      void statusWriter.write(buildStatus(stacks, items, details, new Date()))
     }
   })
   poller.start()

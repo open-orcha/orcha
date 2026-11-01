@@ -1,16 +1,75 @@
+import { execFile } from 'node:child_process'
 import { promises as nodeFs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import type { AgentSummary, StackAttention } from './attention'
 import { isDecisionItem, type AttentionItem, type Stack } from '../shared/types'
 
-/** App Group shared with the native WidgetKit extension. The prefix must be
- *  the signing cert's REAL TeamIdentifier (the OU, N2597TV587 — the CN
- *  misleadingly displays the personal-team id); containermanagerd rejects
- *  groups not prefixed by the requestor's team. The widget declares the same
- *  id. The Electron app is unsandboxed so it can write here directly. */
-export const STATUS_DIR = path.join(os.homedir(), 'Library', 'Group Containers', 'N2597TV587.orcha')
-export const STATUS_FILE = path.join(STATUS_DIR, 'status.json')
+/** App Group shared with the native WidgetKit extension: `<signing team>.orcha`
+ *  (FX6LQ4M698.orcha; the widget declares the same id). macOS only lets an app use a
+ *  group container its own signature is entitled to. Touching anyone else's (e.g. the
+ *  old N2597TV587.orcha) raises the "would like to access data from other apps" prompt,
+ *  again and again (GH #397). So the group is never hardcoded here: it is read
+ *  from the running app's entitlements once, and with no matching entitlement
+ *  (dev builds, older signed builds) the status file is not written at all. */
+export const APP_GROUP_SUFFIX = '.orcha'
+
+export interface StatusTarget {
+  dir: string
+  file: string
+}
+
+export function statusTarget(groupId: string, home = os.homedir()): StatusTarget {
+  const dir = path.join(home, 'Library', 'Group Containers', groupId)
+  return { dir, file: path.join(dir, 'status.json') }
+}
+
+/** The `<team>.orcha` group from a `codesign --entitlements - --xml` plist, if any. */
+export function appGroupFromEntitlements(xml: string): string | null {
+  const m = /<key>com\.apple\.security\.application-groups<\/key>\s*<array>([\s\S]*?)<\/array>/.exec(xml)
+  if (!m) return null
+  for (const g of m[1].matchAll(/<string>([^<]*)<\/string>/g)) {
+    const id = g[1].trim()
+    if (id.endsWith(APP_GROUP_SUFFIX) && id.length > APP_GROUP_SUFFIX.length) return id
+  }
+  return null
+}
+
+/** The .app bundle around the running executable (…/X.app/Contents/MacOS/X). */
+export function bundleFromExecPath(execPath: string): string | null {
+  const bundle = path.resolve(execPath, '..', '..', '..')
+  return bundle.endsWith('.app') ? bundle : null
+}
+
+/** Reads the running app's own signed entitlements (never another app's data). */
+export function readOwnEntitlements(bundle: string): Promise<string> {
+  return new Promise((resolve, reject) =>
+    execFile('/usr/bin/codesign', ['-d', '--entitlements', '-', '--xml', bundle], { encoding: 'utf8', timeout: 5000 }, (err, stdout) =>
+      err ? reject(err) : resolve(stdout)
+    )
+  )
+}
+
+export interface ResolveDeps {
+  platform: NodeJS.Platform
+  execPath: string
+  readEntitlements(bundle: string): Promise<string>
+}
+
+/** Where this app may write the widget file, or null when it isn't entitled to a group. */
+export async function resolveStatusTarget(
+  deps: ResolveDeps = { platform: process.platform, execPath: process.execPath, readEntitlements: readOwnEntitlements }
+): Promise<StatusTarget | null> {
+  if (deps.platform !== 'darwin') return null
+  const bundle = bundleFromExecPath(deps.execPath)
+  if (!bundle) return null
+  try {
+    const group = appGroupFromEntitlements(await deps.readEntitlements(bundle))
+    return group ? statusTarget(group) : null
+  } catch {
+    return null
+  }
+}
 
 export interface WidgetStatus {
   v: 3
@@ -73,13 +132,47 @@ export function buildStatus(
   }
 }
 
-/** Best-effort atomic write — the widget shows stale-data state on its own. */
-export async function writeStatusFile(status: WidgetStatus, fs: StatusFs = nodeFs): Promise<void> {
+/** A refusal from macOS (privacy/sandbox), as opposed to a transient disk error. */
+const isDenied = (err: unknown): boolean => {
+  const code = (err as NodeJS.ErrnoException | null)?.code
+  return code === 'EPERM' || code === 'EACCES'
+}
+
+/** Best-effort atomic write — the widget shows stale-data state on its own.
+ *  Resolves 'denied' when macOS refused access, so the caller can stop trying. */
+export async function writeStatusFile(status: WidgetStatus, target: StatusTarget, fs: StatusFs = nodeFs): Promise<'ok' | 'denied' | 'failed'> {
   try {
-    await fs.mkdir(STATUS_DIR, { recursive: true })
-    await fs.writeFile(`${STATUS_FILE}.tmp`, JSON.stringify(status))
-    await fs.rename(`${STATUS_FILE}.tmp`, STATUS_FILE)
-  } catch {
+    await fs.mkdir(target.dir, { recursive: true })
+    await fs.writeFile(`${target.file}.tmp`, JSON.stringify(status))
+    await fs.rename(`${target.file}.tmp`, target.file)
+    return 'ok'
+  } catch (err) {
     // best-effort: never let widget plumbing break the app
+    return isDenied(err) ? 'denied' : 'failed'
+  }
+}
+
+/** Writes the widget file on every poll, but only into the app's own entitled group,
+ *  and gives up for the rest of the session after the first denial, so macOS is
+ *  never asked again until relaunch. */
+export class StatusFileWriter {
+  private target: Promise<StatusTarget | null> | null = null
+  private stopped = false
+
+  constructor(
+    private resolve: () => Promise<StatusTarget | null> = () => resolveStatusTarget(),
+    private fs: StatusFs = nodeFs,
+    private warn: (msg: string) => void = (msg) => console.warn(`[orcha-desktop] ${msg}`)
+  ) {}
+
+  async write(status: WidgetStatus): Promise<void> {
+    if (this.stopped) return
+    this.target ??= this.resolve().catch(() => null)
+    const target = await this.target
+    if (!target || this.stopped) return
+    if ((await writeStatusFile(status, target, this.fs)) === 'denied') {
+      this.stopped = true
+      this.warn(`widget status file: access to ${target.dir} denied; not retrying this session`)
+    }
   }
 }

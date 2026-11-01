@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!--
+    Hardened Runtime entitlements required for notarizing an Electron app.
+    Electron/V8 JIT-compile JavaScript, so the runtime needs to allocate
+    executable memory; Apple's notary service rejects hardened-runtime builds
+    that lack these. Kept to the minimum Electron needs.
+    Used for everything nested in the bundle (Electron helpers, node-pty, the Python
+    sidecar). The main app's entitlements.mac.plist adds only the widget App Group.
+  -->
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <true/>
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+  <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+  <true/>
+  <!-- Dictation: hardened runtime blocks the microphone without this (TCC then never prompts). -->
+  <key>com.apple.security.device.audio-input</key>
+  <true/>
+</dict>
+</plist>
