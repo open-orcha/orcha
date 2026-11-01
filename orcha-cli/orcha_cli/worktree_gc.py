@@ -483,6 +483,17 @@ def _iso(ts: Optional[float]) -> Optional[str]:
 
 # ------------------------------------------------------------------ classification
 
+def retention_hold(path) -> Optional[str]:
+    """Every cleaner respects the marker, including dangling links and unreadable holds."""
+    try:
+        os.lstat(os.path.join(path, ".orcha-keep"))
+    except FileNotFoundError:
+        return None
+    except OSError:
+        return "The retention hold could not be checked; folder retained"
+    return "Explicit retention hold (.orcha-keep)"
+
+
 def classify(base_cwd, wt: dict, *, busy: Iterable[str] = (), refs: Optional[list[str]] = None,
              measure: bool = True, run=git, now: Optional[float] = None,
              size_cache: Optional[dict] = None) -> dict:
@@ -525,6 +536,9 @@ def classify(base_cwd, wt: dict, *, busy: Iterable[str] = (), refs: Optional[lis
             if size_cache is not None:
                 size_cache[cache_key] = row["size_bytes"]
 
+    hold = retention_hold(path)
+    if hold:
+        return dict(row, state=STATE_IN_USE, reason=hold)
     if not wt.get("registered", True):
         return dict(row, state=STATE_NOT_QUORATE, reason="not registered with git — left alone")
     if not branch:
@@ -826,6 +840,9 @@ def remove_worktree(base_cwd, path: str, *, busy: Iterable[str] = (),
     with worktree_teardown_guard(base_cwd, path) as retained:
         if retained:
             return dict(out, state=STATE_IN_USE, reason=retained)
+        hold = retention_hold(path)
+        if hold:
+            return dict(out, state=STATE_IN_USE, reason=hold)
         late = recent_use(base_cwd, path, quiet_for=quiet_for, include_process_cwds=include_process_cwds)
         if late:
             return dict(out, state=STATE_IN_USE, reason=late)

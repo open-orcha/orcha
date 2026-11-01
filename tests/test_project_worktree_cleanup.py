@@ -5,11 +5,130 @@ import pytest
 
 from orcha_cli import worktree_cleanup as cleanup
 from orcha_cli import worktree_cleanup_scan as scan
-from test_worktree_gc import project, _worktree, _git
+from test_worktree_gc import project, _worktree, _git, _age, _row
 
 
 def inactive(rows):
     return {"complete": True, "busy": [], "contexts": {}}
+
+
+@pytest.mark.parametrize("marker", ["file", "dangling-link"])
+def test_keep_marker_protects_legacy_and_project_cleanup(project, marker):
+    from orcha_cli import notifier_worktree_gc as automatic
+
+    wt = _worktree(project, "held", "orcha/wk-Atlas-1234567890123", scaffold=False)
+    # Ignore the marker just as real projects do; Git sees an otherwise clean checkout.
+    with (project / ".git/info/exclude").open("a") as stream:
+        stream.write("\n.orcha-keep\n")
+    hold = wt / ".orcha-keep"
+    if marker == "file":
+        hold.write_text("keep this checkout")
+    else:
+        hold.symlink_to("missing")
+    _age(wt)
+    row = _row(project, wt, measure=False)
+    assert row["state"] == cleanup.gc.STATE_IN_USE
+    assert automatic.plan_row(row, {}, {"auto_cleanup": True, "grace_days": 0}, 0, 2e9)[0] == "keep"
+    for dry_run in (True, False):
+        result = cleanup.gc.remove_worktree(project, str(wt), dry_run=dry_run, include_process_cwds=False)
+        assert not result["ok"] and ".orcha-keep" in result["reason"]
+    from orcha_cli.notifier_worktree_cleanup import teardown_worktree
+    from test_worktree_gc import _Services
+    assert teardown_worktree(str(project), str(wt), row["branch"], _Services(project)) == "preserved-job"
+    assert cleanup.preview(project, inactive)["candidate_count"] == 0
+    assert wt.exists()
+
+
+def test_legacy_removal_rechecks_marker_after_saving(project, monkeypatch):
+    wt = _worktree(project, "late-hold", "orcha/wk-Atlas-1234567890123", scaffold=False)
+    (wt / "output.txt").write_text("real output")
+    preserve = cleanup.gc.preserve_output
+
+    def save_then_hold(*args, **kwargs):
+        result = preserve(*args, **kwargs)
+        (wt / ".orcha-keep").write_text("keep after saving")
+        return result
+
+    # Ignored markers must be checked again even when they do not appear in Git status.
+    with (project / ".git/info/exclude").open("a") as stream:
+        stream.write("\n.orcha-keep\n")
+    monkeypatch.setattr(cleanup.gc, "preserve_output", save_then_hold)
+    result = cleanup.gc.remove_worktree(project, str(wt), include_process_cwds=False)
+    assert not result["ok"] and ".orcha-keep" in result["reason"]
+    assert (wt / "output.txt").read_text() == "real output"
+
+
+@pytest.mark.parametrize("stage", ["discovery", "preservation", "removal"])
+def test_slow_cleanup_does_not_block_other_starts_or_checkpoints(project, monkeypatch, stage):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+    from uuid import uuid4
+    from orcha_cli import notifier_worktree_stable as stable
+    from orcha_cli.job_store import JobStore, JobStorageError
+    from orcha_cli.notifier_preview import PreviewError, resolve_checkout
+    from test_worktree_gc import _Services, TASK
+
+    wt = _worktree(project, "live-Held", "orcha/live-Held", scaffold=False)
+    store = JobStore(project)
+    job = str(uuid4())
+    store.reserve(job, {"cwd": str(project), "status": "running"})
+    plan = cleanup.preview(project, inactive)
+    entered, release = Event(), Event()
+    target, name = (scan, "discover") if stage == "discovery" else (
+        (cleanup, "_preserve") if stage == "preservation" else (cleanup.gc, "git"))
+    original = getattr(target, name)
+
+    def slow(*args, **kwargs):
+        if stage != "removal" or args[0][:2] == ["worktree", "remove"]:
+            entered.set()
+            assert release.wait(10), "test did not release cleanup"
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(target, name, slow)
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        operation = pool.submit(cleanup.preview, project, inactive) if stage == "discovery" else pool.submit(
+            cleanup.execute, project, plan["plan_id"], inactive)
+        try:
+            assert entered.wait(5)
+            services = _Services(project)
+            worker = pool.submit(stable.provision_task, str(project), "Other", TASK, services)
+            assert worker.result(timeout=3)[0]
+            terminal = pool.submit(stable.provision_live, str(project), "Other", services)
+            assert terminal.result(timeout=3)[0]
+            checkpoint = pool.submit(store.checkpoint, job, 0, {"completed_steps": ["still responsive"]})
+            assert checkpoint.result(timeout=2)["version"] == 1
+            command = pool.submit(store.reserve, str(uuid4()), {"cwd": str(project), "status": "reserved"})
+            assert command.result(timeout=2)["status"] == "reserved"
+            if stage != "discovery":
+                assert stable.provision_live(str(project), "Held", services) == (None, None)
+                with pytest.raises(JobStorageError, match="reserved this checkout"):
+                    store.reserve(str(uuid4()), {"cwd": str(wt), "status": "reserved"})
+                with pytest.raises(PreviewError, match="reserved this checkout"):
+                    resolve_checkout({"worktree": str(wt)}, str(project))
+        finally:
+            release.set()
+        assert operation.result(timeout=10)["status"] in ("ready", "done")
+
+
+def test_interrupted_claim_fences_reuse_until_same_plan_recovers(project, monkeypatch):
+    from uuid import uuid4
+    from orcha_cli.job_store import JobStore, JobStorageError
+
+    wt = _worktree(project, "one", "one", scaffold=False)
+    plan = cleanup.preview(project, inactive)
+    preserve = cleanup._preserve
+
+    def interrupted(*args):
+        raise KeyboardInterrupt("simulated process interruption")
+
+    monkeypatch.setattr(cleanup, "_preserve", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        cleanup.execute(project, plan["plan_id"], inactive)
+    with pytest.raises(JobStorageError):
+        JobStore(project).reserve(str(uuid4()), {"cwd": str(wt), "status": "reserved"})
+    assert cleanup.preview(project, inactive)["candidate_count"] == 0
+    monkeypatch.setattr(cleanup, "_preserve", preserve)
+    assert len(cleanup.execute(project, plan["plan_id"], inactive)["removed"]) == 1
 
 
 def test_external_detached_and_other_branches_keep_commits_and_private_files(project, tmp_path):

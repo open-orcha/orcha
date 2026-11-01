@@ -493,6 +493,8 @@ def request_project_cleanup(cid: str, body: ProjectCleanupRequest, request: Requ
     with db_cursor() as (conn, cur):
         require_container(cur, cid)
         actor, _ = _human_actor(cur, request, cid, body.actor_agent_id)
+        # Serialize same-plan retries as well as first confirmations on PostgreSQL.
+        cur.execute("SELECT id FROM containers WHERE id=%s " + sql.for_update(), (cid,))
         cur.execute("SELECT * FROM agent_worktree_actions WHERE container_id=%s AND action='clean_up' "
                     "ORDER BY created_at DESC", (cid,))
         actions = [_action_out(r) for r in cur.fetchall()]
@@ -505,7 +507,13 @@ def request_project_cleanup(cid: str, body: ProjectCleanupRequest, request: Requ
         for a in actions:
             if (a["options"].get("project_cleanup") and a["options"].get("phase") == body.phase
                     and body.plan_id and a["options"].get("plan_id") == body.plan_id):
-                return a  # Same confirmation never starts a second operation.
+                if a["status"] != "failed":
+                    return a  # Pending/successful confirmations remain idempotent.
+                # A new queue attempt keeps the same durable host plan. Its exclusive
+                # operation lock must be acquired before any recovery: a stale timeout
+                # alone never proves the old execution stopped. A distinct action id
+                # also prevents a late old progress/result report overwriting this retry.
+                break
         if any(a["status"] in ("requested", "claimed") for a in actions):
             raise HTTPException(409, "A cleanup request is already running")
         options = {"project_cleanup": True, "phase": body.phase, "plan_id": body.plan_id or str(uuid4())}

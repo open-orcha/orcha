@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
+import { nodeRun } from './removeHost'
 import {
   CLI_OUTDATED,
   projectCleanup,
@@ -114,3 +115,29 @@ it('binds project cleanup to a known project and the exact preview id, with no p
   await expect(projectCleanup({ folder: '/foreign', phase: 'execute', planId }, PROJECTS, run)).rejects.toMatchObject({ code: 'INVALID_WORKTREE' })
   await expect(projectCleanup({ folder: A, phase: 'execute', planId: '../other' }, PROJECTS, run)).rejects.toMatchObject({ code: 'INVALID_WORKTREE' })
 })
+
+it('preserves a structured cleanup error from an unsuccessful CLI exit', async () => {
+  const run = vi.fn(async () => {
+    throw Object.assign(new Error('Command failed'), {
+      code: 1, stdout: 'notice\n' + JSON.stringify({ ok: false, error: "Start this project's portal" })
+    })
+  })
+  await expect(projectCleanup({ folder: A, phase: 'preview', planId: '11111111-2222-3333-4444-555555555555' }, PROJECTS, run))
+    .rejects.toMatchObject({ code: 'WORKTREE_CLI', message: "Start this project's portal" })
+})
+
+it('keeps error stdout across the real host runner and cleanup caller', async () => {
+  const host = nodeRun(process.env)
+  const run = () => host(process.execPath, ['-e',
+    'process.stdout.write(JSON.stringify({ok:false,error:"Portal unavailable"}));process.exitCode=1'], process.cwd())
+  await expect(projectCleanup({ folder: A, phase: 'preview', planId: '11111111-2222-3333-4444-555555555555' }, PROJECTS, run))
+    .rejects.toMatchObject({ code: 'WORKTREE_CLI', message: 'Portal unavailable' })
+})
+
+it.each(['invalid JSON', JSON.stringify({ ok: true, status: 'ready' })])(
+  'does not treat a crashed CLI as a successful cleanup: %s', async (stdout) => {
+    const run = vi.fn(async () => { throw Object.assign(new Error('Command failed'), { stdout }) })
+    await expect(projectCleanup({ folder: A, phase: 'preview', planId: '11111111-2222-3333-4444-555555555555' }, PROJECTS, run))
+      .rejects.toMatchObject({ code: 'WORKTREE_CLI', message: CLI_OUTDATED })
+  }
+)

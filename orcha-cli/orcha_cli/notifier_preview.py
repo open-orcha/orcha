@@ -151,6 +151,8 @@ def resolve_checkout(claim: dict, project_cwd: str, *, git=_git) -> tuple[str, O
 
 
 def _resolve_checkout(claim: dict, project_cwd: str, *, git=_git) -> tuple[str, Optional[str]]:
+    from .worktree_lifecycle import checkout_available
+
     base = os.path.realpath(project_cwd)
     trees = os.path.join(base, ".orcha-worktrees")
     recorded_base = claim.get("base_cwd")
@@ -159,6 +161,8 @@ def _resolve_checkout(claim: dict, project_cwd: str, *, git=_git) -> tuple[str, 
     wt = claim.get("worktree")
     if wt:
         rp = os.path.realpath(wt)
+        if not checkout_available(project_cwd, rp):
+            raise PreviewError("Cleanup has reserved this checkout; retry after it finishes")
         inside = rp == base or (os.path.dirname(rp) == trees and os.path.basename(rp) != "")
         if not inside:
             raise PreviewError(f"the task's worktree {wt} is outside this project's checkout")
@@ -176,6 +180,8 @@ def _resolve_checkout(claim: dict, project_cwd: str, *, git=_git) -> tuple[str, 
     if not _ID.match(pid):
         raise PreviewError("invalid preview id")
     temp = _plain_path(os.path.join(trees, f"preview-{pid[:8]}"))
+    if not checkout_available(project_cwd, temp):
+        raise PreviewError("Cleanup has reserved this checkout; retry after it finishes")
     if os.path.exists(temp):
         _remove_worktree(base, temp, git)
         if os.path.exists(temp):

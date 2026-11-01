@@ -73,8 +73,9 @@ def _blocked(row, activity, root, *, check_jobs=True, base=None):
         return "The owning task could not be verified"
     if lifecycle.recently_provisioned(root, row["path"]):
         return "A worker is starting or recently reused this folder"
-    if (Path(row["path"]) / ".orcha-keep").exists():
-        return "Explicit retention hold (.orcha-keep)"
+    hold = gc.retention_hold(row["path"])
+    if hold:
+        return hold
     admin = Path(row["admin"]) if row.get("admin") else None
     if admin and any(admin.glob("*.lock")):
         return "Git is changing this checkout"
@@ -95,12 +96,13 @@ def _preview(base, activity, *, progress, plan_id, measure):
     with lifecycle.locked(base) as root:
         target = _plan_path(root, plan_id)
         existing = _read(root, target.name)
-        if existing and existing["status"] != "scanning":
+        if existing and existing["status"] not in ("scanning", "failed"):
             return public(existing)
-        rows = scan.discover(base, _read(root, "known.json", {}))
-        plan = {"id": plan_id, "project": str(scan.common_dir(base)), "status": "scanning",
-                "items": [], "total": len(rows), "created_at": time.time()}
-        atomic_json(target, plan)
+        known = _read(root, "known.json", {})
+    rows = scan.discover(base, known)
+    plan = {"id": plan_id, "project": str(scan.common_dir(base)), "status": "scanning",
+            "items": [], "total": len(rows), "created_at": time.time()}
+    atomic_json(target, plan)
     def publish():
         atomic_json(target, plan)
         if progress:
@@ -228,10 +230,8 @@ def _execute(base, plan_id, activity, *, progress=None):
         if row.get("outcome") or row["state"] != "eligible":
             continue
         try:
-            # Serializes provisioning and managed-command reservation through removal.
-            with lifecycle.locked(base), worktree_teardown_guard(base, row["path"]) as retained:
-                if retained:
-                    raise CleanupError(retained)
+            # Durable per-checkout reservation blocks reuse without blocking unrelated work.
+            with lifecycle.cleanup_claim(base, row["path"], plan_id):
                 current = {r["path"]: r for r in scan.discover(base, _read(root, "known.json", {}), only_path=row["path"])}
                 fresh = current.get(row["path"])
                 if row.get("removing") and not Path(row["path"]).exists() and not fresh:
@@ -276,5 +276,5 @@ def _execute(base, plan_id, activity, *, progress=None):
 
 
 def _blocked_without_job(row, activity, root):
-    # Use the same predicates while the caller holds the job guard.
+    # The durable checkout claim already fences managed-command starts.
     return _blocked(row, activity, root, check_jobs=False)
