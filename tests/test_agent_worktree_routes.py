@@ -312,44 +312,6 @@ async def test_project_cleanup_requires_completed_preview_and_reports_progress(c
     assert '/api/containers/{cid}/agent-worktrees/cleanup-context' in spec['paths']
 
 
-async def test_saved_cleanup_restores_old_execution_and_latest_retry(client, container, make_agent, db):
-    human = (await make_agent('cleanup-owner', kind='human'))['agent_id']
-    cid = container['id']
-    base = f'/api/containers/{cid}/agent-worktrees'
-    assert (await client.get(base + '/cleanup')).json() == {'actions': []}
-    preview = (await client.post(base + '/cleanup', json={'actor_agent_id': human})).json()
-    plan = preview['options']['plan_id']
-    await client.post(base + '/claim', json={})
-    await client.post(f"/api/agent-worktrees/actions/{preview['id']}/result", json={
-        'status': 'done', 'result': {'status': 'ready', 'plan_id': plan}})
-    body = {'phase': 'execute', 'plan_id': plan, 'actor_agent_id': human}
-    execution = (await client.post(base + '/cleanup', json=body)).json()
-    await client.post(base + '/claim', json={})
-    await client.post(f"/api/agent-worktrees/actions/{execution['id']}/result", json={
-        'status': 'failed', 'error': 'host interrupted'})
-    # A newer preview and more than 20 unrelated records must not hide recovery.
-    newer = (await client.post(base + '/cleanup', json={'actor_agent_id': human})).json()
-    for _ in range(21):
-        db.execute("INSERT INTO agent_worktree_actions (container_id, action, requested_by, status) "
-                   "VALUES (%s, 'refresh', %s, 'done')", (cid, human))
-    restored = (await client.get(base + '/cleanup')).json()['actions']
-    assert [a['id'] for a in restored] == [execution['id'], newer['id']]
-    await client.post(base + '/claim', json={})
-    await client.post(f"/api/agent-worktrees/actions/{newer['id']}/result", json={
-        'status': 'failed', 'error': 'preview unavailable'})
-    retry = (await client.post(base + '/cleanup', json=body)).json()
-    restored = (await client.get(base + '/cleanup')).json()['actions']
-    assert restored[0]['id'] == retry['id']
-    assert restored[0]['options']['plan_id'] == plan
-    assert execution['id'] not in [a['id'] for a in restored]
-    spec = (await client.get('/openapi.json')).json()
-    assert 'get' in spec['paths']['/api/containers/{cid}/agent-worktrees/cleanup']
-
-
-async def test_saved_cleanup_requires_project_membership(client, container, trust_proxy):
-    assert (await client.get(f"/api/containers/{container['id']}/agent-worktrees/cleanup", headers=MALLORY)).status_code == 403
-
-
 async def test_project_cleanup_context_retains_task_without_live_run(client, container, make_agent, make_task):
     cid = container['id']
     agent = await make_agent('ongoing')

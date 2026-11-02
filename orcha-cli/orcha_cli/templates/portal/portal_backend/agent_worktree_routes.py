@@ -478,33 +478,6 @@ class ProjectCleanupRequest(BaseModel):
     actor_agent_id: Optional[str] = None
 
 
-@app.get("/api/containers/{cid}/agent-worktrees/cleanup")
-def get_project_cleanup(cid: str, request: Request):
-    """Restore unfinished plans, including attempts older than the recent inventory.
-
-    Only the latest attempt for each plan is returned. Unfinished executions come
-    first so a later preview cannot hide the plan holding checkout reservations.
-    With no unfinished plans, return the most recent result.
-    """
-    _cid(cid)
-    with db_cursor() as (_, cur):
-        require_container(cur, cid)
-        require_member_read(cur, request, cid)
-        cur.execute("SELECT * FROM agent_worktree_actions WHERE container_id=%s AND action='clean_up' "
-                    "ORDER BY created_at DESC, id DESC", (cid,))
-        latest = {}
-        for row in cur.fetchall():
-            action = _action_out(row)
-            options = action["options"]
-            if options.get("project_cleanup") and options.get("plan_id"):
-                latest.setdefault(options["plan_id"], action)
-    actions = list(latest.values())
-    unfinished = [a for a in actions if a["status"] != "done"
-                  or (a["result"] or {}).get("status") == "ready"]
-    unfinished.sort(key=lambda a: a["options"].get("phase") != "execute")
-    return {"actions": unfinished or actions[:1]}
-
-
 @app.post("/api/containers/{cid}/agent-worktrees/cleanup", status_code=201)
 def request_project_cleanup(cid: str, body: ProjectCleanupRequest, request: Request):
     """Queue a project-wide preview, or confirm precisely that completed preview.

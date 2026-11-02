@@ -110,11 +110,7 @@ def provisioning(fn):
 
 @contextmanager
 def operation(base, plan_id):
-    """One writer per operation, including any surviving removal child.
-
-    Pass the yielded descriptor to destructive subprocesses. Closing the parent's
-    copy must not unlock it: the inherited copy fences recovery until child exit.
-    """
+    """One writer per operation; status reads atomic snapshots without waiting."""
     from uuid import UUID
     from .worktree_cleanup_scan import CleanupError
     with locked(base) as root:
@@ -124,6 +120,6 @@ def operation(base, plan_id):
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             raise CleanupError("This cleanup operation is already running; check its status") from None
-        yield fd
+        yield
     finally:
         os.close(fd)
