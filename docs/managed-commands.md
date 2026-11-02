@@ -10,9 +10,25 @@ orcha job --task <task-id> start --key unit-tests --purpose "Run unit tests" -- 
 orcha job --task <task-id> wait <job-id> --seconds 100
 ```
 
-Keep the same key when retrying. An existing reservation, uncertain launch, interrupted command or exhausted budget must be inspected before choosing a new operation. Never reconstruct executable arguments from saved command descriptions: argument values are deliberately omitted.
+Keep the same key when retrying or reconciling the same operation. A completed record cannot be relaunched. Never use a new key to bypass a live, uncertain, interrupted or exhausted command. Never reconstruct executable arguments from saved command descriptions: argument values are deliberately omitted.
 
 If the first authority check fails or refuses mutations before any launch attempt, status is `not_started`. Retry `start` with the same key and original command: it reuses the reservation, directory, isolation contract and absolute budget. This exception requires an explicit saved pre-launch failure and an available controller lock; missing process files alone never authorize another launch. Any uncertain checkpoint or process launch remains fenced for reconciliation.
+
+### Correcting an already-authorized read-only check
+
+A wrong executable or input path can produce a **completed failure**, even when the intended check never ran: a wrapper or script may have launched successfully. This is different from `not_started`. Preserve the failed reservation, terminal record and result; do not reopen them or change their identity.
+
+For a distinct corrective operation within the approved scope:
+
+1. Inspect the original private record and result. Verify completed failure and termination, handle the exact outcome revision, and establish that the intended check did not run and no relevant side effects occurred. A nonzero exit alone does not establish this.
+2. Verify the corrected executable, input paths and setup before starting. Save the original job reference, the reason for correction and a stable corrective key in private progress. Use that key with the ordinary supervised `start` command.
+3. On restart or repeated delivery, inspect and reuse the corrective key. Apply the verified result once and use `result-handled` for its exact revision. A duplicate notification does not create another correction.
+
+For example, a read-only version check that failed because its executable path did not exist may get a separately recorded check using the verified executable. The earlier failure remains visible. No renewed human permission is needed solely for this correction within already-approved work.
+
+This is a guidance distinction, not an automatic retry policy or a new server exemption. It does not authorize replay of successful or destructive work, budget resets, evasion of a live/uncertain/interrupted/exhausted operation, a stop, hold or lost authority, or overriding an explicit human restriction. Reconcile uncertain evidence; if an actual policy conflict remains, request the precise missing decision.
+
+When task autonomy is off, read the current approval records and task thread before asking for a plan approval. An existing valid human approval covers continued work within that scope, including routine reversible corrections and worker restarts. Changed scope, withdrawn approval and explicit restrictions still require the relevant decision. The initial plan gate and final human verification remain in place.
 
 Declare relevant local ports and output paths with repeatable `start --port 8080 --artifact reports/result.json` options. Artifact paths are relative to the command directory. These declarations stay in the private record and handoff; they do not expose a port or upload a file. Mechanical checkpoints also record output file sizes and modification times without copying log contents.
 

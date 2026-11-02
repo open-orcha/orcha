@@ -163,7 +163,12 @@ def build_wake_prompt(cand: dict) -> str:
         else:
             authority = (
                 f" TASK AUTONOMY OFF (revision {revision}) applies to this task: request human "
-                "approval for your plan before implementation and for finished work. You may send "
+                "approval for your plan before implementation and for finished work. First read "
+                "the task's current approval records and thread: an existing valid human plan "
+                "approval covers continued work within that approved scope, including routine "
+                "reversible corrections. Do not request the same permission again solely because "
+                "a worker restarted or an attempt failed. Changed scope, withdrawn approval or "
+                "an explicit human restriction still requires the relevant decision. You may send "
                 "requests to people or agents at any time. Dependencies, holds, scheduling, "
                 "stop-work instructions, and workflow completion rules still apply."
             )
