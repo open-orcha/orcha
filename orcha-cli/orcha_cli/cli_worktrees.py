@@ -10,8 +10,9 @@
     orcha worktrees save-output PATH
 
 All of it runs ``worktree_gc`` (the notifier's implementation). ``--json`` prints one JSON
-object (the desktop app calls this). Removal requires the project's portal so active tasks
-can be protected. Offline listing, dry runs and saving output remain available.
+object (the desktop app calls this). The portal is used when it answers (running runs count as
+"in use", output is attached to the task, removals are logged as project events); without it
+everything still works offline (process check only, output copied to saved-output).
 """
 
 from __future__ import annotations
@@ -208,8 +209,6 @@ def cmd_worktrees(args) -> None:
         from .worktree_cleanup_activity import provider
         activity = provider(api, cid, ngc._default_post)
         try:
-            if args.action == "execute" and args.dry_run:
-                raise cleanup.CleanupError("Use preview or status to inspect cleanup without removing folders")
             if args.action == "preview":
                 out = cleanup.preview(root, activity, plan_id=getattr(args, "plan_id", None))
             elif not args.path:
@@ -235,11 +234,11 @@ def cmd_worktrees(args) -> None:
             sys.exit(1)
         return
     busy = _busy_from_portal(api, cid)
-    if (not api or busy is None) and args.action in ("clean", "remove") and not args.dry_run:
-        msg = "The portal could not verify active tasks; start it before cleanup"
-        print(json.dumps({"ok": False, "error": msg}) if args.json else msg)
-        sys.exit(1)
     if busy is None:
+        if args.action in ("clean", "remove") and not args.dry_run:
+            msg = "The portal could not verify active tasks; start it before cleanup"
+            print(json.dumps({"ok": False, "error": msg}) if args.json else msg)
+            sys.exit(1)
         api, cid, busy = None, None, set()
     rows = gc.inventory(str(root), busy=busy, measure=True)
     if rows is None:

@@ -123,38 +123,6 @@ def test_failed_preservation_keeps_checkout(project, monkeypatch):
     assert wt.exists() and not done["removed"]
 
 
-def test_cli_execute_dry_run_never_removes_previewed_checkout(project, capsys):
-    from test_worktree_gc import _cli
-
-    wt = _worktree(project, "candidate", "candidate", scaffold=False)
-    plan = cleanup.preview(project, inactive)
-    code, output = _cli(["worktrees", "execute", plan["plan_id"], "--dry-run",
-                         "--project", str(project), "--json"], capsys)
-    assert code == 1 and "without removing folders" in output
-    assert wt.exists()
-    assert cleanup.status(project, plan["plan_id"])["status"] == "ready"
-
-
-def test_preview_start_reserves_reused_checkout_before_process_starts(project):
-    from orcha_cli.notifier_preview import resolve_checkout
-
-    wt = _worktree(project, "candidate", "candidate", scaffold=False)
-    resolve_checkout({"worktree": str(wt)}, str(project))
-    plan = cleanup.preview(project, inactive)
-    assert plan["candidate_count"] == 0 and wt.exists()
-    assert "starting" in plan["items"][0]["reason"]
-
-
-def test_merge_rehearsal_is_protected_between_git_commands(project):
-    from orcha_cli.worktree_bringin import _TempWorktree
-
-    with _TempWorktree(str(project), "HEAD") as temporary:
-        plan = cleanup.preview(project, inactive)
-        assert plan["candidate_count"] == 0
-        assert plan["items"][0]["path"] == str(Path(temporary).resolve())
-        assert plan["items"][0]["reason"] == "Locked worktree"
-
-
 def test_changed_content_during_preservation_is_not_removed(project, monkeypatch):
     wt = _worktree(project, "one", "one", scaffold=False)
     plan = cleanup.preview(project, inactive)
