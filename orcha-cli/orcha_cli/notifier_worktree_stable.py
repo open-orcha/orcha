@@ -6,7 +6,7 @@ import pathlib
 from typing import Any
 
 
-from .worktree_lifecycle import checkout_available, provisioning
+from .worktree_lifecycle import provisioning
 
 
 @provisioning
@@ -22,8 +22,6 @@ def _stable_worktree(base_cwd, key, kind: str, services: Any):
     slug = services._safe_ref(key)
     branch = f"orcha/{kind}-{slug}"
     worktree = base / ".orcha-worktrees" / f"{kind}-{slug}"
-    if not checkout_available(base, worktree):
-        return None, None
     if worktree.exists():
         services._overlay_runtime_config(base, worktree)
         return str(worktree), branch
@@ -85,8 +83,6 @@ def provision_task(base_cwd, alias, task_id, services: Any):
     slug = f"{services._safe_ref(alias)}-{services._safe_ref(task_id)[:12]}"
     branch = f"orcha/task-{slug}"
     worktree = base / ".orcha-worktrees" / f"task-{slug}"
-    if not checkout_available(base, worktree):
-        return None, None
     if worktree.exists():
         return_code, _ = services._run_git(
             ["-C", str(worktree), "rev-parse", "--git-dir"], cwd=base_cwd
