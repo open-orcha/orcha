@@ -400,6 +400,101 @@ async def test_project_cleanup_permissions_and_late_progress(client, container, 
                               json={"result": progress})).status_code == 404
 
 
+async def _claimed_project_cleanup(client, container, make_agent, phase):
+    human = (await make_agent("cleanup-owner", kind="human"))["agent_id"]
+    base = f"/api/containers/{container['id']}/agent-worktrees"
+    response = await client.post(base + "/cleanup", json={"actor_agent_id": human})
+    assert response.status_code == 201, response.text
+    action = response.json()
+    assert (await client.post(base + "/claim", json={})).status_code == 200
+    if phase == "execute":
+        plan_id = action["options"]["plan_id"]
+        response = await client.post(f"/api/agent-worktrees/actions/{action['id']}/result", json={
+            "status": "done", "result": {"status": "ready", "plan_id": plan_id}})
+        assert response.status_code == 200, response.text
+        response = await client.post(base + "/cleanup", json={
+            "actor_agent_id": human, "phase": "execute", "plan_id": plan_id})
+        assert response.status_code == 201, response.text
+        action = response.json()
+        assert (await client.post(base + "/claim", json={})).status_code == 200
+    return base, action
+
+
+@pytest.mark.parametrize("phase", ["preview", "execute"])
+@pytest.mark.parametrize("terminal_status", ["done", "failed"])
+async def test_project_cleanup_progress_rechecks_status_at_write(
+        client, container, make_agent, monkeypatch, phase, terminal_status):
+    """Force a stale read on both engines; the real result handler finishes first."""
+    from portal_backend import agent_worktree_routes as routes
+
+    base, action = await _claimed_project_cleanup(client, container, make_agent, phase)
+    final = {"status": "ready" if phase == "preview" else "removed", "removed": 3}
+    if terminal_status == "failed":
+        final = {"status": "failed", "reason": "fixture interruption"}
+    terminal = routes.WorktreeActionResult(status=terminal_status, result=final)
+    authorize = routes.require_machine_lane_member
+    completed = []
+
+    def finish_after_read(cur, request, cid, lane):
+        authorize(cur, request, cid, lane)
+        if not completed:
+            completed.append(True)
+            routes.finish_agent_worktree_action(action["id"], terminal, request)
+
+    monkeypatch.setattr(routes, "require_machine_lane_member", finish_after_read)
+    response = await client.post(f"/api/agent-worktrees/actions/{action['id']}/progress", json={
+        "result": {"status": "scanning" if phase == "preview" else "executing"}})
+    assert response.status_code == 200, response.text
+    assert completed == [True]
+    saved = (await client.get(base + "/actions/" + action["id"])).json()
+    assert saved["status"] == terminal_status
+    assert saved["result"] == final
+
+
+@pytest.mark.parametrize("phase", ["preview", "execute"])
+@pytest.mark.parametrize("terminal_status", ["done", "failed"])
+async def test_project_cleanup_overlapping_progress_preserves_terminal_result(
+        client, container, make_agent, monkeypatch, phase, terminal_status):
+    """Exercise two PostgreSQL connections with completion between read and write."""
+    import asyncio
+    from threading import Event
+    from portal_backend import agent_worktree_routes as routes, database
+
+    if database.BACKEND != "postgres":
+        pytest.skip("SQLite serializes writers; requires PostgreSQL concurrent transactions")
+    base, action = await _claimed_project_cleanup(client, container, make_agent, phase)
+    selected, resume = Event(), Event()
+    authorize = routes.require_machine_lane_member
+
+    def pause_after_read(cur, request, cid, lane):
+        authorize(cur, request, cid, lane)
+        if request.url.path.endswith("/progress"):
+            selected.set()
+            if not resume.wait(10):
+                raise RuntimeError("cleanup progress test schedule timed out")
+
+    monkeypatch.setattr(routes, "require_machine_lane_member", pause_after_read)
+    url = f"/api/agent-worktrees/actions/{action['id']}"
+    progress = asyncio.create_task(client.post(url + "/progress", json={
+        "result": {"status": "scanning" if phase == "preview" else "executing"}}))
+    final = {"status": terminal_status, "preserved": 3}
+    try:
+        assert await asyncio.to_thread(selected.wait, 5), "progress did not reach the stale read"
+        response = await asyncio.wait_for(client.post(url + "/result", json={
+            "status": terminal_status, "result": final}), timeout=5)
+        assert response.status_code == 200, response.text
+        before = (await client.get(base + "/actions/" + action["id"])).json()
+    finally:
+        resume.set()
+        response = await asyncio.wait_for(progress, timeout=10)
+    assert response.status_code == 200, response.text
+    after = (await client.get(base + "/actions/" + action["id"])).json()
+    assert after["status"] == terminal_status
+    assert after["result"] == final
+    assert after["claimed_at"] == before["claimed_at"]
+    assert after["finished_at"] == before["finished_at"]
+
+
 async def test_project_cleanup_context_retains_task_without_live_run(client, container, make_agent, make_task):
     cid = container['id']
     agent = await make_agent('ongoing')

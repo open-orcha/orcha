@@ -568,7 +568,10 @@ def project_cleanup_progress(aid: str, body: ProjectCleanupProgress, request: Re
             raise HTTPException(404, "request not found")
         require_machine_lane_member(cur, request, str(row["container_id"]), LANE_GRANT)
         if row["status"] == "claimed" and (row.get("options") or {}).get("project_cleanup"):
-            cur.execute("UPDATE agent_worktree_actions SET result=%s, claimed_at=now() WHERE id=%s",
+            # Completion can commit after the read above. Check status in the
+            # write itself so older progress cannot replace the terminal result.
+            cur.execute("UPDATE agent_worktree_actions SET result=%s, claimed_at=now() "
+                        "WHERE id=%s AND status='claimed'",
                         (sql.json_param(body.result), aid))
             conn.commit()
     return {"ok": True}
