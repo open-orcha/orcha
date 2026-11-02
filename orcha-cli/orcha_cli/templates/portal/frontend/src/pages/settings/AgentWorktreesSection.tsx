@@ -18,8 +18,6 @@ import { useGrantAuthority } from "./grantAuthority";
 import { SettingRow, SettingRows, SettingsGroup, StatusLine, settingsErrText } from "./settingsUi";
 import { BringInDialog, type BringInDirection } from "./BringInDialog";
 
-import { ProjectWorktreeCleanup } from "./ProjectWorktreeCleanup";
-
 export type WorktreeState = "clean" | "has-output" | "unmerged" | "in-use" | "not-quorate";
 
 export interface WorktreeItem {
@@ -256,8 +254,6 @@ export function AgentWorktreesSection({ cid }: { cid: string | null }) {
           )}
         </SettingRow>
       </SettingRows>
-
-      <ProjectWorktreeCleanup cid={cid} humanId={auth.human?.id} locked={locked} />
 
       {!inv ? (
         <StatusLine tone="muted">

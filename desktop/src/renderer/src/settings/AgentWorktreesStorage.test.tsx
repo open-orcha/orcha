@@ -357,7 +357,7 @@ describe('Settings › Storage › Agent worktrees, project by project (Verdikt:
     api.storageWorktrees.mockResolvedValue([PROJECTS[0], GARDEN])
     render(<StorageSettings />)
     expect(await screen.findByTestId('storage-wt-why-garden')).toHaveTextContent(
-      'Excluded from automatic cleanup: 2 on a branch Orcha didn’t create · 1 detached HEAD'
+      'Not Embodent, so never removed: 2 on a branch Orcha didn’t create · 1 detached HEAD'
     )
     expect(screen.queryByTestId('storage-wt-why-fleet-mate')).toBeNull()
     const explanation = within(screen.getByTestId('storage-worktrees')).getByText(/Agents work in git worktrees/)

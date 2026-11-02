@@ -277,6 +277,3 @@ ios/dd/
 # V2 QA screenshot evidence stays local (hundreds of MB) — reports (.md) are tracked
 docs/orcha-v2-screen-review/**/*.png
 docs/orcha-v2-parity-qa/**/*.png
-
-# Local worktree retention instructions (never part of source changes)
-.orcha-keep
