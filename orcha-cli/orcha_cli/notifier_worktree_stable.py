@@ -6,6 +6,10 @@ import pathlib
 from typing import Any
 
 
+from .worktree_lifecycle import checkout_available, provisioning
+
+
+@provisioning
 def _stable_worktree(base_cwd, key, kind: str, services: Any):
     """Create or reuse a stable worktree, including a surviving local branch."""
     if (
@@ -18,6 +22,14 @@ def _stable_worktree(base_cwd, key, kind: str, services: Any):
     slug = services._safe_ref(key)
     branch = f"orcha/{kind}-{slug}"
     worktree = base / ".orcha-worktrees" / f"{kind}-{slug}"
+    if not checkout_available(base, worktree):
+        if kind == "resident":
+            from .worktree_git import CheckoutBusy
+            raise CheckoutBusy(
+                "This chat's checkout is reserved for cleanup. Finish or recover that cleanup "
+                "in worktree settings; Orcha will retry and pending messages stay queued."
+            )
+        return None, None
     if worktree.exists():
         services._overlay_runtime_config(base, worktree)
         return str(worktree), branch
@@ -65,6 +77,7 @@ def provision_live(base_cwd, alias, services: Any):
     return _stable_worktree(base_cwd, alias, "live", services)
 
 
+@provisioning
 def provision_task(base_cwd, alias, task_id, services: Any):
     """Create or reattach the durable branch for one agent and task."""
     if (
@@ -78,6 +91,8 @@ def provision_task(base_cwd, alias, task_id, services: Any):
     slug = f"{services._safe_ref(alias)}-{services._safe_ref(task_id)[:12]}"
     branch = f"orcha/task-{slug}"
     worktree = base / ".orcha-worktrees" / f"task-{slug}"
+    if not checkout_available(base, worktree):
+        return None, None
     if worktree.exists():
         return_code, _ = services._run_git(
             ["-C", str(worktree), "rev-parse", "--git-dir"], cwd=base_cwd

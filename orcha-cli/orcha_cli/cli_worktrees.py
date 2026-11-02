@@ -10,9 +10,8 @@
     orcha worktrees save-output PATH
 
 All of it runs ``worktree_gc`` (the notifier's implementation). ``--json`` prints one JSON
-object (the desktop app calls this). The portal is used when it answers (running runs count as
-"in use", output is attached to the task, removals are logged as project events); without it
-everything still works offline (process check only, output copied to saved-output).
+object (the desktop app calls this). Removal requires the project's portal so active tasks
+can be protected. Offline listing, dry runs and saving output remain available.
 """
 
 from __future__ import annotations
@@ -34,7 +33,8 @@ def register(sub, handler) -> None:
              "changes into main or update it from main (#288; use --dry-run first)",
     )
     p.add_argument("action", nargs="?", default="list",
-                   choices=("list", "clean", "remove", "save-output", "bring-in", "update-from-main"))
+                   choices=("list", "clean", "remove", "save-output", "bring-in", "update-from-main",
+                            "preview", "execute", "status", "pending"))
     p.add_argument("path", nargs="?", default=None,
                    help="worktree path — or, for bring-in / update-from-main, a task id prefix or "
                         "agent alias")
@@ -58,20 +58,19 @@ def register(sub, handler) -> None:
     p.add_argument("--keep-branch", action="store_true", help="remove: keep the branch")
     p.add_argument("--confirm-unmerged", default=None, metavar="BRANCH",
                    help="remove: required for a worktree with unmerged commits (its branch name)")
+    p.add_argument("--plan-id", default=None, help="preview: stable operation id for progress polling")
     p.add_argument("--offline", action="store_true", help="don't contact the portal")
     p.set_defaults(func=handler)
 
 
 def _project_root(start: Optional[str]) -> pathlib.Path:
     here = pathlib.Path(start or ".").resolve()
-    # Run from inside a worktree → act on the main checkout it belongs to.
-    for cand in (here, *here.parents):
-        if cand.name == gc.WORKTREES_DIR:
-            return cand.parent
-    code, top = gc.git(["rev-parse", "--path-format=absolute", "--git-common-dir"], str(here))
-    if code == 0 and top.strip().endswith("/.git"):
-        return pathlib.Path(top.strip()).parent
-    return here
+    from .worktree_git import NotGitProject, project_root
+    try:
+        # Verify Git ownership rather than inferring it from a folder's name.
+        return project_root(here)
+    except NotGitProject:
+        return here
 
 
 def _portal(root: pathlib.Path, offline: bool):
@@ -199,10 +198,57 @@ def _print_bring_in(out: dict) -> None:
 
 
 def cmd_worktrees(args) -> None:
-    root = _project_root(args.project)
+    from .worktree_git import CleanupError
+    try:
+        root = _project_root(args.project)
+    except (CleanupError, OSError) as exc:
+        message = str(exc) if isinstance(exc, CleanupError) else "The project folder could not be inspected"
+        print(json.dumps({"ok": False, "error": message}) if args.json else message)
+        sys.exit(1)
     api, cid = _portal(root, args.offline)
+    if args.action in ("preview", "execute", "status", "pending"):
+        from . import worktree_cleanup as cleanup
+        from .job_store import JobStorageError
+        from .worktree_cleanup_activity import provider
+        activity = provider(api, cid, ngc._default_post)
+        try:
+            if args.action == "execute" and args.dry_run:
+                raise cleanup.CleanupError("Use preview or status to inspect cleanup without removing folders")
+            if args.action == "preview":
+                out = cleanup.preview(root, activity, plan_id=getattr(args, "plan_id", None))
+            elif args.action == "pending":
+                out = cleanup.pending(root)
+            elif not args.path:
+                raise cleanup.CleanupError("Supply the identifier from a completed preview")
+            elif args.action == "status":
+                out = cleanup.status(root, args.path)
+            else:
+                out = cleanup.execute(root, args.path, activity)
+        except (OSError, ValueError, KeyError, JobStorageError, cleanup.CleanupError) as exc:
+            out = {"ok": False, "error": str(exc)}
+        if args.json:
+            print(json.dumps(out))
+        elif not out.get("ok"):
+            print("Not done: " + out.get("error", "cleanup failed"))
+        elif args.action == "pending":
+            for plan in out["plans"]:
+                print(f"{plan['status']}: orcha worktrees execute {plan['plan_id']}")
+        else:
+            print(f"{out['status']}: {out['scanned']} of {out['total']} folders checked; "
+                  f"{out['candidate_count']} eligible, {len(out['removed'])} removed")
+            for row in out["items"]:
+                print(f"  {row['path']}: {row.get('outcome') or row['state']} — {row['reason']}")
+            if out['status'] == 'ready':
+                print(f"Confirm this preview: orcha worktrees execute {out['plan_id']}")
+        if not out.get("ok"):
+            sys.exit(1)
+        return
     busy = _busy_from_portal(api, cid)
-    if busy is None:  # configured portal didn't answer → offline, process check only
+    if (not api or busy is None) and args.action in ("clean", "remove") and not args.dry_run:
+        msg = "The portal could not verify active tasks; start it before cleanup"
+        print(json.dumps({"ok": False, "error": msg}) if args.json else msg)
+        sys.exit(1)
+    if busy is None:
         api, cid, busy = None, None, set()
     rows = gc.inventory(str(root), busy=busy, measure=True)
     if rows is None:

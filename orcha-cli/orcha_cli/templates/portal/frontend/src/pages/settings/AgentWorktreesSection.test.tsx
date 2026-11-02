@@ -49,6 +49,7 @@ function install({ items = ITEMS, actionResult = { removed: [{}, {}, {}], kept: 
     calls.push({ url, method, body });
     const res = (data: unknown, status = 200) => ({ ok: status < 400, status, json: async () => data }) as unknown as Response;
     if (url === "/api/containers") return res([{ id: "c1", status: "active" }]);
+    if (url === "/api/containers/c1/agent-worktrees/cleanup" && method === "GET") return res({ actions: [] });
     if (url === "/api/containers/c1/agent-worktrees" && method === "GET") {
       return res({ settings, actions: [], inventory: {
         host: "mac", scanned_at: recent, items,
@@ -248,4 +249,3 @@ describe("GH #288 bring in / update (task worktrees)", () => {
       && c.body?.action === "bring_in" && (c.body?.options as { dry_run: boolean }).dry_run === true)).toBe(true));
   });
 });
-

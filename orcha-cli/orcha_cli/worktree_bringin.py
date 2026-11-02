@@ -228,11 +228,13 @@ class _TempWorktree:
 
     def __enter__(self):
         self.path = tempfile.mkdtemp(prefix="orcha-bringin-")
-        code, out = _git(["worktree", "add", "--detach", "--no-checkout", self.path, self.commit],
-                         self.base_cwd)
-        if code != 0:
-            shutil.rmtree(self.path, ignore_errors=True)
-            raise BringInError(f"could not create a rehearsal worktree: {out.strip()[:300]}")
+        from .worktree_git import CleanupError, add_locked
+        try:
+            add_locked(self.base_cwd, self.path, self.commit, "Orcha merge rehearsal",
+                       run=_git, no_checkout=True)
+        except (CleanupError, OSError) as exc:
+            # A partially created/locked checkout is evidence; do not remove it here.
+            raise BringInError("Could not safely create the rehearsal checkout; retain it for inspection") from exc
         _must(["checkout", "-q", "--detach", self.commit], self.path, what="rehearsal checkout")
         return self.path
 

@@ -18,7 +18,7 @@ import type { Agent } from "../../types";
 import { Conversation, SETUP_LABEL } from "./Conversation";
 
 // one cache-cold agent id per scenario (Conversation keeps a per-agent module cache)
-const AGENT_IDS = ["sb1", "sb2", "sb3", "sb4", "sb5", "sb6"];
+const AGENT_IDS = ["sb1", "sb2", "sb3", "sb4", "sb5", "sb6", "sb7"];
 const AI = (id: string) => ({ id, alias: "atlas-" + id, kind: "ai", role: "Builder", status: "idle" });
 const RAW_AGENTS = [{ id: "h1", alias: "kedar", kind: "human", role: "Founder", status: "idle" }].concat(AGENT_IDS.map(AI));
 const agentOf = (id: string) => RAW_AGENTS.find((a) => a.id === id) as unknown as Agent;
@@ -39,6 +39,13 @@ const PAYLOADS: Record<string, unknown> = {
   },
   sb5: { conversation: { id: "cv-sb5", status: "active" }, turns: humanTurn, startup_blocked: null },
   sb6: { conversation: { id: "cv-sb6", status: "active" }, turns: humanTurn, startup_blocked: blocked() },
+  sb7: {
+    conversation: { id: "cv-sb7", status: "active" }, turns: humanTurn,
+    startup_blocked: blocked({
+      reason: "This chat's checkout is reserved for cleanup. Finish or recover that cleanup in worktree settings; pending messages stay queued.",
+      blocker: "checkout_busy", setup_available: false,
+    }),
+  },
 };
 
 const jsonRes = (data: unknown, status = 200) => ({ ok: status < 400, status, json: async () => data }) as Response;
@@ -93,6 +100,16 @@ afterEach(() => {
 });
 
 describe("GH #301 — startup blocked by the project's Git setup", () => {
+  it("explains a cleanup reservation without offering repository setup", async () => {
+    stubFetch();
+    const { container } = mount(agentOf("sb7"));
+    await waitFor(() => expect(container.querySelector(".conv-blocked")).toBeTruthy());
+    expect(container.querySelector(".conv-blocked")!.textContent).toContain("reserved for cleanup");
+    expect(container.querySelector(".conv-blocked")!.textContent).toContain("Finish or recover");
+    expect(setupButton(container)).toBeNull();
+    expect(container.querySelector(".conv-thinking")).toBeNull();
+    expect(container.querySelector(".turn.human .dlv")!.textContent).toBe("saved");
+  });
   it("shows a lasting notice with the reason and the setup action — not 'next wake', not thinking dots", async () => {
     stubFetch();
     const { container } = mount(agentOf("sb1"));

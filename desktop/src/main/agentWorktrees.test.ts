@@ -1,6 +1,9 @@
 import { describe, it, expect, vi } from 'vitest'
+import { nodeRun } from './removeHost'
 import {
   CLI_OUTDATED,
+  projectCleanup,
+  pendingProjectCleanups,
   cleanAgentWorktrees,
   isAgentWorktreePath,
   knownFolder,
@@ -58,7 +61,7 @@ describe('agent worktrees (desktop → orcha worktrees --json)', () => {
   })
 
   it('lists the projects with worktrees, then scans one project on its own (Settings shows each as it lands)', async () => {
-    expect(worktreeProjects(PROJECTS, (f) => f === B)).toEqual([PROJECTS[1]])
+    expect(worktreeProjects(PROJECTS, (f) => f === B)).toEqual([PROJECTS[0], PROJECTS[1]])
     const run = vi.fn(async () => ({ stdout: JSON.stringify({ ok: true, items }) }))
     const out = await scanProjectWorktrees({ ...PROJECTS[0], folder: A }, run)
     expect(run.mock.calls.map((c) => (c as unknown as [string, string[]])[1].join(' '))).toEqual([`worktrees list --json --project ${A}`])
@@ -99,3 +102,52 @@ describe('agent worktrees (desktop → orcha worktrees --json)', () => {
     })
   })
 })
+
+
+it('discovers durable cleanup attempts only for known projects', async () => {
+  const plans = [{ plan_id: '11111111-2222-3333-4444-555555555555', status: 'executing' }]
+  const run = vi.fn(async () => ({ stdout: JSON.stringify({ ok: true, plans }) }))
+  expect(await pendingProjectCleanups(A, PROJECTS, run)).toEqual(plans)
+  expect(run).toHaveBeenCalledWith('orcha', ['worktrees', 'pending', '--json', '--project', A], A)
+  await expect(pendingProjectCleanups('/foreign', PROJECTS, run)).rejects.toMatchObject({ code: 'INVALID_WORKTREE' })
+  expect(run).toHaveBeenCalledTimes(1)
+})
+
+it('binds project cleanup to a known project and the exact preview id, with no path selections', async () => {
+  const planId = '11111111-2222-3333-4444-555555555555'
+  const run = vi.fn(async () => ({ stdout: JSON.stringify({ ok: true, plan_id: planId, status: 'ready' }) }))
+  await projectCleanup({ folder: A, phase: 'preview', planId }, PROJECTS, run)
+  await projectCleanup({ folder: A, phase: 'execute', planId }, PROJECTS, run)
+  expect(run.mock.calls.map(c => (c as unknown as [string, string[]])[1])).toEqual([
+    ['worktrees', 'preview', '--plan-id', planId, '--json', '--project', A],
+    ['worktrees', 'execute', planId, '--json', '--project', A]
+  ])
+  await expect(projectCleanup({ folder: '/foreign', phase: 'execute', planId }, PROJECTS, run)).rejects.toMatchObject({ code: 'INVALID_WORKTREE' })
+  await expect(projectCleanup({ folder: A, phase: 'execute', planId: '../other' }, PROJECTS, run)).rejects.toMatchObject({ code: 'INVALID_WORKTREE' })
+})
+
+it('preserves a structured cleanup error from an unsuccessful CLI exit', async () => {
+  const run = vi.fn(async () => {
+    throw Object.assign(new Error('Command failed'), {
+      code: 1, stdout: 'notice\n' + JSON.stringify({ ok: false, error: "Start this project's portal" })
+    })
+  })
+  await expect(projectCleanup({ folder: A, phase: 'preview', planId: '11111111-2222-3333-4444-555555555555' }, PROJECTS, run))
+    .rejects.toMatchObject({ code: 'WORKTREE_CLI', message: "Start this project's portal" })
+})
+
+it('keeps error stdout across the real host runner and cleanup caller', async () => {
+  const host = nodeRun(process.env)
+  const run = () => host(process.execPath, ['-e',
+    'process.stdout.write(JSON.stringify({ok:false,error:"Portal unavailable"}));process.exitCode=1'], process.cwd())
+  await expect(projectCleanup({ folder: A, phase: 'preview', planId: '11111111-2222-3333-4444-555555555555' }, PROJECTS, run))
+    .rejects.toMatchObject({ code: 'WORKTREE_CLI', message: 'Portal unavailable' })
+})
+
+it.each(['invalid JSON', JSON.stringify({ ok: true, status: 'ready' })])(
+  'does not treat a crashed CLI as a successful cleanup: %s', async (stdout) => {
+    const run = vi.fn(async () => { throw Object.assign(new Error('Command failed'), { stdout }) })
+    await expect(projectCleanup({ folder: A, phase: 'preview', planId: '11111111-2222-3333-4444-555555555555' }, PROJECTS, run))
+      .rejects.toMatchObject({ code: 'WORKTREE_CLI', message: CLI_OUTDATED })
+  }
+)
