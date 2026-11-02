@@ -131,8 +131,6 @@ def start_job(api, store, *, key, purpose, argv, cwd, max_seconds=7200, max_tran
     job_key = str(uuid5(UUID(api.task_id), key))
     registration = store.root / f'.reservation-{job_key}.json'
     with store.locked():
-        if store.cleanup_retains(cwd):
-            raise JobStorageError('Cleanup has reserved this checkout; retry after it finishes')
         if not registration.exists():
             atomic_json(registration, {'task_id':api.task_id, 'cwd':str(Path(cwd).resolve()),
                                        'continuation':contract, 'job_id':None})
@@ -188,8 +186,6 @@ def start_job(api, store, *, key, purpose, argv, cwd, max_seconds=7200, max_tran
             record['container'] = container
         # Serialize against teardown and competing CLI starts. Any crash after
         # this durable reservation retains the fence, including before Popen.
-        if store.cleanup_retains(cwd):
-            raise JobStorageError('Cleanup has reserved this checkout; retry after it finishes')
         if not Path(cwd).is_dir():
             raise JobStorageError('Command directory is unavailable')
         atomic_json(path, record)

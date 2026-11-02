@@ -12,8 +12,6 @@ orcha worktrees status PREVIEW_ID --project /path/to/project --json
 
 All three commands support `--json`. A caller can choose a UUID with `preview --plan-id UUID`, then poll `status UUID` while the foreground command runs. `execute` confirms only that saved preview. Retrying the same identifier reconciles saved outcomes; it never applies the preview to a replacement checkout. Preview and removal run on the host, outside the portal request and notifier wake loops.
 
-If the host stops, use **Retry interrupted cleanup** in the portal to resume the same saved plan. The host first checks that the previous execution no longer holds the plan's exclusive lock. Folders already removed are reported from their saved receipts. A folder being cleaned up is reserved until completion or recovery; other folders and running commands remain available during slow copying or removal.
-
 Use `preview` or `status` to inspect a cleanup without removing anything. `execute --dry-run` is refused. Legacy `clean` and `remove` commands also refuse removal without a reachable project portal; `--offline` remains available for listing and dry-run inspection.
 
 The project's portal must be reachable and support the new activity endpoint. Missing activity evidence blocks cleanup. In-progress tasks remain protected between worker runs, including renamed or detached task checkouts matched through run history or their stable paths. Live runs, sessions, previews, Git locks, managed commands awaiting reconciliation, and newly provisioned checkouts are also protected. Put a `.orcha-keep` file in a checkout, or use `git worktree lock`, to retain it explicitly. The main checkout is always excluded.

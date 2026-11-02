@@ -23,15 +23,3 @@ it("keeps the action unavailable to a viewer", () => {
   render(<ProjectWorktreeCleanup cid="project" locked={true} />);
   expect(screen.getByRole("button", { name: "Preview project-wide cleanup" })).toBeDisabled();
 });
-
-it.each(["preview", "execute"])("retries a failed %s using its original plan", async (phase) => {
-  vi.stubGlobal("fetch", vi.fn(async (_url: string, init?: RequestInit) => {
-    if (init?.body) calls.push(JSON.parse(String(init.body)));
-    return { ok: true, status: 200, json: async () => ({ id: "failed-action", status: "failed",
-      result: null, error: "The host stopped", options: { phase, plan_id: "original-plan" } }) };
-  }));
-  render(<ProjectWorktreeCleanup cid="project" humanId="owner" locked={false} />);
-  fireEvent.click(screen.getByText("Preview project-wide cleanup"));
-  fireEvent.click(await screen.findByText("Retry interrupted cleanup"));
-  await waitFor(() => expect(calls[1]).toEqual({ phase, plan_id: "original-plan", actor_agent_id: "owner" }));
-});

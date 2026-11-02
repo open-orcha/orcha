@@ -27,22 +27,11 @@ export const CLI_OUTDATED =
 
 /** `orcha … --json` → the parsed object, or null when the CLI is missing / too old. */
 async function cliJson(run: Run, args: string[], cwd: string): Promise<Record<string, unknown> | null> {
-  let stdout: string
-  let failed = false
   try {
-    stdout = (await run('orcha', args, cwd)).stdout
-  } catch (error) {
-    // execFile rejects on a nonzero exit, but the CLI still returns its useful JSON error.
-    if (!error || typeof error !== 'object' || !('stdout' in error) || typeof error.stdout !== 'string') return null
-    stdout = error.stdout
-    failed = true
-  }
-  try {
+    const { stdout } = await run('orcha', args, cwd)
     const line = stdout.trim().split('\n').filter(Boolean).pop() ?? ''
     const parsed = JSON.parse(line) as unknown
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null
-    const result = parsed as Record<string, unknown>
-    return failed && result.ok !== false ? null : result
+    return parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : null
   } catch {
     return null
   }
