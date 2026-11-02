@@ -137,20 +137,6 @@ def _plain_path(path: str) -> str:
 def resolve_checkout(claim: dict, project_cwd: str, *, git=_git) -> tuple[str, Optional[str]]:
     """(directory to run in, throwaway worktree to remove afterwards or None). Raises
     PreviewError with plain words when the task's change can't be found safely."""
-    from .job_store import JobStorageError
-    from .worktree_cleanup_scan import CleanupError
-    from .worktree_lifecycle import locked, record_provisioned
-
-    try:
-        with locked(project_cwd) as root:
-            result = _resolve_checkout(claim, project_cwd, git=git)
-            record_provisioned(root, result[0], claim.get("branch"))
-            return result
-    except (OSError, CleanupError, JobStorageError) as exc:
-        raise PreviewError("Could not reserve the preview checkout safely") from exc
-
-
-def _resolve_checkout(claim: dict, project_cwd: str, *, git=_git) -> tuple[str, Optional[str]]:
     base = os.path.realpath(project_cwd)
     trees = os.path.join(base, ".orcha-worktrees")
     recorded_base = claim.get("base_cwd")
@@ -177,11 +163,8 @@ def _resolve_checkout(claim: dict, project_cwd: str, *, git=_git) -> tuple[str, 
         raise PreviewError("invalid preview id")
     temp = _plain_path(os.path.join(trees, f"preview-{pid[:8]}"))
     if os.path.exists(temp):
-        _remove_worktree(base, temp, git)
-        if os.path.exists(temp):
-            raise PreviewError("The previous preview checkout is protected; retain it for inspection")
-    code, out = git(["worktree", "add", "--lock", "--reason", "Orcha preview", "--detach",
-                    temp, f"refs/heads/{branch}"], base)
+        git(["worktree", "remove", "--force", temp], base)
+    code, out = git(["worktree", "add", "--detach", temp, f"refs/heads/{branch}"], base)
     if code != 0:
         raise PreviewError(f"could not check out branch '{branch}' for the preview: {out[-300:]}")
     return temp, temp
@@ -312,26 +295,7 @@ def _proc_started(pid: int) -> Optional[str]:
 
 def _remove_worktree(project_cwd, temp, git=_git):
     if temp:
-        from .worktree_cleanup_scan import CleanupError, common_dir
-        from .worktree_gc import admin_dir
-
-        # Release only the lock this preview created. A person's lock or hold wins.
-        try:
-            if (pathlib.Path(temp) / ".orcha-keep").exists():
-                return
-            common = common_dir(project_cwd)
-            admin = admin_dir(temp)
-            if not admin or pathlib.Path(admin).parent != common / "worktrees" or common_dir(temp) != common:
-                return
-            lock = pathlib.Path(admin) / "locked"
-            if lock.exists():
-                if lock.read_text().strip() != "Orcha preview":
-                    return
-                if git(["worktree", "unlock", temp], project_cwd)[0] != 0:
-                    return
-            git(["worktree", "remove", "--force", temp], os.path.realpath(project_cwd))
-        except (OSError, CleanupError):
-            return
+        git(["worktree", "remove", "--force", temp], os.path.realpath(project_cwd))
 
 
 def kill_group(proc, *, grace: float = KILL_GRACE_S) -> None:
