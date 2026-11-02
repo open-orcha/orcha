@@ -61,28 +61,6 @@ def checkout_available(base, path):
         return not store.cleanup_retains(path)
 
 
-def release_completed_claims(base, owner, paths):
-    """Reconcile terminal receipts while holding this plan's operation/lifecycle locks.
-
-    The operation lock also excludes a surviving removal child. Only this plan's
-    exact claims may be released; another plan's reservation remains untouched.
-    """
-    store = JobStore(base)
-    with store.locked():
-        for path in paths:
-            resolved = str(Path(path).resolve())
-            claim = store.root / ('.cleanup-' + hashlib.sha256(resolved.encode()).hexdigest() + '.json')
-            if not claim.exists():
-                continue
-            saved = read_json(claim)
-            if saved.get('owner') != owner:
-                continue
-            if saved.get('path') != resolved:
-                raise CleanupError("The cleanup reservation does not match this checkout")
-            claim.unlink()
-        _sync_directory(store.root)
-
-
 @contextmanager
 def cleanup_claim(base, path, owner):
     """Reserve only this checkout; slow I/O never holds either project-wide lock.
