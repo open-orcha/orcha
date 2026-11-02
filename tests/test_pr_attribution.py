@@ -61,7 +61,8 @@ def test_migration_042_exists_and_is_next_sequential():
     # 084-090 add managed messages/jobs, notices, immutable stop observations,
     # bounded command transfers, and dispatch boundaries before registration (GH #312).
     # 091 adds durable command outcome monitors and handled receipts (GH #388).
-    assert numbers[-1] == 91, f"091 must be the latest migration, saw {numbers[-1]:03d}"
+    # 092 records which agent drafted a workflow for a person (GH #391).
+    assert numbers[-1] == 92, f"092 must be the latest migration, saw {numbers[-1]:03d}"
 
 
 def test_agents_git_email_column_applied(db):

@@ -101,6 +101,7 @@ class WorkflowActor:
     id: str
     verified: bool
     work_lane: bool = False
+    run_id: str | None = None
 
 
 class WorkflowHooks:
@@ -990,6 +991,11 @@ class WorkflowService:
             if w.get("hidden_by_human_id")
             else None
         )
+        drafted_by = (
+            self.one("SELECT alias FROM agents WHERE id=%s", (w["drafted_by_agent_id"],))
+            if w.get("drafted_by_agent_id")
+            else None
+        )
         created = self.one(
             "SELECT detail FROM workflow_history WHERE workflow_id=%s AND event='workflow_created'", (wid,)
         )
@@ -997,6 +1003,7 @@ class WorkflowService:
             copy_notes=(created["detail"].get("copy_notes", []) if created else []),
             hidden=bool(w.get("hidden_at")),
             hidden_by_alias=hidden_by["alias"] if hidden_by else None,
+            drafted_by_alias=drafted_by["alias"] if drafted_by else None,
             capability={
                 "workflow_read": True,
                 "workflow_human_write": can_write,
@@ -1590,12 +1597,77 @@ class WorkflowService:
             "save_starts_work": False,
         }
 
+    def draft_owner(self, cid, agent, named_id, run_id=None):
+        """GH #391: the person who owns a workflow an agent drafts at someone's request.
+
+        The agent may name them; otherwise it is whoever requested the task this work
+        session runs for (or the agent's only in-progress task when the session is not
+        bound to one). Never guessed: no single live non-viewer human means a refusal."""
+        owner_id = None
+        if named_id:
+            try:
+                owner_id = str(UUID(str(named_id)))
+            except ValueError:
+                pass  # malformed input is a clear refusal, never a database error
+        else:
+            run = run_id and self.one(
+                """SELECT t.created_by_agent_id FROM worker_runs r
+                   JOIN tasks t ON t.id=r.task_id
+                   WHERE r.run_id=%s AND r.agent_id=%s AND t.container_id=%s""",
+                (run_id, agent["id"], cid),
+            )
+            tasks = [run] if run else self.rows(
+                """SELECT t.created_by_agent_id FROM tasks t
+                   JOIN agent_tasks a ON a.task_id=t.id
+                   WHERE a.agent_id=%s AND a.assignment_status IN ('assigned','accepted','working')
+                     AND t.status='in_progress' AND t.is_root=false AND t.container_id=%s
+                   LIMIT 2""",
+                (agent["id"], cid),
+            )
+            if len(tasks) == 1:  # several unbound in-progress tasks: ask, don't guess
+                owner_id = tasks[0]["created_by_agent_id"]
+        owner = owner_id and self.one(
+            "SELECT * FROM agents WHERE id=%s AND container_id=%s AND kind='human' AND terminated_at IS NULL AND member_role<>'viewer'",
+            (owner_id, cid),
+        )
+        if not owner:
+            conflict(
+                "draft_owner_required",
+                "Name the person this draft is for (for_human_id): a current human "
+                "member of this project who is not a viewer."
+                if named_id
+                else "Could not tell which person asked for this draft. Name them "
+                "(for_human_id): a current human member of this project who is not a viewer.",
+                status=422,
+            )
+        return owner
+
     def create(self, cid, actor, body, *, copied_setup=None):
         p = self.actor(actor, cid)
-        if p["kind"] != "human":
-            conflict(
-                "human_required", "Only a person can create a workflow.", status=403
+        drafter = None
+        if p["kind"] == "human":
+            if body.get("for_human_id") not in (None, p["id"]):
+                conflict(
+                    "owner_not_allowed",
+                    "Only an agent drafting for a person names someone else as the owner.",
+                    status=422,
+                )
+        else:
+            # GH #391: an agent may save a DRAFT for a person; nothing else.
+            if (
+                copied_setup
+                or body.get("existing_task_ids")
+                or body.get("import_acceptances")
+            ):
+                conflict(
+                    "human_required",
+                    "A person must bring existing tasks into a workflow.",
+                    status=403,
+                )
+            drafter, p = p, self.draft_owner(
+                cid, p, body.get("for_human_id"), actor.run_id
             )
+            actor = WorkflowActor(p["id"], True)
         project = self.one("SELECT status FROM containers WHERE id=%s", (cid,))
         if project["status"] != "active":
             conflict("project_not_active", "Resume the project first.")
@@ -1613,7 +1685,7 @@ class WorkflowService:
         version = routing.semantics_for(body)
         wid = _id()
         self.cur.execute(
-            "INSERT INTO workflows(id,container_id,owner_human_id,created_by_human_id,title,goal,execution_mode,semantics_version,turn_allowance) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+            "INSERT INTO workflows(id,container_id,owner_human_id,created_by_human_id,title,goal,execution_mode,semantics_version,turn_allowance,drafted_by_agent_id) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
             (
                 wid,
                 cid,
@@ -1624,6 +1696,7 @@ class WorkflowService:
                 body.get("execution_mode", "serial"),
                 version,
                 body.get("turn_allowance", 40),
+                drafter and drafter["id"],
             ),
         )
         if copied_setup:
@@ -1672,14 +1745,24 @@ class WorkflowService:
                 "INSERT INTO workflow_objectives(id,workflow_id,title,criteria) VALUES (%s,%s,%s,%s)",
                 (_id(), wid, o["title"], o["criteria"]),
             )
-        self.audit(w, p, "workflow_created", created, scope=True)
+        if drafter:
+            created.update(
+                drafted_by=drafter["alias"],
+                drafted_for=p["alias"],
+                drafted_for_id=p["id"],
+            )
+        self.audit(w, drafter or p, "workflow_created", created, scope=True)
         return wid
 
     def preview_draft(self, cid, body):
         from portal_backend.schemas.workflows import WorkflowDraft
 
         draft = WorkflowDraft.model_validate(
-            {k: v for k, v in body.items() if k in WorkflowDraft.model_fields}
+            {
+                k: v
+                for k, v in body.items()
+                if k in WorkflowDraft.model_fields and k != "for_human_id"
+            }
         ).model_dump(mode="json")
         preview = self.preview_import(cid, draft["existing_task_ids"])
         keys = [t["client_key"] for t in draft["tasks"]]

@@ -41,6 +41,15 @@ it("shows immutable supplier and same-person acceptance in Activity", async () =
   expect(screen.getByText("Submitted by Kedar (verified).")).toBeVisible();
 });
 
+it("says who drafted a workflow and for whom, without listing the person as the drafter", async () => {
+  const created = { ...activity, id: "created", actor_alias: "CodeCleanupAgent", actor_kind: "ai", event: "workflow_created",
+    detail: { title: "Release", drafted_by: "CodeCleanupAgent", drafted_for: "Kedar", drafted_for_id: "kedar" } };
+  vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ activity: [created], next_before_at: null, next_before_id: null })));
+  render(<MemoryRouter><WorkflowActivity detail={exampleWorkflow({ activity: [] })} /></MemoryRouter>);
+  expect(await screen.findByText(/Drafted by CodeCleanupAgent for Kedar\./)).toBeVisible();
+  expect(screen.getByText(/only the owner can prepare, release or start it/)).toBeVisible();
+});
+
 it("tells the loop's story in Activity: outcomes, the route taken, a stall and the owner's decision", async () => {
   const rows = [
     { ...activity, id: "r1", event: "workflow_outcome_reported", detail: { outcome: "Changes", findings: 2, route: "Sends the work back to Build iOS for round 2 of Draft and review." } },

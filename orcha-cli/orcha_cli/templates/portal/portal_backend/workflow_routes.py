@@ -97,7 +97,7 @@ def resolve_actor(cur, request, cid, *, allow_agent=False):
     token = request.headers.get("X-Orcha-Run-Token")
     if allow_agent and token:
         cur.execute(
-            "SELECT agent_id FROM embodiment_tokens WHERE run_token=%s AND revoked_at IS NULL AND lane='work'",
+            "SELECT agent_id, run_id FROM embodiment_tokens WHERE run_token=%s AND revoked_at IS NULL AND lane='work'",
             (token,),
         )
         row = cur.fetchone()
@@ -109,7 +109,8 @@ def resolve_actor(cur, request, cid, *, allow_agent=False):
             )
         aid = str(row["agent_id"])
         require_work_lane(cur, aid, token, request)
-        actor = service.WorkflowActor(aid, True, True)
+        run_id = row["run_id"] and str(row["run_id"])
+        actor = service.WorkflowActor(aid, True, True, run_id)
         service.WorkflowService(cur, HOOKS).actor(actor, cid)
         return actor
     if token:
@@ -262,7 +263,7 @@ def search_workflow_tasks(
 def preview_workflow(cid: str, body: model.WorkflowDraft, request: Request):
     with db_cursor(readonly=True) as (_, cur):
         require_member_read(cur, request, cid)
-        resolve_actor(cur, request, cid)
+        resolve_actor(cur, request, cid, allow_agent=True)
         svc = service.WorkflowService(cur, HOOKS)
         return svc.preview_draft(cid, body.model_dump(mode="json"))
 
@@ -275,7 +276,9 @@ def preview_workflow(cid: str, body: model.WorkflowDraft, request: Request):
 def create_workflow(cid: str, body: model.WorkflowCreate, request: Request):
     service.require_capability()
     with db_cursor() as (_, cur):
-        actor = resolve_actor(cur, request, cid)
+        # GH #391: a work-session agent may save a DRAFT for a person (create() enforces
+        # draft-only and a human owner); every other workflow write stays human-only.
+        actor = resolve_actor(cur, request, cid, allow_agent=True)
         return service.WorkflowService(cur, HOOKS).mutate(
             cid, actor, "create", body.model_dump(mode="json")
         )
