@@ -41,7 +41,6 @@ export function ProjectWorktreeCleanup({ cid, humanId, locked }: {
     const current = ++generation.current;
     setAction(null); setSaved([]); setRestoring(true); setStarting(false); setRestoreFailed(false); setError(null);
     void getJSON<{ actions: Action[] }>(`${base}/cleanup`).then(data => {
-      if (!Array.isArray(data?.actions)) throw new Error("Could not read saved cleanup. Please reload it.");
       if (generation.current === current) { setSaved(data.actions); setAction(data.actions[0] ?? null); }
     }).catch(e => {
       if (generation.current === current) { setRestoreFailed(true); setError(settingsErrText(e)); }
@@ -49,7 +48,7 @@ export function ProjectWorktreeCleanup({ cid, humanId, locked }: {
     return () => { generation.current++; };
   }, [base, reload]);
   useEffect(() => {
-    if (!action || restoring || starting || (action.status !== "requested" && action.status !== "claimed")) return;
+    if (!action || !pending || starting) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout>;
     const poll = async () => {
@@ -65,7 +64,7 @@ export function ProjectWorktreeCleanup({ cid, humanId, locked }: {
     };
     void poll();
     return () => { cancelled = true; clearTimeout(timer); };
-  }, [base, action?.id, action?.status, restoring, starting]);
+  }, [base, action?.id, pending, starting]);
   async function start(phase: "preview" | "execute", retry = false) {
     if (locked || !humanId || pending || restoreFailed) return;
     const current = generation.current;
