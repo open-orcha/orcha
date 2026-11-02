@@ -186,7 +186,7 @@ def test_reused_resident_conversation_worktree_refreshes_orcha_skills(tmp_path):
     ).read_text() == "installed local Codex recipe"
 
 
-def test_tick_provisions_worktree_only_for_code_wakes(monkeypatch):
+def test_tick_provisions_worktree_only_for_code_wakes(monkeypatch, tmp_path):
     """Heuristic: a wake with an assigned/ready task (auto_start) gets a worktree;
     a pure event wake does not."""
     calls = []
@@ -202,7 +202,7 @@ def test_tick_provisions_worktree_only_for_code_wakes(monkeypatch):
     def cand(auto, latest="x", pending=1):
         return {"active": True, "candidates": [{
             "agent_id": "00000000-0000-0000-0000-000000000009", "alias": "B",
-            "should_wake": True, "headless_cwd": "/proj", "tmux_target": None,
+            "should_wake": True, "headless_cwd": str(tmp_path), "tmux_target": None,
             "pending_events": pending, "auto_start_task_ids": auto, "reason": "wake",
             "latest_event": latest, "max_event_ts": 1.0, "headless_flags": None}]}
 
@@ -239,7 +239,7 @@ def test_tick_provisions_worktree_only_for_code_wakes(monkeypatch):
     calls.clear()
     monkeypatch.setattr(notifier, "_get_json", lambda url, **k: {"active": True, "candidates": [{
         "agent_id": "00000000-0000-0000-0000-000000000009", "alias": "B", "should_wake": True,
-        "headless_cwd": "/proj", "tmux_target": None, "pending_events": 1,
+        "headless_cwd": str(tmp_path), "tmux_target": None, "pending_events": 1,
         "auto_start_task_ids": [], "wake_task_id": "TASK-7", "reason": "wake",
         "latest_event": "request_answered", "max_event_ts": 1.0, "headless_flags": None}]})
     notifier.tick("http://x", "cid", dry_run=False, cooldown=15, min_idle=0, quiet=True, live_workers={})

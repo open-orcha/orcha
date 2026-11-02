@@ -234,6 +234,77 @@ def test_external_detached_and_other_branches_keep_commits_and_private_files(pro
     assert cleanup.execute(project, plan["plan_id"], inactive) == done
 
 
+def test_saved_archive_restores_content_modes_links_and_staged_state(project, tmp_path):
+    """Use only the saved archive and refs to reconstruct a removed checkout."""
+    import json
+    import os
+    import shutil
+    import stat
+
+    wt = _worktree(project, "restore", "feature/restore", scaffold=False)
+    (wt / "removed.txt").write_text("committed, then deleted\n")
+    (wt / "script.sh").write_text("#!/bin/sh\nexit 0\n")
+    _git(["add", "."], wt)
+    _git(["commit", "-qm", "restoration baseline"], wt)
+    head = _git(["rev-parse", "HEAD"], wt).stdout.strip()
+    (wt / "README.md").write_text("staged version\n")
+    (wt / "staged-only.txt").write_text("exists only in the index\n")
+    _git(["add", "README.md", "staged-only.txt"], wt)
+    (wt / "README.md").write_text("unstaged version\n")
+    (wt / "staged-only.txt").unlink()
+    (wt / "removed.txt").unlink()
+    (wt / "script.sh").chmod(0o755)
+    (wt / "binary.dat").write_bytes(bytes(range(256)))
+    (wt / ".env").write_text("synthetic private configuration\n")
+    (wt / "readme-link").symlink_to("README.md")
+
+    def contents(folder):
+        result = {}
+        for path in folder.rglob("*"):
+            rel = path.relative_to(folder).as_posix()
+            if rel == ".git":
+                continue
+            if path.is_symlink():
+                result[rel] = ("link", os.readlink(path))
+            elif path.is_file():
+                result[rel] = ("file", path.read_bytes(), stat.S_IMODE(path.stat().st_mode))
+        return result
+
+    before = contents(wt)
+    staged = _git(["ls-files", "--stage", "-z"], wt).stdout
+    plan = cleanup.preview(project, inactive)
+    assert plan["status"] == "ready" and plan["candidate_count"] == 1
+    done = cleanup.execute(project, plan["plan_id"], inactive)
+    assert done["status"] == "done" and len(done["removed"]) == 1
+    assert not wt.exists()
+    saved = Path(done["removed"][0]["saved_to"])
+    manifest = json.loads((saved / "manifest.json").read_text())
+    assert manifest["head"] == head
+    recovery_ref = f"refs/orcha/cleanup/{plan['plan_id']}/{saved.name}/head"
+    restored = tmp_path / "restored-checkout"
+    _git(["worktree", "add", "--detach", str(restored), recovery_ref], project)
+    _git(["apply", "--binary", str(saved / "tracked.patch")], restored)
+    for rel, meta in manifest["files"].items():
+        target = restored / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if meta["kind"] == "symlink":
+            assert not (saved / "files" / rel).exists()  # archive never follows links
+            target.symlink_to(meta["target"])
+        else:
+            shutil.copyfile(saved / "files" / rel, target)
+            target.chmod(meta["mode"])
+    index = Path(_git(["rev-parse", "--git-path", "index"], restored).stdout.strip())
+    if not index.is_absolute():
+        index = restored / index
+    shutil.copyfile(saved / "index", index)
+
+    assert contents(restored) == before
+    assert _git(["ls-files", "--stage", "-z"], restored).stdout == staged
+    assert _git(["show", ":staged-only.txt"], restored).stdout == "exists only in the index\n"
+    assert _git(["show", ":README.md"], restored).stdout == "staged version\n"
+    assert _git(["rev-parse", "HEAD"], restored).stdout.strip() == head
+
+
 def test_active_task_between_runs_and_locked_and_hold_retained(project):
     task = _worktree(project, "task-Atlas-1234abcd-567", "renamed", scaffold=False)
     held = _worktree(project, "held", "hold", scaffold=False)

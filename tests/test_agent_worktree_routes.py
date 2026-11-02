@@ -356,6 +356,50 @@ async def test_saved_cleanup_requires_project_membership(client, container, make
         assert response.json() == {'actions': []}
 
 
+async def test_project_cleanup_permissions_and_late_progress(client, container, make_agent, trust_proxy):
+    """New cleanup routes retain the human-control and host-reporting boundaries."""
+    from uuid import uuid4
+
+    cid = container["id"]
+    await _members(client, cid, make_agent)
+    base = f"/api/containers/{cid}/agent-worktrees"
+    for who in (HUBOT, VERA, MALLORY):
+        denied = await client.post(base + "/cleanup", json={}, headers=who)
+        assert denied.status_code == 403
+        context = await client.post(base + "/cleanup-context", json={"paths": []}, headers=who)
+        assert context.status_code == 403
+    ai = (await make_agent("cleanup-ai"))["agent_id"]
+    assert (await client.post(base + "/cleanup", json={"actor_agent_id": ai})).status_code == 403
+    assert (await client.post(base + "/cleanup", json={"phase": "unknown"}, headers=OCTO)).status_code == 422
+    assert (await client.post(base + "/cleanup", json={"plan_id": "invalid"}, headers=OCTO)).status_code == 400
+    assert (await client.post(base + "/cleanup-context", json={
+        "paths": [f"/fixture/{i}" for i in range(501)]}, headers=OCTO)).status_code == 422
+
+    response = await client.post(base + "/cleanup", json={}, headers=OCTO)
+    assert response.status_code == 201, response.text
+    preview = response.json()
+    progress_url = f"/api/agent-worktrees/actions/{preview['id']}/progress"
+    progress = {"status": "scanning", "scanned": 10}
+    # Unclaimed and completed actions must not accept late progress.
+    assert (await client.post(progress_url, json={"result": progress})).status_code == 200
+    assert (await client.get(base + "/actions/" + preview["id"])).json()["result"] is None
+    await client.post(base + "/claim", json={})
+    for who in (HUBOT, VERA, MALLORY):
+        assert (await client.post(progress_url, json={"result": progress}, headers=who)).status_code == 403
+    assert (await client.post(progress_url, json={"result": progress})).status_code == 200
+    assert (await client.get(base + "/actions/" + preview["id"])).json()["result"] == progress
+    final = {"status": "ready", "plan_id": preview["options"]["plan_id"]}
+    result = await client.post(f"/api/agent-worktrees/actions/{preview['id']}/result",
+                               json={"status": "done", "result": final})
+    assert result.status_code == 200
+    assert (await client.post(progress_url, json={"result": progress})).status_code == 200
+    assert (await client.get(base + "/actions/" + preview["id"])).json()["result"] == final
+    assert (await client.post("/api/agent-worktrees/actions/invalid/progress",
+                              json={"result": progress})).status_code == 400
+    assert (await client.post(f"/api/agent-worktrees/actions/{uuid4()}/progress",
+                              json={"result": progress})).status_code == 404
+
+
 async def test_project_cleanup_context_retains_task_without_live_run(client, container, make_agent, make_task):
     cid = container['id']
     agent = await make_agent('ongoing')
