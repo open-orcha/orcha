@@ -277,13 +277,6 @@ def _execute(base, plan_id, activity, *, operation_fd, progress=None):
         except (OSError, CleanupError, subprocess.SubprocessError) as exc:
             row.update(outcome="kept", reason=str(exc) if isinstance(exc, CleanupError) else "Could not safely finish; folder retained")
         publish()
-    # Claim admission can fail on a retry (for example, a replacement path now
-    # targets another reserved checkout). Release our older claim for the saved
-    # terminal receipt before reporting completion; keep the other claim intact.
-    with lifecycle.locked(base):
-        lifecycle.release_completed_claims(base, plan_id, [
-            row["path"] for row in plan["items"] if row.get("outcome") in ("removed", "kept")
-        ])
     plan["status"] = "done"
     publish()
     return public(plan)

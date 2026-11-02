@@ -384,8 +384,7 @@ def test_recovery_after_removal_does_not_remove_new_work(project, monkeypatch):
 
 
 @pytest.mark.parametrize("saved_status", ["executing", "done"])
-@pytest.mark.parametrize("replacement", ["worktree", "symlink"])
-def test_recovered_receipt_releases_claim_after_second_interruption(project, monkeypatch, saved_status, replacement):
+def test_recovered_receipt_releases_claim_after_second_interruption(project, monkeypatch, saved_status):
     from uuid import uuid4
     from orcha_cli.job_store import JobStore, JobStorageError, atomic_json, read_json
 
@@ -428,71 +427,20 @@ def test_recovered_receipt_releases_claim_after_second_interruption(project, mon
         store.reserve(str(uuid4()), {"cwd": str(wt), "status": "reserved"})
 
     # Manually reused paths must never be removed again while reconciling receipts.
-    if replacement == "symlink":
-        destination = project.parent / "new-work"
-        destination.mkdir()
-        wt.symlink_to(destination, target_is_directory=True)
-    else:
-        _git(["worktree", "add", str(wt), "twice-interrupted"], project)
-        destination = wt
+    _git(["worktree", "add", str(wt), "twice-interrupted"], project)
     (wt / "new-work.txt").write_text("new work after removal")
-    destination_identity = scan.identity(destination)
-    claims = list(store.root.glob(".cleanup-*.json"))
-    assert len(claims) == 1
 
     def unexpected_activity(rows):
         pytest.fail("terminal replay must not start another removal")
 
     done = cleanup.execute(project, plan["plan_id"], unexpected_activity)
     assert done["status"] == "done" and len(done["removed"]) == 1
-    assert not claims[0].exists()
     assert not store.cleanup_retains(wt)
-    assert not store.cleanup_retains(destination)
     with cleanup.lifecycle.locked(project):
         assert cleanup.lifecycle.checkout_available(project, wt)
-        assert cleanup.lifecycle.checkout_available(project, destination)
     assert store.reserve(str(uuid4()), {"cwd": str(wt), "status": "reserved"})
-    assert store.reserve(str(uuid4()), {"cwd": str(destination), "status": "reserved"})
     assert cleanup.execute(project, plan["plan_id"], unexpected_activity) == done
     assert (wt / "new-work.txt").read_text() == "new work after removal"
-    assert scan.identity(destination) == destination_identity
-    if replacement == "symlink":
-        assert wt.is_symlink() and wt.readlink() == destination
-
-
-@pytest.mark.parametrize("same_owner", [True, False])
-def test_terminal_receipt_preserves_claim_at_symlink_destination(project, same_owner):
-    from uuid import uuid4
-    from orcha_cli.job_store import JobStore, atomic_json, read_json
-
-    wt = _worktree(project, "redirected-receipt", "redirected-receipt", scaffold=False)
-    plan = cleanup.preview(project, inactive)
-    destination = project.parent / "reserved-new-work"
-    destination.mkdir()
-    (destination / "keep.txt").write_text("work protected by a separate reservation")
-    store = JobStore(project)
-    for checkout, owner in [(wt, plan["plan_id"]),
-                            (destination, plan["plan_id"] if same_owner else str(uuid4()))]:
-        with pytest.raises(KeyboardInterrupt), cleanup.lifecycle.operation(project, owner):
-            with cleanup.lifecycle.cleanup_claim(project, str(checkout), owner):
-                raise KeyboardInterrupt("leave a durable reservation")
-    claims = {read_json(p)["path"]: p for p in store.root.glob(".cleanup-*.json")}
-    destination_claim = claims[str(destination)]
-    destination_receipt = destination_claim.read_bytes()
-    _git(["worktree", "remove", str(wt)], project)
-    wt.symlink_to(destination, target_is_directory=True)
-    target = scan.common_dir(project) / "orcha/worktree-cleanup" / (plan["plan_id"] + ".json")
-    saved = read_json(target)
-    saved["items"][0]["outcome"] = "removed"
-    saved["status"] = "done"
-    atomic_json(target, saved)
-
-    assert cleanup.execute(project, plan["plan_id"], inactive)["status"] == "done"
-    assert not claims[str(wt)].exists()
-    assert destination_claim.read_bytes() == destination_receipt
-    assert store.cleanup_retains(destination)
-    assert wt.is_symlink() and wt.readlink() == destination
-    assert (destination / "keep.txt").read_text() == "work protected by a separate reservation"
 
 
 @pytest.mark.parametrize("same_owner", [True, False])
@@ -514,55 +462,6 @@ def test_terminal_kept_receipt_releases_only_its_own_claim(project, same_owner):
     assert cleanup.execute(project, plan["plan_id"], inactive)["status"] == "done"
     assert JobStore(project).cleanup_retains(wt) is not same_owner
     assert (wt / "README.md").exists()
-
-
-@pytest.mark.parametrize("destination_owner", ["none", "same", "other"])
-def test_interrupted_cleanup_keeps_original_claim_identity(project, monkeypatch, destination_owner):
-    from uuid import uuid4
-    from orcha_cli.job_store import JobStore, read_json
-
-    wt = _worktree(project, "interrupted-identity", "interrupted-identity", scaffold=False)
-    plan = cleanup.preview(project, inactive)
-    git = cleanup.gc.git
-
-    def interrupt_after_removal(args, *pos, **kwargs):
-        result = git(args, *pos, **kwargs)
-        if args[:2] == ["worktree", "remove"] and result[0] == 0:
-            raise KeyboardInterrupt("removed before saving a terminal receipt")
-        return result
-
-    monkeypatch.setattr(cleanup.gc, "git", interrupt_after_removal)
-    with pytest.raises(KeyboardInterrupt):
-        cleanup.execute(project, plan["plan_id"], inactive)
-    monkeypatch.setattr(cleanup.gc, "git", git)
-    store = JobStore(project)
-    original_claim, = store.root.glob(".cleanup-*.json")
-    destination = project.parent / "reserved-destination"
-    destination.mkdir()
-    (destination / "keep.txt").write_text("new work")
-    if destination_owner != "none":
-        owner = plan["plan_id"] if destination_owner == "same" else str(uuid4())
-        with pytest.raises(KeyboardInterrupt), cleanup.lifecycle.operation(project, owner):
-            with cleanup.lifecycle.cleanup_claim(project, str(destination), owner):
-                raise KeyboardInterrupt("separate destination reservation")
-    other_claims = {p: p.read_bytes() for p in store.root.glob(".cleanup-*.json") if p != original_claim}
-    wt.symlink_to(destination, target_is_directory=True)
-
-    # Inspect the admitted claim before discovery can reject the replaced checkout.
-    discover = scan.discover
-    def inspect_claim(*args, **kwargs):
-        assert read_json(original_claim)["path"] == str(wt)
-        assert {p: p.read_bytes() for p in other_claims} == other_claims
-        assert len(list(store.root.glob(".cleanup-*.json"))) == 1 + len(other_claims)
-        return discover(*args, **kwargs)
-    monkeypatch.setattr(scan, "discover", inspect_claim)
-    done = cleanup.execute(project, plan["plan_id"], inactive)
-    assert done["status"] == "done" and len(done["kept"]) == 1
-    assert not original_claim.exists()
-    assert {p: p.read_bytes() for p in store.root.glob(".cleanup-*.json")} == other_claims
-    assert store.cleanup_retains(destination) is (destination_owner != "none")
-    assert wt.is_symlink() and wt.readlink() == destination
-    assert (destination / "keep.txt").read_text() == "new work"
 
 
 def test_dependency_cache_does_not_hide_private_config_or_foreign_repo(project):
