@@ -34,15 +34,14 @@ it('cleanup invalidates the changed project’s in-flight inventory but preserve
   expect(reads.filter((folder) => folder === '/projects/small')).toHaveLength(2)
 })
 
-it('project scans reject unknown folders and include projects whose worktrees are elsewhere', async () => {
-  const run = vi.fn(async () => ({ stdout: JSON.stringify({ ok: true, items: [] }) }))
+it('project scans reject unknown folders and projects without worktrees before running the CLI', async () => {
+  const run = vi.fn()
   const operations = worktreeOperations(
     async () => [{ project: 'orcha-small', projectShort: 'small', folder: '/projects/small' }],
     () => run,
     () => false
   )
   await expect(operations.project('/unknown')).rejects.toEqual({ code: 'INVALID_WORKTREE' })
+  await expect(operations.project('/projects/small')).rejects.toEqual({ code: 'INVALID_WORKTREE' })
   expect(run).not.toHaveBeenCalled()
-  await expect(operations.project('/projects/small')).resolves.toMatchObject({ items: [] })
-  expect(run).toHaveBeenCalledTimes(1)
 })

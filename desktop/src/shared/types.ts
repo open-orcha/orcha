@@ -168,27 +168,6 @@ export interface ProjectWorktrees {
   error?: string
 }
 
-export interface ProjectCleanupRequest {
-  folder: string
-  phase: 'preview' | 'execute' | 'status'
-  planId: string
-}
-
-export interface ProjectCleanupResult {
-  ok: boolean
-  plan_id: string
-  status: string
-  scanned: number
-  total: number
-  candidate_count: number
-  candidate_bytes: number
-  unknown_sizes: number
-  removed: unknown[]
-  error?: string | null
-  items: Array<{ path: string; name: string; state: string; reason: string; outcome?: string;
-    output_count?: number; unmerged_commits?: number | null; discarded_caches?: string[]; saved_to?: string }>
-}
-
 export interface WorktreeCleanRequest {
   folder: string
   /** Preview only — nothing changes. */
@@ -514,7 +493,6 @@ export interface OrchaDesktopApi {
   storageWorktreeProjects?(): Promise<WorktreeProject[]>
   storageProjectWorktrees?(folder: string): Promise<ProjectWorktrees>
   /** Preview (dryRun) or run a clean-up of one project's worktrees. */
-  storageProjectCleanup?(req: ProjectCleanupRequest): Promise<ProjectCleanupResult>
   storageCleanWorktrees?(req: WorktreeCleanRequest): Promise<AgentWorktreeCleanResult>
   /** Show one agent worktree in Finder (must be inside a known project's .orcha-worktrees). */
   revealWorktree?(folder: string, path: string): Promise<void>

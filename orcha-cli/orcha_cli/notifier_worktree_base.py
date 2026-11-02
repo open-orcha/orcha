@@ -12,9 +12,6 @@ import time
 from typing import Any
 
 
-from .worktree_lifecycle import provisioning
-
-
 def run_git(args, cwd=None, timeout: float = 30.0):
     """Run Git and return its status and stdout without raising."""
     try:
@@ -200,7 +197,6 @@ def seed_tab_binding(base_cwd, alias, agent_id, container_id) -> bool:
         return False
 
 
-@provisioning
 def provision_disposable(base_cwd, alias, services: Any):
     """Create a fresh worker branch and worktree from origin/main."""
     if (

@@ -6,10 +6,6 @@ import pathlib
 from typing import Any
 
 
-from .worktree_lifecycle import provisioning
-
-
-@provisioning
 def _stable_worktree(base_cwd, key, kind: str, services: Any):
     """Create or reuse a stable worktree, including a surviving local branch."""
     if (
@@ -69,7 +65,6 @@ def provision_live(base_cwd, alias, services: Any):
     return _stable_worktree(base_cwd, alias, "live", services)
 
 
-@provisioning
 def provision_task(base_cwd, alias, task_id, services: Any):
     """Create or reattach the durable branch for one agent and task."""
     if (

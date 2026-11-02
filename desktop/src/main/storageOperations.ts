@@ -2,7 +2,7 @@
  *  captured before the change. CLI/Docker execution is injected for regression tests. */
 import { singleFlight, singleFlightBy } from './singleFlight'
 import { removeLeftover, scanStorage, type StorageDeps } from './storageScan'
-import { projectCleanup, cleanAgentWorktrees, knownFolder, parseCleanRequest, scanProjectWorktrees, worktreeProjects, type KnownFolder, type Run } from './agentWorktrees'
+import { cleanAgentWorktrees, knownFolder, parseCleanRequest, scanProjectWorktrees, worktreeProjects, type KnownFolder, type Run } from './agentWorktrees'
 
 export function storageOperations(deps: () => StorageDeps) {
   const scan = singleFlight(() => scanStorage(deps()))
@@ -35,9 +35,6 @@ export function worktreeOperations(
       const p = worktreeProjects(all, hasWorktreesDir).find((candidate) => candidate.folder === folder)
       if (!p) throw { code: 'INVALID_WORKTREE' } as const
       return scanProject(p)
-    },
-    async cleanupProject(raw: unknown) {
-      return projectCleanup(raw, await projects(), run())
     },
     async clean(raw: unknown) {
       const req = parseCleanRequest(raw, await projects())

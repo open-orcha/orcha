@@ -1381,12 +1381,6 @@ app.whenReady().then(() => {
       return worktrees.project(raw)
     })
   )
-  ipcMain.handle('orcha:storage:projectCleanup', (event, raw: unknown) =>
-    asResult(async () => {
-      if (!fromManager(event)) throw { code: 'INVALID_WORKTREE' } as const
-      return worktrees.cleanupProject(raw)
-    })
-  )
   ipcMain.handle('orcha:storage:worktreesClean', (event, raw: unknown) =>
     asResult(async () => {
       if (!fromManager(event)) throw { code: 'INVALID_WORKTREE' } as const
@@ -1795,7 +1789,7 @@ app.whenReady().then(() => {
     load: () => readAgentPrefs(app.getPath('userData')),
     save: (prefs) => void writeAgentPrefs(app.getPath('userData'), prefs),
     openExternal: (url) => shell.openExternal(url),
-    copyText: async (text) => clipboard.writeText(text),
+    copyText: (text) => clipboard.writeText(text),
     onChange: (snap: AgentsSnapshot) => {
       sendToManager(AGENT_CHANNELS.changed, snap)
       const label = agentShortLabel(snap.defaultAgent)

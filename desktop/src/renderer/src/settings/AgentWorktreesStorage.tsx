@@ -1,5 +1,4 @@
 import { useState, type ReactNode } from 'react'
-import { ProjectWorktreeCleanup } from './ProjectWorktreeCleanup'
 import { FolderGit2, FolderOpen, Loader2, RefreshCw } from 'lucide-react'
 import { Button } from '../ui/Button'
 import ErrorNotice from '../components/ErrorNotice'
@@ -194,10 +193,9 @@ export default function AgentWorktreesStorage({ projectNames }: {
                   {busy === p.folder && !preview ? 'Checking…' : 'Clean up existing…'}
                 </Button>
               </div>
-              <ProjectWorktreeCleanup folder={p.folder} />
               {why && (
                 <p className="mt-1 text-[12px] text-text-3" data-testid={`storage-wt-why-${p.projectShort}`}>
-                  Excluded from automatic cleanup: {why}
+                  Not Embodent, so never removed: {why}
                 </p>
               )}
               {reports[p.folder] && <p className="mt-1.5 text-[12px] text-ok" role="status">{reports[p.folder]}</p>}
