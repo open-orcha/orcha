@@ -206,11 +206,11 @@ def _preserve(base, root, plan_id, row, snapshot):
 
 
 def execute(base, plan_id, activity, *, progress=None):
-    with lifecycle.operation(base, plan_id) as operation_fd:
-        return _execute(base, plan_id, activity, operation_fd=operation_fd, progress=progress)
+    with lifecycle.operation(base, plan_id):
+        return _execute(base, plan_id, activity, progress=progress)
 
 
-def _execute(base, plan_id, activity, *, operation_fd, progress=None):
+def _execute(base, plan_id, activity, *, progress=None):
     with lifecycle.locked(base) as root:
         target = _plan_path(root, plan_id)
         plan = read_json(target)
@@ -241,7 +241,7 @@ def _execute(base, plan_id, activity, *, operation_fd, progress=None):
                 if not fresh or any(fresh.get(k) != row.get(k) for k in ("identity", "head", "branch", "registered")):
                     raise CleanupError("The checkout changed since the preview")
                 facts = _activity(activity, [fresh])
-                # The durable claim fences starts without holding the managed-job lock.
+                # Already holding the managed-job lock: avoid recursively acquiring it.
                 why = _blocked_without_job(fresh, facts, root)
                 if why:
                     raise CleanupError(why)
@@ -258,9 +258,7 @@ def _execute(base, plan_id, activity, *, operation_fd, progress=None):
                 row["removing"] = True
                 publish()  # Durable intent before the irreversible filesystem operation.
                 if row["registered"]:
-                    # The child keeps the operation locked even if this controller dies.
-                    code, _ = gc.git(["worktree", "remove", "--force", "--", row["path"]], str(base),
-                                     timeout=300, pass_fds=(operation_fd,))
+                    code, _ = gc.git(["worktree", "remove", "--force", "--", row["path"]], str(base), timeout=300)
                     if code:
                         raise CleanupError("Git did not finish removal; inspect this folder before retrying")
                 else:
