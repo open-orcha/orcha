@@ -43,11 +43,11 @@ def test_staging_unchanged_crlf_text_is_not_an_edit(repo):
     guard = guard_for(repo)
     git(repo, 'add', 'source.txt')
     assert (repo / 'source.txt').read_bytes() == b'one\r\ntwo\r\nthree\r\n'
-    assert not guard.changed()
+    assert guard.changed() is False
     git(repo, 'commit', '-q', '-m', 'staged')
-    assert not guard.changed()
+    assert guard.changed() is False
     (repo / 'source.txt').write_bytes(b'one\r\nchanged\r\n')
-    assert guard.changed()
+    assert guard.changed() is True
 
 
 def test_staging_through_a_clean_filter_is_not_an_edit(repo):
@@ -60,9 +60,9 @@ def test_staging_through_a_clean_filter_is_not_an_edit(repo):
     (repo / 'notes.up').write_text('abcd\n')
     guard = guard_for(repo)
     git(repo, 'add', 'notes.up')
-    assert not guard.changed()
+    assert guard.changed() is False
     (repo / 'notes.up').write_text('abcde\n')
-    assert guard.changed()
+    assert guard.changed() is True
 
 
 def test_checkpoint_commit_of_new_and_edited_files_is_not_an_edit(repo):
@@ -73,11 +73,11 @@ def test_checkpoint_commit_of_new_and_edited_files_is_not_an_edit(repo):
     guard = guard_for(repo)
     git(repo, 'add', '-A', '--', '.')
     git(repo, 'commit', '-q', '-m', 'orcha: checkpoint task t run r')
-    assert not guard.changed()
+    assert guard.changed() is False
     git(repo, 'reset', '-q', 'HEAD~1')  # Moving the index back changes no file either.
-    assert not guard.changed()
+    assert guard.changed() is False
     git(repo, 'rm', '-q', '--cached', 'src.py')  # Untracked again, same bytes on disk.
-    assert not guard.changed()
+    assert guard.changed() is False
 
 
 @pytest.mark.parametrize('edit', ['rewrite', 'delete', 'replace_with_dir', 'retarget_symlink'])
@@ -96,7 +96,7 @@ def test_changes_to_files_tracked_at_baseline_are_edits(repo, edit):
     else:
         (repo / 'link.py').unlink()
         os.symlink('elsewhere.py', repo / 'link.py')
-    assert guard.changed()
+    assert guard.changed() is True
 
 
 def test_logs_caches_untracked_and_declared_artifacts_are_not_edits(repo):
@@ -111,11 +111,11 @@ def test_logs_caches_untracked_and_declared_artifacts_are_not_edits(repo):
     (repo / '.pytest_cache').mkdir()
     (repo / '.pytest_cache' / 'state').write_text('x')
     (repo / 'scratch.txt').write_text('untracked')
-    assert not guard.changed()
+    assert guard.changed() is False
 
 
 def test_git_failure_is_uncertainty_not_an_edit(repo, monkeypatch):
     guard = guard_for(repo)
     (repo / 'src.py').write_text('VALUE = 4\n')
     monkeypatch.setattr('orcha_cli.job_file_guard._git', lambda *a, **k: None)
-    assert not guard.changed()
+    assert guard.changed() is None  # Unknown: neither an edit nor a clean check.

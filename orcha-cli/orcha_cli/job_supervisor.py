@@ -60,6 +60,7 @@ class Supervisor:
         self.not_started = False
         self.detached = False
         self.file_guard = None
+        self.guard_pending = False
         self.files_changed = False
         self.server_time = None
         self.next_file_check = 0.0
@@ -88,7 +89,10 @@ class Supervisor:
                 self.clock.confirm(response, sent, worker_limits=False)
                 self.server_time = response['server_time']
                 if not self.detached:
-                    self.start_file_guard()
+                    # The baseline waits until the caller has delivered this
+                    # longer grant to the executor: Git can be slow (clean
+                    # filters), and the old worker deadline must not apply meanwhile.
+                    self.guard_pending = True
                 self.detached = True
         if self.record.get('supervisor'):
             atomic_json(self.directory / 'authority.json', {
@@ -97,7 +101,7 @@ class Supervisor:
                 'confirmed_at_monotonic': sent, 'authority_until_monotonic': self.clock.until,
                 'fixed_until_monotonic': self.clock.fixed, 'budget_until_monotonic': self.clock.budget,
                 # Diagnostic: the worker has gone and tracked-file watching has its baseline.
-                'continuing_without_worker': self.detached,
+                'continuing_without_worker': self.detached and not self.guard_pending,
             })
         return self.clock.mutations_allowed
 
@@ -105,6 +109,7 @@ class Supervisor:
         # The baseline time is a server time observed BEFORE the snapshot, so
         # a worker still on the checkout then can never be blamed on the command.
         from .job_file_guard import FileGuard
+        self.guard_pending = False
         try:
             self.file_guard = FileGuard(self.record['cwd'], self.record.get('artifacts', ()),
                                         private_roots=(str(self.store.root),))
@@ -133,14 +138,25 @@ class Supervisor:
 
     def check_files(self):
         """Stop only for tracked changes the server cannot attribute to a worker."""
+        if self.guard_pending:
+            self.start_file_guard()
+            return
         guard = self.file_guard
         if not guard or not guard.root or time.monotonic() < self.next_file_check:
             return
         self.next_file_check = time.monotonic() + self.file_check_secs
+        observed = self.server_time  # Server time seen before this snapshot.
         if guard.baseline is None:
-            guard.rebaseline(self.server_time)
+            guard.rebaseline(observed)
             return
-        if not guard.changed():
+        changed = guard.changed()
+        if changed is None:
+            return  # Git unavailable: uncertainty, never evidence, and no new window.
+        if not changed:
+            # Content still matches the baseline as of a snapshot taken after
+            # `observed`, so any later edit happened after it. Narrowing the
+            # window lets a worker that has since left stop counting.
+            guard.since = observed
             return
         try:
             verdict = self.capability_api.request(f'job-monitors/{self.job_id}/file-change', {

@@ -544,3 +544,60 @@ async def test_only_the_job_sharing_a_checkout_is_not_stopped_for_the_others_edi
     assert saved['status'] == 'completed' and saved['exit_code'] == 0, saved
     assert '3 passed' in (store.job_directory(tests_id)/'stdout.log').read_text()
     assert not db.execute('SELECT * FROM managed_job_monitors WHERE revoked_at IS NOT NULL')
+
+
+async def test_first_edit_long_after_early_handoff_and_worker_exit_is_stopped(
+        client, managed, db, service, tmp_path):
+    """Review case: the early handoff baseline is taken while the worker is still
+    on the checkout; once it leaves, a much later edit by the command is blamed."""
+    await publish(client, managed, seconds=8)
+    checkout = tracked_checkout(tmp_path/'repo')
+    db.execute('UPDATE worker_runs SET base_cwd=%s WHERE run_id=%s', (str(checkout), managed['rid']))
+    store = JobStore(checkout)
+    api = JobAPI(service[0], managed['token'], managed['tid'])
+    code = ("import time;from pathlib import Path;"
+            "[time.sleep(.1) for _ in iter(lambda: Path('go').exists(), True)];"
+            "Path('src.py').write_text('VALUE = 2\\n');time.sleep(12);print('continued after editing')")
+    jid = start_job(api, store, key='edit-after-handoff', purpose='Edits long after handoff',
+                    argv=[sys.executable, '-c', code], cwd=checkout, max_seconds=45)['job_id']
+    try:
+        await asyncio.to_thread(eventually, lambda: running(store, jid))
+        await continuing_without_worker(store, jid)  # Handed off while the worker still runs.
+        await finish_worker(client, managed)
+        await asyncio.sleep(11)  # More than two normal file-check intervals with no edits.
+        assert result(store, jid) is None
+        (checkout/'go').write_text('')
+        saved = await asyncio.to_thread(eventually, lambda: result(store, jid), seconds=20)
+        assert saved['reason'] == 'project_files_changed', saved
+    finally:
+        if not result(store, jid):
+            record = store.read(jid)
+            atomic_json(store.job_directory(jid)/'daemon-stop.json', {
+                'owner_run_id': record['owner_run_id'], 'launch_nonce': record['launch_nonce'],
+                'reason': 'test_cleanup'})
+            await asyncio.to_thread(eventually, lambda: result(store, jid), seconds=12)
+
+
+async def test_slow_initial_git_snapshot_does_not_keep_old_worker_deadline(
+        client, managed, db, service, tmp_path):
+    """Review case: a slow clean filter delays the first tracked-file snapshot past
+    the worker's limit; the longer grant reaches the command before Git runs."""
+    import shlex
+    from orcha_cli.job_identity import same_process
+    checkout = tracked_checkout(tmp_path/'repo')
+    (checkout/'.gitattributes').write_text('*.py filter=slow\n')
+    slow = 'import sys,time;data=sys.stdin.buffer.read();time.sleep(7);sys.stdout.buffer.write(data)'
+    subprocess.run(['git', '-C', str(checkout), 'config', 'filter.slow.clean',
+                    shlex.quote(sys.executable) + ' -c ' + shlex.quote(slow)], check=True)
+    (checkout/'src.py').write_text('VALUE = 200\n')  # Already dirty: Git must filter it.
+    await publish(client, managed, seconds=10)
+    db.execute('UPDATE worker_runs SET base_cwd=%s WHERE run_id=%s', (str(checkout), managed['rid']))
+    store = JobStore(checkout)
+    api = JobAPI(service[0], managed['token'], managed['tid'])
+    jid = start_job(api, store, key='slow-baseline', purpose='Harmless long command',
+                    argv=[sys.executable, '-c', "import time;time.sleep(14);print('completed')"],
+                    cwd=checkout, max_seconds=40)['job_id']
+    await asyncio.to_thread(eventually, lambda: running(store, jid))
+    saved = await asyncio.to_thread(eventually, lambda: result(store, jid), seconds=25)
+    await asyncio.to_thread(eventually, lambda: not same_process(store.read(jid)['supervisor']), seconds=25)
+    assert saved['status'] == 'completed' and saved['exit_code'] == 0, saved
