@@ -64,7 +64,7 @@ def startup_guidance(base_cwd, task_id):
         'these remain private recovery metadata and never upload files. '
         'This is supervision, not a security sandbox. A host command keeps running after this worker '
         'exits (no flag needed) and the task is woken with its saved result and logs when it finishes. '
-        'It is stopped early only if tracked project files change while no worker is on the checkout; '
+        'It is stopped early only if tracked project files change while no worker or other managed command is on the checkout; '
         'logs, caches, temp files, build/test output, untracked files and declared --artifact paths '
         'do not count. A human stop, hold, cancellation or project pause also stops it.\n'
         'For a single-process read-only check on macOS, --isolate enforces no shared writes, '

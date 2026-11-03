@@ -288,10 +288,16 @@ async def test_lease_lapse_keeps_existing_job_but_refuses_controls(jobs, managed
 
 
 async def test_unavailable_api_stops_at_last_confirmed_deadline(client, managed, tmp_path, service):
+    """Failed contact never extends a cap.
+
+    The command may outlive the worker's 4-second limit, so its last confirmed
+    deadline is either that limit (no continuation grant reached it yet) or its
+    own 6-second budget; it never runs on unconfirmed once the service is gone.
+    """
     await publish(client, managed, seconds=4)
     api = JobAPI(service[0], managed['token'], managed['tid'])
     store = JobStore(tmp_path)
-    job = start_job(api, store, key='deadline', purpose='Temporary deadline check',
+    job = start_job(api, store, key='deadline', purpose='Temporary deadline check', max_seconds=6,
                     argv=[sys.executable, '-c', 'import time;time.sleep(30)'], cwd=tmp_path)
     jid = job['job_id']
     process = eventually(lambda: running(store, jid))

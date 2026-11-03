@@ -172,12 +172,13 @@ def continuation_heartbeat(tid: UUID, jid: UUID, body: ContinuationHeartbeat, re
 
 @app.post('/api/tasks/{tid}/job-monitors/{jid}/file-change', response_model=FileChangeVerdict)
 def report_file_change(tid: UUID, jid: UUID, body: FileChangeReport, request: Request):
-    """Stop a continued command only for tracked changes no worker could have made.
+    """Stop a continued command only for tracked changes nobody else could have made.
 
-    A worker running on the same checkout at any point since the supervisor's
-    baseline may have made the change itself, so nothing is attributed then.
+    A worker, or another managed command, on the same checkout at any point
+    since the supervisor's baseline may have made the change itself, so
+    nothing is attributed then.
     """
-    from portal_backend.job_monitor_service import worker_active_on_checkout
+    from portal_backend.job_monitor_service import change_unattributable
     with db_cursor() as (conn, cur):
         _, task, job, monitor = lock_monitor(cur, str(tid), str(jid))
         require_machine_lane_member(cur, request, str(task['container_id']))
@@ -187,7 +188,7 @@ def report_file_change(tid: UUID, jid: UUID, body: FileChangeReport, request: Re
             raise HTTPException(403, 'Original supervisor capability required')
         if monitor['revoked_at']:
             conflict('managed_continuation_revoked')
-        if worker_active_on_checkout(cur, str(task['container_id']), body.checkout, body.since):
+        if change_unattributable(cur, str(task['container_id']), monitor, body.checkout, body.since):
             return dict(attributed=False)
         revoke(cur, str(jid), 'project_files_changed')
         conn.commit()

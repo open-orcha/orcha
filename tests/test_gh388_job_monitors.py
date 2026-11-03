@@ -432,3 +432,75 @@ async def test_file_change_is_attributed_only_without_a_worker_on_the_checkout(c
     heartbeat = await client.post(monitor_url(managed, job, 'continuation-heartbeat'),
                                   json={'capability': secret, 'launch_nonce': job['launch_nonce']})
     assert heartbeat.status_code == 409
+
+
+async def continued_job(client, managed, secret):
+    return await reserve(client, managed, job_key=str(uuid4()), continue_after_exit=True,
+                         continuation_capability_digest=hashlib.sha256(secret.encode()).hexdigest())
+
+
+def mark_launched(db, job):
+    # The supervisor publishes its launch checkpoint before starting the process.
+    db.execute("UPDATE managed_jobs SET state='running',checkpoint_version=1,checkpoint_digest=%s "
+               "WHERE job_id=%s", ('c'*64, job['job_id']))
+
+
+async def test_file_change_is_not_blamed_while_another_command_shares_the_checkout(client, managed, db, tmp_path):
+    """Review case: a checkout-wide change does not say which command wrote it."""
+    await publish(client, managed)
+    secret = 'a'*43
+    job = await continued_job(client, managed, secret)
+    other = await continued_job(client, managed, secret)
+    mark_launched(db, other)
+    checkout = tmp_path / 'checkout'
+    checkout.mkdir()
+    db.execute("UPDATE worker_runs SET worktree=%s,status='exited',ended_at=%s WHERE run_id=%s",
+               (str(checkout), db.ago(60), managed['rid']))
+    path = monitor_url(managed, job, 'file-change')
+    args = {'capability': secret, 'launch_nonce': job['launch_nonce'], 'since': db.ago(5).isoformat(),
+            'checkout': str(checkout)}
+    # The other command the same worker started is still running: it may be the writer.
+    response = await client.post(path, json=args)
+    assert response.status_code == 200, response.text
+    assert response.json() == {'attributed': False}
+    assert not db.execute('SELECT revoked_at FROM managed_job_monitors WHERE job_id=%s',
+                          (job['job_id'],))[0]['revoked_at']
+    # Once the other command's result was saved before the baseline, it is ruled out.
+    done = await client.post(monitor_url(managed, other, 'observe'), json=observation(other, checkpoint_version=2))
+    assert done.status_code == 200, done.text
+    response = await client.post(path, json={**args, 'since': db.from_now(1).isoformat()})
+    assert response.json() == {'attributed': True}
+    stopped = db.execute('SELECT job_id,stop_reason FROM managed_job_monitors WHERE revoked_at IS NOT NULL')
+    assert [(str(r['job_id']), r['stop_reason']) for r in stopped] == [(job['job_id'], 'project_files_changed')]
+
+
+@pytest.mark.parametrize('where', ['same_checkout_alias', 'other_checkout', 'budget_ended', 'never_launched'])
+async def test_command_from_another_worker_counts_only_on_this_checkout(client, managed, db, tmp_path, where):
+    await publish(client, managed)
+    secret = 'a'*43
+    job = await continued_job(client, managed, secret)
+    other = await continued_job(client, managed, secret)
+    checkout = tmp_path / 'checkout'
+    checkout.mkdir()
+    (tmp_path / 'alias').symlink_to(checkout)
+    (tmp_path / 'elsewhere').mkdir()
+    db.execute("UPDATE worker_runs SET worktree=%s,status='exited',ended_at=%s WHERE run_id=%s",
+               (str(checkout), db.ago(60), managed['rid']))
+    # A second, already-finished worker launched the other command.
+    row = db.execute('SELECT * FROM worker_runs WHERE run_id=%s', (managed['rid'],))[0]
+    second = str(uuid4())
+    row = {**row, 'run_id': second,
+           'worktree': str(tmp_path / ('alias' if where != 'other_checkout' else 'elsewhere'))}
+    db.execute(f"INSERT INTO worker_runs ({','.join(row)}) VALUES ({','.join(['%s']*len(row))})",
+               tuple(row.values()))
+    db.execute('UPDATE managed_job_monitors SET launch_run_id=%s WHERE job_id=%s', (second, other['job_id']))
+    db.execute('UPDATE managed_jobs SET owner_run_id=%s WHERE job_id=%s', (second, other['job_id']))
+    if where != 'never_launched':
+        mark_launched(db, other)
+    if where == 'budget_ended':
+        db.execute('UPDATE managed_jobs SET budget_until=%s WHERE job_id=%s', (db.ago(30), other['job_id']))
+    response = await client.post(monitor_url(managed, job, 'file-change'), json={
+        'capability': secret, 'launch_nonce': job['launch_nonce'], 'since': db.ago(5).isoformat(),
+        'checkout': str(checkout)})
+    assert response.status_code == 200, response.text
+    assert response.json() == {'attributed': where != 'same_checkout_alias'}

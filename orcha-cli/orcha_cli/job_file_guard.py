@@ -1,19 +1,25 @@
 """Detect tracked project changes made while a command runs without its worker.
 
 The only reason a continued command is stopped on its own is that tracked
-project content changed while no worker was on the checkout. Untracked and
+project content changed while no worker, and no other managed command, was on
+the checkout. Untracked and
 ignored files never count, and neither do declared artifacts, Orcha's own job
 records, or common log/cache/build/test output folders, even when tracked.
 
-Content is identified the way Git identifies a blob, so staging or committing an
-unchanged file (for example an Orcha checkpoint commit) is not a change. Any
-Git failure is uncertainty, never evidence: the caller keeps the command.
+Content is identified the way Git stores it: a clean file by its index blob,
+and an edited file by `git hash-object`, which applies the same line-ending
+and clean-filter normalization `git add` would. Staging or committing an
+unchanged file (for example an Orcha checkpoint commit) is therefore not a
+change. Only files tracked when the baseline was taken are compared, so
+newly created files stay out of it even once they are staged. Any Git failure
+is uncertainty, never evidence: the caller keeps the command.
 """
 
 from __future__ import annotations
 
 import hashlib
 import os
+import stat
 import subprocess
 from pathlib import Path, PurePosixPath
 
@@ -55,18 +61,13 @@ def is_artifact(path, excluded=()):
     return any(path == prefix or path.startswith(prefix.rstrip('/') + '/') for prefix in excluded)
 
 
-def blob_id(path):
-    """Git's blob ID for the working file, or a marker for a missing file."""
-    try:
-        if path.is_symlink():
-            data = os.readlink(path).encode(errors='surrogateescape')
-        elif path.is_file():
-            data = path.read_bytes()
-        else:
-            return 'missing'
-    except OSError:
-        return 'missing'
+def symlink_id(path):
+    """Git's blob ID for a symlink: its target text, which Git never filters."""
+    data = os.readlink(path).encode(errors='surrogateescape')
     return hashlib.sha1(b'blob %d\0' % len(data) + data).hexdigest()
+
+
+HASH_BATCH = 200
 
 
 class FileGuard:
@@ -83,10 +84,10 @@ class FileGuard:
             self.excluded = tuple(p for p in prefixes if p not in {'', '.'})
         self.since = None
         self.baseline = None
-        self._dirty_cache = {}
+        self._working_cache = {}
 
-    def fingerprint(self):
-        """A digest of tracked, non-artifact content; None when Git is unavailable."""
+    def snapshot(self):
+        """{path: content ID} for tracked, non-artifact files; None when Git is unavailable."""
         if not self.root or not Path(self.root).is_dir():
             return None
         listed = _git(self.root, 'ls-files', '-s', '-z')
@@ -94,8 +95,7 @@ class FileGuard:
         if listed is None or dirty is None:
             return None
         dirty_paths = {p.decode(errors='surrogateescape') for p in dirty.split(b'\0') if p}
-        digest = hashlib.sha256()
-        seen = set()
+        indexed, edited, seen = {}, [], set()
         for entry in listed.split(b'\0'):
             if not entry:
                 continue
@@ -107,35 +107,66 @@ class FileGuard:
             if path in seen or is_artifact(path, self.excluded):
                 continue  # Conflict stages repeat a path; the first is enough.
             seen.add(path)
-            content = fields[1].decode()
             if path in dirty_paths:
-                content = self._dirty_id(path)
-            digest.update(path.encode(errors='surrogateescape') + b'\0' + content.encode() + b'\0')
-        return digest.hexdigest()
+                edited.append(path)
+            else:
+                indexed[path] = fields[1].decode()
+        working = self.working_ids(edited)
+        return None if working is None else {**indexed, **working}
 
-    def _dirty_id(self, path):
-        full = Path(self.root) / path
-        try:
-            st = full.lstat()
-            key = (st.st_size, st.st_mtime_ns, st.st_ino)
-        except OSError:
-            return 'missing'
-        cached = self._dirty_cache.get(path)
-        if cached and cached[0] == key:
-            return cached[1]
-        value = blob_id(full)
-        self._dirty_cache[path] = (key, value)
-        return value
+    def working_ids(self, paths):
+        """Normalized blob IDs of working files, as `git add` would store them."""
+        found, regular = {}, []
+        for path in paths:
+            full = Path(self.root) / path
+            try:
+                st = full.lstat()
+            except OSError:
+                found[path] = 'missing'
+                continue
+            key = (st.st_mode, st.st_size, st.st_mtime_ns, st.st_ctime_ns, st.st_ino)
+            cached = self._working_cache.get(path)
+            if cached and cached[0] == key:
+                found[path] = cached[1]
+            elif stat.S_ISLNK(st.st_mode):
+                try:
+                    found[path] = symlink_id(full)
+                except OSError:
+                    return None
+                self._working_cache[path] = (key, found[path])
+            elif stat.S_ISREG(st.st_mode):
+                regular.append((path, key))
+            else:
+                found[path] = 'missing'  # Replaced by a directory or special file.
+        for offset in range(0, len(regular), HASH_BATCH):
+            batch = regular[offset:offset + HASH_BATCH]
+            out = _git(self.root, 'hash-object', '--', *(path for path, _ in batch))
+            ids = out.decode().split() if out is not None else []
+            if len(ids) != len(batch):
+                return None
+            for (path, key), value in zip(batch, ids):
+                found[path] = value
+                self._working_cache[path] = (key, value)
+        return found
 
     def rebaseline(self, since):
-        """`since` is server time observed before this fingerprint was taken."""
-        value = self.fingerprint()
+        """`since` is server time observed before this snapshot was taken."""
+        value = self.snapshot()
         if value is not None:
             self.since, self.baseline = since, value
         return value is not None
 
     def changed(self):
+        """A file tracked at the baseline now has different content, or is gone."""
         if self.baseline is None:
             return False
-        value = self.fingerprint()
-        return value is not None and value != self.baseline
+        current = self.snapshot()
+        if current is None:
+            return False
+        untracked = [path for path in self.baseline if path not in current]
+        if untracked:
+            working = self.working_ids(untracked)
+            if working is None:
+                return False
+            current = {**current, **working}
+        return any(current[path] != value for path, value in self.baseline.items())
