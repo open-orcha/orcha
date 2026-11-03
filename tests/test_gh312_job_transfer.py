@@ -203,21 +203,22 @@ async def test_real_retained_command_survives_worker_exit_and_atomic_adoption(cl
 
 @pytest.mark.skipif(sys.platform != 'darwin', reason='Enforced host continuation is macOS only')
 @pytest.mark.parametrize('forced', [False, True])
-async def test_notifier_pre_cap_handoff_stops_generic_job_and_observes_actual_worker_exit(client, managed, service, tmp_path, db, forced):
+async def test_hard_cap_respawn_keeps_commands_running_and_observes_actual_worker_exit(client, managed, service, tmp_path, db, forced):
+    """At the fixed run cap every command keeps its original supervisor; none is stopped or moved."""
     import subprocess
     import time
     import pathlib
     from types import SimpleNamespace
     import httpx
     from orcha_cli.notifier_checkpoint import checkpoint_and_respawn
-    from orcha_cli.notifier_managed_jobs import transfer_due, prepare, settled
+    from orcha_cli.notifier_managed_jobs import transfer_due, prepare
     from test_gh312_notifier_jobs import worker_record
     await publish(client, managed, seconds=120)
     store = JobStore(tmp_path)
     api = JobAPI(service[0], managed['token'], managed['tid'])
     code = "import os,time;from pathlib import Path;(Path(os.environ['ORCHA_JOB_SCRATCH'])/'launches').write_text('once');time.sleep(60)"
-    jid = start_job(api, store, key='retained', purpose='Retained test', cwd=tmp_path,
-                    argv=[sys.executable,'-c',code], isolate=True, max_transfers=1)['job_id']
+    isolated = start_job(api, store, key='retained', purpose='Retained test', cwd=tmp_path,
+                         argv=[sys.executable,'-c',code], isolate=True, max_transfers=1)['job_id']
     generic = start_job(api, store, key='generic', purpose='Generic test', cwd=tmp_path,
                         argv=[sys.executable,'-c','import time;time.sleep(60)'])['job_id']
     old = subprocess.Popen([sys.executable, '-c', 'import time;time.sleep(60)'])
@@ -236,9 +237,10 @@ async def test_notifier_pre_cap_handoff_stops_generic_job_and_observes_actual_wo
             children.append(proc)
             return True, 'temporary worker', proc
         def kill(proc, **kwargs):
-            assert (store.job_directory(jid)/'handoff.json').exists()
-            assert result(store, generic)['termination_verified']
-            assert not result(store, jid)
+            for jid in (isolated, generic):
+                assert not (store.job_directory(jid)/'daemon-stop.json').exists()
+                assert (store.job_directory(jid)/'handoff.json').exists()  # Evidence only, not a stop.
+                assert not result(store, jid)
             (proc.kill if forced else proc.terminate)()
             proc.wait(timeout=3)
         services = SimpleNamespace(
@@ -250,32 +252,29 @@ async def test_notifier_pre_cap_handoff_stops_generic_job_and_observes_actual_wo
             _build_persona=lambda *a,**kw:'', spawn_headless=spawn, time=time, pathlib=pathlib,
             HARD_CAP_MIN_SECS=120, HARD_CAP_RESPAWN_MAX=3, WAKE_LEASE_TTL_SECS=180,
             _pump_one=lambda *a:None)
-        services._checkpoint_and_respawn = lambda base,aid,w,live,quiet: checkpoint_and_respawn(base,aid,w,live,quiet,services)
         try:
-            process = eventually(lambda: running(store, jid))
-            eventually(lambda: running(store, generic))
-            eventually(lambda: store.read(jid).get('transfer_socket'))
-            assert transfer_due(worker, time.time())
-            from orcha_cli.notifier_reaper import reap_workers
-            reap_workers(service[0], live, True, 300, {}, {}, services)
+            processes = {jid: eventually(lambda jid=jid: running(store, jid)) for jid in (isolated, generic)}
+            eventually(lambda: store.read(isolated).get('transfer_socket'))
+            # Nothing has to be handed over, so no early pre-cap replacement starts.
+            assert not transfer_due({**worker, 'hard_deadline': time.time()+30}, time.time())
+            checkpoint_and_respawn(service[0], managed['aid'], worker, live, True, services)
             new = live[managed['aid']]
-            assert new['run_id'] != managed['rid']
-            assert store.read(jid)['owner_run_id'] == new['run_id']
-            assert store.read(jid)['transfers_used'] == 1
-            assert running(store, jid) == process and not result(store, jid)
+            assert new['run_id'] != managed['rid'] and not new.get('managed_transfers')
             assert db.execute('SELECT process_id FROM worker_stop_observations')[0]['process_id'] == old.pid
-            assert result(store, generic)['status'] == 'interrupted'
-            # A fresh daemon record cannot reset the durable count. Its next
-            # planned handoff stops this job as exhausted, without a second adopt.
-            assert prepare(service[0], dict(new), services, reason='checkpoint_transfer', stop=True)
-            assert result(store, jid)['status'] == 'exhausted'
-            assert settled(store.read(jid))
+            for jid in (isolated, generic):
+                record = store.read(jid)
+                assert running(store, jid) == processes[jid] and not result(store, jid)
+                assert record['owner_run_id'] == managed['rid'] and record.get('transfers_used', 0) == 0
+                monitor = db.execute('SELECT * FROM managed_job_monitors WHERE job_id=%s', (jid,))[0]
+                assert not monitor['revoked_at'] and not monitor['stop_reason']
+            assert (store.job_directory(isolated)/'scratch'/'launches').read_text() == 'once'
         finally:
             for proc in children:
                 if proc.poll() is None:
                     proc.terminate(); proc.wait(timeout=3)
-            for item in [worker, live[managed['aid']]]:
-                prepare(service[0], item, services, reason='test_cleanup', stop=True)
+            prepare(service[0], worker, services, reason='human_stop', stop=True)
+            for jid in (isolated, generic):
+                eventually(lambda jid=jid: result(store, jid), seconds=12)
 
 
 @pytest.mark.skipif(sys.platform != 'darwin', reason='Enforced host continuation is macOS only')

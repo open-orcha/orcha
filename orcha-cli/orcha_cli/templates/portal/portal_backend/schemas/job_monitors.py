@@ -92,6 +92,16 @@ class ContinuationHeartbeat(BaseModel):
     capability: str = Field(min_length=43, max_length=128, repr=False)
 
 
+class FileChangeReport(ContinuationHeartbeat):
+    """The detached supervisor saw tracked project content change."""
+    since: datetime
+    checkout: str = Field(min_length=1, max_length=4096)
+
+
+class FileChangeVerdict(BaseModel):
+    attributed: bool
+
+
 class CompletionReason(BaseModel):
     task_id: UUID
     agent_id: UUID

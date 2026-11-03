@@ -101,7 +101,8 @@ def publish_from_supervisor(supervisor):
     from .job_supervisor import evidence_version
     if r.get('checkpoint'):
         job['checkpoint_version'] = evidence_version(r)
+    api = supervisor.capability_api if supervisor.detached else supervisor.api
     try:
-        publish(supervisor.api, supervisor.store, job)
+        publish(api, supervisor.store, job)
     except (JobAPIError, JobStorageError, OSError, ValueError, KeyError):
         pass

@@ -31,6 +31,9 @@ def module_environment():
     return env
 
 
+FILE_CHECK_SECS = 5.0
+
+
 class Supervisor:
     def __init__(self, config):
         self.config = config
@@ -41,6 +44,10 @@ class Supervisor:
         if self.record['launch_nonce'] != config['launch_nonce']:
             raise ValueError('Managed command reservation changed')
         self.api = JobAPI(config['api_base'], config['token'], self.record['task_id'])
+        # Once the worker has gone, its run token is retired (a workflow step's
+        # token is refused outright), so retained-command calls carry only the
+        # command's own launch capability, the way the notifier's calls do.
+        self.capability_api = JobAPI(config['api_base'], None, self.record['task_id'], machine=True)
         self.clock = AuthorityClock(self.record['owner_run_id'], self.job_id)
         self.guard = None
         self.stopping = False
@@ -48,6 +55,11 @@ class Supervisor:
         self.transfer_channel = None
         self.not_started = False
         self.detached = False
+        self.file_guard = None
+        self.files_changed = False
+        self.server_time = None
+        self.next_file_check = 0.0
+        self.file_check_secs = min(60.0, max(0.2, float(config.get('file_check_secs', FILE_CHECK_SECS))))
 
     def update(self, **changes):
         self.record = self.store.update(self.job_id, self.record['version'], changes)
@@ -66,9 +78,12 @@ class Supervisor:
                     raise
                 # Only the retained original supervisor uses the narrow grant.
                 # It never restores worker mutation permission or a run token.
-                response = self.api.request(f'job-monitors/{self.job_id}/continuation-heartbeat', {
+                response = self.capability_api.request(f'job-monitors/{self.job_id}/continuation-heartbeat', {
                     'launch_nonce':self.record['launch_nonce'], 'capability':self.config['continuation_capability']})
                 self.clock.confirm(response, sent)
+                self.server_time = response['server_time']
+                if not self.detached:
+                    self.start_file_guard()
                 self.detached = True
         if self.record.get('supervisor'):
             atomic_json(self.directory / 'authority.json', {
@@ -76,8 +91,46 @@ class Supervisor:
                 'launch_nonce': self.record['launch_nonce'], 'supervisor': self.record['supervisor'],
                 'confirmed_at_monotonic': sent, 'authority_until_monotonic': self.clock.until,
                 'fixed_until_monotonic': self.clock.fixed, 'budget_until_monotonic': self.clock.budget,
+                # Diagnostic: the worker has gone and tracked-file watching has its baseline.
+                'continuing_without_worker': self.detached,
             })
         return self.clock.mutations_allowed
+
+    def start_file_guard(self):
+        # The baseline time is a server time observed BEFORE the fingerprint, so
+        # a worker still on the checkout then can never be blamed on the command.
+        from .job_file_guard import FileGuard
+        try:
+            self.file_guard = FileGuard(self.record['cwd'], self.record.get('artifacts', ()),
+                                        private_roots=(str(self.store.root),))
+            self.file_guard.rebaseline(self.server_time)
+        except (OSError, ValueError):
+            self.file_guard = None  # Uncertainty never stops the command.
+        self.next_file_check = time.monotonic() + self.file_check_secs
+
+    def check_files(self):
+        """Stop only for tracked changes the server cannot attribute to a worker."""
+        guard = self.file_guard
+        if not guard or not guard.root or time.monotonic() < self.next_file_check:
+            return
+        self.next_file_check = time.monotonic() + self.file_check_secs
+        if guard.baseline is None:
+            guard.rebaseline(self.server_time)
+            return
+        if not guard.changed():
+            return
+        try:
+            verdict = self.capability_api.request(f'job-monitors/{self.job_id}/file-change', {
+                'launch_nonce': self.record['launch_nonce'],
+                'capability': self.config['continuation_capability'],
+                'since': guard.since, 'checkout': guard.root})
+        except JobAPIError:
+            return  # Unconfirmed: keep running and ask again on the next check.
+        if verdict.get('attributed'):
+            self.files_changed = True
+            self.stopping = True
+        else:
+            guard.rebaseline(self.server_time)
 
     def checkpoint(self, reason, state=None, result=None):
         evidence = {**context_snapshot(self.directory), 'reason': reason, 'owner_run_id': self.record['owner_run_id'],
@@ -268,10 +321,10 @@ class Supervisor:
                 if self.stopping or now >= self.clock.until:
                     try:
                         self.clock.mutations_allowed = False
-                        self.checkpoint('stopping')
+                        self.checkpoint('project_files_changed' if self.files_changed else 'stopping')
                     finally:
-                        self.send({'stop': True, 'reason': 'budget_exhausted'
-                                   if time.monotonic() >= self.clock.budget else
+                        self.send({'stop': True, 'reason': 'project_files_changed' if self.files_changed else
+                                   'budget_exhausted' if time.monotonic() >= self.clock.budget else
                                    ('transfer_budget_exhausted' if daemon_stop_reason(self.directory, self.record) == 'transfer_budget_exhausted'
                                     else 'supervisor_stop_requested')})
                         self.guard.stdin.close()
@@ -290,6 +343,8 @@ class Supervisor:
                     except JobAPIError as exc:
                         self.reconcile_contact_error(exc)
                     next_contact = time.monotonic() + 2
+                if self.detached and not self.stopping:
+                    self.check_files()
                 time.sleep(0.05)
             self.guard.wait(timeout=5)
             path = self.directory / 'result.json'
