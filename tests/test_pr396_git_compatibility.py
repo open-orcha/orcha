@@ -288,3 +288,57 @@ def test_foreign_lock_is_preserved_during_preview_creation(repository):
         query.add_locked(repository, wt, "HEAD", "Orcha preview", run=intervening_git)
     admin = git(wt, "rev-parse", "--absolute-git-dir").decode().rstrip("\n")
     assert (Path(admin) / "locked").read_text() == "human hold\n"
+
+
+@pytest.mark.parametrize("raw", ["--path-format=absolute\n--no-optional-locks\n--git-common-dir\n",
+                                 "--path-format=absolute\n.git\n", "missing\n", ""])
+def test_automatic_cleanup_state_never_forms_a_path_from_bad_output(repository, monkeypatch, raw):
+    """Overnight step 4: automatic cleanup created a folder named from echoed options."""
+    real = query.gc.git
+    monkeypatch.setattr(query.gc, "git", lambda args, cwd, **kw: (0, raw)
+                        if args == ["rev-parse", "--git-common-dir"] else real(args, cwd, **kw))
+    before = sorted(p.name for p in repository.iterdir())
+    assert query.gc.state_path(repository) is None
+    query.gc.save_state(repository, {"first_seen": {"x": 1}})
+    assert query.gc.load_state(repository) == {}
+    assert sorted(p.name for p in repository.iterdir()) == before
+    assert not (repository / ".git/orcha").exists()
+
+
+@pytest.mark.parametrize("change", ["dropped", "rewritten"])
+@pytest.mark.parametrize("second_guard_only", [False, True])
+def test_incomplete_worktree_list_never_offers_a_locked_checkout(repository, monkeypatch, change,
+                                                                  second_guard_only):
+    """Overnight step 7: a list missing a locked checkout's record made it look like a leftover."""
+    wt = repository / ".orcha-worktrees" / "held"
+    git(repository, "worktree", "add", "-qb", "held", str(wt))
+    git(repository, "worktree", "lock", "--reason", "human hold", str(wt))
+    inactive = lambda rows: {"complete": True, "busy": [], "contexts": {}}
+    first = cleanup.preview(repository, inactive)
+    assert first["candidate_count"] == 0
+    real = query.gc.git
+    head = git(repository, "rev-parse", "HEAD").decode().strip()
+    # Modern (-z) output, supplied directly so every Git version runs the modern parser.
+    listed = "worktree %s\0HEAD %s\0branch refs/heads/main\0\0" % (repository, head)
+    if change == "rewritten":
+        listed += "worktree %s\0HEAD %s\0branch refs/heads/held\0locked\0\0" % (
+            repository.parent / "moved", head)
+
+    def fake(args, cwd, **kw):
+        if args == ["worktree", "list", "--porcelain", "-z"]:
+            return 0, listed
+        return real(args, cwd, **kw)
+
+    monkeypatch.setattr(query.gc, "git", fake)
+    if second_guard_only:
+        monkeypatch.setattr(query, "_require_recorded", lambda rows, common: None)
+        plan = cleanup.preview(repository, inactive)
+        assert plan["candidate_count"] == 0
+        item = next(i for i in plan["items"] if i.get("path") == str(wt))
+        assert "Git still records this folder" in item["reason"], item
+    else:
+        with pytest.raises(query.CleanupError, match="left out a registered checkout"):
+            query.registrations(repository)
+        with pytest.raises(query.CleanupError):
+            cleanup.preview(repository, inactive)
+    assert wt.is_dir() and (repository / ".git/worktrees/held/locked").exists()

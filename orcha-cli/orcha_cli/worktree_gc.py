@@ -868,14 +868,17 @@ def remove_worktree(base_cwd, path: str, *, busy: Iterable[str] = (),
 # ------------------------------------------------------------------ host-side memory
 
 def state_path(base_cwd) -> Optional[pathlib.Path]:
-    """``<git common dir>/orcha/worktree-gc.json`` — first-seen times etc., never committed."""
-    code, common = git(["rev-parse", "--git-common-dir"], base_cwd)
-    if code != 0 or not common.strip():
+    """``<git common dir>/orcha/worktree-gc.json`` — first-seen times etc., never committed.
+
+    Only a verified common directory is used. Older or broken Git can echo options
+    back with a successful exit status, and that text must never become a folder
+    inside the checkout.
+    """
+    from .worktree_git import CleanupError, common_dir  # worktree_git imports this module
+    try:
+        return common_dir(base_cwd) / "orcha" / "worktree-gc.json"
+    except CleanupError:
         return None
-    p = pathlib.Path(common.strip())
-    if not p.is_absolute():
-        p = pathlib.Path(base_cwd) / p
-    return p.resolve() / "orcha" / "worktree-gc.json"
 
 
 def load_state(base_cwd) -> dict:

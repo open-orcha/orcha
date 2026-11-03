@@ -74,6 +74,9 @@ def discover(base, known=None, *, only_path=None):
                     pointer = gc.admin_dir(path)
                     if not pointer or Path(pointer).parent != common / "worktrees":
                         raise CleanupError("The leftover's Git pointer belongs elsewhere")
+                    if os.path.lexists(pointer):
+                        # Git still records it; an incomplete list must not make it a leftover.
+                        raise CleanupError("Git still records this folder as a checkout; retain for inspection")
                 row["head"] = previous.get("head")
                 row["branch"] = previous.get("branch")
         except (OSError, CleanupError) as exc:

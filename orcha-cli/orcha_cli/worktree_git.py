@@ -191,11 +191,51 @@ def _legacy_registrations(base, common, *, only_path=None):
     return rows
 
 
+def _require_recorded(rows, common):
+    """A dropped or rewritten record must never turn a registered checkout into a leftover.
+
+    Git lists every administration entry with a readable checkout pointer. Any such
+    entry whose folder exists but is missing from the list means the list cannot be
+    trusted, so nothing is removed.
+    """
+    listed = set()
+    for row in rows:
+        listed.add(row["path"])
+        try:
+            listed.add(str(Path(row["path"]).resolve()))
+        except (OSError, RuntimeError):
+            pass
+    root = common / "worktrees"
+    try:
+        admins = sorted(root.iterdir()) if root.is_dir() else []
+    except OSError as exc:
+        raise CleanupError("Worktree administration could not be read; no folders can be removed") from exc
+    for admin in admins:
+        try:
+            pointer = (admin / "gitdir").read_bytes().decode("utf-8", "surrogateescape").rstrip()
+        except OSError:
+            continue  # Git skips entries without a readable pointer too.
+        if not pointer:
+            continue
+        folder = Path(pointer)
+        folder = (folder if folder.is_absolute() else admin / folder).parent
+        try:
+            if not folder.exists():
+                continue  # Nothing to protect; Git reports these as prunable.
+            resolved = str(folder.resolve())
+        except (OSError, RuntimeError) as exc:
+            raise CleanupError("A registered checkout could not be checked; no folders can be removed") from exc
+        if str(folder) not in listed and resolved not in listed:
+            raise CleanupError("Git's worktree list left out a registered checkout; no folders can be removed")
+
+
 def registrations(base, *, only_path=None):
     common = common_dir(base)
     code, raw = gc.git(["worktree", "list", "--porcelain", "-z"], str(base))
     if not code:
-        return _porcelain(raw)
+        rows = _porcelain(raw)
+        _require_recorded(rows, common)
+        return rows
     # Only an explicit unsupported-option result admits the old-Git fallback.
     if code != 129 or not re.search(r"unknown (?:switch|option) [`']z['`]", raw):
         raise CleanupError("Git could not list this project's worktrees")
