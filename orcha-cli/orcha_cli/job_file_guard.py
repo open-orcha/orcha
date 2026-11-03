@@ -11,16 +11,21 @@ and an edited file by `git hash-object`, which applies the same line-ending
 and clean-filter normalization `git add` would. Staging or committing an
 unchanged file (for example an Orcha checkpoint commit) is therefore not a
 change. Only files tracked when the baseline was taken are compared, so
-newly created files stay out of it even once they are staged. Any Git failure
-is uncertainty, never evidence: the caller keeps the command.
+newly created files stay out of it even once they are staged. A snapshot
+combines two reads of Git's index, so it is retried when the index changes
+between them (a checkpoint staging files, for example). Any Git failure, or an
+index that keeps changing, is uncertainty, never evidence: the caller keeps
+the command. Every Git process can be cancelled so a scan never delays a stop.
 """
 
 from __future__ import annotations
 
 import hashlib
 import os
+import signal
 import stat
 import subprocess
+import threading
 from pathlib import Path, PurePosixPath
 
 GITLINK = '160000'
@@ -33,19 +38,61 @@ ARTIFACT_PARTS = frozenset({
 ARTIFACT_SUFFIXES = ('.log', '.pyc', '.pyo', '.tmp', '.swp')
 
 
-def _git(root, *args, timeout=30):
+class Cancellation:
+    """Stops in-flight Git scans (and any filters they started) on request."""
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.cancelled = False
+        self.processes = set()
+
+    def cancel(self):
+        with self.lock:
+            self.cancelled = True
+            for process in self.processes:
+                _kill_group(process)
+
+
+def _kill_group(process):
+    # An unreaped process keeps its ID, so its group cannot belong to another program.
+    if process.returncode is None:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except OSError:
+            pass
+
+
+def _git(root, *args, timeout=30, cancellation=None):
     env = {k: v for k, v in os.environ.items() if not k.startswith('GIT_')}
     env['GIT_OPTIONAL_LOCKS'] = '0'  # Read-only: never refresh or lock the index.
+    lock = cancellation.lock if cancellation else threading.Lock()
+    with lock:
+        if cancellation and cancellation.cancelled:
+            return None
+        try:
+            # Its own process group, so cancelling also ends clean filters it runs.
+            process = subprocess.Popen(['git', '-C', str(root), *args], stdout=subprocess.PIPE,
+                                       stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
+                                       env=env, start_new_session=True)
+        except (OSError, subprocess.SubprocessError):
+            return None
+        if cancellation:
+            cancellation.processes.add(process)
     try:
-        done = subprocess.run(['git', '-C', str(root), *args], capture_output=True, env=env,
-                              stdin=subprocess.DEVNULL, timeout=timeout, check=False)
-    except (OSError, subprocess.SubprocessError):
+        out, _ = process.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        _kill_group(process)
+        process.communicate()
         return None
-    return done.stdout if done.returncode == 0 else None
+    finally:
+        if cancellation:
+            with lock:
+                cancellation.processes.discard(process)
+    return out if process.returncode == 0 else None
 
 
-def checkout_root(cwd):
-    out = _git(cwd, 'rev-parse', '--show-toplevel')
+def checkout_root(cwd, cancellation=None):
+    out = _git(cwd, 'rev-parse', '--show-toplevel', cancellation=cancellation)
     if not out:
         return None
     root = out.decode(errors='surrogateescape').strip()
@@ -68,12 +115,15 @@ def symlink_id(path):
 
 
 HASH_BATCH = 200
+SNAPSHOT_ATTEMPTS = 3
 
 
 class FileGuard:
-    def __init__(self, cwd, artifacts=(), private_roots=()):
-        self.root = checkout_root(cwd)
+    def __init__(self, cwd, artifacts=(), private_roots=(), cancellation=None):
+        self.cancellation = cancellation
+        self.root = checkout_root(cwd, cancellation)
         self.excluded = ()
+        self.index_path = None
         if self.root:
             prefixes = []
             for base, names in ((Path(cwd), artifacts), (None, private_roots)):
@@ -82,18 +132,46 @@ class FileGuard:
                     if target.is_relative_to(self.root):
                         prefixes.append(target.relative_to(self.root).as_posix())
             self.excluded = tuple(p for p in prefixes if p not in {'', '.'})
+            index = self.git('rev-parse', '--git-path', 'index')
+            if index and index.strip():
+                self.index_path = Path(self.root) / index.decode(errors='surrogateescape').strip()
         self.since = None
         self.baseline = None
         self._working_cache = {}
+
+    def git(self, *args):
+        return _git(self.root, *args, cancellation=self.cancellation)
+
+    def index_stamp(self):
+        """Identifies one version of the index; Git replaces the file on every write."""
+        try:
+            st = os.stat(self.index_path)
+        except FileNotFoundError:
+            return 'absent'
+        except (OSError, TypeError):
+            return None
+        return (st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
+
+    def index_reads(self):
+        """The index listing and its dirty paths, both from the same index version."""
+        for _ in range(SNAPSHOT_ATTEMPTS):
+            before = self.index_stamp()
+            listed = self.git('ls-files', '-s', '-z')
+            dirty = self.git('diff-files', '--name-only', '-z')
+            if before is None or listed is None or dirty is None:
+                return None
+            if self.index_stamp() == before:
+                return listed, dirty
+        return None  # The index kept changing: uncertain, never evidence.
 
     def snapshot(self):
         """{path: content ID} for tracked, non-artifact files; None when Git is unavailable."""
         if not self.root or not Path(self.root).is_dir():
             return None
-        listed = _git(self.root, 'ls-files', '-s', '-z')
-        dirty = _git(self.root, 'diff-files', '--name-only', '-z')
-        if listed is None or dirty is None:
+        reads = self.index_reads()
+        if reads is None:
             return None
+        listed, dirty = reads
         dirty_paths = {p.decode(errors='surrogateescape') for p in dirty.split(b'\0') if p}
         indexed, edited, seen = {}, [], set()
         for entry in listed.split(b'\0'):
@@ -140,7 +218,7 @@ class FileGuard:
                 found[path] = 'missing'  # Replaced by a directory or special file.
         for offset in range(0, len(regular), HASH_BATCH):
             batch = regular[offset:offset + HASH_BATCH]
-            out = _git(self.root, 'hash-object', '--', *(path for path, _ in batch))
+            out = self.git('hash-object', '--', *(path for path, _ in batch))
             ids = out.decode().split() if out is not None else []
             if len(ids) != len(batch):
                 return None

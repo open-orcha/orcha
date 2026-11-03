@@ -601,3 +601,110 @@ async def test_slow_initial_git_snapshot_does_not_keep_old_worker_deadline(
     saved = await asyncio.to_thread(eventually, lambda: result(store, jid), seconds=25)
     await asyncio.to_thread(eventually, lambda: not same_process(store.read(jid)['supervisor']), seconds=25)
     assert saved['status'] == 'completed' and saved['exit_code'] == 0, saved
+
+
+async def test_checkpoint_staging_between_git_reads_does_not_stop_harmless_command(
+        client, managed, db, service, tmp_path, monkeypatch):
+    """Review case: Orcha's exit checkpoint stages the worker's unchanged edit while
+    a scan is between its two index reads; the harmless command keeps running."""
+    import os
+    checkout = tracked_checkout(tmp_path/'repo')
+    source = checkout/'src.py'
+    source.write_text('VALUE = 2\n')  # Worker edit, made before the handoff.
+    before = source.read_bytes()
+    real_git = subprocess.run(['/bin/sh', '-c', 'command -v git'], capture_output=True, text=True,
+                              check=True).stdout.strip()
+    bindir = tmp_path/'bin'
+    bindir.mkdir()
+    wrapper = bindir/'git'
+    # Delegates every call unchanged; for one marked scan it stages src.py just
+    # after `ls-files` has read the index.
+    wrapper.write_text('#!' + sys.executable + '\n' + f'''import pathlib, subprocess, sys
+args = sys.argv[1:]
+read = subprocess.run([{real_git!r}, *args], capture_output=True)
+if 'ls-files' in args:
+    root = pathlib.Path(args[args.index('-C') + 1])
+    marker = root/'.stage-once'
+    if marker.exists():
+        marker.unlink()
+        subprocess.run([{real_git!r}, '-C', str(root), 'add', 'src.py'], check=True, capture_output=True)
+        (root/'.staged').touch()
+sys.stdout.buffer.write(read.stdout)
+raise SystemExit(read.returncode)
+''')
+    wrapper.chmod(0o755)
+    monkeypatch.setenv('PATH', str(bindir) + os.pathsep + os.environ['PATH'])
+    monkeypatch.setattr('orcha_cli.job_supervisor.FILE_CHECK_SECS', 0.3)
+    await publish(client, managed, seconds=120)
+    db.execute('UPDATE worker_runs SET base_cwd=%s WHERE run_id=%s', (str(checkout), managed['rid']))
+    store = JobStore(checkout)
+    api = JobAPI(service[0], managed['token'], managed['tid'])
+    code = ("import time;from pathlib import Path;"
+            "[time.sleep(.1) for _ in iter(lambda: Path('done').exists(), True)];print('completed')")
+    jid = start_job(api, store, key='staging-race', purpose='Harmless command',
+                    argv=[sys.executable, '-c', code], cwd=checkout, max_seconds=30)['job_id']
+    try:
+        await asyncio.to_thread(eventually, lambda: running(store, jid))
+        await finish_worker(client, managed)
+        await continuing_without_worker(store, jid)
+        (checkout/'.stage-once').touch()
+        await asyncio.to_thread(eventually, lambda: (checkout/'.staged').exists())
+        await asyncio.sleep(2)  # Several further file checks.
+        assert source.read_bytes() == before
+        assert result(store, jid) is None
+        (checkout/'done').touch()
+        saved = await asyncio.to_thread(eventually, lambda: result(store, jid))
+        assert saved['status'] == 'completed' and saved['exit_code'] == 0, saved
+    finally:
+        if not result(store, jid):
+            record = store.read(jid)
+            atomic_json(store.job_directory(jid)/'daemon-stop.json', {
+                'owner_run_id': record['owner_run_id'], 'launch_nonce': record['launch_nonce'],
+                'reason': 'test_cleanup'})
+            await asyncio.to_thread(eventually, lambda: result(store, jid))
+
+
+async def test_human_stop_is_not_delayed_by_a_slow_git_scan(
+        client, managed, db, service, tmp_path, make_agent):
+    """Review case: a 12-second clean filter is mid-scan when a human stops the
+    command; the stop takes effect at once and the scan's Git process ends."""
+    import os
+    import shlex
+    from orcha_cli.job_identity import same_process
+    checkout = tracked_checkout(tmp_path/'repo')
+    started = tmp_path/'filter-started'
+    (checkout/'.gitattributes').write_text('*.py filter=slow\n')
+    slow = (f'import os,pathlib,sys,time;pathlib.Path({str(started)!r}).write_text(str(os.getpid()));'
+            'data=sys.stdin.buffer.read();time.sleep(12);sys.stdout.buffer.write(data)')
+    subprocess.run(['git', '-C', str(checkout), 'config', 'filter.slow.clean',
+                    shlex.quote(sys.executable) + ' -c ' + shlex.quote(slow)], check=True)
+    (checkout/'src.py').write_text('VALUE = 200\n')  # Already dirty: Git must filter it.
+    await publish(client, managed, seconds=120)
+    db.execute('UPDATE worker_runs SET base_cwd=%s WHERE run_id=%s', (str(checkout), managed['rid']))
+    store = JobStore(checkout)
+    api = JobAPI(service[0], managed['token'], managed['tid'])
+    jid = start_job(api, store, key='stop-during-git', purpose='Harmless long command',
+                    argv=[sys.executable, '-c', "import time;time.sleep(10);print('finished despite stop')"],
+                    cwd=checkout, max_seconds=40)['job_id']
+    try:
+        await asyncio.to_thread(eventually, lambda: running(store, jid))
+        await finish_worker(client, managed)
+        await asyncio.to_thread(eventually, lambda: started.exists() and started.read_text())
+        filter_pid = int(started.read_text())
+        owner = (await make_agent('Stop owner', kind='human'))['agent_id']
+        response = await client.post(f"/api/tasks/{managed['tid']}/job-monitors/{jid}/stop",
+                                     json={'actor_agent_id': owner})
+        assert response.status_code == 200, response.text
+        saved = await asyncio.to_thread(eventually, lambda: result(store, jid), seconds=8)
+        assert saved['status'] == 'interrupted' and saved['exit_code'] != 0, saved
+        await asyncio.to_thread(eventually, lambda: not same_process(store.read(jid)['supervisor']), seconds=10)
+
+        def filter_gone():
+            try:
+                os.kill(filter_pid, 0)
+            except ProcessLookupError:
+                return True
+            return False
+        await asyncio.to_thread(eventually, filter_gone, seconds=5)  # The scan's filter ended too.
+    finally:
+        await asyncio.to_thread(eventually, lambda: not same_process(store.read(jid)['supervisor']), seconds=40)
