@@ -1,7 +1,10 @@
 """Tracked-file detection for commands that keep running after their worker exits."""
 
 import os
+import shlex
 import subprocess
+import sys
+import time
 
 import pytest
 
@@ -119,3 +122,65 @@ def test_git_failure_is_uncertainty_not_an_edit(repo, monkeypatch):
     (repo / 'src.py').write_text('VALUE = 4\n')
     monkeypatch.setattr('orcha_cli.job_file_guard._git', lambda *a, **k: None)
     assert guard.changed() is None  # Unknown: neither an edit nor a clean check.
+
+
+def test_staging_between_the_two_index_reads_is_not_an_edit(repo, monkeypatch):
+    """Review case: a checkpoint stages unchanged bytes after `ls-files` and before
+    `diff-files`; mixing the two index versions must not look like an edit."""
+    from orcha_cli import job_file_guard
+    (repo / 'src.py').write_text('VALUE = 2\n')  # Worker edit made before the baseline.
+    before = (repo / 'src.py').read_bytes()
+    guard = guard_for(repo)
+    original, staged = job_file_guard._git, []
+
+    def interleaved(root, *args, **kwargs):
+        value = original(root, *args, **kwargs)
+        if args[0] == 'ls-files' and not staged:
+            git(repo, 'add', '-A')
+            staged.append(True)
+        return value
+    monkeypatch.setattr(job_file_guard, '_git', interleaved)
+    assert guard.changed() is False
+    assert staged and (repo / 'src.py').read_bytes() == before
+
+
+def test_an_index_that_keeps_changing_is_uncertainty(repo, monkeypatch):
+    from orcha_cli import job_file_guard
+    guard = guard_for(repo)
+    original, writes = job_file_guard._git, []
+
+    def always_restaging(root, *args, **kwargs):
+        value = original(root, *args, **kwargs)
+        if args[0] == 'ls-files':
+            writes.append(True)  # A new index version between every pair of reads.
+            (repo / 'counter.txt').write_text(str(len(writes)))
+            git(repo, 'add', 'counter.txt')
+        return value
+    monkeypatch.setattr(job_file_guard, '_git', always_restaging)
+    assert guard.changed() is None
+    assert len(writes) == 3
+
+
+def test_cancelled_scan_ends_its_git_process_and_reports_uncertainty(repo, tmp_path):
+    import threading
+    from orcha_cli.job_file_guard import Cancellation
+    started = tmp_path / 'filter-started'
+    slow = f"import pathlib,sys,time;pathlib.Path({str(started)!r}).touch();time.sleep(30);sys.stdout.write(sys.stdin.read())"
+    git(repo, 'config', 'filter.slow.clean', f'{shlex.quote(sys.executable)} -c {shlex.quote(slow)}')
+    (repo / '.gitattributes').write_text('*.py filter=slow\n')
+    (repo / 'src.py').write_text('VALUE = 9\n')
+    cancellation = Cancellation()
+    guard = FileGuard(repo, cancellation=cancellation)
+    outcome = []
+    scan = threading.Thread(target=lambda: outcome.append(guard.rebaseline('2026-11-03T00:00:00+00:00')))
+    scan.start()
+    deadline = time.monotonic() + 10
+    while not started.exists() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert started.exists()
+    stopped = time.monotonic()
+    cancellation.cancel()
+    scan.join(timeout=5)
+    assert not scan.is_alive() and time.monotonic() - stopped < 5
+    assert outcome == [False] and guard.baseline is None
+    assert guard.snapshot() is None  # Cancelled for good: no new Git process starts.
