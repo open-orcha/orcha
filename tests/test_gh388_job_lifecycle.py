@@ -481,3 +481,66 @@ async def test_command_that_changes_tracked_source_after_worker_exit_is_stopped(
     await asyncio.to_thread(eventually, lambda: db.execute('SELECT * FROM managed_job_outcomes'), seconds=8)
     c = await candidate(client, managed, db)
     assert c['should_wake'] and c['completion']  # The agent is still woken to read why.
+
+
+@pytest.mark.parametrize('worker', ['exits_early', 'still_running_at_its_deadline'])
+async def test_continuing_command_outlives_the_worker_deadline(
+        client, managed, db, service, tmp_path, transport, monkeypatch, worker):
+    """Review case: the worker's own limit never stops a command that may continue."""
+    monkeypatch.setattr('orcha_cli.job_supervisor.FILE_CHECK_SECS', 0.3)
+    await publish(client, managed, seconds=8)
+    checkout = tracked_checkout(tmp_path/'repo')
+    managed = {**managed, 'checkout': checkout}
+    db.execute('UPDATE worker_runs SET base_cwd=%s WHERE run_id=%s', (str(checkout), managed['rid']))
+    api = JobAPI(service[0], managed['token'], managed['tid'])
+    store = JobStore(tmp_path/'repo')
+    started = time.monotonic()
+    code = "import time;time.sleep(11);print('long run finished',flush=True)"
+    jid = start_job(api, store, key='long-tests', purpose='Run the long tests', max_seconds=30,
+                    argv=[sys.executable, '-c', code], cwd=checkout)['job_id']
+    await asyncio.to_thread(eventually, lambda: running(store, jid))
+    if worker == 'exits_early':
+        await exit_worker(client, managed, service, transport, 'worker_exited')
+    saved = await asyncio.to_thread(eventually, lambda: result(store, jid), seconds=25)
+    assert time.monotonic() - started > 10  # Past the 8-second worker limit.
+    assert saved['status'] == 'completed' and saved['exit_code'] == 0, saved
+    assert 'long run finished' in (store.job_directory(jid)/'stdout.log').read_text()
+    monitor = db.execute('SELECT * FROM managed_job_monitors WHERE job_id=%s', (jid,))[0]
+    assert not monitor['revoked_at'] and not monitor['stop_reason']
+
+
+async def test_only_the_job_sharing_a_checkout_is_not_stopped_for_the_others_edit(
+        client, managed, db, service, tmp_path, transport, monkeypatch):
+    """Review case: two continued commands; one rewrites a tracked file.
+
+    The writer cannot be told apart from its neighbour, so neither is blamed;
+    the harmless test run completes normally.
+    """
+    monkeypatch.setattr('orcha_cli.job_supervisor.FILE_CHECK_SECS', 0.3)
+    await publish(client, managed, seconds=120)
+    checkout = tracked_checkout(tmp_path/'repo')
+    managed = {**managed, 'checkout': checkout}
+    db.execute('UPDATE worker_runs SET base_cwd=%s WHERE run_id=%s', (str(checkout), managed['rid']))
+    api = JobAPI(service[0], managed['token'], managed['tid'])
+    store = JobStore(tmp_path/'repo')
+    writer = ("import time;from pathlib import Path;"
+              "[time.sleep(.1) for _ in iter(lambda: Path('go').exists(), True)];"
+              "Path('src.py').write_text('VALUE = 2\\n');time.sleep(3)")
+    tests = ("import time;from pathlib import Path;"
+             "[time.sleep(.1) for _ in iter(lambda: Path('done').exists(), True)];print('3 passed')")
+    writer_id = start_job(api, store, key='rewrites-source', purpose='Rewrites a tracked file',
+                          argv=[sys.executable, '-c', writer], cwd=checkout)['job_id']
+    tests_id = start_job(api, store, key='unit-tests', purpose='Run the unit tests',
+                         argv=[sys.executable, '-c', tests], cwd=checkout)['job_id']
+    for jid in (writer_id, tests_id):
+        await asyncio.to_thread(eventually, lambda: running(store, jid))
+    await exit_worker(client, managed, service, transport, 'worker_exited')
+    for jid in (writer_id, tests_id):
+        await continuing_without_worker(store, jid)
+    (checkout/'go').write_text('')
+    await asyncio.to_thread(eventually, lambda: result(store, writer_id), seconds=20)
+    (checkout/'done').write_text('')
+    saved = await asyncio.to_thread(eventually, lambda: result(store, tests_id), seconds=20)
+    assert saved['status'] == 'completed' and saved['exit_code'] == 0, saved
+    assert '3 passed' in (store.job_directory(tests_id)/'stdout.log').read_text()
+    assert not db.execute('SELECT * FROM managed_job_monitors WHERE revoked_at IS NOT NULL')

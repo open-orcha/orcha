@@ -154,6 +154,11 @@ def execution_refusal(cur, run, task, job, monitor):
     return None
 
 
+def same_checkout(path, target):
+    import os
+    return bool(path) and os.path.realpath(path) == target
+
+
 def worker_active_on_checkout(cur, cid, checkout, since):
     """Any project worker on this checkout that was live at or after `since`.
 
@@ -165,7 +170,40 @@ def worker_active_on_checkout(cur, cid, checkout, since):
         JOIN agents a ON a.id=r.agent_id WHERE a.container_id=%s
           AND (r.ended_at IS NULL OR r.ended_at>=%s)''', (cid, since))
     target = os.path.realpath(checkout)
-    return any(row['checkout'] and os.path.realpath(row['checkout']) == target for row in cur.fetchall())
+    return any(same_checkout(row['checkout'], target) for row in cur.fetchall())
+
+
+def other_command_on_checkout(cur, cid, monitor, checkout, since):
+    """Another managed command that may have been running here at or after `since`.
+
+    A checkout-wide change does not say which command wrote it, so a second
+    command that was live in the window makes the change unattributable. A
+    command counts when its launch worker used this checkout, when the same
+    worker launched it, or when its checkout is unknown. It is ruled out only
+    when it never launched a process (its launch checkpoint precedes the
+    process), or once its own budget ended, or its result was saved, before
+    `since`.
+    """
+    import os
+    cur.execute('''SELECT COALESCE(m.launch_run_id,j.owner_run_id) AS launch_run_id,
+            COALESCE(r.worktree,r.base_cwd) AS checkout
+        FROM managed_jobs j JOIN tasks t ON t.id=j.task_id
+        LEFT JOIN managed_job_monitors m ON m.job_id=j.job_id
+        LEFT JOIN worker_runs r ON r.run_id=COALESCE(m.launch_run_id,j.owner_run_id)
+        WHERE t.container_id=%s AND j.job_id<>%s AND j.budget_until>=%s
+          AND NOT (j.state='reserved' AND j.checkpoint_version=0)
+          AND (j.state IN ('reserved','running') OR NOT EXISTS (SELECT 1 FROM managed_job_outcomes o
+               WHERE o.job_id=j.job_id AND o.created_at<%s))''',
+        (cid, str(monitor['job_id']), since, since))
+    target = os.path.realpath(checkout)
+    return any(str(row['launch_run_id']) == str(monitor['launch_run_id']) or not row['checkout']
+               or same_checkout(row['checkout'], target) for row in cur.fetchall())
+
+
+def change_unattributable(cur, cid, monitor, checkout, since):
+    """Someone other than this command may have made a tracked change."""
+    return (worker_active_on_checkout(cur, cid, checkout, since)
+            or other_command_on_checkout(cur, cid, monitor, checkout, since))
 
 
 def continuation_until(job):

@@ -32,6 +32,10 @@ def module_environment():
 
 
 FILE_CHECK_SECS = 5.0
+# A command that may outlive its worker switches to its own continuation grant
+# this long before the worker's grant ends, so the worker's deadline never
+# reaches the command (contacts are 2 s apart and each may take up to 2 s).
+HANDOFF_LEAD_SECS = 5.0
 
 
 class Supervisor:
@@ -59,18 +63,19 @@ class Supervisor:
         self.files_changed = False
         self.server_time = None
         self.next_file_check = 0.0
+        self.next_handoff = 0.0
         self.file_check_secs = min(60.0, max(0.2, float(config.get('file_check_secs', FILE_CHECK_SECS))))
 
     def update(self, **changes):
         self.record = self.store.update(self.job_id, self.record['version'], changes)
 
-    def confirm(self):
+    def confirm(self, *, continuation=False):
         sent = time.monotonic()
         if self.transfer:
             self.transfer.confirm(sent)
         else:
             try:
-                if self.detached:
+                if self.detached or continuation:
                     raise JobAPIError(409)
                 self.clock.confirm(self.api.heartbeat(self.job_id), sent)
             except JobAPIError as exc:
@@ -80,7 +85,7 @@ class Supervisor:
                 # It never restores worker mutation permission or a run token.
                 response = self.capability_api.request(f'job-monitors/{self.job_id}/continuation-heartbeat', {
                     'launch_nonce':self.record['launch_nonce'], 'capability':self.config['continuation_capability']})
-                self.clock.confirm(response, sent)
+                self.clock.confirm(response, sent, worker_limits=False)
                 self.server_time = response['server_time']
                 if not self.detached:
                     self.start_file_guard()
@@ -97,7 +102,7 @@ class Supervisor:
         return self.clock.mutations_allowed
 
     def start_file_guard(self):
-        # The baseline time is a server time observed BEFORE the fingerprint, so
+        # The baseline time is a server time observed BEFORE the snapshot, so
         # a worker still on the checkout then can never be blamed on the command.
         from .job_file_guard import FileGuard
         try:
@@ -107,6 +112,24 @@ class Supervisor:
         except (OSError, ValueError):
             self.file_guard = None  # Uncertainty never stops the command.
         self.next_file_check = time.monotonic() + self.file_check_secs
+
+    def worker_grant_ending(self, now):
+        """The worker's own limit, not the command's budget, is about to stop it."""
+        return (self.record.get('continue_after_exit') and not self.detached and not self.transfer
+                and not self.stopping and self.clock.until < self.clock.budget
+                and now >= max(self.next_handoff, self.clock.until - HANDOFF_LEAD_SECS))
+
+    def continue_without_worker(self):
+        self.next_handoff = time.monotonic() + 1
+        try:
+            self.confirm(continuation=True)
+            self.send({'until': self.clock.until, 'prepare': self.clock.prepare,
+                       'budget_until': self.clock.budget})
+        except JobAPIError as exc:
+            # A refused grant is a real stop (human stop, cancel, hold, pause).
+            # An unreachable service leaves the existing finite deadline in place.
+            if exc.fenced:
+                self.stopping = True
 
     def check_files(self):
         """Stop only for tracked changes the server cannot attribute to a worker."""
@@ -318,6 +341,9 @@ class Supervisor:
                     preparation_owner = self.record['owner_run_id']
                 if daemon_stop_requested(self.directory, self.record):
                     self.stopping = True
+                if self.worker_grant_ending(now):
+                    self.continue_without_worker()
+                    now = time.monotonic()
                 if self.stopping or now >= self.clock.until:
                     try:
                         self.clock.mutations_allowed = False
