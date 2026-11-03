@@ -177,12 +177,16 @@ def other_command_on_checkout(cur, cid, monitor, checkout, since):
     """Another managed command that may have been running here at or after `since`.
 
     A checkout-wide change does not say which command wrote it, so a second
-    command that was live in the window makes the change unattributable. A
-    command counts when its launch worker used this checkout, when the same
-    worker launched it, or when its checkout is unknown. It is ruled out only
-    when it never launched a process (its launch checkpoint precedes the
-    process), or once its own budget ended, or its result was saved, before
-    `since`.
+    command that may still have been running in the window makes the change
+    unattributable. A command counts when its launch worker used this
+    checkout, when the same worker launched it, or when its checkout is
+    unknown. It is ruled out only when it never launched a process (its launch
+    checkpoint precedes the process), or when a VERIFIED termination was
+    recorded before `since`. An unverified or unknown outcome, or a passed
+    budget, is not proof the process stopped, so those still count. Commands
+    from before monitoring kept no outcome history; they always stopped with
+    their worker, so their verified finish with a budget that ended before
+    `since` is final.
     """
     import os
     cur.execute('''SELECT COALESCE(m.launch_run_id,j.owner_run_id) AS launch_run_id,
@@ -190,10 +194,11 @@ def other_command_on_checkout(cur, cid, monitor, checkout, since):
         FROM managed_jobs j JOIN tasks t ON t.id=j.task_id
         LEFT JOIN managed_job_monitors m ON m.job_id=j.job_id
         LEFT JOIN worker_runs r ON r.run_id=COALESCE(m.launch_run_id,j.owner_run_id)
-        WHERE t.container_id=%s AND j.job_id<>%s AND j.budget_until>=%s
+        WHERE t.container_id=%s AND j.job_id<>%s
           AND NOT (j.state='reserved' AND j.checkpoint_version=0)
-          AND (j.state IN ('reserved','running') OR NOT EXISTS (SELECT 1 FROM managed_job_outcomes o
-               WHERE o.job_id=j.job_id AND o.created_at<%s))''',
+          AND NOT EXISTS (SELECT 1 FROM managed_job_outcomes o WHERE o.job_id=j.job_id
+               AND o.termination_verified AND o.created_at<%s)
+          AND NOT (m.job_id IS NULL AND j.termination_verified AND j.budget_until<%s)''',
         (cid, str(monitor['job_id']), since, since))
     target = os.path.realpath(checkout)
     return any(str(row['launch_run_id']) == str(monitor['launch_run_id']) or not row['checkout']

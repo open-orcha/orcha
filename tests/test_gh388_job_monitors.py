@@ -474,12 +474,18 @@ async def test_file_change_is_not_blamed_while_another_command_shares_the_checko
     assert [(str(r['job_id']), r['stop_reason']) for r in stopped] == [(job['job_id'], 'project_files_changed')]
 
 
-@pytest.mark.parametrize('where', ['same_checkout_alias', 'other_checkout', 'budget_ended', 'never_launched'])
+@pytest.mark.parametrize('where', ['same_checkout_alias', 'other_checkout', 'budget_ended', 'never_launched',
+                                   'verified_finish'])
 async def test_command_from_another_worker_counts_only_on_this_checkout(client, managed, db, tmp_path, where):
     await publish(client, managed)
     secret = 'a'*43
     job = await continued_job(client, managed, secret)
     other = await continued_job(client, managed, secret)
+    if where == 'verified_finish':
+        # Its verified result was saved before the baseline.
+        done = await client.post(monitor_url(managed, other, 'observe'), json=observation(other, checkpoint_version=2))
+        assert done.status_code == 200 and done.json()['outcome']['termination_verified'], done.text
+        db.execute('UPDATE managed_job_outcomes SET created_at=%s WHERE job_id=%s', (db.ago(30), other['job_id']))
     checkout = tmp_path / 'checkout'
     checkout.mkdir()
     (tmp_path / 'alias').symlink_to(checkout)
@@ -495,12 +501,57 @@ async def test_command_from_another_worker_counts_only_on_this_checkout(client, 
                tuple(row.values()))
     db.execute('UPDATE managed_job_monitors SET launch_run_id=%s WHERE job_id=%s', (second, other['job_id']))
     db.execute('UPDATE managed_jobs SET owner_run_id=%s WHERE job_id=%s', (second, other['job_id']))
-    if where != 'never_launched':
+    if where not in {'never_launched', 'verified_finish'}:
         mark_launched(db, other)
     if where == 'budget_ended':
+        # A passed budget is not proof its process stopped.
         db.execute('UPDATE managed_jobs SET budget_until=%s WHERE job_id=%s', (db.ago(30), other['job_id']))
     response = await client.post(monitor_url(managed, job, 'file-change'), json={
         'capability': secret, 'launch_nonce': job['launch_nonce'], 'since': db.ago(5).isoformat(),
         'checkout': str(checkout)})
     assert response.status_code == 200, response.text
-    assert response.json() == {'attributed': where != 'same_checkout_alias'}
+    assert response.json() == {'attributed': where in {'other_checkout', 'never_launched', 'verified_finish'}}
+
+
+async def sibling_with_uncertain_finish(client, managed, db, tmp_path):
+    """Two commands on one checkout; the sibling's earlier outcome is unverified."""
+    await publish(client, managed)
+    secret = 'a'*43
+    job = await continued_job(client, managed, secret)
+    other = await continued_job(client, managed, secret)
+    mark_launched(db, other)
+    checkout = tmp_path / 'repo'
+    checkout.mkdir()
+    db.execute("UPDATE worker_runs SET worktree=%s,status='exited',ended_at=%s WHERE run_id=%s",
+               (str(checkout), db.ago(60), managed['rid']))
+    body = observation(other, checkpoint_version=2)
+    unknown = await client.post(monitor_url(managed, other, 'observe'), json={
+        **body, 'state': 'unknown', 'termination_verified': False, 'result_digest': None})
+    assert unknown.status_code == 200, unknown.text
+    assert not unknown.json()['outcome']['termination_verified']
+    db.execute('UPDATE managed_job_outcomes SET created_at=%s WHERE job_id=%s', (db.ago(30), other['job_id']))
+    report = {'capability': secret, 'launch_nonce': job['launch_nonce'], 'since': db.ago(5).isoformat(),
+              'checkout': str(checkout)}
+    return job, other, body, report
+
+
+async def test_uncertain_sibling_termination_still_prevents_blame(client, managed, db, tmp_path):
+    """Review case: an unknown outcome means the sibling's process may still be writing."""
+    job, _, _, report = await sibling_with_uncertain_finish(client, managed, db, tmp_path)
+    response = await client.post(monitor_url(managed, job, 'file-change'), json=report)
+    assert response.status_code == 200, response.text
+    assert response.json() == {'attributed': False}
+    assert not db.execute('SELECT * FROM managed_job_monitors WHERE revoked_at IS NOT NULL')
+
+
+async def test_verified_sibling_finish_after_baseline_is_not_hidden_by_old_uncertainty(client, managed, db, tmp_path):
+    """Review case: only a verified finish BEFORE the baseline rules a sibling out."""
+    job, other, body, report = await sibling_with_uncertain_finish(client, managed, db, tmp_path)
+    verified = await client.post(monitor_url(managed, other, 'observe'), json={
+        **body, 'operation_id': str(uuid4()), 'expected_version': 1, 'checkpoint_version': 3})
+    assert verified.status_code == 200, verified.text
+    assert verified.json()['outcome']['termination_verified']
+    response = await client.post(monitor_url(managed, job, 'file-change'), json=report)
+    assert response.status_code == 200, response.text
+    assert response.json() == {'attributed': False}
+    assert not db.execute('SELECT * FROM managed_job_monitors WHERE revoked_at IS NOT NULL')

@@ -157,16 +157,17 @@ class FileGuard:
         return value is not None
 
     def changed(self):
-        """A file tracked at the baseline now has different content, or is gone."""
+        """True when a file tracked at the baseline now has different content, or
+        is gone; False when all match; None when Git could not tell (uncertain)."""
         if self.baseline is None:
-            return False
+            return None
         current = self.snapshot()
         if current is None:
-            return False
+            return None
         untracked = [path for path in self.baseline if path not in current]
         if untracked:
             working = self.working_ids(untracked)
             if working is None:
-                return False
+                return None
             current = {**current, **working}
         return any(current[path] != value for path, value in self.baseline.items())
