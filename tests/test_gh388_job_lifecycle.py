@@ -379,3 +379,105 @@ def test_unverifiable_owner_change_publishes_actionable_uncertainty(tmp_path):
     store.update(jid, store.read(jid)['version'], {'launch_owner_run_id': old})
     assert evidence(store, job)['termination_verified']
     assert evidence(store, {**job, 'transfers_used': 0})['termination_verified'] is False
+
+
+def tracked_checkout(root):
+    """A real Git checkout with tracked source plus a tracked log folder."""
+    def git(*args):
+        subprocess.run(['git', '-C', str(root), *args], check=True, capture_output=True)
+    root.mkdir()
+    (root/'logs').mkdir()
+    (root/'src.py').write_text('VALUE = 1\n')
+    (root/'logs'/'run.log').write_text('old log\n')
+    git('init', '-q')
+    git('add', 'src.py', 'logs/run.log')
+    git('-c', 'user.name=Orcha Test', '-c', 'user.email=test@example.invalid', 'commit', '-q', '-m', 'fixture')
+    return root
+
+
+async def continuing_without_worker(store, jid):
+    """Wait until the supervisor runs on alone with its tracked-file baseline.
+
+    Changes made before that baseline (while the worker may still have been on
+    the checkout) are never blamed on the command.
+    """
+    from orcha_cli.job_store import read_json
+    path = store.job_directory(jid)/'authority.json'
+    await asyncio.to_thread(eventually, lambda: path.exists() and read_json(path).get('continuing_without_worker'))
+
+
+async def exit_worker(client, managed, service, transport, reason):
+    worker = {'run_id': managed['rid'], 'base_cwd': str(managed['checkout']), 'run_token': managed['token']}
+    assert await asyncio.to_thread(notifier_managed_jobs.prepare, service[0], worker, transport,
+                                   reason=reason, stop=True)
+    await finish_worker(client, managed)
+
+
+@pytest.mark.parametrize('reason', ['worker_exited', 'worker_completed', 'checkpoint_transfer'])
+async def test_plain_test_command_keeps_running_after_worker_exit_and_wakes_with_log(
+        client, managed, db, service, tmp_path, transport, monkeypatch, reason):
+    """Kedar's case: an ordinary pytest/npm-test style run, started with no flags."""
+    monkeypatch.setattr('orcha_cli.job_supervisor.FILE_CHECK_SECS', 0.3)
+    await publish(client, managed, seconds=120)
+    db.execute("UPDATE tasks SET autonomy='on' WHERE id=%s", (managed['tid'],))
+    checkout = tracked_checkout(tmp_path/'repo')
+    managed = {**managed, 'checkout': checkout}
+    db.execute('UPDATE worker_runs SET base_cwd=%s WHERE run_id=%s', (str(checkout), managed['rid']))
+    api = JobAPI(service[0], managed['token'], managed['tid'])
+    store = JobStore(tmp_path/'repo')
+    # Subprocesses, network-free test output, a tracked log rewrite, caches and
+    # untracked files are all normal for a test run and must not stop it.
+    code = ("import subprocess,sys,time;from pathlib import Path;"
+            "subprocess.run([sys.executable,'-c','print(\"collected 3 items\")'],check=True);"
+            "[time.sleep(.1) for _ in iter(lambda: Path('go').exists(), True)];"
+            "Path('logs/run.log').write_text('new log\\n');"
+            "Path('.pytest_cache').mkdir(exist_ok=True);Path('.pytest_cache/state').write_text('x');"
+            "Path('report.xml').write_text('<testsuite/>');time.sleep(1.5);print('3 passed')")
+    jid = start_job(api, store, key='unit-tests', purpose='Run the unit tests',
+                    argv=[sys.executable, '-c', code], cwd=checkout)['job_id']
+    await asyncio.to_thread(eventually, lambda: running(store, jid))
+    await exit_worker(client, managed, service, transport, reason)
+    assert not (store.job_directory(jid)/'daemon-stop.json').exists()
+    await continuing_without_worker(store, jid)
+    (checkout/'go').write_text('')
+    saved = await asyncio.to_thread(eventually, lambda: result(store, jid), seconds=20)
+    assert saved['status'] == 'completed' and saved['exit_code'] == 0, saved
+    log = (store.job_directory(jid)/'stdout.log').read_text()
+    assert 'collected 3 items' in log and '3 passed' in log
+    monitor = db.execute('SELECT * FROM managed_job_monitors WHERE job_id=%s', (jid,))[0]
+    assert not monitor['revoked_at'] and not monitor['stop_reason']
+    await asyncio.to_thread(eventually, lambda: db.execute('SELECT * FROM managed_job_outcomes'), seconds=8)
+    c = await candidate(client, managed, db)
+    assert c['should_wake'] and c['completion'] and c['context_task_id'] == managed['tid']
+
+
+async def test_command_that_changes_tracked_source_after_worker_exit_is_stopped(
+        client, managed, db, service, tmp_path, transport, monkeypatch):
+    monkeypatch.setattr('orcha_cli.job_supervisor.FILE_CHECK_SECS', 0.3)
+    await publish(client, managed, seconds=120)
+    db.execute("UPDATE tasks SET autonomy='on' WHERE id=%s", (managed['tid'],))
+    checkout = tracked_checkout(tmp_path/'repo')
+    managed = {**managed, 'checkout': checkout}
+    db.execute('UPDATE worker_runs SET base_cwd=%s WHERE run_id=%s', (str(checkout), managed['rid']))
+    api = JobAPI(service[0], managed['token'], managed['tid'])
+    store = JobStore(tmp_path/'repo')
+    code = ("import time;from pathlib import Path;"
+            "[time.sleep(.1) for _ in iter(lambda: Path('go').exists(), True)];"
+            "Path('src.py').write_text('VALUE = 2\\n');print('changed source',flush=True);time.sleep(60)")
+    jid = start_job(api, store, key='rewrites-source', purpose='Rewrites a tracked file',
+                    argv=[sys.executable, '-c', code], cwd=checkout)['job_id']
+    process = await asyncio.to_thread(eventually, lambda: running(store, jid))
+    await exit_worker(client, managed, service, transport, 'worker_exited')
+    await continuing_without_worker(store, jid)
+    (checkout/'go').write_text('')
+    saved = await asyncio.to_thread(eventually, lambda: result(store, jid), seconds=20)
+    assert saved['reason'] == 'project_files_changed' and saved['status'] == 'interrupted', saved
+    assert saved['termination_verified']
+    from orcha_cli.job_identity import same_process
+    assert not same_process(process['process'])
+    monitor = db.execute('SELECT * FROM managed_job_monitors WHERE job_id=%s', (jid,))[0]
+    assert monitor['stop_reason'] == 'project_files_changed' and not monitor['suppress_wake']
+    assert 'changed source' in (store.job_directory(jid)/'stdout.log').read_text()
+    await asyncio.to_thread(eventually, lambda: db.execute('SELECT * FROM managed_job_outcomes'), seconds=8)
+    c = await candidate(client, managed, db)
+    assert c['should_wake'] and c['completion']  # The agent is still woken to read why.

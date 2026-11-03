@@ -106,11 +106,11 @@ def prepare(api_base, worker, services, *, reason, stop=False, wait_secs=5, reta
         store, records = run_jobs(worker)
         if not records:
             return True
-        if (stop and reason in {'worker_exited','worker_missing'}
-                and any(r.get('continue_after_exit') for r in records)
-                and not worker.get('workflow') and not worker.get('sandbox_container_id')):
-            # A machine-lane observation of this exact exit. Retain only grants
-            # authorized before launch, under their original fixed deadline.
+        if (stop and reason != 'human_stop' and any(r.get('continue_after_exit') for r in records)
+                and not worker.get('sandbox_container_id')):
+            # A machine-lane observation of this exact exit, whatever ended the
+            # worker. The server retains each command it still lets continue;
+            # only those it refuses (explicit stop, hold, pause) are stopped.
             exiting = services._post_json(f"{api_base}/api/runs/{worker['run_id']}/job-exit", {})
             retained_jobs = set(retained_jobs) | set((exiting or {}).get('retained_job_ids', []))
         pending = []

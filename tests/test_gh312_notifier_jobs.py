@@ -25,7 +25,7 @@ def transport():
     with httpx.Client(timeout=2) as client:
         def post(url, body):
             response = client.post(url, json=body)
-            assert response.status_code == 201, response.text
+            assert response.status_code in {200, 201}, response.text
             return response.json()
         yield SimpleNamespace(_post_json=post)
 
@@ -200,7 +200,9 @@ def test_startup_pointers_omit_private_metadata_and_explain_both_wait_contracts(
     assert all(secret not in text for secret in ('private-purpose-fixture', 'private-command-fixture', 'private-output-fixture'))
     assert '--seconds 100' in text and '120000' in text and 'session_id' in text
     assert 'write_stdin' in text and 'yield_time_ms=50000' in text
-    assert 'Generic commands stop before worker transfer' in text
+    assert 'keeps running after this worker exits' in text
+    assert 'tracked project files change' in text
+    assert 'Generic commands stop before worker transfer' not in text
     assert jid not in startup_guidance(tmp_path, str(uuid4()))
 
 
