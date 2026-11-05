@@ -19,11 +19,11 @@ from portal_backend.database import db_cursor
 from portal_backend.guards import require_kind
 from portal_backend.identity_routes import require_machine_lane_member, trusted_actor
 from portal_backend.job_monitor_service import (
-    execution_refusal, latest_outcome, lock_monitor, observe, one, revoke,
+    continuation_until, execution_refusal, latest_outcome, lock_monitor, observe, one, revoke,
 )
 from portal_backend.managed_run_auth import conflict, require_managed_run
 from portal_backend.schemas.job_monitors import (
-    ContinuationHeartbeat, HandleOutcome, JobMonitor, JobObservation,
+    ContinuationHeartbeat, FileChangeReport, FileChangeVerdict, HandleOutcome, JobMonitor, JobObservation,
     JobOutcome, JobStop, JobStopReceipt, JobWaitReceipt, JobYield, MonitorPage,
     ObservationReceipt, OutcomePage, RunJobWait, UnlaunchedAttempt, UnlaunchedRelease,
 )
@@ -158,8 +158,7 @@ def continuation_heartbeat(tid: UUID, jid: UUID, body: ContinuationHeartbeat, re
             revoke(cur, str(jid), refused, suppress=refused == 'explicit_stop')
         else:
             now = sql.utcnow()
-            limits = one(cur, 'SELECT * FROM managed_run_limits WHERE run_id=%s', (monitor['launch_run_id'],))
-            until = min(monitor['execution_until'], limits['run_until'], job['budget_until'])
+            until = continuation_until(job)
             result = dict(server_time=now, run_id=monitor['launch_run_id'], job_id=jid,
                 workflow_generation=None, token_valid=True, stop_requested=False, on_hold=False,
                 cancelled=False, lease_until=None, lease_active=False, mutations_allowed=False,
@@ -169,6 +168,31 @@ def continuation_heartbeat(tid: UUID, jid: UUID, body: ContinuationHeartbeat, re
     if refused:
         conflict('managed_continuation_revoked')
     return result
+
+
+@app.post('/api/tasks/{tid}/job-monitors/{jid}/file-change', response_model=FileChangeVerdict)
+def report_file_change(tid: UUID, jid: UUID, body: FileChangeReport, request: Request):
+    """Stop a continued command only for tracked changes nobody else could have made.
+
+    A worker, or another managed command, on the same checkout at any point
+    since the supervisor's baseline may have made the change itself, so
+    nothing is attributed then.
+    """
+    from portal_backend.job_monitor_service import change_unattributable
+    with db_cursor() as (conn, cur):
+        _, task, job, monitor = lock_monitor(cur, str(tid), str(jid))
+        require_machine_lane_member(cur, request, str(task['container_id']))
+        if (str(body.launch_nonce) != str(job['launch_nonce'])
+                or not hmac.compare_digest(hashlib.sha256(body.capability.encode()).hexdigest(),
+                                           monitor['capability_digest'] or '')):
+            raise HTTPException(403, 'Original supervisor capability required')
+        if monitor['revoked_at']:
+            conflict('managed_continuation_revoked')
+        if change_unattributable(cur, str(task['container_id']), monitor, body.checkout, body.since):
+            return dict(attributed=False)
+        revoke(cur, str(jid), 'project_files_changed')
+        conn.commit()
+    return dict(attributed=True)
 
 
 @app.post('/api/tasks/{tid}/job-monitors/{jid}/stop', response_model=JobStopReceipt)

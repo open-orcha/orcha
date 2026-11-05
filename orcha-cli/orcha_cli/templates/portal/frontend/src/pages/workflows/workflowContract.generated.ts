@@ -1,5 +1,5 @@
 // Generated from FastAPI OpenAPI slices. DO NOT EDIT.
-// Workflow source SHA-256: 1b745c2ea2599763b3261608d33acfd24531fa8a81367fa49bb4b9d2962bf4a0
+// Workflow source SHA-256: 84ae5b8802db2e352bed6c903bc576742b940188deb1a6e0afa1aeb3bbe45b66
 // Evidence GET source SHA-256: f2a794298f992bd3ff3955fa5d6aefc30a97e373794a3c1e9d03c8f46796853e
 // Regenerate with tools/generate-workflow-contract.mjs and both source files.
 
@@ -591,6 +591,7 @@ export type WorkflowCreate = {
   "semantics_version"?: 1 | 2 | null;
   "repeat_groups"?: Array<RepeatGroup>;
   "turn_allowance"?: number;
+  "for_human_id"?: string | null;
   "idempotency_key": string;
   "preview_digest"?: string | null;
 };
@@ -627,6 +628,8 @@ export type WorkflowDetail = {
   "hidden_at"?: string | null;
   "hidden_by_human_id"?: string | null;
   "hidden_by_alias"?: string | null;
+  "drafted_by_agent_id"?: string | null;
+  "drafted_by_alias"?: string | null;
   "hidden_reason"?: string | null;
   "evidence_capability"?: IntegrationCapability;
   "created_task_ids"?: Record<string, string>;
@@ -648,6 +651,7 @@ export type WorkflowDraft = {
   "semantics_version"?: 1 | 2 | null;
   "repeat_groups"?: Array<RepeatGroup>;
   "turn_allowance"?: number;
+  "for_human_id"?: string | null;
 };
 
 export type WorkflowImpact = {
@@ -682,6 +686,8 @@ export type WorkflowImpact = {
   "hidden_at"?: string | null;
   "hidden_by_human_id"?: string | null;
   "hidden_by_alias"?: string | null;
+  "drafted_by_agent_id"?: string | null;
+  "drafted_by_alias"?: string | null;
   "hidden_reason"?: string | null;
   "evidence_capability"?: IntegrationCapability;
   "created_task_ids"?: Record<string, string>;
@@ -3874,6 +3880,16 @@ export const workflowSchemas = {
         "maximum": 1000,
         "minimum": 1
       },
+      "for_human_id": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
       "idempotency_key": {
         "type": "string",
         "maxLength": 200,
@@ -4058,6 +4074,26 @@ export const workflowSchemas = {
           }
         ]
       },
+      "drafted_by_agent_id": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "drafted_by_alias": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
       "hidden_reason": {
         "anyOf": [
           {
@@ -4197,6 +4233,16 @@ export const workflowSchemas = {
         "type": "integer",
         "maximum": 1000,
         "minimum": 1
+      },
+      "for_human_id": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
       }
     },
     "additionalProperties": false,
@@ -4357,6 +4403,26 @@ export const workflowSchemas = {
         ]
       },
       "hidden_by_alias": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "drafted_by_agent_id": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "drafted_by_alias": {
         "anyOf": [
           {
             "type": "string"

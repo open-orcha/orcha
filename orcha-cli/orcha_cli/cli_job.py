@@ -36,7 +36,7 @@ def register(sub, handler):
     start.add_argument('--isolate', action='store_true',
                        help='macOS: deny shared writes, network, IPC and subprocesses; write only to ORCHA_JOB_SCRATCH')
     start.add_argument('--continue-after-exit', action='store_true',
-                       help='explicit finite continuation of an isolated ordinary host command after the worker exits')
+                       help='accepted for compatibility; host commands always keep running after the worker exits')
     start.add_argument('command', nargs=argparse.REMAINDER)
     status = commands.add_parser('status', help='read status and saved exit information without raw logs')
     status.add_argument('job_id', nargs='?')
@@ -126,8 +126,9 @@ def start_job(api, store, *, key, purpose, argv, cwd, max_seconds=7200, max_tran
     contract = job_isolation.CONTRACT if isolate else 'stop_before_transfer'
     from .job_sandbox import launch_identity
     container = launch_identity(store)
-    if continue_after_exit and (not isolate or container):
-        raise ValueError('Continuation requires an isolated ordinary host command')
+    # Any host command may outlive its worker; the supervisor stops it only if
+    # it changes tracked project files. Container commands end with the sandbox.
+    continue_after_exit = not container
     job_key = str(uuid5(UUID(api.task_id), key))
     registration = store.root / f'.reservation-{job_key}.json'
     with store.locked():
@@ -204,6 +205,8 @@ def start_job(api, store, *, key, purpose, argv, cwd, max_seconds=7200, max_tran
                   'env': minimal_environment(os.environ), 'api_base': api.url.geturl(), 'token': api.token}
         if capability:
             config['continuation_capability'] = capability
+            from . import job_supervisor
+            config['file_check_secs'] = job_supervisor.FILE_CHECK_SECS
         proc = subprocess.Popen([sys.executable, '-m', 'orcha_cli.job_supervisor'],
                                 stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                                 env=module_environment(), start_new_session=True, close_fds=True)

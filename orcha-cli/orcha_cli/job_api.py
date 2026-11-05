@@ -118,7 +118,7 @@ class AuthorityClock:
         self.budget = float('inf')
         self.mutations_allowed = False
 
-    def confirm(self, response, sent_at):
+    def confirm(self, response, sent_at, *, worker_limits=True):
         if (response['run_id'] != self.run_id or response['job_id'] != self.job_id
                 or not response['token_valid'] or any(response[k] for k in
                     ('stop_requested', 'on_hold', 'cancelled'))):
@@ -128,8 +128,10 @@ class AuthorityClock:
         # remains safe across local wall-clock jumps. Fixed limits never slide.
         fixed = min(epoch(response[k]) for k in ('run_until', 'sandbox_until', 'budget_until')
                     if response.get(k))
-        self.fixed = min(self.fixed, sent_at + fixed - server)
         self.budget = min(self.budget, sent_at + epoch(response['budget_until']) - server)
+        # A command continuing after its worker is bound only by its own budget:
+        # the worker's run and sandbox limits no longer apply to it.
+        self.fixed = min(self.fixed if worker_limits else self.budget, sent_at + fixed - server)
         self.until = min(self.fixed, sent_at + epoch(response['authority_until']) - server)
         self.prepare = min(self.until - 60, sent_at + epoch(response['prepare_at']) - server)
         self.mutations_allowed = bool(response['mutations_allowed']) and time.monotonic() < self.until

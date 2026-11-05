@@ -6336,6 +6336,17 @@
             "title": "Turn Allowance",
             "default": 40
           },
+          "for_human_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "For Human Id"
+          },
           "idempotency_key": {
             "type": "string",
             "maxLength": 200,
@@ -6553,6 +6564,28 @@
             ],
             "title": "Hidden By Alias"
           },
+          "drafted_by_agent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Drafted By Agent Id"
+          },
+          "drafted_by_alias": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Drafted By Alias"
+          },
           "hidden_reason": {
             "anyOf": [
               {
@@ -6716,6 +6749,17 @@
             "minimum": 1.0,
             "title": "Turn Allowance",
             "default": 40
+          },
+          "for_human_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "For Human Id"
           }
         },
         "additionalProperties": false,
@@ -6915,6 +6959,28 @@
               }
             ],
             "title": "Hidden By Alias"
+          },
+          "drafted_by_agent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Drafted By Agent Id"
+          },
+          "drafted_by_alias": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Drafted By Alias"
           },
           "hidden_reason": {
             "anyOf": [

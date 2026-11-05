@@ -43,14 +43,14 @@ def register_monitor(cur, run, task, job, body, limits):
                 or existing['capability_digest'] != body.continuation_capability_digest):
             conflict('managed_monitor_registration_conflict')
         return
-    if body.continue_after_exit and (body.continuation_contract != 'readonly_single_process_v1'
-            or task.get('workflow_id') or run['sandbox_container_id'] or run['wake_kind'] != 'ephemeral'):
-        conflict('managed_continuation_requires_isolated_host')
+    if body.continue_after_exit and run['sandbox_container_id']:
+        # A command inside a container sandbox cannot outlive the container.
+        conflict('managed_continuation_requires_host')
     cur.execute('''INSERT INTO managed_job_monitors
         (job_id,agent_id,launch_run_id,work_revision,continue_after_exit,capability_digest,execution_until)
         VALUES (%s,%s,%s,%s,%s,%s,%s)''',
         (job['job_id'], run['agent_id'], run['run_id'], task['work_revision'], body.continue_after_exit,
-         body.continuation_capability_digest, min(limits['run_until'], job['budget_until'])))
+         body.continuation_capability_digest, job['budget_until']))
 
 
 def latest_outcome(cur, jid):
@@ -132,7 +132,7 @@ def execution_refusal(cur, run, task, job, monitor):
     if monitor['revoked_at']:
         return 'revoked'
     if (not monitor['continue_after_exit'] or str(run['run_id']) != str(monitor['launch_run_id'])
-            or task.get('workflow_id') or run['sandbox_container_id'] or run['wake_kind'] != 'ephemeral'):
+            or run['sandbox_container_id']):
         return 'unsupported_continuation'
     if run['stop_requested_at']:
         return 'explicit_stop'
@@ -146,12 +146,73 @@ def execution_refusal(cur, run, task, job, monitor):
     if not one(cur, '''SELECT 1 FROM agent_tasks WHERE task_id=%s AND agent_id=%s
         AND assignment_status IN ('assigned','accepted','working')''', (task['id'], monitor['agent_id'])):
         return 'assignment_changed'
-    limits = one(cur, 'SELECT * FROM managed_run_limits WHERE run_id=%s', (monitor['launch_run_id'],))
-    if not limits or min(monitor['execution_until'], limits['run_until'], job['budget_until']) <= sql.utcnow():
+    # Only the command's own time budget applies; the worker's run cap does not.
+    if continuation_until(job) <= sql.utcnow():
         return 'deadline_reached'
     if job['state'] not in {'reserved', 'running'}:
         return 'job_not_live'
     return None
+
+
+def same_checkout(path, target):
+    import os
+    return bool(path) and os.path.realpath(path) == target
+
+
+def worker_active_on_checkout(cur, cid, checkout, since):
+    """Any project worker on this checkout that was live at or after `since`.
+
+    Paths are compared after resolution so /tmp and /private/tmp style aliases
+    still match. Unknown or unfinished runs count as live (never attributed).
+    """
+    import os
+    cur.execute('''SELECT COALESCE(r.worktree,r.base_cwd) AS checkout FROM worker_runs r
+        JOIN agents a ON a.id=r.agent_id WHERE a.container_id=%s
+          AND (r.ended_at IS NULL OR r.ended_at>=%s)''', (cid, since))
+    target = os.path.realpath(checkout)
+    return any(same_checkout(row['checkout'], target) for row in cur.fetchall())
+
+
+def other_command_on_checkout(cur, cid, monitor, checkout, since):
+    """Another managed command that may have been running here at or after `since`.
+
+    A checkout-wide change does not say which command wrote it, so a second
+    command that may still have been running in the window makes the change
+    unattributable. A command counts when its launch worker used this
+    checkout, when the same worker launched it, or when its checkout is
+    unknown. It is ruled out only when it never launched a process (its launch
+    checkpoint precedes the process), or when a VERIFIED termination was
+    recorded before `since`. An unverified or unknown outcome, or a passed
+    budget, is not proof the process stopped, so those still count. Commands
+    from before monitoring kept no outcome history; they always stopped with
+    their worker, so their verified finish with a budget that ended before
+    `since` is final.
+    """
+    import os
+    cur.execute('''SELECT COALESCE(m.launch_run_id,j.owner_run_id) AS launch_run_id,
+            COALESCE(r.worktree,r.base_cwd) AS checkout
+        FROM managed_jobs j JOIN tasks t ON t.id=j.task_id
+        LEFT JOIN managed_job_monitors m ON m.job_id=j.job_id
+        LEFT JOIN worker_runs r ON r.run_id=COALESCE(m.launch_run_id,j.owner_run_id)
+        WHERE t.container_id=%s AND j.job_id<>%s
+          AND NOT (j.state='reserved' AND j.checkpoint_version=0)
+          AND NOT EXISTS (SELECT 1 FROM managed_job_outcomes o WHERE o.job_id=j.job_id
+               AND o.termination_verified AND o.created_at<%s)
+          AND NOT (m.job_id IS NULL AND j.termination_verified AND j.budget_until<%s)''',
+        (cid, str(monitor['job_id']), since, since))
+    target = os.path.realpath(checkout)
+    return any(str(row['launch_run_id']) == str(monitor['launch_run_id']) or not row['checkout']
+               or same_checkout(row['checkout'], target) for row in cur.fetchall())
+
+
+def change_unattributable(cur, cid, monitor, checkout, since):
+    """Someone other than this command may have made a tracked change."""
+    return (worker_active_on_checkout(cur, cid, checkout, since)
+            or other_command_on_checkout(cur, cid, monitor, checkout, since))
+
+
+def continuation_until(job):
+    return job['budget_until']
 
 
 def task_waiting(cur, tid, aid, *, source_run_id=None):

@@ -51,7 +51,7 @@ def service():
 
 
 @pytest.fixture
-async def jobs(client, managed, tmp_path, service):
+async def jobs(client, managed, tmp_path, service, db):
     await publish(client, managed, seconds=120)
     api = JobAPI(service[0], managed['token'], managed['tid'])
     store = JobStore(tmp_path)
@@ -62,7 +62,9 @@ async def jobs(client, managed, tmp_path, service):
         created.append(job['job_id'])
         return job['job_id']
     yield api, store, launch
-    # Tear down only the disposable worker token. The real guards stop children.
+    # Commands outlive their worker now, so a human stop on the disposable run
+    # (not token revocation alone) is what ends them. The real guards stop children.
+    db.execute('UPDATE worker_runs SET stop_requested_at=now() WHERE run_id=%s', (managed['rid'],))
     await client.post(f"/api/embodiment-tokens/{managed['token']}/revoke", json={})
     for jid in set(created):
         directory = store.job_directory(jid)
@@ -241,17 +243,30 @@ async def test_supervisor_sigkill_pipe_guard_saves_then_stops(jobs):
     assert launch('raise SystemExit("must not run")') == jid
 
 
-@pytest.mark.parametrize('cause', ['hold', 'revoke', 'owner'])
-async def test_authority_loss_stops_original_group(jobs, managed, db, cause):
+@pytest.mark.parametrize('cause', ['revoke', 'owner'])
+async def test_worker_authority_loss_leaves_command_running(jobs, managed, db, cause):
+    """Losing the worker (token revoked or run orphaned) no longer ends its command."""
+    api, store, launch = jobs
+    jid = launch('import time;time.sleep(30)')
+    process = eventually(lambda: running(store, jid))
+    if cause == 'revoke':
+        db.execute('UPDATE embodiment_tokens SET revoked_at=now() WHERE run_token=%s', (managed['token'],))
+    else:
+        db.execute("UPDATE worker_runs SET status='orphaned' WHERE run_id=%s", (managed['rid'],))
+    time.sleep(5)
+    assert same_process(process['process'])
+    assert not result(store, jid)
+
+
+@pytest.mark.parametrize('cause', ['hold', 'stop'])
+async def test_human_controls_stop_original_group(jobs, managed, db, cause):
     api, store, launch = jobs
     jid = launch('import time;time.sleep(30)')
     process = eventually(lambda: running(store, jid))
     if cause == 'hold':
         db.execute('UPDATE tasks SET start_hold=true WHERE id=%s', (managed['tid'],))
-    elif cause == 'revoke':
-        db.execute('UPDATE embodiment_tokens SET revoked_at=now() WHERE run_token=%s', (managed['token'],))
     else:
-        db.execute("UPDATE worker_runs SET status='orphaned' WHERE run_id=%s", (managed['rid'],))
+        db.execute('UPDATE worker_runs SET stop_requested_at=now() WHERE run_id=%s', (managed['rid'],))
     saved = eventually(lambda: result(store, jid))
     assert saved['termination_verified'] and saved['status'] == 'interrupted'
     assert not same_process(process['process'])
@@ -273,10 +288,16 @@ async def test_lease_lapse_keeps_existing_job_but_refuses_controls(jobs, managed
 
 
 async def test_unavailable_api_stops_at_last_confirmed_deadline(client, managed, tmp_path, service):
+    """Failed contact never extends a cap.
+
+    The command may outlive the worker's 4-second limit, so its last confirmed
+    deadline is either that limit (no continuation grant reached it yet) or its
+    own 6-second budget; it never runs on unconfirmed once the service is gone.
+    """
     await publish(client, managed, seconds=4)
     api = JobAPI(service[0], managed['token'], managed['tid'])
     store = JobStore(tmp_path)
-    job = start_job(api, store, key='deadline', purpose='Temporary deadline check',
+    job = start_job(api, store, key='deadline', purpose='Temporary deadline check', max_seconds=6,
                     argv=[sys.executable, '-c', 'import time;time.sleep(30)'], cwd=tmp_path)
     jid = job['job_id']
     process = eventually(lambda: running(store, jid))

@@ -149,7 +149,9 @@ def run(config):
                             exhausted = ((control.get('reason') == 'budget_exhausted' and time.monotonic() >= budget)
                                          or (control.get('reason') == 'transfer_budget_exhausted'
                                              and transfers_used >= max_transfers))
-                            reason = 'budget_exhausted' if exhausted else 'supervisor_stop_requested'
+                            reason = ('budget_exhausted' if exhausted else
+                                      'project_files_changed' if control.get('reason') == 'project_files_changed'
+                                      else 'supervisor_stop_requested')
                             break
                         until, prepare = control['until'], control['prepare']
                         budget = min(budget, control.get('budget_until', budget))

@@ -9,12 +9,14 @@ import os
 import signal
 import subprocess
 import sys
+import threading
 import time
 from uuid import uuid4
 
 from .job_api import AuthorityClock, JobAPI, JobAPIError
 from .job_evidence import context_snapshot, daemon_stop_requested, daemon_stop_reason
 from .job_executor import minimal_environment
+from .job_file_guard import Cancellation, FileGuard
 from .job_identity import process_identity
 from .job_store import JobStore, atomic_json, read_json, _open_private
 
@@ -31,6 +33,36 @@ def module_environment():
     return env
 
 
+FILE_CHECK_SECS = 5.0
+# A command that may outlive its worker switches to its own continuation grant
+# this long before the worker's grant ends, so the worker's deadline never
+# reaches the command (contacts are 2 s apart and each may take up to 2 s).
+HANDOFF_LEAD_SECS = 5.0
+
+
+class FileScan:
+    """One tracked-file Git scan, run beside the supervision loop.
+
+    Git can be slow (clean filters, large checkouts), so the loop never waits
+    for it: stop requests, refused grants and deadlines are handled meanwhile,
+    and a stop cancels the scan's Git processes.
+    """
+
+    def __init__(self, kind, observed, work):
+        self.kind, self.observed, self.value = kind, observed, None
+        self.thread = threading.Thread(target=self.run, args=(work,), daemon=True)
+        self.thread.start()
+
+    def run(self, work):
+        try:
+            self.value = work()
+        except Exception:
+            self.value = None  # Uncertainty never stops the command.
+
+    def done(self):
+        return not self.thread.is_alive()
+
+
 class Supervisor:
     def __init__(self, config):
         self.config = config
@@ -41,6 +73,10 @@ class Supervisor:
         if self.record['launch_nonce'] != config['launch_nonce']:
             raise ValueError('Managed command reservation changed')
         self.api = JobAPI(config['api_base'], config['token'], self.record['task_id'])
+        # Once the worker has gone, its run token is retired (a workflow step's
+        # token is refused outright), so retained-command calls carry only the
+        # command's own launch capability, the way the notifier's calls do.
+        self.capability_api = JobAPI(config['api_base'], None, self.record['task_id'], machine=True)
         self.clock = AuthorityClock(self.record['owner_run_id'], self.job_id)
         self.guard = None
         self.stopping = False
@@ -48,17 +84,27 @@ class Supervisor:
         self.transfer_channel = None
         self.not_started = False
         self.detached = False
+        self.file_guard = None
+        self.guard_pending = False
+        self.guard_ready = False
+        self.file_scan = None
+        self.git_cancellation = Cancellation()
+        self.files_changed = False
+        self.server_time = None
+        self.next_file_check = 0.0
+        self.next_handoff = 0.0
+        self.file_check_secs = min(60.0, max(0.2, float(config.get('file_check_secs', FILE_CHECK_SECS))))
 
     def update(self, **changes):
         self.record = self.store.update(self.job_id, self.record['version'], changes)
 
-    def confirm(self):
+    def confirm(self, *, continuation=False):
         sent = time.monotonic()
         if self.transfer:
             self.transfer.confirm(sent)
         else:
             try:
-                if self.detached:
+                if self.detached or continuation:
                     raise JobAPIError(409)
                 self.clock.confirm(self.api.heartbeat(self.job_id), sent)
             except JobAPIError as exc:
@@ -66,9 +112,15 @@ class Supervisor:
                     raise
                 # Only the retained original supervisor uses the narrow grant.
                 # It never restores worker mutation permission or a run token.
-                response = self.api.request(f'job-monitors/{self.job_id}/continuation-heartbeat', {
+                response = self.capability_api.request(f'job-monitors/{self.job_id}/continuation-heartbeat', {
                     'launch_nonce':self.record['launch_nonce'], 'capability':self.config['continuation_capability']})
-                self.clock.confirm(response, sent)
+                self.clock.confirm(response, sent, worker_limits=False)
+                self.server_time = response['server_time']
+                if not self.detached:
+                    # The baseline waits until the caller has delivered this
+                    # longer grant to the executor: Git can be slow (clean
+                    # filters), and the old worker deadline must not apply meanwhile.
+                    self.guard_pending = True
                 self.detached = True
         if self.record.get('supervisor'):
             atomic_json(self.directory / 'authority.json', {
@@ -76,8 +128,99 @@ class Supervisor:
                 'launch_nonce': self.record['launch_nonce'], 'supervisor': self.record['supervisor'],
                 'confirmed_at_monotonic': sent, 'authority_until_monotonic': self.clock.until,
                 'fixed_until_monotonic': self.clock.fixed, 'budget_until_monotonic': self.clock.budget,
+                # Diagnostic: the worker has gone and tracked-file watching has its baseline.
+                'continuing_without_worker': self.detached and self.guard_ready,
             })
         return self.clock.mutations_allowed
+
+    def start_file_guard(self):
+        # The baseline time is a server time observed BEFORE the snapshot, so
+        # a worker still on the checkout then can never be blamed on the command.
+        self.guard_pending = False
+        observed, cwd = self.server_time, self.record['cwd']
+        artifacts, private = self.record.get('artifacts', ()), (str(self.store.root),)
+
+        def baseline():
+            guard = FileGuard(cwd, artifacts, private_roots=private, cancellation=self.git_cancellation)
+            guard.rebaseline(observed)
+            return guard
+        self.file_scan = FileScan('start', observed, baseline)
+
+    def rebaseline_files(self, observed):
+        guard = self.file_guard
+        self.file_scan = FileScan('baseline', observed, lambda: guard.rebaseline(observed))
+
+    def stop_file_scans(self):
+        self.git_cancellation.cancel()
+
+    def worker_grant_ending(self, now):
+        """The worker's own limit, not the command's budget, is about to stop it."""
+        return (self.record.get('continue_after_exit') and not self.detached and not self.transfer
+                and not self.stopping and self.clock.until < self.clock.budget
+                and now >= max(self.next_handoff, self.clock.until - HANDOFF_LEAD_SECS))
+
+    def continue_without_worker(self):
+        self.next_handoff = time.monotonic() + 1
+        try:
+            self.confirm(continuation=True)
+            self.send({'until': self.clock.until, 'prepare': self.clock.prepare,
+                       'budget_until': self.clock.budget})
+        except JobAPIError as exc:
+            # A refused grant is a real stop (human stop, cancel, hold, pause).
+            # An unreachable service leaves the existing finite deadline in place.
+            if exc.fenced:
+                self.stopping = True
+
+    def check_files(self):
+        """Stop only for tracked changes the server cannot attribute to a worker.
+
+        Starts or collects one background scan per call and never waits for Git.
+        """
+        if self.file_scan:
+            if self.file_scan.done():
+                scan, self.file_scan = self.file_scan, None
+                self.next_file_check = time.monotonic() + self.file_check_secs
+                self.file_scan_finished(scan)
+            return
+        if self.guard_pending:
+            self.start_file_guard()
+            return
+        guard = self.file_guard
+        if not guard or not guard.root or time.monotonic() < self.next_file_check:
+            return
+        observed = self.server_time  # Server time seen before this snapshot.
+        if guard.baseline is None:
+            self.rebaseline_files(observed)
+        else:
+            self.file_scan = FileScan('compare', observed, guard.changed)
+
+    def file_scan_finished(self, scan):
+        if scan.kind == 'start':
+            self.file_guard, self.guard_ready = scan.value, True
+            return
+        if scan.kind != 'compare':
+            return
+        guard, changed = self.file_guard, scan.value
+        if changed is None:
+            return  # Git unavailable: uncertainty, never evidence, and no new window.
+        if not changed:
+            # Content still matches the baseline as of a snapshot taken after
+            # `observed`, so any later edit happened after it. Narrowing the
+            # window lets a worker that has since left stop counting.
+            guard.since = scan.observed
+            return
+        try:
+            verdict = self.capability_api.request(f'job-monitors/{self.job_id}/file-change', {
+                'launch_nonce': self.record['launch_nonce'],
+                'capability': self.config['continuation_capability'],
+                'since': guard.since, 'checkout': guard.root})
+        except JobAPIError:
+            return  # Unconfirmed: keep running and ask again on the next check.
+        if verdict.get('attributed'):
+            self.files_changed = True
+            self.stopping = True
+        else:
+            self.rebaseline_files(self.server_time)
 
     def checkpoint(self, reason, state=None, result=None):
         evidence = {**context_snapshot(self.directory), 'reason': reason, 'owner_run_id': self.record['owner_run_id'],
@@ -265,13 +408,17 @@ class Supervisor:
                     preparation_owner = self.record['owner_run_id']
                 if daemon_stop_requested(self.directory, self.record):
                     self.stopping = True
+                if self.worker_grant_ending(now):
+                    self.continue_without_worker()
+                    now = time.monotonic()
                 if self.stopping or now >= self.clock.until:
+                    self.stop_file_scans()
                     try:
                         self.clock.mutations_allowed = False
-                        self.checkpoint('stopping')
+                        self.checkpoint('project_files_changed' if self.files_changed else 'stopping')
                     finally:
-                        self.send({'stop': True, 'reason': 'budget_exhausted'
-                                   if time.monotonic() >= self.clock.budget else
+                        self.send({'stop': True, 'reason': 'project_files_changed' if self.files_changed else
+                                   'budget_exhausted' if time.monotonic() >= self.clock.budget else
                                    ('transfer_budget_exhausted' if daemon_stop_reason(self.directory, self.record) == 'transfer_budget_exhausted'
                                     else 'supervisor_stop_requested')})
                         self.guard.stdin.close()
@@ -290,7 +437,10 @@ class Supervisor:
                     except JobAPIError as exc:
                         self.reconcile_contact_error(exc)
                     next_contact = time.monotonic() + 2
+                if self.detached and not self.stopping:
+                    self.check_files()
                 time.sleep(0.05)
+            self.stop_file_scans()
             self.guard.wait(timeout=5)
             path = self.directory / 'result.json'
             if path.exists():
@@ -313,6 +463,7 @@ class Supervisor:
                         pass  # Do not signal a recorded/reused process ID.
                 self.update(status='not_started' if self.not_started else 'unknown')
         finally:
+            self.stop_file_scans()
             if self.transfer_channel:
                 self.transfer_channel.close()
             os.close(lock)
