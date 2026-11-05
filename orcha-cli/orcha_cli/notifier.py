@@ -238,8 +238,16 @@ def service_residents(api_base: str, cid: str, live_residents: dict, *, quiet: b
                 file=sys.stderr,
             )
             if not dry_run and c.get("agent_id") and live_residents.get(conv_id) is None:
-                _post_json(
-                    f"{api_base}/api/agents/{c['agent_id']}/wake-ack",
-                    {"kind": "conversation_error", "release_lease": True,
-                     "lane": "conversation"},
+                from . import notifier_startup_preflight as startup
+                from .worktree_git import CheckoutBusy, CleanupError
+                reason = (str(error) + ". Orcha will retry; pending messages stay queued.") if isinstance(error, CleanupError) else (
+                    "Orcha could not start this conversation. Check the local service log "
+                    "and project access. Orcha will retry; pending messages stay queued."
+                )
+                startup.report_failure(
+                    sys.modules[__name__], api_base, c, conv_id,
+                    kind="codex_conversation_failed" if runtime == RUNTIME_CODEX else "resident_failed",
+                    reason=reason, release_lease=True, quiet=quiet,
+                    blocker="checkout_busy" if isinstance(error, CheckoutBusy) else "checkout_startup_failed",
+                    setup_available=False,
                 )

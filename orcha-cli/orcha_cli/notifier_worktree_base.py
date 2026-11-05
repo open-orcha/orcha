@@ -12,6 +12,9 @@ import time
 from typing import Any
 
 
+from .worktree_lifecycle import checkout_available, provisioning
+
+
 def run_git(args, cwd=None, timeout: float = 30.0):
     """Run Git and return its status and stdout without raising."""
     try:
@@ -197,6 +200,7 @@ def seed_tab_binding(base_cwd, alias, agent_id, container_id) -> bool:
         return False
 
 
+@provisioning
 def provision_disposable(base_cwd, alias, services: Any):
     """Create a fresh worker branch and worktree from origin/main."""
     if (
@@ -209,6 +213,8 @@ def provision_disposable(base_cwd, alias, services: Any):
     stamp = f"{services._safe_ref(alias)}-{int(time.time() * 1000)}"
     branch = f"orcha/wk-{stamp}"
     worktree = base / ".orcha-worktrees" / stamp
+    if not checkout_available(base, worktree):
+        return None, None
     services._run_git(["fetch", "origin", "main"], cwd=base_cwd, timeout=60)
     return_code, _ = services._run_git(
         [

@@ -470,3 +470,134 @@ def log_agent_worktree_event(cid: str, body: WorktreeEventBody, request: Request
                   body.model_dump())
         conn.commit()
     return {"ok": True}
+
+
+class ProjectCleanupRequest(BaseModel):
+    phase: Literal["preview", "execute"] = "preview"
+    plan_id: Optional[str] = None
+    actor_agent_id: Optional[str] = None
+
+
+@app.get("/api/containers/{cid}/agent-worktrees/cleanup")
+def get_project_cleanup(cid: str, request: Request):
+    """Restore unfinished plans, including attempts older than the recent inventory.
+
+    Only the latest attempt for each plan is returned. Unfinished executions come
+    first so a later preview cannot hide the plan holding checkout reservations.
+    With no unfinished plans, return the most recent result.
+    """
+    _cid(cid)
+    with db_cursor() as (_, cur):
+        require_container(cur, cid)
+        require_member_read(cur, request, cid)
+        cur.execute("SELECT * FROM agent_worktree_actions WHERE container_id=%s AND action='clean_up' "
+                    "ORDER BY created_at DESC, id DESC", (cid,))
+        latest = {}
+        for row in cur.fetchall():
+            action = _action_out(row)
+            options = action["options"]
+            if options.get("project_cleanup") and options.get("plan_id"):
+                latest.setdefault(options["plan_id"], action)
+    actions = list(latest.values())
+    unfinished = [a for a in actions if a["status"] != "done"
+                  or (a["result"] or {}).get("status") == "ready"]
+    unfinished.sort(key=lambda a: a["options"].get("phase") != "execute")
+    return {"actions": unfinished or actions[:1]}
+
+
+@app.post("/api/containers/{cid}/agent-worktrees/cleanup", status_code=201)
+def request_project_cleanup(cid: str, body: ProjectCleanupRequest, request: Request):
+    """Queue a project-wide preview, or confirm precisely that completed preview.
+
+    Host work runs off the HTTP and wake loops. Poll the returned action for incremental
+    progress. File contents and private preservation manifests stay on the host.
+    """
+    from uuid import uuid4
+
+    _cid(cid)
+    if body.plan_id and not valid_uuid(body.plan_id):
+        raise HTTPException(400, "invalid cleanup preview")
+    with db_cursor() as (conn, cur):
+        require_container(cur, cid)
+        actor, _ = _human_actor(cur, request, cid, body.actor_agent_id)
+        # Serialize same-plan retries as well as first confirmations on PostgreSQL.
+        cur.execute("SELECT id FROM containers WHERE id=%s " + sql.for_update(), (cid,))
+        cur.execute("SELECT * FROM agent_worktree_actions WHERE container_id=%s AND action='clean_up' "
+                    "ORDER BY created_at DESC", (cid,))
+        actions = [_action_out(r) for r in cur.fetchall()]
+        if body.phase == "execute":
+            previews = [a for a in actions if a["options"].get("project_cleanup")
+                        and a["options"].get("phase") == "preview"
+                        and a["options"].get("plan_id") == body.plan_id]
+            if not previews or previews[0]["status"] != "done" or (previews[0]["result"] or {}).get("status") != "ready":
+                raise HTTPException(409, "Wait for a complete preview before confirming cleanup")
+        for a in actions:
+            if (a["options"].get("project_cleanup") and a["options"].get("phase") == body.phase
+                    and body.plan_id and a["options"].get("plan_id") == body.plan_id):
+                if a["status"] != "failed":
+                    return a  # Pending/successful confirmations remain idempotent.
+                # A new queue attempt keeps the same durable host plan. Its exclusive
+                # operation lock must be acquired before any recovery: a stale timeout
+                # alone never proves the old execution stopped. A distinct action id
+                # also prevents a late old progress/result report overwriting this retry.
+                break
+        if any(a["status"] in ("requested", "claimed") for a in actions):
+            raise HTTPException(409, "A cleanup request is already running")
+        options = {"project_cleanup": True, "phase": body.phase, "plan_id": body.plan_id or str(uuid4())}
+        cur.execute("""INSERT INTO agent_worktree_actions (container_id, action, requested_by, options)
+                       VALUES (%s, 'clean_up', %s, %s) RETURNING *""", (cid, actor, sql.json_param(options)))
+        row = cur.fetchone()
+        log_event(cur, cid, "human", actor, "container", cid, "project_worktree_cleanup_requested", options)
+        conn.commit()
+    return _action_out(row)
+
+
+class ProjectCleanupProgress(BaseModel):
+    result: dict[str, Any]
+
+
+@app.post("/api/agent-worktrees/actions/{aid}/progress")
+def project_cleanup_progress(aid: str, body: ProjectCleanupProgress, request: Request):
+    """Persist incremental scan/removal results while the host is working."""
+    if not valid_uuid(aid):
+        raise HTTPException(400, "invalid action")
+    with db_cursor() as (conn, cur):
+        cur.execute("SELECT * FROM agent_worktree_actions WHERE id=%s", (aid,))
+        row = cur.fetchone()
+        if not row:
+            raise HTTPException(404, "request not found")
+        require_machine_lane_member(cur, request, str(row["container_id"]), LANE_GRANT)
+        if row["status"] == "claimed" and (row.get("options") or {}).get("project_cleanup"):
+            # Completion can commit after the read above. Check status in the
+            # write itself so older progress cannot replace the terminal result.
+            cur.execute("UPDATE agent_worktree_actions SET result=%s, claimed_at=now() "
+                        "WHERE id=%s AND status='claimed'",
+                        (sql.json_param(body.result), aid))
+            conn.commit()
+    return {"ok": True}
+
+
+@app.post("/api/containers/{cid}/agent-worktrees/cleanup-context")
+def project_cleanup_context(cid: str, body: WorktreeContextBody, request: Request):
+    """Complete activity evidence, including in-progress tasks between worker runs.
+
+    History matches survive branch renaming/detaching. Stable path task prefixes cover
+    tasks whose first run has not yet registered. Unknown task prefixes remain protected
+    by the host. A missing/old portal never implies an empty activity set.
+    """
+    context = agent_worktree_context(cid, body, request)
+    with db_cursor() as (_, cur):
+        require_container(cur, cid)
+        require_machine_lane_member(cur, request, cid, LANE_GRANT)
+        busy = set(_busy_worktrees(cur, cid))
+        if body.paths:
+            cur.execute(f"""SELECT DISTINCT wr.worktree FROM worker_runs wr
+                             LEFT JOIN tasks t ON t.id=wr.task_id
+                             WHERE {sql.in_list('wr.worktree')}
+                               AND (wr.status='running' OR t.status='in_progress')""",
+                        (sql.list_param(body.paths),))
+            busy.update(r["worktree"] for r in cur.fetchall())
+        for path, item in context["items"].items():
+            if item.get("task_status") == "in_progress":
+                busy.add(path)
+    return {"complete": True, "items": context["items"], "busy_worktrees": sorted(busy)}

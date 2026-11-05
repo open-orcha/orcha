@@ -489,10 +489,11 @@ def _portal_cand(**over):
     return c
 
 
-def test_tick_backfills_reachability_for_portal_agent(monkeypatch):
+def test_tick_backfills_reachability_for_portal_agent(monkeypatch, tmp_path):
     """A portal-created agent has no agent_reachability row → the daemon has nowhere to spawn it
     and it can't be woken by anything. tick() auto-records headless_cwd = its project dir, so the
     agent becomes spawnable THIS tick (no extra-tick latency) and is woken."""
+    # Exercise backfill in an existing non-Git project; a missing cwd is a startup error.
     cand = _portal_cand()
     monkeypatch.setattr(notifier, "_get_json", lambda url, **k: {"active": True, "candidates": [cand]})
     monkeypatch.setattr(notifier, "_build_persona", lambda *a, **k: None)
@@ -517,16 +518,69 @@ def test_tick_backfills_reachability_for_portal_agent(monkeypatch):
     # NOTE: select_transport is the REAL one — after the backfill sets headless_cwd it returns
     # 'ephemeral', proving the in-memory backfill makes the agent spawnable in the same tick.
     notifier.tick("http://x", "cid", dry_run=False, cooldown=15, min_idle=0, quiet=True,
-                  live_workers=live, base_cwd="/proj")
+                  live_workers=live, base_cwd=str(tmp_path))
 
     reach = next(b for u, b in posts if u.endswith("/reachability"))
-    assert reach == {"headless_cwd": "/proj"}              # only headless_cwd → wake_enabled untouched
-    assert cand["headless_cwd"] == "/proj"                 # backfilled in-memory → spawnable now
+    assert reach == {"headless_cwd": str(tmp_path)}  # wake_enabled untouched
+    assert cand["headless_cwd"] == str(tmp_path)     # spawnable in this tick
     assert len(spawned) == 1                               # and it actually woke this tick
     assert cand["agent_id"] in live
 
 
-def test_tick_backfill_is_trigger_agnostic(monkeypatch):
+def test_tick_missing_project_keeps_events_pending_then_recovers(monkeypatch, tmp_path):
+    """A missing project is an error, unlike an existing non-Git project.
+
+    Keep the real provisioning guard: repairing the folder and waiting out the
+    error hold must allow the same pending event to start its worker.
+    """
+    project = tmp_path / "project"
+    cand = _portal_cand(headless_cwd=str(project), latest_event="request_created",
+                        handled_event_ids=[71, 72], delivery_handled_event_ids=[71])
+    monkeypatch.setattr(notifier, "_get_json", lambda url, **k: {"active": True, "candidates": [cand]})
+    monkeypatch.setattr(notifier, "select_transport", lambda c: "ephemeral")
+    monkeypatch.setattr(notifier, "decide_wake_tier", lambda *a, **k: {"tier": "full"})
+    monkeypatch.setattr(notifier, "_build_persona", lambda *a, **k: None)
+    posts, spawned = [], []
+
+    def post(url, body, **kwargs):
+        posts.append((url, body))
+        if url.endswith("/wake-claim"):
+            return {"claimed": True}
+        if url.endswith("/runs"):
+            return {"run_id": "recovered-run"}
+        return {}
+
+    monkeypatch.setattr(notifier, "_post_json", post)
+    monkeypatch.setattr(notifier, "spawn_headless",
+                        lambda *a, **k: spawned.append(a) or (True, "cmd", FakeProc()))
+    live, holds = {}, {}
+
+    def tick():
+        return notifier.tick("http://x", "cid", dry_run=False, cooldown=15,
+                             min_idle=0, quiet=True, live_workers=live,
+                             agent_hold_until=holds)
+
+    assert tick()["woke"] == []
+    assert spawned == [] and live == {}
+    ack = next(body for url, body in posts if url.endswith("/wake-ack"))
+    assert ack == {"kind": "wake_error", "release_lease": True, "lane": "work"}
+    assert not any(url.endswith("/events/ack-handled") for url, _ in posts)
+    assert holds[cand["agent_id"]] > time.time()
+
+    project.mkdir()
+    assert tick()["woke"] == []  # repair alone must not bypass the existing hold
+    assert spawned == []
+    after_hold = holds[cand["agent_id"]] + 1
+    monkeypatch.setattr(time, "time", lambda: after_hold)
+    assert tick()["woke"][0]["sent"] is True
+    assert len(spawned) == 1
+    assert cand["agent_id"] in live
+    assert live[cand["agent_id"]]["handled_event_ids"] == [71, 72]
+    assert live[cand["agent_id"]]["respawn_ctx"]["handled_event_ids"] == [71, 72]
+    assert not any(url.endswith("/events/ack-handled") for url, _ in posts)
+
+
+def test_tick_backfill_is_trigger_agnostic(monkeypatch, tmp_path):
     """The backfill sits at the TRANSPORT layer (below should_wake), so the one fix makes a
     portal-created agent wakeable for EVERY trigger that sets should_wake — task-thread messages,
     info/task REQUESTS, decisions/approvals, and prompts (Tim addendum 0d8f4981). Here the trigger
@@ -551,7 +605,7 @@ def test_tick_backfill_is_trigger_agnostic(monkeypatch):
                         lambda *a, **k: spawned.append((a, k)) or (True, "cmd", FakeProc(pid=4321)))
 
     notifier.tick("http://x", "cid", dry_run=False, cooldown=15, min_idle=0, quiet=True,
-                  live_workers={}, base_cwd="/proj")
+                  live_workers={}, base_cwd=str(tmp_path))
 
     assert any(u.endswith("/reachability") for u, _ in posts)   # backfilled regardless of trigger
     assert len(spawned) == 1                                    # request trigger wakes it too
@@ -593,9 +647,9 @@ def test_tick_backfill_respects_wake_disabled_optout(monkeypatch):
     assert spawned == []
 
 
-def test_tick_spawns_when_claim_won(monkeypatch):
+def test_tick_spawns_when_claim_won(monkeypatch, tmp_path):
     cand = {"agent_id": "00000000-0000-0000-0000-000000000001", "alias": "B",
-            "should_wake": True, "headless_cwd": "/proj", "tmux_target": None,
+            "should_wake": True, "headless_cwd": str(tmp_path), "tmux_target": None,
             "pending_events": 1, "auto_start_task_ids": [], "reason": "wake",
             "latest_event": "request_created", "max_event_ts": 5.0, "headless_flags": None}
     monkeypatch.setattr(notifier, "_get_json",
@@ -676,13 +730,13 @@ def test_taskless_ephemeral_wake_uses_work_lane(monkeypatch):
     assert spawned[0]["conversation"] is False
 
 
-def test_tick_isolates_task_message_wake_in_worktree(monkeypatch):
+def test_tick_isolates_task_message_wake_in_worktree(monkeypatch, tmp_path):
     """PR #132 review [P1]: a task_message wake is actionable (ISS-55 — worker reads the thread
     and may edit code, e.g. 'rebase onto main'). With no auto-start task it must STILL provision
     an isolated worktree (keyed off wake_task_id) and run there, NOT in the shared headless_cwd —
     else it bypasses ISS-8 and collides with other workers."""
     cand = {"agent_id": "00000000-0000-0000-0000-000000000001", "alias": "B",
-            "should_wake": True, "headless_cwd": "/proj", "tmux_target": None,
+            "should_wake": True, "headless_cwd": str(tmp_path), "tmux_target": None,
             "pending_events": 1, "auto_start_task_ids": [], "wake_task_id": "TASK-77",
             "reason": "wake", "latest_event": "task_message", "max_event_ts": 5.0,
             "headless_flags": None}
@@ -700,17 +754,17 @@ def test_tick_isolates_task_message_wake_in_worktree(monkeypatch):
                         else ({"run_id": "R"} if url.endswith("/runs") else {}))
     live = {}
     notifier.tick("http://x", "cid", dry_run=False, cooldown=15, min_idle=0, quiet=True, live_workers=live)
-    assert prov == [("/proj", "B")]                  # worktree provisioned off the base checkout
-    assert spawned_cwd == ["/wt/B"]                  # worker runs IN the worktree, not /proj
+    assert prov == [(str(tmp_path), "B")]  # provisioned from the project
+    assert spawned_cwd == ["/wt/B"]        # worker runs in the returned worktree
     assert live["00000000-0000-0000-0000-000000000001"]["worktree"] == "/wt/B"
 
 
-def test_tick_attributes_event_wake_run_to_task_via_wake_task_id(monkeypatch):
+def test_tick_attributes_event_wake_run_to_task_via_wake_task_id(monkeypatch, tmp_path):
     """ISS-56: an event-wake with NO auto-start task (e.g. a `task_message` poke) records the
     worker_run against the TRIGGERING event's task (cand.wake_task_id) instead of task_id=NULL,
     so the run shows up in that task's worker feed."""
     cand = {"agent_id": "00000000-0000-0000-0000-000000000001", "alias": "B",
-            "should_wake": True, "headless_cwd": "/proj", "tmux_target": None,
+            "should_wake": True, "headless_cwd": str(tmp_path), "tmux_target": None,
             "pending_events": 1, "auto_start_task_ids": [], "wake_task_id": "TASK-77",
             "reason": "wake", "latest_event": "task_message", "max_event_ts": 5.0,
             "headless_flags": None}
@@ -729,11 +783,11 @@ def test_tick_attributes_event_wake_run_to_task_via_wake_task_id(monkeypatch):
     assert run["task_id"] == "TASK-77"           # ISS-56: attributed, not None
 
 
-def test_tick_auto_start_task_takes_precedence_over_wake_task_id(monkeypatch):
+def test_tick_auto_start_task_takes_precedence_over_wake_task_id(monkeypatch, tmp_path):
     """When BOTH an auto-start target and a triggering-event task exist, the auto-start task wins
     (it's the work the worker will actually claim+begin)."""
     cand = {"agent_id": "00000000-0000-0000-0000-000000000001", "alias": "B",
-            "should_wake": True, "headless_cwd": "/proj", "tmux_target": None,
+            "should_wake": True, "headless_cwd": str(tmp_path), "tmux_target": None,
             "pending_events": 1, "auto_start_task_ids": ["TASK-AUTO"], "wake_task_id": "TASK-77",
             "reason": "wake", "latest_event": "task_message", "max_event_ts": 5.0,
             "headless_flags": None}
@@ -752,13 +806,13 @@ def test_tick_auto_start_task_takes_precedence_over_wake_task_id(monkeypatch):
     assert run["task_id"] == "TASK-AUTO"
 
 
-def test_tick_persona_and_run_keyed_off_context_task_not_wake_task_id(monkeypatch):
+def test_tick_persona_and_run_keyed_off_context_task_not_wake_task_id(monkeypatch, tmp_path):
     """GH #58 (R2 fix): when the server says the run-context is task B (context_task_id) while a
     DIFFERENT in_progress task A is the directed wake_task_id, the worker must boot under B's protocol
     and the run must be attributed to B — NOT A. Keying persona/attribution off wake_task_id alone
     (the bug) booted B's worker under A's protocol and logged the run on A's thread."""
     cand = {"agent_id": "00000000-0000-0000-0000-000000000001", "alias": "B",
-            "should_wake": True, "headless_cwd": "/proj", "tmux_target": None,
+            "should_wake": True, "headless_cwd": str(tmp_path), "tmux_target": None,
             "pending_events": 1, "auto_start_task_ids": ["TASK-B"],
             "wake_task_id": "TASK-A", "context_task_id": "TASK-B",
             "reason": "wake", "latest_event": "task_assigned", "max_event_ts": 5.0,
@@ -812,12 +866,12 @@ def test_hardcap_floored_independent_of_small_lease_ttl(monkeypatch):
     assert w["worktree"] is None                              # ISS-8: no auto_start task -> no worktree
 
 
-def test_tick_releases_lease_when_headless_spawn_fails(monkeypatch):
+def test_tick_releases_lease_when_headless_spawn_fails(monkeypatch, tmp_path):
     """Claim won but the headless spawn failed (no claude / bad cwd / Popen error):
     no worker exists, so the wake-ack must release the lease (release_lease=true) —
     otherwise the agent is suppressed for the whole TTL for nothing."""
     cand = {"agent_id": "00000000-0000-0000-0000-000000000001", "alias": "B",
-            "should_wake": True, "headless_cwd": "/proj", "tmux_target": None,
+            "should_wake": True, "headless_cwd": str(tmp_path), "tmux_target": None,
             "pending_events": 1, "auto_start_task_ids": [], "reason": "wake",
             "latest_event": "request_created", "max_event_ts": 5.0, "headless_flags": None}
     monkeypatch.setattr(notifier, "_get_json",
@@ -1608,12 +1662,12 @@ def _respawn_entry(proc, log, *, respawns=0, cap=1200.0):
                                         "task_id": "T1", "event": "task_message"}}}
 
 
-def test_tick_stores_model_in_respawn_ctx(monkeypatch):
+def test_tick_stores_model_in_respawn_ctx(monkeypatch, tmp_path):
     """[P2 #218] tick() must carry the agent's resolved model INTO respawn_ctx — without it a
     checkpoint-respawn silently reverts the replacement worker to claude's default model
     mid-task, breaking the per-agent model contract (#202)."""
     cand = {"agent_id": "00000000-0000-0000-0000-000000000001", "alias": "B",
-            "should_wake": True, "headless_cwd": "/proj", "tmux_target": None,
+            "should_wake": True, "headless_cwd": str(tmp_path), "tmux_target": None,
             "pending_events": 1, "auto_start_task_ids": [], "reason": "wake",
             "latest_event": "request_created", "max_event_ts": 5.0, "headless_flags": None,
             "model": "claude-fable-5", "model_runtime": "claude"}

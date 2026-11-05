@@ -13,6 +13,7 @@ import pytest
 
 from test_evidence_verdikt import HUBOT, MALLORY, OCTO, VERA, _members
 from conftest import ts_ago
+from test_worktree_gc import project, _worktree
 
 BASE = "/Users/dev/acme"
 WT = f"{BASE}/.orcha-worktrees"
@@ -285,3 +286,315 @@ async def test_bring_in_requests_carry_the_humans_choices_and_refuse_a_running_a
     assert "bring_in" in enum and "update_from_main" in enum
     assert "BringInOptions" in spec["components"]["schemas"]
 
+
+
+async def test_project_cleanup_requires_completed_preview_and_reports_progress(client, container, make_agent):
+    cid = container['id']
+    human = (await make_agent('cleanup-owner', kind='human'))['agent_id']
+    base = f'/api/containers/{cid}/agent-worktrees'
+    assert (await client.post(base + '/cleanup', json={'phase': 'execute', 'actor_agent_id': human})).status_code == 409
+    preview = (await client.post(base + '/cleanup', json={'actor_agent_id': human})).json()
+    assert preview['options']['phase'] == 'preview'
+    plan_id = preview['options']['plan_id']
+    await client.post(base + '/claim', json={})
+    progress = {'status': 'scanning', 'plan_id': plan_id, 'scanned': 1, 'total': 250}
+    await client.post(f"/api/agent-worktrees/actions/{preview['id']}/progress", json={'result': progress})
+    assert (await client.get(base + '/actions/' + preview['id'])).json()['result'] == progress
+    assert (await client.post(base + '/cleanup', json={'phase': 'execute', 'plan_id': plan_id, 'actor_agent_id': human})).status_code == 409
+    await client.post(f"/api/agent-worktrees/actions/{preview['id']}/result", json={
+        'status': 'done', 'result': dict(progress, status='ready')})
+    body = {'phase': 'execute', 'plan_id': plan_id, 'actor_agent_id': human}
+    execution = (await client.post(base + '/cleanup', json=body)).json()
+    assert execution['options']['plan_id'] == plan_id
+    assert (await client.post(base + '/cleanup', json=body)).json()['id'] == execution['id']
+    spec = (await client.get('/openapi.json')).json()
+    assert '/api/containers/{cid}/agent-worktrees/cleanup' in spec['paths']
+    assert '/api/containers/{cid}/agent-worktrees/cleanup-context' in spec['paths']
+
+
+async def test_saved_cleanup_restores_old_execution_and_latest_retry(client, container, make_agent, db):
+    human = (await make_agent('cleanup-owner', kind='human'))['agent_id']
+    cid = container['id']
+    base = f'/api/containers/{cid}/agent-worktrees'
+    assert (await client.get(base + '/cleanup')).json() == {'actions': []}
+    preview = (await client.post(base + '/cleanup', json={'actor_agent_id': human})).json()
+    plan = preview['options']['plan_id']
+    await client.post(base + '/claim', json={})
+    await client.post(f"/api/agent-worktrees/actions/{preview['id']}/result", json={
+        'status': 'done', 'result': {'status': 'ready', 'plan_id': plan}})
+    body = {'phase': 'execute', 'plan_id': plan, 'actor_agent_id': human}
+    execution = (await client.post(base + '/cleanup', json=body)).json()
+    await client.post(base + '/claim', json={})
+    await client.post(f"/api/agent-worktrees/actions/{execution['id']}/result", json={
+        'status': 'failed', 'error': 'host interrupted'})
+    # A newer preview and more than 20 unrelated records must not hide recovery.
+    newer = (await client.post(base + '/cleanup', json={'actor_agent_id': human})).json()
+    for _ in range(21):
+        db.execute("INSERT INTO agent_worktree_actions (container_id, action, requested_by, status) "
+                   "VALUES (%s, 'refresh', %s, 'done')", (cid, human))
+    restored = (await client.get(base + '/cleanup')).json()['actions']
+    assert [a['id'] for a in restored] == [execution['id'], newer['id']]
+    await client.post(base + '/claim', json={})
+    await client.post(f"/api/agent-worktrees/actions/{newer['id']}/result", json={
+        'status': 'failed', 'error': 'preview unavailable'})
+    retry = (await client.post(base + '/cleanup', json=body)).json()
+    restored = (await client.get(base + '/cleanup')).json()['actions']
+    assert restored[0]['id'] == retry['id']
+    assert restored[0]['options']['plan_id'] == plan
+    assert execution['id'] not in [a['id'] for a in restored]
+    spec = (await client.get('/openapi.json')).json()
+    assert 'get' in spec['paths']['/api/containers/{cid}/agent-worktrees/cleanup']
+
+
+async def test_saved_cleanup_requires_project_membership(client, container, make_agent, trust_proxy):
+    await _members(client, container['id'], make_agent)
+    url = f"/api/containers/{container['id']}/agent-worktrees/cleanup"
+    assert (await client.get(url, headers=MALLORY)).status_code == 403
+    for member in (OCTO, HUBOT, VERA):
+        response = await client.get(url, headers=member)
+        assert response.status_code == 200
+        assert response.json() == {'actions': []}
+
+
+async def test_project_cleanup_permissions_and_late_progress(client, container, make_agent, trust_proxy):
+    """New cleanup routes retain the human-control and host-reporting boundaries."""
+    from uuid import uuid4
+
+    cid = container["id"]
+    await _members(client, cid, make_agent)
+    base = f"/api/containers/{cid}/agent-worktrees"
+    for who in (HUBOT, VERA, MALLORY):
+        denied = await client.post(base + "/cleanup", json={}, headers=who)
+        assert denied.status_code == 403
+        context = await client.post(base + "/cleanup-context", json={"paths": []}, headers=who)
+        assert context.status_code == 403
+    ai = (await make_agent("cleanup-ai"))["agent_id"]
+    assert (await client.post(base + "/cleanup", json={"actor_agent_id": ai})).status_code == 403
+    assert (await client.post(base + "/cleanup", json={"phase": "unknown"}, headers=OCTO)).status_code == 422
+    assert (await client.post(base + "/cleanup", json={"plan_id": "invalid"}, headers=OCTO)).status_code == 400
+    assert (await client.post(base + "/cleanup-context", json={
+        "paths": [f"/fixture/{i}" for i in range(501)]}, headers=OCTO)).status_code == 422
+
+    response = await client.post(base + "/cleanup", json={}, headers=OCTO)
+    assert response.status_code == 201, response.text
+    preview = response.json()
+    progress_url = f"/api/agent-worktrees/actions/{preview['id']}/progress"
+    progress = {"status": "scanning", "scanned": 10}
+    # Unclaimed and completed actions must not accept late progress.
+    assert (await client.post(progress_url, json={"result": progress})).status_code == 200
+    assert (await client.get(base + "/actions/" + preview["id"])).json()["result"] is None
+    await client.post(base + "/claim", json={})
+    for who in (HUBOT, VERA, MALLORY):
+        assert (await client.post(progress_url, json={"result": progress}, headers=who)).status_code == 403
+    assert (await client.post(progress_url, json={"result": progress})).status_code == 200
+    assert (await client.get(base + "/actions/" + preview["id"])).json()["result"] == progress
+    final = {"status": "ready", "plan_id": preview["options"]["plan_id"]}
+    result = await client.post(f"/api/agent-worktrees/actions/{preview['id']}/result",
+                               json={"status": "done", "result": final})
+    assert result.status_code == 200
+    assert (await client.post(progress_url, json={"result": progress})).status_code == 200
+    assert (await client.get(base + "/actions/" + preview["id"])).json()["result"] == final
+    assert (await client.post("/api/agent-worktrees/actions/invalid/progress",
+                              json={"result": progress})).status_code == 400
+    assert (await client.post(f"/api/agent-worktrees/actions/{uuid4()}/progress",
+                              json={"result": progress})).status_code == 404
+
+
+async def _claimed_project_cleanup(client, container, make_agent, phase):
+    human = (await make_agent("cleanup-owner", kind="human"))["agent_id"]
+    base = f"/api/containers/{container['id']}/agent-worktrees"
+    response = await client.post(base + "/cleanup", json={"actor_agent_id": human})
+    assert response.status_code == 201, response.text
+    action = response.json()
+    assert (await client.post(base + "/claim", json={})).status_code == 200
+    if phase == "execute":
+        plan_id = action["options"]["plan_id"]
+        response = await client.post(f"/api/agent-worktrees/actions/{action['id']}/result", json={
+            "status": "done", "result": {"status": "ready", "plan_id": plan_id}})
+        assert response.status_code == 200, response.text
+        response = await client.post(base + "/cleanup", json={
+            "actor_agent_id": human, "phase": "execute", "plan_id": plan_id})
+        assert response.status_code == 201, response.text
+        action = response.json()
+        assert (await client.post(base + "/claim", json={})).status_code == 200
+    return base, action
+
+
+@pytest.mark.parametrize("phase", ["preview", "execute"])
+@pytest.mark.parametrize("terminal_status", ["done", "failed"])
+async def test_project_cleanup_progress_rechecks_status_at_write(
+        client, container, make_agent, monkeypatch, phase, terminal_status):
+    """Force a stale read on both engines; the real result handler finishes first."""
+    from portal_backend import agent_worktree_routes as routes
+
+    base, action = await _claimed_project_cleanup(client, container, make_agent, phase)
+    final = {"status": "ready" if phase == "preview" else "removed", "removed": 3}
+    if terminal_status == "failed":
+        final = {"status": "failed", "reason": "fixture interruption"}
+    terminal = routes.WorktreeActionResult(status=terminal_status, result=final)
+    authorize = routes.require_machine_lane_member
+    completed = []
+
+    def finish_after_read(cur, request, cid, lane):
+        authorize(cur, request, cid, lane)
+        if not completed:
+            completed.append(True)
+            routes.finish_agent_worktree_action(action["id"], terminal, request)
+
+    monkeypatch.setattr(routes, "require_machine_lane_member", finish_after_read)
+    response = await client.post(f"/api/agent-worktrees/actions/{action['id']}/progress", json={
+        "result": {"status": "scanning" if phase == "preview" else "executing"}})
+    assert response.status_code == 200, response.text
+    assert completed == [True]
+    saved = (await client.get(base + "/actions/" + action["id"])).json()
+    assert saved["status"] == terminal_status
+    assert saved["result"] == final
+
+
+@pytest.mark.parametrize("phase", ["preview", "execute"])
+@pytest.mark.parametrize("terminal_status", ["done", "failed"])
+async def test_project_cleanup_overlapping_progress_preserves_terminal_result(
+        client, container, make_agent, monkeypatch, phase, terminal_status):
+    """Exercise two PostgreSQL connections with completion between read and write."""
+    import asyncio
+    from threading import Event
+    from portal_backend import agent_worktree_routes as routes, database
+
+    if database.BACKEND != "postgres":
+        pytest.skip("SQLite serializes writers; requires PostgreSQL concurrent transactions")
+    base, action = await _claimed_project_cleanup(client, container, make_agent, phase)
+    selected, resume = Event(), Event()
+    authorize = routes.require_machine_lane_member
+
+    def pause_after_read(cur, request, cid, lane):
+        authorize(cur, request, cid, lane)
+        if request.url.path.endswith("/progress"):
+            selected.set()
+            if not resume.wait(10):
+                raise RuntimeError("cleanup progress test schedule timed out")
+
+    monkeypatch.setattr(routes, "require_machine_lane_member", pause_after_read)
+    url = f"/api/agent-worktrees/actions/{action['id']}"
+    progress = asyncio.create_task(client.post(url + "/progress", json={
+        "result": {"status": "scanning" if phase == "preview" else "executing"}}))
+    final = {"status": terminal_status, "preserved": 3}
+    try:
+        assert await asyncio.to_thread(selected.wait, 5), "progress did not reach the stale read"
+        response = await asyncio.wait_for(client.post(url + "/result", json={
+            "status": terminal_status, "result": final}), timeout=5)
+        assert response.status_code == 200, response.text
+        before = (await client.get(base + "/actions/" + action["id"])).json()
+    finally:
+        resume.set()
+        response = await asyncio.wait_for(progress, timeout=10)
+    assert response.status_code == 200, response.text
+    after = (await client.get(base + "/actions/" + action["id"])).json()
+    assert after["status"] == terminal_status
+    assert after["result"] == final
+    assert after["claimed_at"] == before["claimed_at"]
+    assert after["finished_at"] == before["finished_at"]
+
+
+async def test_project_cleanup_context_retains_task_without_live_run(client, container, make_agent, make_task):
+    cid = container['id']
+    agent = await make_agent('ongoing')
+    task = await make_task('unfinished task', 'finish the work', assignee_alias='ongoing')
+    # Assigned task is in progress even before a first run.
+    assert task["status"] == "in_progress"
+    path = '/tmp/renamed-checkout'
+    res = await client.post(f'/api/containers/{cid}/agent-worktrees/cleanup-context', json={
+        'paths': [path], 'task_refs': {path: task['task_id'][:12]}})
+    assert res.status_code == 200, res.text
+    assert res.json()['complete'] is True
+    assert path in res.json()['busy_worktrees']
+
+
+@pytest.mark.parametrize("phase", ["preview", "execute"])
+async def test_project_cleanup_retries_failed_host_attempt_with_original_plan(
+        client, container, make_agent, db, project, monkeypatch, phase):
+    import asyncio
+    from types import SimpleNamespace
+    from urllib.parse import urlsplit
+    from orcha_cli import notifier_worktree_gc as host
+    from orcha_cli import worktree_cleanup as cleanup
+    from orcha_cli import worktree_cleanup_activity as activity
+
+    cid = container['id']
+    human = (await make_agent('retry-owner', kind='human'))['agent_id']
+    base = f'/api/containers/{cid}/agent-worktrees'
+    wt = _worktree(project, 'retry', 'feature/retry', scaffold=False)
+    loop = asyncio.get_running_loop()
+    run = activity.subprocess.run
+
+    def process_lookup(args, *pos, **kw):
+        if args[0] == 'lsof':
+            return SimpleNamespace(returncode=0, stdout='p123\nfcwd\nn/fixture-host\n')
+        return run(args, *pos, **kw)
+
+    monkeypatch.setattr(activity.subprocess, 'run', process_lookup)
+
+    def post(url, body):
+        response = asyncio.run_coroutine_threadsafe(client.post(urlsplit(url).path, json=body), loop).result(5)
+        assert response.status_code < 300, response.text
+        return response.json()
+
+    async def perform(action):
+        return await asyncio.to_thread(host.run_action, 'http://test', cid, str(project), action, set(), post=post)
+
+    async def finish(action, result):
+        return await client.post(f"/api/agent-worktrees/actions/{action['id']}/result", json=result)
+
+    preview = (await client.post(base + '/cleanup', json={'actor_agent_id': human})).json()
+    plan_id = preview['options']['plan_id']
+    preview = (await client.post(base + '/claim', json={})).json()['actions'][0]
+    if phase == 'preview':
+        # A failed saved preview must be rebuilt, rather than returned forever.
+        failed = cleanup.preview(project, lambda rows: None, plan_id=plan_id)
+        await finish(preview, {'status': 'failed', 'result': failed})
+        original = preview
+    else:
+        await finish(preview, await perform(preview))
+        original = (await client.post(base + '/cleanup', json={
+            'phase': 'execute', 'plan_id': plan_id, 'actor_agent_id': human})).json()
+        original = (await client.post(base + '/claim', json={})).json()['actions'][0]
+        git = cleanup.gc.git
+
+        class StoppedHost(BaseException):
+            pass
+
+        def interrupted(args, *pos, **kw):
+            result = git(args, *pos, **kw)
+            if args[:2] == ['worktree', 'remove'] and result[0] == 0:
+                raise StoppedHost()
+            return result
+
+        monkeypatch.setattr(cleanup.gc, 'git', interrupted)
+        with pytest.raises(StoppedHost):
+            await perform(original)
+        monkeypatch.setattr(cleanup.gc, 'git', git)
+        assert not wt.exists()
+        db.execute(f"UPDATE agent_worktree_actions SET claimed_at={ts_ago(3600)} WHERE id=%s", (original['id'],))
+        await client.post(base + '/claim', json={'peek': True})
+
+    request = {'phase': phase, 'plan_id': plan_id, 'actor_agent_id': human}
+    retry = (await client.post(base + '/cleanup', json=request)).json()
+    assert retry['id'] != original['id']
+    assert retry['options']['plan_id'] == plan_id
+    assert (await client.post(base + '/cleanup', json=request)).json()['id'] == retry['id']
+    claimed = (await client.post(base + '/claim', json={})).json()['actions'][0]
+    # A still-running old host cannot overlap recovery, even after its queue lease timed out.
+    with cleanup.lifecycle.operation(project, plan_id):
+        fenced = await perform(claimed)
+        assert fenced['status'] == 'failed' and 'already running' in fenced['error']
+    await finish(original, {'status': 'done', 'result': {'status': 'old report'}})
+    assert (await client.get(base + '/actions/' + retry['id'])).json()['status'] == 'claimed'
+    result = await perform(claimed)
+    assert result['status'] == 'done', result
+    assert result['result']['status'] == ('ready' if phase == 'preview' else 'done')
+    if phase == 'execute':
+        assert len(result['result']['removed']) == 1
+        assert result['result']['removed'][0]['reason'] == 'Recovered the saved removal result'
+    else:
+        assert wt.exists()
+    await finish(claimed, result)
+    assert (await client.post(base + '/cleanup', json=request)).json()['id'] == retry['id']

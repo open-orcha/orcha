@@ -94,14 +94,17 @@ _LIVE_BRANCH = re.compile(r"^orcha/live-(?P<agent>.+)$")
 
 # ------------------------------------------------------------------ git plumbing
 
-def git(args, cwd, timeout: float = GIT_TIMEOUT) -> tuple[int, str]:
+def git(args, cwd, timeout: float = GIT_TIMEOUT, *, pass_fds=()) -> tuple[int, str]:
     """Run git without optional locks (so inspection never rewrites an index) — never raises."""
     try:
         p = subprocess.run(
-            ["git", "--no-optional-locks", *args], cwd=cwd, capture_output=True, text=True,
-            encoding="utf-8", errors="surrogateescape", timeout=timeout, check=False,
+            ["git", "--no-optional-locks", *args], cwd=cwd, capture_output=True,
+            env={**os.environ, "LC_ALL": "C"}, timeout=timeout, check=False,
+            pass_fds=pass_fds,
         )
-        return p.returncode, p.stdout if p.returncode == 0 else (p.stdout + p.stderr)
+        output = p.stdout if p.returncode == 0 else (p.stdout + p.stderr)
+        # text=True normalizes CR/CRLF inside filenames, even with NUL porcelain.
+        return p.returncode, output.decode("utf-8", "surrogateescape")
     except (OSError, subprocess.SubprocessError, ValueError) as exc:
         return 1, str(exc)
 
@@ -483,6 +486,17 @@ def _iso(ts: Optional[float]) -> Optional[str]:
 
 # ------------------------------------------------------------------ classification
 
+def retention_hold(path) -> Optional[str]:
+    """Every cleaner respects the marker, including dangling links and unreadable holds."""
+    try:
+        os.lstat(os.path.join(path, ".orcha-keep"))
+    except FileNotFoundError:
+        return None
+    except OSError:
+        return "The retention hold could not be checked; folder retained"
+    return "Explicit retention hold (.orcha-keep)"
+
+
 def classify(base_cwd, wt: dict, *, busy: Iterable[str] = (), refs: Optional[list[str]] = None,
              measure: bool = True, run=git, now: Optional[float] = None,
              size_cache: Optional[dict] = None) -> dict:
@@ -525,6 +539,9 @@ def classify(base_cwd, wt: dict, *, busy: Iterable[str] = (), refs: Optional[lis
             if size_cache is not None:
                 size_cache[cache_key] = row["size_bytes"]
 
+    hold = retention_hold(path)
+    if hold:
+        return dict(row, state=STATE_IN_USE, reason=hold)
     if not wt.get("registered", True):
         return dict(row, state=STATE_NOT_QUORATE, reason="not registered with git — left alone")
     if not branch:
@@ -826,6 +843,9 @@ def remove_worktree(base_cwd, path: str, *, busy: Iterable[str] = (),
     with worktree_teardown_guard(base_cwd, path) as retained:
         if retained:
             return dict(out, state=STATE_IN_USE, reason=retained)
+        hold = retention_hold(path)
+        if hold:
+            return dict(out, state=STATE_IN_USE, reason=hold)
         late = recent_use(base_cwd, path, quiet_for=quiet_for, include_process_cwds=include_process_cwds)
         if late:
             return dict(out, state=STATE_IN_USE, reason=late)
@@ -848,14 +868,17 @@ def remove_worktree(base_cwd, path: str, *, busy: Iterable[str] = (),
 # ------------------------------------------------------------------ host-side memory
 
 def state_path(base_cwd) -> Optional[pathlib.Path]:
-    """``<git common dir>/orcha/worktree-gc.json`` — first-seen times etc., never committed."""
-    code, common = git(["rev-parse", "--git-common-dir"], base_cwd)
-    if code != 0 or not common.strip():
+    """``<git common dir>/orcha/worktree-gc.json`` — first-seen times etc., never committed.
+
+    Only a verified common directory is used. Older or broken Git can echo options
+    back with a successful exit status, and that text must never become a folder
+    inside the checkout.
+    """
+    from .worktree_git import CleanupError, common_dir  # worktree_git imports this module
+    try:
+        return common_dir(base_cwd) / "orcha" / "worktree-gc.json"
+    except CleanupError:
         return None
-    p = pathlib.Path(common.strip())
-    if not p.is_absolute():
-        p = pathlib.Path(base_cwd) / p
-    return p.resolve() / "orcha" / "worktree-gc.json"
 
 
 def load_state(base_cwd) -> dict:
