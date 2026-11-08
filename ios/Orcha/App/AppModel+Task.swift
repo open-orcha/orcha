@@ -2,7 +2,7 @@ import Foundation
 
 /// Task-detail parity — the view-owned load/act surface on AppModel (the `AppModel+*`
 /// per-feature extension pattern). Reads return their value to the calling view, which
-/// owns the state (evidence, Verdikt, goal chain, manager pre-review); a failed read is
+/// owns the state (evidence, goal chain, manager pre-review); a failed read is
 /// shown in place, never the app-wide banner. Writes follow the shared human-action
 /// contract: `actionInFlight`, `error`, and a success `toast`.
 extension AppModel {
@@ -17,11 +17,6 @@ extension AppModel {
     func fetchEvidence(_ taskId: String) async throws -> EvidencePackDto? {
         guard let t = taskSliceTarget else { return nil }
         return try await api.taskEvidence(t.base, taskId)
-    }
-
-    func fetchVerdiktRuns(_ taskId: String) async throws -> VerdiktRunsResponse? {
-        guard let t = taskSliceTarget else { return nil }
-        return try await api.verdiktRuns(t.base, taskId)
     }
 
     func fetchGoalChain(_ taskId: String) async throws -> GoalChainDto? {
@@ -44,13 +39,6 @@ extension AppModel {
     func previewTaskRoutine(cron: String, timezone: String) async -> TaskRoutinePreviewDto? {
         guard let t = taskSliceTarget else { return nil }
         return try? await api.previewTaskRoutineSchedule(t.base, t.cid, cron: cron, timezone: timezone)
-    }
-
-    /// Absolute URL for a portal-relative link (Verdikt report / "Open in Verdikt").
-    func portalURL(_ path: String) -> URL? {
-        if path.hasPrefix("http") { return URL(string: path) }
-        guard let base = selectedContainer?.baseUrl else { return nil }
-        return URL(string: base + path)
     }
 
     // MARK: writes
@@ -98,13 +86,6 @@ extension AppModel {
             try await api.createRoutineFromTask(base, cid, actor: actor, draft: draft)
         }
         return result != nil
-    }
-
-    /// Hand the task's definition of done to Verdikt now (manual trigger).
-    func runVerdikt(_ taskId: String) async -> VerdiktRunDto? {
-        await taskSliceAction({ (_: VerdiktRunDto) in "Sent to Verdikt" }) { base, _, actor in
-            try await api.triggerVerdikt(base, taskId, actor: actor)
-        }
     }
 }
 

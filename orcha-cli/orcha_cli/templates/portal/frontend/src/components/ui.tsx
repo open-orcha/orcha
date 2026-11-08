@@ -87,6 +87,9 @@ const I: Record<string, string> = {
   lock: '<rect x="4.5" y="9" width="11" height="8" rx="2"/><path d="M7 9V6.6a3 3 0 0 1 6 0V9"/>',
   "bell-off": '<path d="M6.3 6.6A4 4 0 0 0 6 9c0 3-1.2 4-1.8 4.6-.3.3-.1.9.4.9h9.9M14 9.6V9a4 4 0 0 0-6.2-3.4"/><path d="M8.4 17a1.8 1.8 0 0 0 3.2 0M3 3l14 14"/>',
   pause: '<path d="M7.5 5v10M12.5 5v10"/>',
+  /* Quality: a folded map; a list of checks */
+  map: '<path d="M3 5.6 7.4 3.6l5.2 2 4.4-2v10.8l-4.4 2-5.2-2-4.4 2z"/><path d="M7.4 3.6v10.8M12.6 5.6v10.8"/>',
+  checklist: '<path d="M9 5.5h7.5M9 10h7.5M9 14.5h7.5"/><path d="m3.5 5.5 1.1 1.1 2-2.2M3.5 10l1.1 1.1 2-2.2M3.5 14.5l1.1 1.1 2-2.2"/>',
 };
 /** Aliases so call sites can use the obvious name (GitHub → git branch mark, Activity → pulse). */
 I.github = I.git;

@@ -63,6 +63,10 @@ import { projectStatusMeta } from "../../cloud/projects/projectStatus";
 import { sendJSON } from "../../api/client";
 import type { Agent, OrchaRequest, Snapshot, Task } from "../../types";
 import { GateSurface, NO_HUMAN, useTaskRuns } from "../tasks/TasksPage";
+import { RunResultCard } from "../qa/runTask/RunResultCard";
+import { isRunTaskRow } from "../qa/runTask/model";
+import { useRunTaskIds } from "../qa/runTask/useRunTasks";
+import { qualityName } from "../qa/runTask/finishing";
 import { WorkflowTaskInspector, WorkflowTaskProvider, WorkflowTaskStatus, useTaskWorkflow } from "../workflows/WorkflowTaskContext";
 import { RequestDetail, requestKindLabel } from "../requests/RequestsPage";
 import { requestTitle as payloadRequestTitle } from "../requests/requestPayload";
@@ -391,6 +395,7 @@ function TaskDecision({ item, onDecided }: { item: AttentionItem; onDecided: (ou
   // GateSurface reports WHICH decision succeeded just before onActed
   const outcomeRef = useRef<string | null>(null);
   const assignee = agentBy(snap, t.assignee);
+  const runIds = useRunTaskIds();
   const count = t.message_summary?.count ?? 0;
   // the assigned reviewer, when it isn't you (you may still decide as Owner)
   const me = actingHuman(snap)?.alias ?? null;
@@ -414,7 +419,7 @@ function TaskDecision({ item, onDecided }: { item: AttentionItem; onDecided: (ou
           Assigned to {otherOwner(item)} for review. It isn't counted in your queue; you can still decide if you need to.
         </p>
       ) : null}
-      {t.description ? <Description text={t.description} snap={snap} /> : null}
+      {isRunTaskRow(t, runIds) ? <RunResultCard task={t} /> : t.description ? <Description text={t.description} snap={snap} /> : null}
       <WorkflowTaskInspector taskId={t.id} />
       <div className="nd-decision">
         <GateSurface
@@ -641,6 +646,7 @@ function NeedsPageContent() {
   // nobody's identity is known yet: never claim an item is someone else's
   const identityUnknown = authority.pending || !!authority.unverified;
   const attention = useAttention();
+  const runIds = useRunTaskIds();
   const location = useLocation();
   const navigate = useNavigate();
   const narrow = useNarrow();
@@ -767,6 +773,7 @@ function NeedsPageContent() {
     // what the AI manager recommended, before the evidence preview
     const route = i.kind === "verify" && i.task ? reviewBrief(i.task) : "";
     const sub = [kindLabel(i), i.assignedToOther && !identityUnknown ? "assigned to " + otherOwner(i) : "", route, ev ? ev.replace(/\s+/g, " ") : happened(i)].filter(Boolean).join(" · ");
+    const qualityRun = !!i.task && isRunTaskRow(i.task, runIds);
     return (
       <Row key={i.key} id={i.key} className="nd-row" selected={i.key === selKey} dim={i.assignedToOther} onActivate={() => select(i.key)} title={itemTitle(i)}>
         <span className="nd-av">
@@ -777,7 +784,7 @@ function NeedsPageContent() {
           )}
         </span>
         <span className="nd-main">
-          <span className="nd-title">{itemTitle(i)}</span>
+          <span className="nd-title">{qualityRun ? qualityName(itemTitle(i)) : itemTitle(i)}{qualityRun ? <Chip size="sm" className="nd-qualitychip" title="A Quality run">Quality</Chip> : null}</span>
           <span className="nd-sub">{trunc(sub, 160)}</span>
         </span>
         <span className="nd-side">

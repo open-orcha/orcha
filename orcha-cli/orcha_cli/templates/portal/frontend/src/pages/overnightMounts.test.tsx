@@ -5,7 +5,7 @@
  *     chain sits above the title.
  *   - Needs you: a verify row's second line is the evidence one-liner.
  *   - Settings: General carries Work type (mode + templates) and Template (portability);
- *     Integrations carries Verdikt — also when the distribution has no GitHub.
+ *     Integrations appears only when the distribution has GitHub.
  *   - General mode: the project tabs drop Code / GitHub and "Build to PR" reads "Execute".
  *   - Metrics: the Agent performance table; Agents › Configuration: the Performance card.
  */
@@ -17,7 +17,7 @@ import { SnapshotProvider } from "../state/SnapshotProvider";
 import { resetProjectModeCache } from "../lib/projectMode";
 import { TasksPage } from "./tasks/TasksPage";
 import { NeedsPage } from "./needs/NeedsPage";
-import { SettingsPage } from "./settings/SettingsPage";
+import { SettingsPage, buildSettingsGroups } from "./settings/SettingsPage";
 import { HomePage } from "./home/HomePage";
 import { AgentsPage } from "./agents/AgentsPage";
 import { MetricsPage } from "../cloud/metrics/MetricsPage";
@@ -35,8 +35,7 @@ const SUMMARY = {
   dod: { total: 3, proven: 1, not_proven: 1, needs_human: 1 },
   tests: { status: "passed", passed: 42, failed: 0, skipped: 0, errors: 0, suites: 2 },
   risk_flags: 1,
-  verdikt: { status: "completed", verdict: "fail" },
-  line: "1/3 DoD items evidenced · 42 tests passed · 1 risk flag · Verdikt fail",
+  line: "1/3 DoD items evidenced · 42 tests passed · 1 risk flag",
 };
 const PACK = {
   version: 1, task_id: TID, task_status: "needs_verification", basis: "b", built_at: "2026-09-29T00:00:00Z", round_started_at: null,
@@ -47,12 +46,11 @@ const PACK = {
   dod: {
     items: [
       { index: 0, text: "All tests pass", status: "proven", basis: "tests", evidence: "42 passed" },
-      { index: 1, text: "Greets the user by name", status: "not_proven", basis: "verdikt", evidence: "Verdikt: fail" },
+      { index: 1, text: "Greets the user by name", status: "not_proven", basis: "changes", evidence: "Not among the changed files: web/greet.tsx" },
       { index: 2, text: "Copy reads well", status: "needs_human", basis: "none", evidence: "" },
     ],
     total: 3, proven: 1, not_proven: 1, needs_human: 1,
   },
-  verdikt: null,
   summary: SUMMARY,
 };
 const CHAIN = {
@@ -82,10 +80,6 @@ const PERF = {
   project: { container_id: "c1", name: "Orcha", metrics: perfMetrics(), series },
   agents: [{ agent_id: "a1", alias: "forge", model: null, role: "backend", retired: false, metrics: perfMetrics(), series }],
 };
-const VERDIKT = {
-  configured: true, enabled: true, base_url: "http://127.0.0.1:31950", verdikt_project: "shop-web", target_kind: "web",
-  target_locator: "http://127.0.0.1:5810", trigger_mode: "always", timeout_minutes: 30, updated_at: null, updated_by: null,
-};
 
 const json = (data: unknown, status = 200) =>
   ({ ok: status < 300, status, json: async () => data, text: async () => JSON.stringify(data), clone() { return this; } }) as unknown as Response;
@@ -100,7 +94,6 @@ function route(url: string, method: string): Response {
   if (url.endsWith("/evidence") && method === "GET") return json(PACK);
   if (url.endsWith("/goal-chain")) return json(CHAIN);
   if (url.endsWith("/deliverables")) return json({ task_id: TID, deliverables: [], limits: { max_bytes: 1, max_deliverables_per_task: 1, max_versions_per_deliverable: 1, allowed_extensions: [], outputs_folder: ".orcha/outputs" } });
-  if (url.endsWith("/verdikt")) return json(VERDIKT);
   if (url.includes("/metrics/performance/agents/")) return json({ ...PERF, agent: PERF.agents[0] });
   if (url.includes("/metrics/performance")) return json(PERF);
   if (url.endsWith("/dod-presets") || url.endsWith("/skills")) return json({ items: [] });
@@ -160,7 +153,7 @@ describe("Task detail", () => {
     const gate = await screen.findByRole("region", { name: "Verification" });
     const proof = await waitFor(() => within(gate).getByTestId("evidence-pack"));
     await waitFor(() => expect(proof.textContent).toContain("1/3 DoD"));
-    expect(proof.textContent).toContain("Verdikt fail");
+    expect(proof.textContent).toContain("1 risk");
     // Proof is the FIRST row of the gate
     expect(gate.querySelector(".td-g-rows")?.firstElementChild?.getAttribute("data-testid")).toBe("evidence-pack");
     const chain = await screen.findByTestId("goal-chain");
@@ -203,12 +196,11 @@ describe("Settings", () => {
     expect(screen.getByText("Share this setup")).toBeTruthy();
   });
 
-  it("Integrations carries Verdikt even without GitHub routes", async () => {
-    extensions.routes = (ORIGINAL_ROUTES || []).filter((r) => r.path !== "/github");
-    window.history.replaceState(null, "", window.location.pathname + "#tab=github-access");
-    wrap(<SettingsPage />);
-    const url = await screen.findByLabelText("Verdikt URL");
-    expect((url as HTMLInputElement).value).toBe("http://127.0.0.1:31950");
+  it("Integrations is left out when the distribution has no GitHub", () => {
+    const routes = (ORIGINAL_ROUTES || []).filter((r) => r.path !== "/github");
+    const keys = buildSettingsGroups("c1", { ...extensions, routes, settingsSections: [] }).map((g) => g.key);
+    expect(keys).not.toContain("github-access");
+    expect(keys).toContain("notifications");
   });
 });
 

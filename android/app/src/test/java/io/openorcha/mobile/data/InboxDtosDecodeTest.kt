@@ -18,7 +18,7 @@ class InboxDtosDecodeTest {
     @Test
     fun `notification prefs payload decodes catalog, locks, availability and defaults`() {
         val p = json.decodeFromString(NotifPrefsPayload.serializer(), fixture("notification_prefs.json"))
-        assertEquals(9, p.catalog.categories.size)
+        assertEquals(8, p.catalog.categories.size)
         assertEquals(listOf("in_app", "desktop", "push", "slack"), p.catalog.channels.map { it.key })
         assertEquals("budget", p.catalog.locks.single().category)
         assertFalse(p.channels.getValue("push").available)

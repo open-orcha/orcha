@@ -153,6 +153,7 @@ const actionMessages: Record<string, string> = {
   review_loop_unavailable: "There are no open review findings to resolve.",
   withdrawal_not_allowed: "This task cannot be withdrawn in its current state.",
   task_limit: "The workflow’s task limit has been reached.",
+  workflow_incomplete: "Not ready to finish yet: the list below says what is left.",
 };
 
 /** Per-action decisions are authoritative. The coarse write flag is owner-only;

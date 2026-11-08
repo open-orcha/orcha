@@ -1,5 +1,5 @@
 // Generated from FastAPI OpenAPI slices. DO NOT EDIT.
-// Workflow source SHA-256: 84ae5b8802db2e352bed6c903bc576742b940188deb1a6e0afa1aeb3bbe45b66
+// Workflow source SHA-256: 02d17966580c3272334f26275de41974b17aa5ce1454439180cffda066b90711
 // Evidence GET source SHA-256: f2a794298f992bd3ff3955fa5d6aefc30a97e373794a3c1e9d03c8f46796853e
 // Regenerate with tools/generate-workflow-contract.mjs and both source files.
 
@@ -145,6 +145,7 @@ export type FlowStep = {
   "task_id": string;
   "outcomes"?: Array<StepOutcome>;
   "routes"?: Array<StepRoute>;
+  "qa"?: QaStepSpec | null;
   "expected_work_revision"?: number | null;
 };
 
@@ -265,6 +266,8 @@ export type NewTask = {
   "depends_on"?: Array<string>;
   "outcomes"?: Array<StepOutcome>;
   "routes"?: Array<StepRoute>;
+  "qa"?: QaStepSpec | null;
+  "block"?: QaStepBlock | null;
 };
 
 export type Objective = {
@@ -337,6 +340,21 @@ export type Progress = {
   "withdrawn": number;
   "objectives_accepted": number;
   "objectives_total": number;
+};
+
+export type QaStepBlock = {
+  "key": string;
+  "name": string;
+};
+
+export type QaStepSpec = {
+  "kind": "map" | "explore" | "draft" | "check" | "triage";
+  "platform"?: "ios" | "android" | "web" | null;
+  "device"?: string | null;
+  "scenario_ids"?: Array<string>;
+  "tags"?: Array<string>;
+  "focus"?: string | null;
+  "minutes"?: number | null;
 };
 
 export type Receipt = {
@@ -748,6 +766,8 @@ export type WorkflowTask = {
   "acceptance"?: TaskAcceptance | null;
   "outcomes"?: Array<StepOutcome>;
   "routes"?: Array<StepRoute>;
+  "qa"?: QaStepSpec | null;
+  "block"?: QaStepBlock | null;
   "route_state"?: "not_selected" | null;
   "awaiting_loop_decision"?: "limit_reached" | "stalled" | "missing_outcome" | "ask_owner" | null;
   "repeat_group_id"?: string | null;
@@ -853,6 +873,8 @@ export type WorkflowModels = {
   PrepareTask: PrepareTask;
   Preview: Preview;
   Progress: Progress;
+  QaStepBlock: QaStepBlock;
+  QaStepSpec: QaStepSpec;
   Receipt: Receipt;
   ReleaseTasks: ReleaseTasks;
   RepeatGroup: RepeatGroup;
@@ -1616,6 +1638,16 @@ export const workflowSchemas = {
         "type": "array",
         "maxItems": 8
       },
+      "qa": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/QaStepSpec"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
       "expected_work_revision": {
         "anyOf": [
           {
@@ -2236,6 +2268,26 @@ export const workflowSchemas = {
         },
         "type": "array",
         "maxItems": 8
+      },
+      "qa": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/QaStepSpec"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "block": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/QaStepBlock"
+          },
+          {
+            "type": "null"
+          }
+        ]
       }
     },
     "additionalProperties": false,
@@ -2592,6 +2644,109 @@ export const workflowSchemas = {
       "withdrawn",
       "objectives_accepted",
       "objectives_total"
+    ]
+  },
+  "QaStepBlock": {
+    "properties": {
+      "key": {
+        "type": "string",
+        "maxLength": 200,
+        "minLength": 1
+      },
+      "name": {
+        "type": "string",
+        "maxLength": 200,
+        "minLength": 1
+      }
+    },
+    "additionalProperties": false,
+    "type": "object",
+    "required": [
+      "key",
+      "name"
+    ]
+  },
+  "QaStepSpec": {
+    "properties": {
+      "kind": {
+        "type": "string",
+        "enum": [
+          "map",
+          "explore",
+          "draft",
+          "check",
+          "triage"
+        ]
+      },
+      "platform": {
+        "anyOf": [
+          {
+            "type": "string",
+            "enum": [
+              "ios",
+              "android",
+              "web"
+            ]
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "device": {
+        "anyOf": [
+          {
+            "type": "string",
+            "maxLength": 200
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "scenario_ids": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array",
+        "maxItems": 50
+      },
+      "tags": {
+        "items": {
+          "type": "string",
+          "maxLength": 60
+        },
+        "type": "array",
+        "maxItems": 20
+      },
+      "focus": {
+        "anyOf": [
+          {
+            "type": "string",
+            "maxLength": 2000
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "minutes": {
+        "anyOf": [
+          {
+            "type": "integer",
+            "maximum": 480,
+            "minimum": 1
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "additionalProperties": false,
+    "type": "object",
+    "required": [
+      "kind"
     ]
   },
   "Receipt": {
@@ -4832,6 +4987,26 @@ export const workflowSchemas = {
           "$ref": "#/components/schemas/StepRoute"
         },
         "type": "array"
+      },
+      "qa": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/QaStepSpec"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "block": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/QaStepBlock"
+          },
+          {
+            "type": "null"
+          }
+        ]
       },
       "route_state": {
         "anyOf": [

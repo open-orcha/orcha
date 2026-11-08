@@ -1,0 +1,67 @@
+/* The run flow. */
+.qa-livepill-thumb { flex: none; width: 15px; height: 20px; border-radius: 3px; object-fit: cover; object-position: top; background: var(--v2-hover); }
+.qa-livepill-t { font-variant-numeric: tabular-nums; }
+.qa-livepill-d { color: var(--v2-text-3); }
+@media (max-width: 1100px) { .qa-livepill-d, .qa-livepill-thumb { display: none; } }
+
+/* A run that stopped before it had a session. */
+.qa-run-waiting { display: flex; flex-direction: column; align-items: center; gap: var(--v2-space-4); padding-top: var(--v2-space-5); text-align: center; }
+.qa-run-waiting-t { margin: 0; color: var(--v2-text); font-size: 22px; font-weight: var(--v2-fw-semibold); line-height: 28px; letter-spacing: -0.01em; }
+.qa-run-waiting-b { margin: 4px 0 0; color: var(--v2-text-2); font-size: var(--v2-fs-body); }
+
+/* The line above a run's device: what it waits on, or what stopped it. */
+.qa-runline { display: flex; flex: none; flex-wrap: wrap; align-items: center; gap: 6px 12px; padding: 8px var(--v2-space-4); border-bottom: 1px solid var(--v2-border); background: var(--v2-panel); font-size: var(--v2-fs-body); }
+.qa-runline-t { flex: 1 1 280px; min-width: 0; margin: 0; color: var(--v2-text); }
+.qa-runline-b { color: var(--v2-text-3); }
+.qa-runline a { color: var(--v2-text-2); font-size: var(--v2-fs-meta); }
+
+/* A run with no session yet: what is happening, in place of a device. */
+.qa-run-pending { display: flex; flex-direction: column; gap: var(--v2-space-3); width: min(100%, 680px); margin: 0 auto; padding-top: var(--v2-space-4); }
+.qa-run-pending .qa-activity { height: min(62vh, 520px); max-height: none; }
+
+/* The run page: the theater, with the Activity rail beside its device. */
+.qa-run-body { display: flex; flex: 1 1 auto; min-width: 0; min-height: 0; }
+.qa-run-main { display: flex; flex: 1 1 auto; flex-direction: column; min-width: 0; min-height: 0; }
+.qa-run-rail { display: flex; flex: none; width: 320px; min-height: 0; border-left: 1px solid var(--v2-border); background: var(--v2-panel); }
+@media (max-width: 1100px) {
+  /* Stacked, the watch keeps a usable height and the page scrolls to the activity under it. */
+  .qa-run-body { flex-direction: column; overflow-y: auto; }
+  .qa-run-main { flex: none; height: max(500px, 100%); }
+  .qa-run-rail { flex: none; width: auto; height: 240px; border-top: 1px solid var(--v2-border); border-left: 0; }
+}
+
+/* The Activity panel. */
+.qa-activity { display: flex; flex-direction: column; min-width: 0; min-height: 0; border: 1px solid var(--v2-border); border-radius: var(--v2-radius-card); background: var(--v2-panel); overflow: hidden; }
+.qa-activity { max-height: 340px; }
+.qa-activity.is-fill { flex: 1 1 auto; max-height: none; border: 0; border-radius: 0; background: transparent; }
+.qa-activity-top { display: flex; flex: none; align-items: baseline; gap: 8px; padding: 8px 12px 0; }
+.qa-activity-t { margin: 0; color: var(--v2-text-3); font-size: var(--v2-fs-meta); font-weight: var(--v2-fw-medium); }
+.qa-activity-count { margin-left: auto; color: var(--v2-text-3); font-size: 11px; font-variant-numeric: tabular-nums; }
+.qa-activity-now { display: flex; flex: none; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 4px 12px 8px; border-bottom: 1px solid var(--v2-border); }
+.qa-activity-head { display: flex; flex: 1 1 100%; align-items: flex-start; gap: 6px; min-width: 0; margin: 0; color: var(--v2-text); font-size: var(--v2-fs-body); font-variant-numeric: tabular-nums; line-height: 20px; overflow-wrap: anywhere; }
+.qa-activity-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.qa-activity-link { color: var(--v2-text-2); font-size: var(--v2-fs-meta); text-decoration: underline; text-underline-offset: 2px; }
+.qa-activity-body { position: relative; display: flex; flex: 1 1 auto; flex-direction: column; min-height: 0; }
+.qa-activity-behind { flex: none; margin: 0; padding: 4px 12px; border-bottom: 1px solid var(--v2-border); color: var(--v2-text-3); font-size: var(--v2-fs-meta); font-variant-numeric: tabular-nums; }
+.qa-activity-empty { margin: 0; padding: 10px 12px; color: var(--v2-text-3); font-size: var(--v2-fs-meta); }
+.qa-activity-log { flex: 1 1 auto; min-height: 0; margin: 0; padding: 6px 0; list-style: none; overflow-y: auto; overscroll-behavior: contain; }
+.qa-activity-older { padding: 2px 12px 6px; color: var(--v2-text-3); font-size: var(--v2-fs-meta); }
+.qa-activity-line { display: grid; grid-template-columns: auto 14px minmax(0, 1fr); gap: 6px; align-items: baseline; padding: 2px 12px; color: var(--v2-text-2); font-size: var(--v2-fs-meta); line-height: 18px; }
+.qa-activity-time { color: var(--v2-text-3); font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.qa-activity-mark { display: inline-flex; align-self: center; justify-content: center; }
+.qa-activity-dot { display: inline-block; flex: none; width: 4px; height: 4px; border-radius: 50%; background: var(--v2-text-3); }
+.qa-activity-ico { flex: none; width: 13px; height: 13px; }
+.qa-activity-head .qa-activity-ico { margin-top: 3px; }
+.qa-activity-text { min-width: 0; overflow-wrap: anywhere; user-select: text; }
+.qa-activity-detail { display: block; color: var(--v2-text-3); }
+[data-level="wait"] > .qa-activity-text, [data-level="wait"] .qa-activity-ico { color: var(--v2-text); }
+[data-level="warn"] > .qa-activity-text, [data-level="warn"] .qa-activity-ico { color: var(--v2-warn); }
+[data-level="error"] > .qa-activity-text, [data-level="error"] .qa-activity-ico { color: var(--v2-danger); }
+[data-level="done"] .qa-activity-ico { color: var(--v2-ok); }
+.qa-activity-jump { position: absolute; bottom: 8px; left: 50%; transform: translateX(-50%); padding: 2px 10px; border: 1px solid var(--v2-border); border-radius: 999px; background: var(--v2-surface); color: var(--v2-text-2); font: inherit; font-size: var(--v2-fs-meta); cursor: pointer; }
+.qa-activity-jump:hover { color: var(--v2-text); }
+
+/* The device before its first screen: what the agent is doing instead. */
+.qa-noframe { display: flex; flex-direction: column; gap: 4px; align-self: stretch; padding: var(--v2-space-4); border: 1px solid var(--v2-border); border-radius: var(--v2-radius-card); background: var(--v2-panel); }
+.qa-noframe-t { margin: 0; color: var(--v2-text); font-size: var(--v2-fs-body); }
+.qa-noframe-b { margin: 0; color: var(--v2-text-3); font-size: var(--v2-fs-meta); }

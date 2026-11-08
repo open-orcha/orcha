@@ -18,10 +18,8 @@ import types
 import pytest
 
 from orcha_cli import notifier  # noqa: E402 (conftest puts orcha-cli on sys.path)
-from orcha_cli import notifier_preview
 from orcha_cli import notifier_request_sweep
 from orcha_cli import notifier_routines
-from orcha_cli import notifier_verdikt_sweep
 from orcha_cli import notifier_worktree_gc
 from orcha_cli import worktree_gc
 
@@ -91,9 +89,6 @@ class _Daemon:
         monkeypatch.setattr(notifier.signal, "signal", lambda sig, fn: self.handlers.append(fn))
         monkeypatch.setattr(notifier_routines, "maybe_fire_routines", lambda *a, **k: None)
         monkeypatch.setattr(notifier_request_sweep, "maybe_sweep_expired", lambda *a, **k: None)
-        monkeypatch.setattr(notifier_preview, "service_previews", lambda *a, **k: None)
-        monkeypatch.setattr(notifier_preview, "stop_all", lambda *a, **k: None)
-        monkeypatch.setattr(notifier_verdikt_sweep, "maybe_sweep", lambda *a, **k: None)
         monkeypatch.setattr(notifier_worktree_gc, "service_worktrees", housekeeping)
         self.args = types.SimpleNamespace(
             stop=False, restart=False, ensure=False, once=False, quiet=True,
@@ -267,8 +262,7 @@ def test_slow_loop_pass_logs_one_timestamped_line_with_stage_times(monkeypatch, 
     assert len(lines) == 1, lines
     line = lines[0]
     assert line.startswith("[notifier 20") and line.split("]")[0].endswith("Z")
-    for stage in ("reaps", "residents", "routines", "requests", "previews", "verdikt",
-                  "worktrees", "scan 75"):
+    for stage in ("reaps", "residents", "routines", "requests", "worktrees", "scan 75"):
         assert stage in line, (stage, line)
 
 

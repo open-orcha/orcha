@@ -129,4 +129,8 @@ def workflow_for_prompt(cur, task):
                "step_number": step_number, "tasks": steps}
     if workflow.get("semantics_version") == 2:
         context["round_context"] = round_context(cur, task, wid)
+    if task.get("qa_step"):
+        from portal_backend import qa_handoff
+
+        context["qa"] = qa_handoff.prompt_context(cur, task)
     return context

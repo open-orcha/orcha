@@ -8,6 +8,7 @@ import { useEffect, useState } from "react";
 import { Badge, Section } from "../../components/primitives";
 import { workflowRequest } from "./workflowApi";
 import type { RoundContext, WorkflowDetail, WorkflowTask } from "./workflowContract.generated";
+import { heldBy } from "./WorkflowTaskRows";
 
 const TRIGGERS: Record<string, string> = {
   initial: "First round", return: "Sent back by the review", owner_raise_limit: "The owner allowed more rounds",
@@ -59,7 +60,7 @@ export function WorkflowRoundContext({ detail, task }: { detail: WorkflowDetail;
         <dt>Round</dt><dd>{started ? `${group.round} of ${group.max_rounds}` : `Not started · up to ${group.max_rounds} rounds`} in “{group.name}”</dd>
         <dt>Ends when</dt><dd>{group.is_review_step ? "This step" : group.review_step ?? "The review step"} reports “{group.exit_outcome}”</dd>
         <dt>Why it runs</dt><dd>{why}</dd>
-        <dt>Waiting on</dt><dd>{task.blockers[0]?.message ?? task.display_state.label}</dd>
+        <dt>Waiting on</dt><dd>{heldBy(task)[0]?.message ?? task.display_state.label}</dd>
       </dl>
     </Section>}
     {group && received && <Section title="Received this round">

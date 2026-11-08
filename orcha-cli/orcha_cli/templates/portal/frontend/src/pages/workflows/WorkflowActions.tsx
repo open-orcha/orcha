@@ -68,6 +68,7 @@ export function WorkflowActions({ detail, scope, verified, stale, onSaved, reque
       if (current.container_id !== scope.project || current.id !== detail.id) throw new Error("The workflow changed. Return to the list and open it again.");
       if (next === "finish") current.completion = await workflowRequest("CompletionCheck", workflowPaths.detail(detail.id) + "/completion-check", { actorId: scope.identity });
       setPreview(current);
+      if (next === "start" && !selected.length) setSelected(current.tasks.filter((t) => startEligible(t) && !t.human_hold_by).map((t) => t.id));
       if ("impact" in current) setImpact(current.impact as Impact);
     } catch (e) { setError(e instanceof Error ? e.message : "Could not check this action."); }
     finally { setBusy(false); }

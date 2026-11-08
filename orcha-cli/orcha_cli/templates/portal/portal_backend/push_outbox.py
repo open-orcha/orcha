@@ -127,7 +127,7 @@ def _enqueue(cur, container_id, kind, ref_id, body) -> None:
 
 def push_task_verify(container_id, task_id, body=None) -> None:
     """A task parked at needs_verification — a human must verify it. `body` replaces the
-    default (the task title), e.g. "… — Verdikt passed on attempt 2 — ready for your review"."""
+    default (the task title)."""
     try:
         with db_cursor() as (conn, cur):
             if not _seeded(cur, container_id):

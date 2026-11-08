@@ -19,4 +19,14 @@ describe("classifyConnection", () => {
   it("no error but no fresh data for > STALE_MS (hung requests) is never live", () => {
     expect(classifyConnection({ error: null, lastOkAt: T, streamOpen: true, now: T + STALE_MS + 1 })).toEqual({ connection: "reconnecting", stale: true });
   });
+
+  it("slow is no outage: a read on its way counts for nothing, and offline takes repeated failures", () => {
+    const old = T + STALE_MS + 1;
+    expect(classifyConnection({ error: null, lastOkAt: T, streamOpen: true, now: old, failures: 0 })).toEqual({ connection: "live", stale: true });
+    expect(classifyConnection({ error: "request timed out", lastOkAt: T, streamOpen: true, now: old, failures: 1 }).connection).toBe("reconnecting");
+    expect(classifyConnection({ error: "request timed out", lastOkAt: T, streamOpen: true, now: old, failures: 2 }).connection).toBe("reconnecting");
+    expect(classifyConnection({ error: "request timed out", lastOkAt: T, streamOpen: true, now: old, failures: 3 }).connection).toBe("offline");
+    expect(classifyConnection({ error: "request timed out", lastOkAt: null, streamOpen: false, now: T, failures: 1 }).connection).toBe("polling");
+    expect(classifyConnection({ error: "request timed out", lastOkAt: null, streamOpen: false, now: T, failures: 3 }).connection).toBe("offline");
+  });
 });

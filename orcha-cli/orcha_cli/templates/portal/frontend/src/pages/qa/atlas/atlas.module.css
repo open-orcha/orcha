@@ -1,0 +1,1201 @@
+/* The Screen atlas (docs/screen-atlas.md). Colours come from the app's tokens, so light and dark
+   follow the theme; the badge tones are the coverage palette's, with a shape beside each so a
+   badge never reads by colour alone. */
+
+.palette {
+  --atlas-same: var(--color-success);
+  --atlas-minor: var(--color-warning);
+  --atlas-different: var(--color-danger);
+  --atlas-sheen: white;
+  --atlas-shade: black;
+  --atlas-missing: var(--color-chart-4);
+  --atlas-unchecked: var(--color-muted);
+  --atlas-flow: var(--color-accent);
+  --atlas-changed: var(--color-chart-2);
+  --atlas-frame: color-mix(in srgb, var(--color-fg) 82%, var(--color-bg));
+  /* A device's edge: a lit rim over its bezel, and the shadow it casts on the card. */
+  --atlas-rim: color-mix(in srgb, var(--atlas-sheen) 16%, transparent);
+  --atlas-cast: 0 10px 18px -12px color-mix(in srgb, var(--atlas-shade) 45%, transparent);
+  --atlas-wire: color-mix(in srgb, var(--color-muted) 30%, transparent);
+  --atlas-card-top: var(--color-panel);
+  --atlas-card-bottom: color-mix(in srgb, var(--color-panel) 96%, var(--color-fg));
+}
+:global([data-theme="dark"]) .palette {
+  --atlas-frame: color-mix(in srgb, var(--color-fg) 30%, var(--color-bg));
+  --atlas-rim: color-mix(in srgb, var(--atlas-sheen) 12%, transparent);
+  --atlas-cast: 0 12px 22px -12px color-mix(in srgb, var(--atlas-shade) 75%, transparent);
+  --atlas-card-top: color-mix(in srgb, var(--color-panel) 96%, var(--color-fg));
+  --atlas-card-bottom: var(--color-panel);
+}
+
+/* ---------- rows ---------- */
+
+.board {
+  padding-top: 4px;
+}
+.row {
+  position: relative;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 360px;
+}
+/* A hairline between areas that fades at both ends. */
+.row + .row::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 24px;
+  right: 24px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--color-border) 12%, var(--color-border) 88%, transparent);
+}
+.strip {
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: thin;
+  scroll-snap-type: x proximity;
+  scroll-padding-inline: 16px;
+}
+@media (min-width: 768px) {
+  .strip {
+    scroll-padding-inline: 24px;
+  }
+}
+.lane {
+  position: relative;
+  /* Its size is set from the layout, so what happens inside a row never re-lays out the page.
+     Not paint: a card's focus ring and hover shadow reach past the lane's edge. */
+  contain: layout;
+}
+.arrows {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: visible;
+}
+.arrow {
+  fill: none;
+  stroke: var(--atlas-flow);
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: stroke-width 160ms ease;
+}
+.head {
+  fill: var(--atlas-flow);
+  stroke: var(--atlas-flow);
+  stroke-width: 1.2;
+  stroke-linejoin: round;
+}
+.flow {
+  opacity: 0.5;
+  transition: opacity 200ms ease;
+}
+/* A light running along a lit arrow, the way the move goes. */
+.traveler {
+  fill: var(--color-panel);
+  stroke: var(--atlas-flow);
+  stroke-width: 2;
+  filter: drop-shadow(0 0 4px color-mix(in srgb, var(--atlas-flow) 70%, transparent));
+}
+.flow[data-seen="false"] .arrow {
+  stroke-dasharray: 4 4;
+}
+.flow[data-lit="true"] {
+  opacity: 1;
+}
+.flow[data-lit="true"] .arrow {
+  stroke-width: 2.2;
+}
+.flow[data-dim="true"] {
+  opacity: 0.14;
+}
+/* Turned on: each line draws in along its path (a mask, so a dashed line draws in dashed), then
+   its head lands. */
+.drawMask {
+  fill: none;
+  stroke: var(--color-primary-fg);
+  stroke-width: 10;
+  stroke-linecap: round;
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  animation: drawIn 520ms var(--ease-swift) forwards;
+  animation-delay: var(--d, 0ms);
+}
+@keyframes drawIn {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+.arrows[data-draw="true"] .head {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: headIn 200ms var(--ease-rise) both;
+  animation-delay: calc(var(--d, 0ms) + 430ms);
+}
+@keyframes headIn {
+  from {
+    opacity: 0;
+    transform: scale(0.3);
+  }
+}
+/* The move a lit arrow stands for ("Tap Checkout"), a pill over the cards while one is hovered. */
+.moveLabel {
+  position: absolute;
+  z-index: 5;
+  transform: translateX(-50%);
+  max-width: 180px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  line-height: 18px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+  color: var(--color-fg);
+  background: var(--color-raised);
+  border: 1px solid color-mix(in srgb, var(--atlas-flow) 45%, var(--color-border));
+  box-shadow: 0 4px 14px -8px color-mix(in srgb, var(--atlas-shade) 40%, transparent);
+}
+
+/* ---------- cards ---------- */
+
+.card {
+  position: absolute;
+  top: 0;
+  contain: layout paint style;
+  scroll-snap-align: start;
+  border-radius: 16px;
+  border: 1px solid var(--color-border);
+  background: linear-gradient(180deg, var(--atlas-card-top), var(--atlas-card-bottom));
+  box-shadow:
+    0 1px 1px color-mix(in srgb, var(--atlas-shade) 3%, transparent),
+    0 12px 28px -24px color-mix(in srgb, var(--atlas-shade) 40%, transparent);
+  text-align: left;
+  transition:
+    border-color 180ms ease,
+    box-shadow 220ms ease,
+    transform 220ms var(--ease-rise),
+    opacity 200ms ease;
+}
+:global([data-theme="dark"]) .card {
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--atlas-sheen) 3.5%, transparent),
+    0 14px 30px -22px color-mix(in srgb, var(--atlas-shade) 80%, transparent);
+}
+.card:hover,
+.card[data-lit="true"] {
+  transform: translateY(-3px);
+  border-color: var(--color-border-strong);
+  box-shadow:
+    0 2px 4px color-mix(in srgb, var(--atlas-shade) 4%, transparent),
+    0 24px 40px -26px color-mix(in srgb, var(--atlas-shade) 50%, transparent);
+}
+:global([data-theme="dark"]) .card:hover,
+:global([data-theme="dark"]) .card[data-lit="true"] {
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--atlas-sheen) 5%, transparent),
+    0 26px 44px -24px color-mix(in srgb, var(--atlas-shade) 95%, transparent);
+}
+/* Pressed: it gives under the pointer at once, and springs back on release (the base transition). */
+.card:active {
+  transform: translateY(-1px) scale(0.985);
+  transition-duration: 180ms, 220ms, 90ms, 200ms;
+  transition-timing-function: ease, ease, cubic-bezier(0.2, 0, 0, 1), ease;
+}
+.card:focus-visible {
+  outline: 2px solid var(--color-ring);
+  outline-offset: 2px;
+}
+.card[data-dim="true"] {
+  opacity: 0.42;
+}
+/* Its screenshots lean in a touch while the card is hovered. */
+.card:hover .shot {
+  transform: scale(1.03);
+}
+.changePill {
+  position: absolute;
+  top: 11px;
+  right: 11px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 18px;
+  padding: 0 7px 0 6px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: var(--atlas-changed);
+  background: color-mix(in srgb, var(--atlas-changed) 11%, transparent);
+  border: 1px solid color-mix(in srgb, var(--atlas-changed) 30%, transparent);
+}
+/* A narrow card gives its name the whole width: the pill sits on the frame's top corner instead. */
+.changePill[data-narrow] {
+  top: calc(var(--card-head) - 4px);
+  right: 4px;
+  z-index: 2;
+  background: color-mix(in srgb, var(--atlas-changed) 11%, var(--color-panel));
+  box-shadow: 0 4px 12px -6px color-mix(in srgb, var(--atlas-shade) 35%, transparent);
+}
+.changePill::before {
+  content: "";
+  width: 5px;
+  height: 5px;
+  border-radius: 999px;
+  background: currentColor;
+}
+/* The first rows deal their cards in when the page opens, one after another. Backwards only, so
+   once in, a card's hover and glow are its own again. */
+.row[data-enter="true"] .card {
+  animation: dealIn 560ms var(--ease-rise) backwards;
+  animation-delay: calc(140ms + var(--k, 0) * 70ms);
+}
+@keyframes dealIn {
+  from {
+    opacity: 0;
+    transform: translateY(14px) scale(0.985);
+  }
+}
+/* Lit in turn after a refresh ("Show them") or a jump to it: a ring that blooms and settles. */
+.card[data-glow="true"],
+.row[data-enter="true"] .card[data-glow="true"] {
+  animation: glowIn 1600ms var(--ease-rise) both;
+  animation-delay: calc(var(--glow-i, 0) * 140ms);
+}
+@keyframes glowIn {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-primary) 0%, transparent);
+  }
+  20% {
+    box-shadow:
+      0 0 0 3px color-mix(in srgb, var(--color-primary) 55%, transparent),
+      0 0 34px 2px color-mix(in srgb, var(--color-primary) 30%, transparent);
+  }
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-primary) 0%, transparent);
+  }
+}
+
+/* A card's name: up to two lines, then an ellipsis; the route under it takes the rest. */
+.cardTitle {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  line-height: 16px;
+  /* A word breaks only when it is wider than the whole line ("Library" never ends up "Librar y"). */
+  overflow-wrap: break-word;
+}
+/* A small floating list (the areas a row leads to). */
+.popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  min-width: 240px;
+  max-width: 320px;
+  /* Inside its row, which clips what leaves it (content-visibility). */
+  max-height: 220px;
+  overflow-y: auto;
+  padding: 4px;
+  border-radius: 10px;
+  border: 1px solid var(--color-border);
+  background: var(--color-raised);
+  box-shadow: 0 12px 32px -12px color-mix(in srgb, var(--atlas-shade) 35%, transparent);
+  white-space: normal;
+  animation: popIn 140ms var(--ease-rise) both;
+  transform-origin: top left;
+}
+@keyframes popIn {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+  }
+}
+
+/* ---------- frames ---------- */
+
+.phone,
+.tablet,
+.desktop,
+.browser {
+  position: relative;
+  background: var(--color-bg);
+  flex: none;
+}
+/* A phone: a dark bezel with a lit rim, its screen rounded inside it, the island (iOS) or the
+   punch-hole camera (Android) over the screen, and its buttons on the sides. */
+.phone {
+  border-radius: 18px;
+  border: 3px solid var(--atlas-frame);
+  box-shadow:
+    inset 0 0 0 1px var(--atlas-rim),
+    0 0 0 0.5px color-mix(in srgb, var(--color-fg) 35%, transparent),
+    var(--atlas-cast);
+}
+.phone > .ground {
+  border-radius: 15px;
+}
+.phone::before {
+  /* The island of a phone's screen. */
+  content: "";
+  position: absolute;
+  z-index: 3;
+  top: 4px;
+  left: 50%;
+  width: 30%;
+  height: 7px;
+  transform: translateX(-50%);
+  border-radius: 999px;
+  background: var(--atlas-frame);
+}
+.phone[data-platform="android"]::before {
+  width: 6px;
+  height: 6px;
+  top: 5px;
+}
+.phone[data-platform="android"] {
+  border-radius: 15px;
+}
+.phone[data-platform="android"] > .ground {
+  border-radius: 12px;
+}
+/* An iPad (or an Android tablet): an even bezel and the front camera's dot. */
+.tablet {
+  border-radius: 13px;
+  border: 4px solid var(--atlas-frame);
+  box-shadow:
+    inset 0 0 0 1px var(--atlas-rim),
+    0 0 0 0.5px color-mix(in srgb, var(--color-fg) 35%, transparent),
+    var(--atlas-cast);
+}
+.tablet > .ground {
+  border-radius: 9px;
+}
+.tablet::before {
+  content: "";
+  position: absolute;
+  z-index: 3;
+  top: -3px;
+  left: 50%;
+  width: 3px;
+  height: 3px;
+  transform: translateX(-50%);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--color-bg) 35%, var(--atlas-frame));
+}
+/* The side buttons, drawn just outside the bezel. */
+.buttons {
+  position: absolute;
+  inset: -3px;
+  pointer-events: none;
+}
+.buttons::before,
+.buttons::after {
+  content: "";
+  position: absolute;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--atlas-frame);
+}
+/* iOS: the action button and the volume pair on the left, the side button on the right. */
+.phone[data-platform="ios"] .buttons::before {
+  left: -2px;
+  top: 17%;
+  height: 21%;
+  background: linear-gradient(var(--atlas-frame) 0 18%, transparent 18% 30%, var(--atlas-frame) 30% 62%, transparent 62% 70%, var(--atlas-frame) 70%);
+}
+.phone[data-platform="ios"] .buttons::after {
+  right: -2px;
+  top: 24%;
+  height: 14%;
+}
+/* Android: the power key and the volume rocker on the right. */
+.phone[data-platform="android"] .buttons::before {
+  right: -2px;
+  top: 20%;
+  height: 8%;
+}
+.phone[data-platform="android"] .buttons::after {
+  right: -2px;
+  top: 33%;
+  height: 15%;
+}
+/* A tablet: the top button and the volume pair on the right edge. */
+.tablet .buttons {
+  inset: -4px;
+}
+.tablet .buttons::before {
+  top: -2px;
+  right: 12%;
+  width: 12%;
+  height: 2px;
+}
+.tablet .buttons::after {
+  right: -2px;
+  top: 10%;
+  height: 12%;
+}
+/* A desktop app's window: a title bar, no address field. */
+.desktop {
+  border-radius: 9px;
+  border: 1px solid var(--color-border-strong);
+  box-shadow: var(--atlas-cast);
+}
+.desktop > .ground {
+  border-radius: 0 0 8px 8px;
+}
+.browser {
+  border-radius: 9px;
+  border: 1px solid var(--color-border-strong);
+  box-shadow: var(--atlas-cast);
+}
+.browser > .ground {
+  border-radius: 0 0 8px 8px;
+}
+.browserBar {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  height: 12px;
+  padding: 0 5px;
+  border-radius: 8px 8px 0 0;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--color-panel) 70%, var(--color-hover)), var(--color-hover));
+  border-bottom: 1px solid var(--color-border);
+}
+.browserBar i {
+  flex: none;
+  width: 4px;
+  height: 4px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--color-danger) 70%, var(--color-border-strong));
+}
+.browserBar i:nth-child(2) {
+  background: color-mix(in srgb, var(--color-warning) 70%, var(--color-border-strong));
+}
+.browserBar i:nth-child(3) {
+  background: color-mix(in srgb, var(--color-success) 70%, var(--color-border-strong));
+}
+/* The address field, the route in it when the window is big enough to read it. */
+.address {
+  flex: 1;
+  min-width: 0;
+  height: 58%;
+  margin: 0 18% 0 8%;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--color-bg) 70%, transparent);
+  border: 0.5px solid var(--color-border);
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 8px;
+  line-height: 1.3;
+  text-align: center;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--color-muted);
+}
+.shot {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: 50% 0%;
+  transform-origin: 50% 0%;
+  transition: transform 420ms var(--ease-rise);
+}
+/* A screenshot of another shape than its frame, shown whole on a quiet ground. */
+.contain {
+  object-fit: contain;
+  background: color-mix(in srgb, var(--color-muted) 10%, var(--color-bg));
+}
+/* What a frame shows behind its screenshot: a quiet ground while it loads, and around a
+   screenshot shown whole. */
+.ground {
+  position: relative;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--color-muted) 7%, var(--color-bg));
+}
+/* Glass: a soft light across a device's screen, over the screenshot. */
+.phone > .ground::after,
+.tablet > .ground::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  background: linear-gradient(128deg, color-mix(in srgb, var(--atlas-sheen) 14%, transparent), color-mix(in srgb, var(--atlas-sheen) 3%, transparent) 34%, transparent 46%);
+}
+/* A screenshot that just arrived develops in, like a photo: from a soft blur, a little large. */
+.fresh {
+  animation: develop 900ms var(--ease-rise) both;
+}
+@keyframes develop {
+  from {
+    opacity: 0;
+    filter: blur(6px) saturate(0.2);
+    transform: scale(1.04);
+  }
+  to {
+    opacity: 1;
+    filter: none;
+    transform: none;
+  }
+}
+/* Its card glows once around it. */
+.card[data-fresh="true"],
+.row[data-enter="true"] .card[data-fresh="true"] {
+  animation: arrive 1400ms var(--ease-rise);
+}
+@keyframes arrive {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-accent) 0%, transparent);
+  }
+  25% {
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent) 35%, transparent);
+  }
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-accent) 0%, transparent);
+  }
+}
+/* A frame the high-level pass is about to capture: a light sweeping across it. Transform only. */
+.capture {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: inherit;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding-bottom: 8px;
+  outline: 1.5px solid color-mix(in srgb, var(--color-accent) 45%, transparent);
+  outline-offset: -1.5px;
+}
+.capture::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(100deg, transparent 25%, color-mix(in srgb, var(--color-fg) 16%, transparent) 50%, transparent 75%);
+  transform: translateX(-100%);
+  animation: sweep 1.5s var(--ease-swift) infinite;
+}
+@keyframes sweep {
+  to {
+    transform: translateX(100%);
+  }
+}
+.captureTag {
+  position: relative;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 9.5px;
+  font-weight: 600;
+  color: var(--color-accent);
+  background: color-mix(in srgb, var(--color-panel) 85%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-accent) 35%, transparent);
+}
+
+/* A screen known from the code only: a wireframe with its name, route and words. */
+.wire {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 16px 8px 8px;
+  border: 1.5px dashed var(--atlas-wire);
+  border-radius: inherit;
+  background: color-mix(in srgb, var(--color-muted) 5%, transparent);
+}
+.wireBar {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--atlas-wire);
+}
+.wireText {
+  font-size: 8.5px;
+  line-height: 1.25;
+  color: var(--color-muted);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.absent {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px;
+  text-align: center;
+  font-size: 10.5px;
+  line-height: 1.3;
+  color: var(--color-muted);
+  border: 1.5px dashed color-mix(in srgb, var(--atlas-missing) 45%, transparent);
+  border-radius: inherit;
+  background: color-mix(in srgb, var(--atlas-missing) 5%, transparent);
+}
+
+/* Not matched yet: nothing is known, so nothing is claimed. Quieter than "not in the code". */
+.gated {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: center;
+  justify-content: center;
+  padding: 8px;
+  text-align: center;
+  font-size: 10.5px;
+  line-height: 1.3;
+  color: var(--color-muted);
+  border: 1.5px dotted var(--atlas-wire);
+  border-radius: inherit;
+  background: color-mix(in srgb, var(--color-muted) 4%, transparent);
+}
+
+/* Seen, but its capture was blank (an app in secure mode, a screen not drawn yet): the sign-in
+   slot's quiet style, saying why there is no picture. On a big frame, what Orcha did instead. */
+.blank {
+  padding: 10px 9px;
+}
+.blankTitle {
+  color: var(--color-fg-2);
+  font-weight: 550;
+  text-wrap: balance;
+}
+.blankFull {
+  gap: 10px;
+  padding: 18px 16px;
+  font-size: 13px;
+  line-height: 1.35;
+}
+.blankLine {
+  max-width: 30ch;
+  font-size: 11.5px;
+  line-height: 1.45;
+  text-wrap: pretty;
+}
+
+.unknown {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px;
+  text-align: center;
+  font-size: 10.5px;
+  line-height: 1.3;
+  color: var(--color-muted);
+  border: 1.5px dotted var(--atlas-wire);
+  border-radius: inherit;
+  background: color-mix(in srgb, var(--color-muted) 3%, transparent);
+}
+
+/* A column's room holding a frame of another device (an iPad's shot in a phone column), centred. */
+.slot {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+}
+
+/* What took a screenshot: a small glass chip on its frame (device, sun or moon), and its words in
+   full under a big frame. Glass over a picture reads the same in light and dark. */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  max-width: 100%;
+  height: 15px;
+  padding: 0 5px;
+  border-radius: 999px;
+  font-size: 9px;
+  font-weight: 560;
+  line-height: 1;
+  letter-spacing: 0.01em;
+  color: color-mix(in srgb, var(--atlas-sheen) 94%, transparent);
+  background: color-mix(in srgb, var(--atlas-shade) 58%, transparent);
+  box-shadow: 0 0 0 0.5px color-mix(in srgb, var(--atlas-sheen) 16%, transparent);
+  backdrop-filter: blur(6px) saturate(1.3);
+  -webkit-backdrop-filter: blur(6px) saturate(1.3);
+  white-space: nowrap;
+}
+.chipName {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.chipOn {
+  position: absolute;
+  z-index: 4;
+  left: 5px;
+  bottom: 5px;
+  max-width: calc(100% - 10px);
+  pointer-events: none;
+  opacity: 0.88;
+  transition: opacity 160ms ease;
+}
+.card:hover .chipOn {
+  opacity: 1;
+}
+/* Under a frame, in the page's own colours. */
+.chipFull {
+  height: 20px;
+  padding: 0 8px;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--color-fg-2);
+  background: color-mix(in srgb, var(--color-panel-2) 70%, var(--color-bg));
+  box-shadow: inset 0 0 0 1px var(--color-border);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+/* ---------- badges ---------- */
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 560;
+  border: 1px solid color-mix(in srgb, currentColor 35%, transparent);
+  background: color-mix(in srgb, currentColor 9%, transparent);
+  white-space: nowrap;
+}
+/* A badge that explains itself on hover and focus. */
+.badgeTip {
+  cursor: help;
+}
+.badgeTip:focus-visible {
+  outline: 2px solid var(--color-ring);
+  outline-offset: 2px;
+}
+
+/* What a badge (or a count) means: a small raised note under it, its arrow on the badge. Fixed,
+   in a portal (the body, or the open dialog), so a card's paint containment never clips it. */
+.tip {
+  position: fixed;
+  z-index: 85;
+  width: max-content;
+  max-width: min(280px, calc(100vw - 16px));
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-raised);
+  color: var(--color-fg);
+  box-shadow: var(--shadow-md);
+  font-size: 12px;
+  line-height: 17px;
+  text-align: left;
+  white-space: normal;
+  animation: tipIn 140ms var(--ease-rise) both;
+}
+.tip::before {
+  content: "";
+  position: absolute;
+  left: calc(var(--tip-x, 50%) - 5px);
+  width: 8px;
+  height: 8px;
+  transform: rotate(45deg);
+  background: var(--color-raised);
+  border: 1px solid var(--color-border-strong);
+}
+.tip[data-side="below"]::before {
+  top: -5px;
+  border-right: 0;
+  border-bottom: 0;
+}
+.tip[data-side="above"]::before {
+  bottom: -5px;
+  border-left: 0;
+  border-top: 0;
+}
+.tip[data-side="above"] {
+  animation-name: tipInAbove;
+}
+@keyframes tipIn {
+  from {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+}
+@keyframes tipInAbove {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+}
+
+.same {
+  color: var(--atlas-same);
+}
+.minor {
+  color: var(--atlas-minor);
+}
+.different {
+  color: var(--atlas-different);
+}
+.missing {
+  color: var(--atlas-missing);
+}
+.unchecked,
+.unmatched {
+  color: var(--atlas-unchecked);
+}
+.changedTone {
+  color: var(--atlas-changed);
+}
+
+/* ---------- the before and after slider ---------- */
+
+.compare {
+  position: relative;
+  overflow: hidden;
+  border-radius: 12px;
+  border: 1px solid var(--color-border);
+  background: var(--color-bg);
+  user-select: none;
+  touch-action: none;
+  cursor: ew-resize;
+}
+.compare img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.compareAfter {
+  position: absolute;
+  inset: 0;
+  clip-path: inset(0 0 0 var(--cut, 50%));
+}
+.compareHandle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: var(--cut, 50%);
+  width: 2px;
+  transform: translateX(-1px);
+  background: var(--color-accent);
+  box-shadow: 0 0 0 1px var(--color-bg);
+  pointer-events: none;
+}
+.compareGrip {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  transform: translate(-50%, -50%);
+  border-radius: 999px;
+  border: 2px solid var(--color-accent);
+  background: var(--color-panel);
+  color: var(--color-accent);
+  box-shadow: 0 6px 18px -8px color-mix(in srgb, var(--atlas-shade) 45%, transparent);
+  transition: transform 160ms var(--ease-rise), box-shadow 160ms ease;
+}
+.compare:hover .compareGrip,
+.compare:active .compareGrip {
+  transform: translate(-50%, -50%) scale(1.1);
+  box-shadow: 0 8px 22px -8px color-mix(in srgb, var(--atlas-shade) 55%, transparent);
+}
+.compareRange {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  margin: 0;
+  pointer-events: none;
+}
+.compareRange:focus-visible + .compareHandle .compareGrip {
+  outline: 2px solid var(--color-ring);
+  outline-offset: 2px;
+}
+.compareTag {
+  position: absolute;
+  top: 8px;
+  padding: 2px 7px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 560;
+  background: color-mix(in srgb, var(--color-panel) 88%, transparent);
+  color: var(--color-fg);
+  border: 1px solid var(--color-border);
+}
+
+/* ---------- the teaching scene (empty-scene.tsx) and the filling view ---------- */
+
+.scene {
+  display: grid;
+  align-items: center;
+  gap: 32px;
+}
+@media (min-width: 900px) {
+  .scene {
+    grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.25fr);
+  }
+}
+/* Until its timeline starts, so the finished storyboard never flashes first. */
+@media (prefers-reduced-motion: no-preference) {
+  .scene[data-wait] .sceneSvg,
+  .scene[data-wait] .sceneSteps {
+    opacity: 0;
+  }
+}
+.sceneSvg {
+  width: 100%;
+  height: auto;
+  overflow: visible;
+  transition: opacity 300ms ease;
+}
+.sceneSvg * {
+  transform-box: view-box;
+}
+.sceneSteps {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 20px;
+}
+.sceneStep {
+  display: flex;
+  gap: 12px;
+  will-change: opacity, transform;
+}
+.sceneNum {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  margin-top: 1px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-accent) 30%, transparent);
+}
+.sceneBand {
+  fill: color-mix(in srgb, var(--atlas-flow) 6%, transparent);
+}
+.sceneColumn {
+  font-size: 9.5px;
+  font-weight: 600;
+  fill: var(--color-muted);
+}
+.sceneRow {
+  fill: color-mix(in srgb, var(--color-muted) 5%, transparent);
+  stroke: var(--color-border);
+}
+.sceneArea {
+  fill: var(--color-panel);
+  stroke: var(--color-border-strong);
+}
+.sceneAreaLabel {
+  font-size: 11px;
+  font-weight: 600;
+  fill: var(--color-fg-2);
+}
+.sceneSeed {
+  fill: color-mix(in srgb, var(--atlas-flow) 22%, var(--color-panel));
+  stroke: var(--atlas-flow);
+  stroke-width: 1;
+}
+/* Where an area's screens wait before they fly: an outline left behind. */
+.sceneGhost {
+  fill: none;
+  stroke: var(--color-border-strong);
+  stroke-dasharray: 2 2;
+}
+.sceneCard {
+  fill: var(--color-panel);
+  stroke: var(--color-border);
+}
+.scenePhone {
+  fill: var(--color-bg);
+  stroke: var(--atlas-frame);
+  stroke-width: 2.2;
+}
+.sceneBrowser {
+  fill: var(--color-bg);
+  stroke: var(--color-border-strong);
+}
+.sceneUnknown {
+  fill: transparent;
+  stroke: var(--atlas-wire);
+  stroke-width: 1.4;
+  stroke-dasharray: 2 3;
+}
+.sceneQuestion {
+  font-size: 13px;
+  font-weight: 600;
+  fill: var(--color-muted);
+}
+.sceneInk {
+  fill: var(--atlas-flow);
+  opacity: 0.55;
+}
+.sceneTint {
+  fill: var(--color-muted);
+  opacity: 0.22;
+}
+.sceneMuted {
+  fill: var(--color-muted);
+  opacity: 0.35;
+}
+.sceneBadge {
+  fill: color-mix(in srgb, currentColor 10%, transparent);
+  stroke: color-mix(in srgb, currentColor 40%, transparent);
+}
+.sceneBadgeText {
+  font-size: 8.5px;
+  font-weight: 600;
+  fill: currentColor;
+}
+.sceneArrow {
+  fill: none;
+  stroke: var(--atlas-flow);
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-dasharray: 1;
+  stroke-dashoffset: 0;
+}
+.sceneHead {
+  fill: var(--atlas-flow);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tip,
+  .popover,
+  .card[data-fresh="true"],
+  .row[data-enter="true"] .card[data-fresh="true"],
+  .capture::before,
+  .fresh {
+    animation: none;
+    opacity: 1;
+    stroke-dashoffset: 0;
+  }
+  .card,
+  .flow,
+  .compareGrip,
+  .shot,
+  .arrow {
+    transition: none;
+  }
+  .card:hover,
+  .card[data-lit="true"] {
+    transform: none;
+  }
+  .card:hover .shot {
+    transform: none;
+  }
+  .row[data-enter="true"] .card {
+    animation: none;
+  }
+  .card[data-glow="true"],
+  .row[data-enter="true"] .card[data-glow="true"] {
+    animation: none;
+    outline: 2px solid var(--color-primary);
+    outline-offset: 2px;
+  }
+  .traveler {
+    display: none;
+  }
+  .drawMask {
+    animation: none;
+    stroke-dashoffset: 0;
+  }
+  .arrows[data-draw="true"] .head {
+    animation: none;
+  }
+}
+
+/* "Save as PDF" from the browser's print dialog: every row unrolled, no chrome. */
+@media print {
+  .noPrint {
+    display: none !important;
+  }
+  .strip {
+    overflow: visible;
+  }
+  .row {
+    content-visibility: visible;
+    break-inside: avoid;
+  }
+}
+
+
+/* "Fill in Android" beside a card with a not-seen frame: it shows while the card is hovered or
+   focused (or itself is), at the card's lower right, over its quiet corner. */
+.cardFill {
+  position: absolute;
+  z-index: 3;
+  transform: translate(-100%, -100%);
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--color-primary) 45%, var(--color-border));
+  background: var(--color-raised, var(--color-panel));
+  color: var(--color-fg);
+  padding: 3px 10px;
+  font-size: 12px;
+  font-weight: 560;
+  line-height: 18px;
+  white-space: nowrap;
+  box-shadow: var(--shadow-sm);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 160ms ease;
+}
+.card:hover + .cardFill,
+.card:focus-visible + .cardFill,
+.cardFill:hover,
+.cardFill:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+.cardFill:hover {
+  background: color-mix(in srgb, var(--color-primary) 10%, var(--color-panel));
+}
+@media (prefers-reduced-motion: reduce) {
+  .cardFill {
+    transition: none;
+  }
+}
+
+/* A wireframe's foot says which platform has not seen it ("Not seen on Android yet"): on two
+   lines in a narrow phone frame rather than cut off. */
+.wireFoot {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  line-height: 1.25;
+}
+
+/* ---------- the empty scene's stage ---------- */
+
+.emptyStage {
+  position: relative;
+  overflow: hidden;
+  border-radius: var(--radius-xl);
+  border: 1px solid var(--color-border);
+  background: var(--color-panel-2);
+}
+:global([data-theme="dark"]) .emptyStage {
+  border-color: color-mix(in srgb, var(--atlas-sheen) 7%, transparent);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--atlas-sheen) 4%, transparent), 0 30px 80px -40px color-mix(in srgb, var(--atlas-shade) 80%, transparent);
+}

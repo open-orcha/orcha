@@ -280,3 +280,6 @@ docs/orcha-v2-parity-qa/**/*.png
 
 # Local worktree retention instructions (never part of source changes)
 .orcha-keep
+
+# vitest cache written next to the portal frontend
+orcha-cli/orcha_cli/templates/portal/node_modules/

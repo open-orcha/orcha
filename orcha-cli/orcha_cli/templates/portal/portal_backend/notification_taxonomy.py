@@ -65,15 +65,6 @@ _NOTIF_TAXONOMY = {
         "link_kind": "task",
         "link_field": "task_id",
     },
-    # mig 068: the Verdikt auto-fix loop stopped (pass / limit / no progress …) — the task is
-    # waiting in needs_verification for a person, with the reason in `message`
-    "verdikt_autofix_stopped": {
-        "type": "task_verify",
-        "zone": "needs_you",
-        "priority": _NOTIF_PRI_OWN_WORK,
-        "link_kind": "task",
-        "link_field": "task_id",
-    },
     "task_request_rejected": {
         "type": "agent_blocked",
         "zone": "needs_you",
@@ -122,6 +113,13 @@ _NOTIF_TAXONOMY = {
         "priority": _NOTIF_PRI_HUMAN_CONVO,
         "link_kind": "request",
         "link_field": "request_id",
+    },
+    "qa_result": {
+        "type": "qa_result",
+        "zone": "earlier",
+        "priority": _NOTIF_PRI_TASK,
+        "link_kind": "task",
+        "link_field": "task_id",
     },
     "task_assigned": {
         "type": "task_assigned",
@@ -180,7 +178,9 @@ _NOTIF_TAXONOMY = {
 # (digest_snapshotted, container-scoped so it doesn't even reach an agent key — suppressed defensively)
 # and the live-conversation channel (conversation_turn — that is the chat transcript, delivered to the
 # agent's OWN key, and is NOT a notification). The classifier returns None for these (dropped).
-_NOTIF_SUPPRESSED = ("digest_snapshotted", "conversation_turn", "task_result_mirrored")
+# The last entry is an event only a removed QA integration wrote: rows already stored stay hidden.
+_NOTIF_SUPPRESSED = ("digest_snapshotted", "conversation_turn", "task_result_mirrored",
+                     "verdikt_autofix_stopped")
 
 # payload fields carrying a short human-readable preview, in priority order.
 _NOTIF_PREVIEW_FIELDS = ("preview", "message", "reason", "feedback", "title")

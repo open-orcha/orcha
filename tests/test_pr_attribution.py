@@ -62,7 +62,11 @@ def test_migration_042_exists_and_is_next_sequential():
     # bounded command transfers, and dispatch boundaries before registration (GH #312).
     # 091 adds durable command outcome monitors and handled receipts (GH #388).
     # 092 records which agent drafted a workflow for a person (GH #391).
-    assert numbers[-1] == 92, f"092 must be the latest migration, saw {numbers[-1]:03d}"
+    # 093 adds Orcha QA: the app map, QA sessions, findings, flows, walks and scenarios.
+    # 094 adds Orcha QA onboarding (qa_onboarding).
+    # 095 adds what the QA screens show beyond 093 and 094 (docs/orcha-qa-ui-parity.md).
+    # 096 adds the QA handoff: requests, settings and acceptance verdicts (docs/orcha-qa-plan.md).
+    assert numbers[-1] == 97, f"097 must be the latest migration, saw {numbers[-1]:03d}"
 
 
 def test_agents_git_email_column_applied(db):

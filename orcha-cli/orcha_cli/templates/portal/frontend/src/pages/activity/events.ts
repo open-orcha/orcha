@@ -12,8 +12,13 @@
  */
 import { normalizePayload, payloadText, payloadTitle as primitivePayloadTitle } from "../../components/primitives/Payload";
 import type { OrchaRequest, Task } from "../../types";
+import type { QaRequest } from "../qa/requests/api";
+import { requestIdHref } from "../qa/requests/links";
+import { requestKindWord, requestTitle } from "../qa/requests/words";
 
-export type EventKind = "message" | "decision" | "request" | "answer";
+const PLATFORM_WORD: Record<string, string> = { ios: "iOS", android: "Android", web: "the web" };
+
+export type EventKind = "message" | "decision" | "request" | "answer" | "qa";
 export interface ProjectEvent {
   key: string;
   kind: EventKind;
@@ -31,6 +36,8 @@ export interface ProjectEvent {
   requestId: string | null;
   /** older consecutive comments by the same actor folded into this entry (collapseEvents) */
   folded?: ProjectEvent[];
+  /** a QA event's verb, before its subject ("QA passed", "asked QA about") */
+  qaVerb?: string;
 }
 
 export const EVENT_KIND_LABEL: Record<EventKind, string> = {
@@ -38,6 +45,7 @@ export const EVENT_KIND_LABEL: Record<EventKind, string> = {
   decision: "Human message",
   request: "Request",
   answer: "Answer",
+  qa: "QA",
 };
 
 /**
@@ -162,6 +170,35 @@ export function projectEvents(tasks: Task[], requests: OrchaRequest[]): ProjectE
   return out.filter((e) => e.at && Date.parse(e.at)).sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
 }
 
+/* ---- QA: what was asked and what came back, in plain words ---- */
+const QA_DONE: Record<string, string> = {
+  passed: "passed", failed: "failed", blocked: "is blocked on", cancelled: "stopped work on",
+};
+
+/** Sentence-ready subject of a request: its source task, else the workflow, else what it asked. */
+function qaSubject(r: QaRequest, titleOf: (id: string) => string | null): string {
+  const task = r.source_task_title || (r.source_task_id ? titleOf(r.source_task_id) : null);
+  return task || r.source_workflow_title || requestTitle(r);
+}
+
+/**
+ * Two events per request: who asked QA for what, and the result when it came back. A request
+ * from Quality or an agent reads the same way; the link always opens the request.
+ */
+export function qaEvents(requests: QaRequest[], whoIs: (agentId: string | null) => string | null, titleOf: (taskId: string) => string | null): ProjectEvent[] {
+  const out: ProjectEvent[] = [];
+  for (const r of requests) {
+    const subject = qaSubject(r, titleOf);
+    const href = requestIdHref(r.id);
+    const base = { kind: "qa" as const, subject, other: null, reqType: null, href, taskId: r.source_task_id, requestId: null };
+    const round = r.round > 1 ? ` (round ${r.round})` : "";
+    const what = requestKindWord(r.kind).toLowerCase() + (r.platform ? " on " + (PLATFORM_WORD[r.platform] ?? r.platform) : "");
+    if (r.created_at) out.push({ ...base, key: "qa:" + r.id, who: r.requested_by_alias || whoIs(r.requested_by_agent_id) || "system", qaVerb: "asked QA about", text: clip(r.focus ? `${what}: ${r.focus}${round}` : what + round, 200), at: r.created_at });
+    if (r.finished_at && QA_DONE[r.status]) out.push({ ...base, key: "qa-done:" + r.id, who: "QA", qaVerb: QA_DONE[r.status], text: clip(r.result?.summary ?? "", 200), at: r.finished_at });
+  }
+  return out.filter((e) => e.at && Date.parse(e.at)).sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
+}
+
 export function filterEvents(evs: ProjectEvent[], agentAlias: string | null, taskId: string | null): ProjectEvent[] {
   return evs.filter((e) => (!agentAlias || e.who === agentAlias) && (!taskId || e.taskId === taskId));
 }
@@ -197,18 +234,20 @@ export function foldedSameTask(e: ProjectEvent): boolean {
 }
 
 /* ---- Events view filter pills: "All events · Messages · Requests" ---- */
-export type EventKindFilter = "all" | "messages" | "requests";
+export type EventKindFilter = "all" | "messages" | "requests" | "qa";
 export const EVENT_KIND_FILTERS: { key: EventKindFilter; label: string; hint: string }[] = [
   { key: "all", label: "All events", hint: "Task messages and request activity" },
   { key: "messages", label: "Messages", hint: "The latest message on each task" },
   { key: "requests", label: "Requests", hint: "Requests sent and answered" },
+  { key: "qa", label: "QA", hint: "Work sent to QA and what came back" },
 ];
 export function parseEventKind(v: string | null | undefined): EventKindFilter {
-  return v === "messages" || v === "requests" ? v : "all";
+  return v === "messages" || v === "requests" || v === "qa" ? v : "all";
 }
 export function matchesEventKind(e: ProjectEvent, f: EventKindFilter): boolean {
   if (f === "messages") return e.kind === "message" || e.kind === "decision";
   if (f === "requests") return e.kind === "request" || e.kind === "answer";
+  if (f === "qa") return e.kind === "qa";
   return true;
 }
 

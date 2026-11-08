@@ -11,6 +11,7 @@ from .cli_parser_runtime import register_runtime_commands
 from .cli_parser_session import register_session_commands
 from .cli_job import register as register_job_commands
 from .cli_worktrees import register as register_worktree_commands
+from .qa.cli import register as register_qa_commands
 
 
 def build_parser(
@@ -31,4 +32,6 @@ def build_parser(
         register_worktree_commands(sub, handlers["worktrees"])
     if "job" in handlers:
         register_job_commands(sub, handlers["job"])
+    if "qa" in handlers:
+        register_qa_commands(sub, handlers["qa"])
     return parser

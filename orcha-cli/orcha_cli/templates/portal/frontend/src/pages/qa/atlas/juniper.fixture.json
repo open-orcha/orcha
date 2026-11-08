@@ -1,0 +1,2309 @@
+{
+ "areas": [
+  {
+   "differs": 0,
+   "key": "browse",
+   "name": "Browse",
+   "screens": [
+    "screen:/",
+    "screen:search"
+   ],
+   "seen": 2,
+   "summary": "The home page and search"
+  },
+  {
+   "differs": 2,
+   "key": "products",
+   "name": "Products",
+   "screens": [
+    "screen:/products",
+    "screen:/products/*",
+    "screen:/products/*/reviews"
+   ],
+   "seen": 3,
+   "summary": "Lists, details and reviews"
+  },
+  {
+   "differs": 2,
+   "key": "checkout",
+   "name": "Cart and checkout",
+   "screens": [
+    "screen:cart",
+    "screen:shipping",
+    "screen:payment",
+    "screen:/checkout/done"
+   ],
+   "seen": 3,
+   "summary": "From the cart to a placed order"
+  },
+  {
+   "differs": 2,
+   "key": "account",
+   "name": "Account",
+   "screens": [
+    "screen:sign-in",
+    "screen:profile",
+    "screen:orders",
+    "screen:wishlist"
+   ],
+   "seen": 4,
+   "summary": "Signing in, orders and the wishlist"
+  },
+  {
+   "differs": 1,
+   "key": "support",
+   "name": "Help and settings",
+   "screens": [
+    "screen:help",
+    "screen:settings"
+   ],
+   "seen": 0,
+   "summary": "Getting help and changing preferences"
+  }
+ ],
+ "builds": [
+  {
+   "at": "2026-10-24T16:00:00.000Z",
+   "id": "115c2d14-b187-46de-ab9c-32707c59d851",
+   "label": "1.5.0",
+   "made_at": "2026-10-22T09:00:00Z"
+  },
+  {
+   "at": "2026-10-24T16:00:00.000Z",
+   "id": "60f30927-e58e-4442-af7b-a0ab35869e8e",
+   "label": "1.5.0",
+   "made_at": "2026-10-22T09:00:00Z"
+  },
+  {
+   "at": "2026-10-24T16:00:00.000Z",
+   "id": "5a8593c1-22ca-406c-a59b-aaade234a281",
+   "label": "1.5.0",
+   "made_at": "2026-10-22T09:00:00Z"
+  },
+  {
+   "at": "2026-10-12T16:00:00.000Z",
+   "id": "614b1b43-6a7b-4535-a826-8f730319f912",
+   "label": "1.4.0",
+   "made_at": "2026-10-10T09:00:00Z"
+  },
+  {
+   "at": "2026-10-12T16:00:00.000Z",
+   "id": "20b69150-9670-4e96-813b-80f6e05eb9f2",
+   "label": "1.4.0",
+   "made_at": "2026-10-10T09:00:00Z"
+  },
+  {
+   "at": "2026-10-12T16:00:00.000Z",
+   "id": "2471b9d1-8dec-4247-bcdb-375a0cf86548",
+   "label": "1.4.0",
+   "made_at": "2026-10-10T09:00:00Z"
+  }
+ ],
+ "counts": {
+  "areas": 5,
+  "changed": 1,
+  "different": 0,
+  "differs": 7,
+  "looks": 39,
+  "matched": 14,
+  "minor": 4,
+  "missing": 3,
+  "never_seen": 3,
+  "same": 6,
+  "screens": 15,
+  "seen": 12,
+  "unchecked": 2,
+  "unmatched": 0
+ },
+ "devices": {
+  "android": {
+   "kind": "phone",
+   "landscape": false
+  },
+  "ios": {
+   "kind": "phone",
+   "landscape": false
+  },
+  "web": {
+   "kind": "browser",
+   "landscape": false
+  }
+ },
+ "flows": [
+  {
+   "count": 6,
+   "from": "screen:/",
+   "label": "Tap \"Shirts\"",
+   "seen": true,
+   "to": "screen:/products"
+  },
+  {
+   "count": 6,
+   "from": "screen:/",
+   "label": "Tap \"Search\"",
+   "seen": true,
+   "to": "screen:search"
+  },
+  {
+   "count": 6,
+   "from": "screen:/products",
+   "label": "Tap \"Linen shirt\"",
+   "seen": true,
+   "to": "screen:/products/*"
+  },
+  {
+   "count": 6,
+   "from": "screen:/products/*",
+   "label": "Tap \"Add to cart\"",
+   "seen": true,
+   "to": "screen:cart"
+  },
+  {
+   "count": 6,
+   "from": "screen:cart",
+   "label": "Tap \"Checkout\"",
+   "seen": true,
+   "to": "screen:shipping"
+  },
+  {
+   "count": 6,
+   "from": "screen:orders",
+   "label": "Tap \"Back\"",
+   "seen": true,
+   "to": "screen:profile"
+  },
+  {
+   "count": 6,
+   "from": "screen:profile",
+   "label": "Tap \"Orders\"",
+   "seen": true,
+   "to": "screen:orders"
+  },
+  {
+   "count": 6,
+   "from": "screen:search",
+   "label": "Tap \"Linen shirt\"",
+   "seen": true,
+   "to": "screen:/products/*"
+  },
+  {
+   "count": 6,
+   "from": "screen:shipping",
+   "label": "Tap \"Continue to payment\"",
+   "seen": true,
+   "to": "screen:payment"
+  },
+  {
+   "count": 6,
+   "from": "screen:sign-in",
+   "label": "Tap \"Sign in\"",
+   "seen": true,
+   "to": "screen:profile"
+  },
+  {
+   "count": 4,
+   "from": "screen:profile",
+   "label": "Tap \"Wishlist\"",
+   "seen": true,
+   "to": "screen:wishlist"
+  },
+  {
+   "count": 2,
+   "from": "screen:/products/*",
+   "label": "Tap \"Reviews\"",
+   "seen": true,
+   "to": "screen:/products/*/reviews"
+  }
+ ],
+ "generated_at": "2026-10-27T12:00:00.000Z",
+ "map_build": {
+  "error": null,
+  "finished_at": "2026-10-27T12:57:27.414Z",
+  "id": "e3e09170-f7f4-4382-bd83-9cd385767771",
+  "started_at": "2026-10-27T12:57:27.175Z",
+  "status": "done"
+ },
+ "name": "Juniper",
+ "platforms": [
+  "ios",
+  "android",
+  "web"
+ ],
+ "project_id": "6019e73e-55ec-496f-83fb-35bbbb6a3033",
+ "refresh": {
+  "cost_usd": null,
+  "depth": null,
+  "estimate_usd": 0.3,
+  "minutes": 3,
+  "note": null,
+  "state": "idle"
+ },
+ "screens": [
+  {
+   "area": "browse",
+   "blocked_reason": null,
+   "change": null,
+   "code_only": false,
+   "code_texts": [
+    "Juniper",
+    "Search shirts, shoes and more",
+    "New in",
+    "Shirts",
+    "Shoes",
+    "Sale",
+    "Autumn edit: 20% off knitwear",
+    "Linen shirt"
+   ],
+   "flows": [],
+   "from": [],
+   "id": "screen:/",
+   "last_build": "1.5.0",
+   "last_seen_at": "2026-10-24T10:00:21.000Z",
+   "name": "Home",
+   "never_seen": false,
+   "nodes": [
+    "screen:/",
+    "screen:home"
+   ],
+   "platforms": [
+    "ios",
+    "android",
+    "web"
+   ],
+   "presence": {
+    "android": "seen",
+    "ios": "seen",
+    "web": "seen"
+   },
+   "route": "/",
+   "similarity": {
+    "badge": "same",
+    "label": "Same",
+    "pairs": [
+     {
+      "a": "ios",
+      "b": "android",
+      "badge": "same",
+      "reasons": [],
+      "score": 0.934
+     },
+     {
+      "a": "ios",
+      "b": "web",
+      "badge": "same",
+      "reasons": [],
+      "score": 1.0
+     },
+     {
+      "a": "android",
+      "b": "web",
+      "badge": "same",
+      "reasons": [],
+      "score": 1.0
+     }
+    ],
+    "reasons": [
+     "Looks and reads the same on iOS, Android and Web"
+    ],
+    "score": 0.934
+   },
+   "states": [
+    {
+     "at": "2026-10-24T10:00:21.000Z",
+     "frame_url": "/api/artifacts/qa-runs/df63a932-2ddb-41b0-a40d-ea8304b7b8f4/frames/0007.png",
+     "label": "Loaded",
+     "platforms": [
+      "ios",
+      "android",
+      "web"
+     ],
+     "state": "loaded"
+    }
+   ],
+   "to": [
+    {
+     "id": "screen:/products",
+     "label": "Tap \"Shirts\""
+    },
+    {
+     "id": "screen:search",
+     "label": "Tap \"Search\""
+    }
+   ],
+   "variants": {
+    "android": {
+     "build": "1.5.0",
+     "device": {
+      "h": 446,
+      "kind": "phone",
+      "landscape": false,
+      "w": 206
+     },
+     "frame_url": "/api/artifacts/qa-runs/a6601a33-eec3-4ea4-96c8-2920943e5ead/frames/0007.png",
+     "last_seen_at": "2026-10-24T10:00:21.000Z",
+     "looks": 1,
+     "node": "screen:home",
+     "platform": "android",
+     "route": null,
+     "run_id": "a6601a33-eec3-4ea4-96c8-2920943e5ead",
+     "seen": true
+    },
+    "ios": {
+     "build": "1.5.0",
+     "device": {
+      "h": 422,
+      "kind": "phone",
+      "landscape": false,
+      "w": 195
+     },
+     "frame_url": "/api/artifacts/qa-runs/a58fc22a-1809-4d49-83db-a019e80e7c4b/frames/0007.png",
+     "last_seen_at": "2026-10-24T10:00:21.000Z",
+     "looks": 1,
+     "node": "screen:home",
+     "platform": "ios",
+     "route": null,
+     "run_id": "a58fc22a-1809-4d49-83db-a019e80e7c4b",
+     "seen": true
+    },
+    "web": {
+     "build": "1.5.0",
+     "device": {
+      "h": 400,
+      "kind": "browser",
+      "landscape": true,
+      "w": 640
+     },
+     "frame_url": "/api/artifacts/qa-runs/df63a932-2ddb-41b0-a40d-ea8304b7b8f4/frames/0007.png",
+     "last_seen_at": "2026-10-24T10:00:21.000Z",
+     "looks": 1,
+     "node": "screen:/",
+     "platform": "web",
+     "route": "/",
+     "run_id": "df63a932-2ddb-41b0-a40d-ea8304b7b8f4",
+     "seen": true
+    }
+   }
+  },
+  {
+   "area": "browse",
+   "blocked_reason": null,
+   "change": null,
+   "code_only": false,
+   "code_texts": [
+    "Search",
+    "linen",
+    "Linen shirt",
+    "$48",
+    "Linen trousers",
+    "$62",
+    "Something went wrong. Try again",
+    "Retry"
+   ],
+   "flows": [],
+   "from": [
+    {
+     "id": "screen:/",
+     "label": "Tap \"Search\""
+    }
+   ],
+   "id": "screen:search",
+   "last_build": "1.5.0",
+   "last_seen_at": "2026-10-24T10:00:24.000Z",
+   "name": "Search",
+   "never_seen": false,
+   "nodes": [
+    "screen:search",
+    "screen:/search"
+   ],
+   "platforms": [
+    "ios",
+    "android",
+    "web"
+   ],
+   "presence": {
+    "android": "seen",
+    "ios": "seen",
+    "web": "seen"
+   },
+   "route": "/search",
+   "similarity": {
+    "badge": "same",
+    "label": "Same",
+    "pairs": [
+     {
+      "a": "ios",
+      "b": "android",
+      "badge": "same",
+      "reasons": [],
+      "score": 0.925
+     },
+     {
+      "a": "ios",
+      "b": "web",
+      "badge": "same",
+      "reasons": [],
+      "score": 1.0
+     },
+     {
+      "a": "android",
+      "b": "web",
+      "badge": "same",
+      "reasons": [],
+      "score": 1.0
+     }
+    ],
+    "reasons": [
+     "Looks and reads the same on iOS, Android and Web"
+    ],
+    "score": 0.925
+   },
+   "states": [
+    {
+     "at": "2026-10-24T10:00:24.000Z",
+     "frame_url": "/api/artifacts/qa-runs/df63a932-2ddb-41b0-a40d-ea8304b7b8f4/frames/0008.png",
+     "label": "Loaded",
+     "platforms": [
+      "ios",
+      "android",
+      "web"
+     ],
+     "state": "loaded"
+    },
+    {
+     "at": "2026-10-12T10:00:43.500Z",
+     "frame_url": "/api/artifacts/qa-runs/b2fd6a6c-5c37-4210-a5bb-9c98667210c6/frames/0014.png",
+     "label": "Error",
+     "platforms": [
+      "android"
+     ],
+     "state": "error"
+    }
+   ],
+   "to": [
+    {
+     "id": "screen:/products/*",
+     "label": "Tap \"Linen shirt\""
+    }
+   ],
+   "variants": {
+    "android": {
+     "build": "1.5.0",
+     "device": {
+      "h": 446,
+      "kind": "phone",
+      "landscape": false,
+      "w": 206
+     },
+     "frame_url": "/api/artifacts/qa-runs/a6601a33-eec3-4ea4-96c8-2920943e5ead/frames/0008.png",
+     "last_seen_at": "2026-10-24T10:00:24.000Z",
+     "looks": 2,
+     "node": "screen:search",
+     "platform": "android",
+     "route": null,
+     "run_id": "a6601a33-eec3-4ea4-96c8-2920943e5ead",
+     "seen": true
+    },
+    "ios": {
+     "build": "1.5.0",
+     "device": {
+      "h": 422,
+      "kind": "phone",
+      "landscape": false,
+      "w": 195
+     },
+     "frame_url": "/api/artifacts/qa-runs/a58fc22a-1809-4d49-83db-a019e80e7c4b/frames/0008.png",
+     "last_seen_at": "2026-10-24T10:00:24.000Z",
+     "looks": 1,
+     "node": "screen:search",
+     "platform": "ios",
+     "route": null,
+     "run_id": "a58fc22a-1809-4d49-83db-a019e80e7c4b",
+     "seen": true
+    },
+    "web": {
+     "build": "1.5.0",
+     "device": {
+      "h": 400,
+      "kind": "browser",
+      "landscape": true,
+      "w": 640
+     },
+     "frame_url": "/api/artifacts/qa-runs/df63a932-2ddb-41b0-a40d-ea8304b7b8f4/frames/0008.png",
+     "last_seen_at": "2026-10-24T10:00:24.000Z",
+     "looks": 1,
+     "node": "screen:/search",
+     "platform": "web",
+     "route": "/search",
+     "run_id": "df63a932-2ddb-41b0-a40d-ea8304b7b8f4",
+     "seen": true
+    }
+   }
+  },
+  {
+   "area": "products",
+   "blocked_reason": null,
+   "change": null,
+   "code_only": false,
+   "code_texts": [
+    "Shirts",
+    "All",
+    "Linen",
+    "Oxford",
+    "Flannel",
+    "Linen shirt",
+    "$48",
+    "Oxford shirt"
+   ],
+   "flows": [],
+   "from": [
+    {
+     "id": "screen:/",
+     "label": "Tap \"Shirts\""
+    }
+   ],
+   "id": "screen:/products",
+   "last_build": "1.5.0",
+   "last_seen_at": "2026-10-24T10:00:06.000Z",
+   "name": "Product list",
+   "never_seen": false,
+   "nodes": [
+    "screen:/products",
+    "screen:product-list"
+   ],
+   "platforms": [
+    "ios",
+    "android",
+    "web"
+   ],
+   "presence": {
+    "android": "seen",
+    "ios": "seen",
+    "web": "seen"
+   },
+   "route": "/products",
+   "similarity": {
+    "badge": "same",
+    "label": "Same",
+    "pairs": [
+     {
+      "a": "ios",
+      "b": "android",
+      "badge": "same",
+      "reasons": [],
+      "score": 0.972
+     },
+     {
+      "a": "ios",
+      "b": "web",
+      "badge": "same",
+      "reasons": [],
+      "score": 1.0
+     },
+     {
+      "a": "android",
+      "b": "web",
+      "badge": "same",
+      "reasons": [],
+      "score": 1.0
+     }
+    ],
+    "reasons": [
+     "Looks and reads the same on iOS, Android and Web"
+    ],
+    "score": 0.972
+   },
+   "states": [
+    {
+     "at": "2026-10-24T10:00:06.000Z",
+     "frame_url": "/api/artifacts/qa-runs/df63a932-2ddb-41b0-a40d-ea8304b7b8f4/frames/0002.png",
+     "label": "Loaded",
+     "platforms": [
+      "ios",
+      "android",
+      "web"
+     ],
+     "state": "loaded"
+    }
+   ],
+   "to": [
+    {
+     "id": "screen:/products/*",
+     "label": "Tap \"Linen shirt\""
+    }
+   ],
+   "variants": {
+    "android": {
+     "build": "1.5.0",
+     "device": {
+      "h": 446,
+      "kind": "phone",
+      "landscape": false,
+      "w": 206
+     },
+     "frame_url": "/api/artifacts/qa-runs/a6601a33-eec3-4ea4-96c8-2920943e5ead/frames/0002.png",
+     "last_seen_at": "2026-10-24T10:00:06.000Z",
+     "looks": 1,
+     "node": "screen:product-list",
+     "platform": "android",
+     "route": null,
+     "run_id": "a6601a33-eec3-4ea4-96c8-2920943e5ead",
+     "seen": true
+    },
+    "ios": {
+     "build": "1.5.0",
+     "device": {
+      "h": 422,
+      "kind": "phone",
+      "landscape": false,
+      "w": 195
+     },
+     "frame_url": "/api/artifacts/qa-runs/a58fc22a-1809-4d49-83db-a019e80e7c4b/frames/0002.png",
+     "last_seen_at": "2026-10-24T10:00:06.000Z",
+     "looks": 1,
+     "node": "screen:product-list",
+     "platform": "ios",
+     "route": null,
+     "run_id": "a58fc22a-1809-4d49-83db-a019e80e7c4b",
+     "seen": true
+    },
+    "web": {
+     "build": "1.5.0",
+     "device": {
+      "h": 400,
+      "kind": "browser",
+      "landscape": true,
+      "w": 640
+     },
+     "frame_url": "/api/artifacts/qa-runs/df63a932-2ddb-41b0-a40d-ea8304b7b8f4/frames/0002.png",
+     "last_seen_at": "2026-10-24T10:00:06.000Z",
+     "looks": 1,
+     "node": "screen:/products",
+     "platform": "web",
+     "route": "/products",
+     "run_id": "df63a932-2ddb-41b0-a40d-ea8304b7b8f4",
+     "seen": true
+    }
+   }
+  },
+  {
+   "area": "products",
+   "blocked_reason": null,
+   "change": null,
+   "code_only": false,
+   "code_texts": [
+    "Linen shirt",
+    "$48 · Free returns",
+    "S",
+    "M",
+    "L",
+    "XL",
+    "Add to cart",
+    "Save to wishlist"
+   ],
+   "flows": [],
+   "from": [
+    {
+     "id": "screen:/products",
+     "label": "Tap \"Linen shirt\""
+    },
+    {
+     "id": "screen:search",
+     "label": "Tap \"Linen shirt\""
+    }
+   ],
+   "id": "screen:/products/*",
+   "last_build": "1.5.0",
+   "last_seen_at": "2026-10-24T10:00:27.000Z",
+   "name": "Product detail",
+   "never_seen": false,
+   "nodes": [
+    "screen:/products/*",
+    "screen:product-detail"
+   ],
+   "platforms": [
+    "ios",
+    "android",
+    "web"
+   ],
+   "presence": {
+    "android": "seen",
+    "ios": "seen",
+    "web": "seen"
+   },
+   "route": "/products/*",
+   "similarity": {
+    "badge": "minor",
+    "label": "Minor differences",
+    "pairs": [
+     {
+      "a": "ios",
+      "b": "android",
+      "badge": "minor",
+      "reasons": [
+       "iOS says “Add to cart”, Android says “Add to bag”"
+      ],
+      "score": 0.879
+     },
+     {
+      "a": "ios",
+      "b": "web",
+      "badge": "same",
+      "reasons": [],
+      "score": 1.0
+     },
+     {
+      "a": "android",
+      "b": "web",
+      "badge": "minor",
+      "reasons": [
+       "Android says “Add to bag”, Web says “Add to cart”"
+      ],
+      "score": 0.87
+     }
+    ],
+    "reasons": [
+     "iOS and Web say “Add to cart”, Android says “Add to bag”"
+    ],
+    "score": 0.87
+   },
+   "states": [
+    {
+     "at": "2026-10-24T10:00:27.000Z",
+     "frame_url": "/api/artifacts/qa-runs/df63a932-2ddb-41b0-a40d-ea8304b7b8f4/frames/0009.png",
+     "label": "Loaded",
+     "platforms": [
+      "ios",
+      "android",
+      "web"
+     ],
+     "state": "loaded"
+    }
+   ],
+   "to": [
+    {
+     "id": "screen:cart",
+     "label": "Tap \"Add to cart\""
+    },
+    {
+     "id": "screen:/products/*/reviews",
+     "label": "Tap \"Reviews\""
+    }
+   ],
+   "variants": {
+    "android": {
+     "build": "1.5.0",
+     "device": {
+      "h": 446,
+      "kind": "phone",
+      "landscape": false,
+      "w": 206
+     },
+     "frame_url": "/api/artifacts/qa-runs/a6601a33-eec3-4ea4-96c8-2920943e5ead/frames/0009.png",
+     "last_seen_at": "2026-10-24T10:00:27.000Z",
+     "looks": 1,
+     "node": "screen:product-detail",
+     "platform": "android",
+     "route": null,
+     "run_id": "a6601a33-eec3-4ea4-96c8-2920943e5ead",
+     "seen": true
+    },
+    "ios": {
+     "build": "1.5.0",
+     "device": {
+      "h": 422,
+      "kind": "phone",
+      "landscape": false,
+      "w": 195
+     },
+     "frame_url": "/api/artifacts/qa-runs/a58fc22a-1809-4d49-83db-a019e80e7c4b/frames/0009.png",
+     "last_seen_at": "2026-10-24T10:00:27.000Z",
+     "looks": 1,
+     "node": "screen:product-detail",
+     "platform": "ios",
+     "route": null,
+     "run_id": "a58fc22a-1809-4d49-83db-a019e80e7c4b",
+     "seen": true
+    },
+    "web": {
+     "build": "1.5.0",
+     "device": {
+      "h": 400,
+      "kind": "browser",
+      "landscape": true,
+      "w": 640
+     },
+     "frame_url": "/api/artifacts/qa-runs/df63a932-2ddb-41b0-a40d-ea8304b7b8f4/frames/0009.png",
+     "last_seen_at": "2026-10-24T10:00:27.000Z",
+     "looks": 1,
+     "node": "screen:/products/*",
+     "platform": "web",
+     "route": "/products/*",
+     "run_id": "df63a932-2ddb-41b0-a40d-ea8304b7b8f4",
+     "seen": true
+    }
+   }
+  },
+  {
+   "area": "products",
+   "blocked_reason": null,
+   "change": null,
+   "code_only": false,
+   "code_texts": [],
+   "flows": [],
+   "from": [
+    {
+     "id": "screen:/products/*",
+     "label": "Tap \"Reviews\""
+    }
+   ],
+   "id": "screen:/products/*/reviews",
+   "last_build": "1.5.0",
+   "last_seen_at": "2026-10-24T10:00:30.000Z",
+   "name": "Reviews",
+   "never_seen": false,
+   "nodes": [
+    "screen:/products/*/reviews"
+   ],
+   "platforms": [
+    "web"
+   ],
+   "presence": {
+    "android": "absent",
+    "ios": "absent",
+    "web": "seen"
+   },
+   "route": "/products/*/reviews",
+   "similarity": {
+    "badge": "missing",
+    "label": "Not on every platform",
+    "pairs": [],
+    "reasons": [
+     "Not in the iOS code",
+     "Not in the Android code"
+    ],
+    "score": null
+   },
+   "states": [
+    {
+     "at": "2026-10-24T10:00:30.000Z",
+     "frame_url": "/api/artifacts/qa-runs/df63a932-2ddb-41b0-a40d-ea8304b7b8f4/frames/0010.png",
+     "label": "Loaded",
+     "platforms": [
+      "web"
+     ],
+     "state": "loaded"
+    }
+   ],
+   "to": [],
+   "variants": {
+    "web": {
+     "build": "1.5.0",
+     "device": {
+      "h": 400,
+      "kind": "browser",
+      "landscape": true,
+      "w": 640
+     },
+     "frame_url": "/api/artifacts/qa-runs/df63a932-2ddb-41b0-a40d-ea8304b7b8f4/frames/0010.png",
+     "last_seen_at": "2026-10-24T10:00:30.000Z",
+     "looks": 1,
+     "node": "screen:/products/*/reviews",
+     "platform": "web",
+     "route": "/products/*/reviews",
+     "run_id": "df63a932-2ddb-41b0-a40d-ea8304b7b8f4",
+     "seen": true
+    }
+   }
+  },
+  {
+   "area": "checkout",
+   "blocked_reason": null,
+   "change": {
+    "kind": "changed",
+    "platforms": [
+     {
+      "after": {
+       "at": "2026-10-24T10:00:12.000Z",
+       "build": "1.5.0",
+       "first_at": "2026-10-24T10:00:12.000Z",
+       "frame_url": "/api/artifacts/qa-runs/a58fc22a-1809-4d49-83db-a019e80e7c4b/frames/0004.png",
+       "run_id": "a58fc22a-1809-4d49-83db-a019e80e7c4b",
+       "state": "loaded"
+      },
+      "before": {
+       "at": "2026-10-12T10:00:12.000Z",
+       "build": "1.4.0",
+       "first_at": "2026-10-12T10:00:12.000Z",
+       "frame_url": "/api/artifacts/qa-runs/94e5a6a6-affe-4e12-be73-a2c558ceee0a/frames/0004.png",
+       "run_id": "94e5a6a6-affe-4e12-be73-a2c558ceee0a",
+       "state": "loaded"
+      },
+      "kind": "changed",
+      "platform": "ios",
+      "what": [
+       "Now says “Checkout” instead of “Proceed to checkout”",
+       "New: “Free delivery over $50”, “Keep shopping”",
+       "It looks a little different"
+      ]
+     },
+     {
+      "after": {
+       "at": "2026-10-24T10:00:12.000Z",
+       "build": "1.5.0",
+       "first_at": "2026-10-24T10:00:12.000Z",
+       "frame_url": "/api/artifacts/qa-runs/df63a932-2ddb-41b0-a40d-ea8304b7b8f4/frames/0004.png",
+       "run_id": "df63a932-2ddb-41b0-a40d-ea8304b7b8f4",
+       "state": "loaded"
+      },
+      "before": {
+       "at": "2026-10-12T10:00:12.000Z",
+       "build": "1.4.0",
+       "first_at": "2026-10-12T10:00:12.000Z",
+       "frame_url": "/api/artifacts/qa-runs/aa6cff1d-4288-4892-b0da-1d5cab5ab0b6/frames/0004.png",
+       "run_id": "aa6cff1d-4288-4892-b0da-1d5cab5ab0b6",
+       "state": "loaded"
+      },
+      "kind": "changed",
+      "platform": "web",
+      "what": [
+       "Now says “Checkout” instead of “Proceed to checkout”",
+       "New: “Free delivery over $50”, “Keep shopping”",
+       "It looks a little different"
+      ]
+     }
+    ]
+   },
+   "code_only": false,
+   "code_texts": [
+    "Your cart",
+    "Linen shirt · M",
+    "$48",
+    "Wool scarf",
+    "$29",
+    "Subtotal $77",
+    "Proceed to checkout"
+   ],
+   "flows": [],
+   "from": [
+    {
+     "id": "screen:/products/*",
+     "label": "Tap \"Add to cart\""
+    }
+   ],
+   "id": "screen:cart",
+   "last_build": "1.5.0",
+   "last_seen_at": "2026-10-24T10:00:12.000Z",
+   "name": "Cart",
+   "never_seen": false,
+   "nodes": [
+    "screen:cart",
+    "screen:/cart"
+   ],
+   "platforms": [
+    "ios",
+    "android",
+    "web"
+   ],
+   "presence": {
+    "android": "seen",
+    "ios": "seen",
+    "web": "seen"
+   },
+   "route": "/cart",
+   "similarity": {
+    "badge": "minor",
+    "label": "Minor differences",
+    "pairs": [
+     {
+      "a": "ios",
+      "b": "android",
+      "badge": "minor",
+      "reasons": [
+       "iOS says “Checkout”, Android says “Proceed to checkout”",
+       "Only iOS shows “Free delivery over $50”, “Keep shopping”"
+      ],
+      "score": 0.692
+     },
+     {
+      "a": "ios",
+      "b": "web",
+      "badge": "same",
+      "reasons": [],
+      "score": 1.0
+     },
+     {
+      "a": "android",
+      "b": "web",
+      "badge": "minor",
+      "reasons": [
+       "Android says “Proceed to checkout”, Web says “Checkout”",
+       "Only Web shows “Free delivery over $50”, “Keep shopping”"
+      ],
+      "score": 0.721
+     }
+    ],
+    "reasons": [
+     "iOS and Web say “Checkout”, Android says “Proceed to checkout”",
+     "Only iOS and Web show “Free delivery over $50”, “Keep shopping”"
+    ],
+    "score": 0.692
+   },
+   "states": [
+    {
+     "at": "2026-10-24T10:00:12.000Z",
+     "frame_url": "/api/artifacts/qa-runs/df63a932-2ddb-41b0-a40d-ea8304b7b8f4/frames/0004.png",
+     "label": "Loaded",
+     "platforms": [
+      "ios",
+      "android",
+      "web"
+     ],
+     "state": "loaded"
+    }
+   ],
+   "to": [
+    {
+     "id": "screen:shipping",
+     "label": "Tap \"Checkout\""
+    }
+   ],
+   "variants": {
+    "android": {
+     "build": "1.5.0",
+     "device": {
+      "h": 446,
+      "kind": "phone",
+      "landscape": false,
+      "w": 206
+     },
+     "frame_url": "/api/artifacts/qa-runs/a6601a33-eec3-4ea4-96c8-2920943e5ead/frames/0004.png",
+     "last_seen_at": "2026-10-24T10:00:12.000Z",
+     "looks": 1,
+     "node": "screen:cart",
+     "platform": "android",
+     "route": null,
+     "run_id": "a6601a33-eec3-4ea4-96c8-2920943e5ead",
+     "seen": true
+    },
+    "ios": {
+     "build": "1.5.0",
+     "device": {
+      "h": 422,
+      "kind": "phone",
+      "landscape": false,
+      "w": 195
+     },
+     "frame_url": "/api/artifacts/qa-runs/a58fc22a-1809-4d49-83db-a019e80e7c4b/frames/0004.png",
+     "last_seen_at": "2026-10-24T10:00:12.000Z",
+     "looks": 2,
+     "node": "screen:cart",
+     "platform": "ios",
+     "route": null,
+     "run_id": "a58fc22a-1809-4d49-83db-a019e80e7c4b",
+     "seen": true
+    },
+    "web": {
+     "build": "1.5.0",
+     "device": {
+      "h": 400,
+      "kind": "browser",
+      "landscape": true,
+      "w": 640
+     },
+     "frame_url": "/api/artifacts/qa-runs/df63a932-2ddb-41b0-a40d-ea8304b7b8f4/frames/0004.png",
+     "last_seen_at": "2026-10-24T10:00:12.000Z",
+     "looks": 2,
+     "node": "screen:/cart",
+     "platform": "web",
+     "route": "/cart",
+     "run_id": "df63a932-2ddb-41b0-a40d-ea8304b7b8f4",
+     "seen": true
+    }
+   }
+  },
+  {
+   "area": "checkout",
+   "blocked_reason": null,
+   "change": null,
+   "code_only": false,
+   "code_texts": [
+    "Shipping",
+    "Full name",
+    "Street address",
+    "City",
+    "Postcode",
+    "Continue to payment"
+   ],
+   "flows": [],
+   "from": [
+    {
+     "id": "screen:cart",
+     "label": "Tap \"Checkout\""
+    }
+   ],
+   "id": "screen:shipping",
+   "last_build": "1.5.0",
+   "last_seen_at": "2026-10-24T10:00:15.000Z",
+   "name": "Shipping",
+   "never_seen": false,
+   "nodes": [
+    "screen:/checkout/shipping",
+    "screen:shipping"
+   ],
+   "platforms": [
+    "ios",
+    "android",
+    "web"
+   ],
+   "presence": {
+    "android": "seen",
+    "ios": "seen",
+    "web": "seen"
+   },
+   "route": "/checkout/shipping",
+   "similarity": {
+    "badge": "same",
+    "label": "Same",
+    "pairs": [
+     {
+      "a": "ios",
+      "b": "android",
+      "badge": "same",
+      "reasons": [],
+      "score": 0.925
+     },
+     {
+      "a": "ios",
+      "b": "web",
+      "badge": "same",
+      "reasons": [],
+      "score": 1.0
+     },
+     {
+      "a": "android",
+      "b": "web",
+      "badge": "same",
+      "reasons": [],
+      "score": 1.0
+     }
+    ],
+    "reasons": [
+     "Looks and reads the same on iOS, Android and Web"
+    ],
+    "score": 0.925
+   },
+   "states": [
+    {
+     "at": "2026-10-24T10:00:15.000Z",
+     "frame_url": "/api/artifacts/qa-runs/df63a932-2ddb-41b0-a40d-ea8304b7b8f4/frames/0005.png",
+     "label": "Loaded",
+     "platforms": [
+      "ios",
+      "android",
+      "web"
+     ],
+     "state": "loaded"
+    }
+   ],
+   "to": [
+    {
+     "id": "screen:payment",
+     "label": "Tap \"Continue to payment\""
+    }
+   ],
+   "variants": {
+    "android": {
+     "build": "1.5.0",
+     "device": {
+      "h": 446,
+      "kind": "phone",
+      "landscape": false,
+      "w": 206
+     },
+     "frame_url": "/api/artifacts/qa-runs/a6601a33-eec3-4ea4-96c8-2920943e5ead/frames/0005.png",
+     "last_seen_at": "2026-10-24T10:00:15.000Z",
+     "looks": 1,
+     "node": "screen:shipping",
+     "platform": "android",
+     "route": null,
+     "run_id": "a6601a33-eec3-4ea4-96c8-2920943e5ead",
+     "seen": true
+    },
+    "ios": {
+     "build": "1.5.0",
+     "device": {
+      "h": 422,
+      "kind": "phone",
+      "landscape": false,
+      "w": 195
+     },
+     "frame_url": "/api/artifacts/qa-runs/a58fc22a-1809-4d49-83db-a019e80e7c4b/frames/0005.png",
+     "last_seen_at": "2026-10-24T10:00:15.000Z",
+     "looks": 1,
+     "node": "screen:shipping",
+     "platform": "ios",
+     "route": null,
+     "run_id": "a58fc22a-1809-4d49-83db-a019e80e7c4b",
+     "seen": true
+    },
+    "web": {
+     "build": "1.5.0",
+     "device": {
+      "h": 400,
+      "kind": "browser",
+      "landscape": true,
+      "w": 640
+     },
+     "frame_url": "/api/artifacts/qa-runs/df63a932-2ddb-41b0-a40d-ea8304b7b8f4/frames/0005.png",
+     "last_seen_at": "2026-10-24T10:00:15.000Z",
+     "looks": 1,
+     "node": "screen:/checkout/shipping",
+     "platform": "web",
+     "route": "/checkout/shipping",
+     "run_id": "df63a932-2ddb-41b0-a40d-ea8304b7b8f4",
+     "seen": true
+    }
+   }
+  },
+  {
+   "area": "checkout",
+   "blocked_reason": null,
+   "change": null,
+   "code_only": false,
+   "code_texts": [
+    "Payment",
+    "Card number",
+    "Expiry",
+    "Order total",
+    "$77",
+    "Pay now",
+    "Apply coupon"
+   ],
+   "flows": [],
+   "from": [
+    {
+     "id": "screen:shipping",
+     "label": "Tap \"Continue to payment\""
+    }
+   ],
+   "id": "screen:payment",
+   "last_build": "1.5.0",
+   "last_seen_at": "2026-10-24T10:00:18.000Z",
+   "name": "Payment",
+   "never_seen": false,
+   "nodes": [
+    "screen:/checkout/payment",
+    "screen:payment"
+   ],
+   "platforms": [
+    "ios",
+    "android",
+    "web"
+   ],
+   "presence": {
+    "android": "seen",
+    "ios": "seen",
+    "web": "seen"
+   },
+   "route": "/checkout/payment",
+   "similarity": {
+    "badge": "minor",
+    "label": "Minor differences",
+    "pairs": [
+     {
+      "a": "ios",
+      "b": "android",
+      "badge": "minor",
+      "reasons": [
+       "Button order differs: “Pay now” comes before “Apply coupon” on iOS, after it on Android"
+      ],
+      "score": 0.87
+     },
+     {
+      "a": "ios",
+      "b": "web",
+      "badge": "same",
+      "reasons": [],
+      "score": 1.0
+     },
+     {
+      "a": "android",
+      "b": "web",
+      "badge": "minor",
+      "reasons": [
+       "Button order differs: “Apply coupon” comes before “Pay now” on Android, after it on Web"
+      ],
+      "score": 0.87
+     }
+    ],
+    "reasons": [
+     "Button order differs: “Pay now” comes before “Apply coupon” on iOS and Web, after it on Android"
+    ],
+    "score": 0.87
+   },
+   "states": [
+    {
+     "at": "2026-10-24T10:00:18.000Z",
+     "frame_url": "/api/artifacts/qa-runs/df63a932-2ddb-41b0-a40d-ea8304b7b8f4/frames/0006.png",
+     "label": "Loaded",
+     "platforms": [
+      "ios",
+      "android",
+      "web"
+     ],
+     "state": "loaded"
+    }
+   ],
+   "to": [],
+   "variants": {
+    "android": {
+     "build": "1.5.0",
+     "device": {
+      "h": 446,
+      "kind": "phone",
+      "landscape": false,
+      "w": 206
+     },
+     "frame_url": "/api/artifacts/qa-runs/a6601a33-eec3-4ea4-96c8-2920943e5ead/frames/0006.png",
+     "last_seen_at": "2026-10-24T10:00:18.000Z",
+     "looks": 1,
+     "node": "screen:payment",
+     "platform": "android",
+     "route": null,
+     "run_id": "a6601a33-eec3-4ea4-96c8-2920943e5ead",
+     "seen": true
+    },
+    "ios": {
+     "build": "1.5.0",
+     "device": {
+      "h": 422,
+      "kind": "phone",
+      "landscape": false,
+      "w": 195
+     },
+     "frame_url": "/api/artifacts/qa-runs/a58fc22a-1809-4d49-83db-a019e80e7c4b/frames/0006.png",
+     "last_seen_at": "2026-10-24T10:00:18.000Z",
+     "looks": 1,
+     "node": "screen:payment",
+     "platform": "ios",
+     "route": null,
+     "run_id": "a58fc22a-1809-4d49-83db-a019e80e7c4b",
+     "seen": true
+    },
+    "web": {
+     "build": "1.5.0",
+     "device": {
+      "h": 400,
+      "kind": "browser",
+      "landscape": true,
+      "w": 640
+     },
+     "frame_url": "/api/artifacts/qa-runs/df63a932-2ddb-41b0-a40d-ea8304b7b8f4/frames/0006.png",
+     "last_seen_at": "2026-10-24T10:00:18.000Z",
+     "looks": 1,
+     "node": "screen:/checkout/payment",
+     "platform": "web",
+     "route": "/checkout/payment",
+     "run_id": "df63a932-2ddb-41b0-a40d-ea8304b7b8f4",
+     "seen": true
+    }
+   }
+  },
+  {
+   "area": "checkout",
+   "blocked_reason": null,
+   "change": null,
+   "code_only": true,
+   "code_texts": [
+    "Order confirmed",
+    "Thanks, Amara. Order #1043 is on its way.",
+    "Track order"
+   ],
+   "flows": [],
+   "from": [],
+   "id": "screen:/checkout/done",
+   "last_build": null,
+   "last_seen_at": null,
+   "name": "Order confirmed",
+   "never_seen": true,
+   "nodes": [
+    "screen:/checkout/done",
+    "screen:order-confirmed"
+   ],
+   "platforms": [
+    "ios",
+    "android",
+    "web"
+   ],
+   "presence": {
+    "android": "unseen",
+    "ios": "unseen",
+    "web": "unseen"
+   },
+   "route": "/checkout/done",
+   "similarity": {
+    "badge": "unchecked",
+    "label": "Not compared yet",
+    "pairs": [
+     {
+      "a": "ios",
+      "b": "android",
+      "badge": "unchecked",
+      "reasons": [],
+      "score": null
+     },
+     {
+      "a": "ios",
+      "b": "web",
+      "badge": "unchecked",
+      "reasons": [],
+      "score": null
+     },
+     {
+      "a": "android",
+      "b": "web",
+      "badge": "unchecked",
+      "reasons": [],
+      "score": null
+     }
+    ],
+    "reasons": [
+     "Not seen live yet, so there is nothing to compare"
+    ],
+    "score": null
+   },
+   "states": [],
+   "to": [],
+   "variants": {
+    "android": {
+     "build": null,
+     "device": {
+      "h": null,
+      "kind": "phone",
+      "landscape": false,
+      "w": null
+     },
+     "frame_url": null,
+     "last_seen_at": null,
+     "looks": 0,
+     "node": "screen:order-confirmed",
+     "platform": "android",
+     "route": null,
+     "run_id": null,
+     "seen": false
+    },
+    "ios": {
+     "build": null,
+     "device": {
+      "h": null,
+      "kind": "phone",
+      "landscape": false,
+      "w": null
+     },
+     "frame_url": null,
+     "last_seen_at": null,
+     "looks": 0,
+     "node": "screen:order-confirmed",
+     "platform": "ios",
+     "route": null,
+     "run_id": null,
+     "seen": false
+    },
+    "web": {
+     "build": null,
+     "device": {
+      "h": null,
+      "kind": "browser",
+      "landscape": false,
+      "w": null
+     },
+     "frame_url": null,
+     "last_seen_at": null,
+     "looks": 0,
+     "node": "screen:/checkout/done",
+     "platform": "web",
+     "route": "/checkout/done",
+     "run_id": null,
+     "seen": false
+    }
+   }
+  },
+  {
+   "area": "account",
+   "blocked_reason": null,
+   "change": null,
+   "code_only": false,
+   "code_texts": [
+    "Sign in",
+    "Email",
+    "Password",
+    "Create an account"
+   ],
+   "flows": [],
+   "from": [],
+   "id": "screen:sign-in",
+   "last_build": "1.5.0",
+   "last_seen_at": "2026-10-24T10:00:33.000Z",
+   "name": "Sign in",
+   "never_seen": false,
+   "nodes": [
+    "screen:/sign-in",
+    "screen:sign-in"
+   ],
+   "platforms": [
+    "ios",
+    "android",
+    "web"
+   ],
+   "presence": {
+    "android": "seen",
+    "ios": "seen",
+    "web": "seen"
+   },
+   "route": "/sign-in",
+   "similarity": {
+    "badge": "same",
+    "label": "Same",
+    "pairs": [
+     {
+      "a": "ios",
+      "b": "android",
+      "badge": "same",
+      "reasons": [],
+      "score": 0.953
+     },
+     {
+      "a": "ios",
+      "b": "web",
+      "badge": "same",
+      "reasons": [],
+      "score": 1.0
+     },
+     {
+      "a": "android",
+      "b": "web",
+      "badge": "same",
+      "reasons": [],
+      "score": 1.0
+     }
+    ],
+    "reasons": [
+     "Looks and reads the same on iOS, Android and Web"
+    ],
+    "score": 0.953
+   },
+   "states": [
+    {
+     "at": "2026-10-24T10:00:33.000Z",
+     "frame_url": "/api/artifacts/qa-runs/df63a932-2ddb-41b0-a40d-ea8304b7b8f4/frames/0011.png",
+     "label": "Loaded",
+     "platforms": [
+      "ios",
+      "android",
+      "web"
+     ],
+     "state": "loaded"
+    }
+   ],
+   "to": [
+    {
+     "id": "screen:profile",
+     "label": "Tap \"Sign in\""
+    }
+   ],
+   "variants": {
+    "android": {
+     "build": "1.5.0",
+     "device": {
+      "h": 446,
+      "kind": "phone",
+      "landscape": false,
+      "w": 206
+     },
+     "frame_url": "/api/artifacts/qa-runs/a6601a33-eec3-4ea4-96c8-2920943e5ead/frames/0010.png",
+     "last_seen_at": "2026-10-24T10:00:30.000Z",
+     "looks": 1,
+     "node": "screen:sign-in",
+     "platform": "android",
+     "route": null,
+     "run_id": "a6601a33-eec3-4ea4-96c8-2920943e5ead",
+     "seen": true
+    },
+    "ios": {
+     "build": "1.5.0",
+     "device": {
+      "h": 422,
+      "kind": "phone",
+      "landscape": false,
+      "w": 195
+     },
+     "frame_url": "/api/artifacts/qa-runs/a58fc22a-1809-4d49-83db-a019e80e7c4b/frames/0010.png",
+     "last_seen_at": "2026-10-24T10:00:30.000Z",
+     "looks": 1,
+     "node": "screen:sign-in",
+     "platform": "ios",
+     "route": null,
+     "run_id": "a58fc22a-1809-4d49-83db-a019e80e7c4b",
+     "seen": true
+    },
+    "web": {
+     "build": "1.5.0",
+     "device": {
+      "h": 400,
+      "kind": "browser",
+      "landscape": true,
+      "w": 640
+     },
+     "frame_url": "/api/artifacts/qa-runs/df63a932-2ddb-41b0-a40d-ea8304b7b8f4/frames/0011.png",
+     "last_seen_at": "2026-10-24T10:00:33.000Z",
+     "looks": 1,
+     "node": "screen:/sign-in",
+     "platform": "web",
+     "route": "/sign-in",
+     "run_id": "df63a932-2ddb-41b0-a40d-ea8304b7b8f4",
+     "seen": true
+    }
+   }
+  },
+  {
+   "area": "account",
+   "blocked_reason": null,
+   "change": null,
+   "code_only": false,
+   "code_texts": [
+    "Profile",
+    "Amara Okafor",
+    "Orders",
+    "Wishlist",
+    "Addresses",
+    "Settings",
+    "Sign out"
+   ],
+   "flows": [],
+   "from": [
+    {
+     "id": "screen:orders",
+     "label": "Tap \"Back\""
+    },
+    {
+     "id": "screen:sign-in",
+     "label": "Tap \"Sign in\""
+    }
+   ],
+   "id": "screen:profile",
+   "last_build": "1.5.0",
+   "last_seen_at": "2026-10-24T10:00:42.000Z",
+   "name": "Profile",
+   "never_seen": false,
+   "nodes": [
+    "screen:/account",
+    "screen:profile"
+   ],
+   "platforms": [
+    "ios",
+    "android",
+    "web"
+   ],
+   "presence": {
+    "android": "seen",
+    "ios": "seen",
+    "web": "seen"
+   },
+   "route": "/account",
+   "similarity": {
+    "badge": "minor",
+    "label": "Minor differences",
+    "pairs": [
+     {
+      "a": "ios",
+      "b": "android",
+      "badge": "minor",
+      "reasons": [
+       "Only iOS shows “Wishlist”",
+       "Colours differ: iOS looks lighter than Android",
+       "The layout looks different"
+      ],
+      "score": 0.68
+     },
+     {
+      "a": "ios",
+      "b": "web",
+      "badge": "same",
+      "reasons": [],
+      "score": 1.0
+     },
+     {
+      "a": "android",
+      "b": "web",
+      "badge": "minor",
+      "reasons": [
+       "Only Web shows “Wishlist”"
+      ],
+      "score": 0.87
+     }
+    ],
+    "reasons": [
+     "Only iOS and Web show “Wishlist”",
+     "Colours differ: iOS looks lighter than Android",
+     "The layout looks different"
+    ],
+    "score": 0.68
+   },
+   "states": [
+    {
+     "at": "2026-10-24T10:00:42.000Z",
+     "frame_url": "/api/artifacts/qa-runs/df63a932-2ddb-41b0-a40d-ea8304b7b8f4/frames/0014.png",
+     "label": "Loaded",
+     "platforms": [
+      "ios",
+      "android",
+      "web"
+     ],
+     "state": "loaded"
+    }
+   ],
+   "to": [
+    {
+     "id": "screen:orders",
+     "label": "Tap \"Orders\""
+    },
+    {
+     "id": "screen:wishlist",
+     "label": "Tap \"Wishlist\""
+    }
+   ],
+   "variants": {
+    "android": {
+     "build": "1.5.0",
+     "device": {
+      "h": 446,
+      "kind": "phone",
+      "landscape": false,
+      "w": 206
+     },
+     "frame_url": "/api/artifacts/qa-runs/a6601a33-eec3-4ea4-96c8-2920943e5ead/frames/0013.png",
+     "last_seen_at": "2026-10-24T10:00:39.000Z",
+     "looks": 1,
+     "node": "screen:profile",
+     "platform": "android",
+     "route": null,
+     "run_id": "a6601a33-eec3-4ea4-96c8-2920943e5ead",
+     "seen": true
+    },
+    "ios": {
+     "build": "1.5.0",
+     "device": {
+      "h": 422,
+      "kind": "phone",
+      "landscape": false,
+      "w": 195
+     },
+     "frame_url": "/api/artifacts/qa-runs/a58fc22a-1809-4d49-83db-a019e80e7c4b/frames/0013.png",
+     "last_seen_at": "2026-10-24T10:00:39.000Z",
+     "looks": 1,
+     "node": "screen:profile",
+     "platform": "ios",
+     "route": null,
+     "run_id": "a58fc22a-1809-4d49-83db-a019e80e7c4b",
+     "seen": true
+    },
+    "web": {
+     "build": "1.5.0",
+     "device": {
+      "h": 400,
+      "kind": "browser",
+      "landscape": true,
+      "w": 640
+     },
+     "frame_url": "/api/artifacts/qa-runs/df63a932-2ddb-41b0-a40d-ea8304b7b8f4/frames/0014.png",
+     "last_seen_at": "2026-10-24T10:00:42.000Z",
+     "looks": 1,
+     "node": "screen:/account",
+     "platform": "web",
+     "route": "/account",
+     "run_id": "df63a932-2ddb-41b0-a40d-ea8304b7b8f4",
+     "seen": true
+    }
+   }
+  },
+  {
+   "area": "account",
+   "blocked_reason": null,
+   "change": null,
+   "code_only": false,
+   "code_texts": [
+    "Orders",
+    "Order #1042 · Delivered",
+    "$77",
+    "Order #1031 · Delivered",
+    "$54",
+    "Order #1019 · Returned",
+    "$29",
+    "No orders yet"
+   ],
+   "flows": [],
+   "from": [
+    {
+     "id": "screen:profile",
+     "label": "Tap \"Orders\""
+    }
+   ],
+   "id": "screen:orders",
+   "last_build": "1.5.0",
+   "last_seen_at": "2026-10-24T10:00:39.000Z",
+   "name": "Orders",
+   "never_seen": false,
+   "nodes": [
+    "screen:/account/orders",
+    "screen:orders"
+   ],
+   "platforms": [
+    "ios",
+    "android",
+    "web"
+   ],
+   "presence": {
+    "android": "seen",
+    "ios": "seen",
+    "web": "seen"
+   },
+   "route": "/account/orders",
+   "similarity": {
+    "badge": "same",
+    "label": "Same",
+    "pairs": [
+     {
+      "a": "ios",
+      "b": "android",
+      "badge": "same",
+      "reasons": [],
+      "score": 0.963
+     },
+     {
+      "a": "ios",
+      "b": "web",
+      "badge": "same",
+      "reasons": [],
+      "score": 1.0
+     },
+     {
+      "a": "android",
+      "b": "web",
+      "badge": "same",
+      "reasons": [],
+      "score": 1.0
+     }
+    ],
+    "reasons": [
+     "Looks and reads the same on iOS, Android and Web"
+    ],
+    "score": 0.963
+   },
+   "states": [
+    {
+     "at": "2026-10-24T10:00:39.000Z",
+     "frame_url": "/api/artifacts/qa-runs/df63a932-2ddb-41b0-a40d-ea8304b7b8f4/frames/0013.png",
+     "label": "Loaded",
+     "platforms": [
+      "ios",
+      "android",
+      "web"
+     ],
+     "state": "loaded"
+    },
+    {
+     "at": "2026-10-12T10:00:49.500Z",
+     "frame_url": "/api/artifacts/qa-runs/aa6cff1d-4288-4892-b0da-1d5cab5ab0b6/frames/0016.png",
+     "label": "Empty",
+     "platforms": [
+      "ios",
+      "android",
+      "web"
+     ],
+     "state": "empty"
+    }
+   ],
+   "to": [
+    {
+     "id": "screen:profile",
+     "label": "Tap \"Back\""
+    }
+   ],
+   "variants": {
+    "android": {
+     "build": "1.5.0",
+     "device": {
+      "h": 446,
+      "kind": "phone",
+      "landscape": false,
+      "w": 206
+     },
+     "frame_url": "/api/artifacts/qa-runs/a6601a33-eec3-4ea4-96c8-2920943e5ead/frames/0012.png",
+     "last_seen_at": "2026-10-24T10:00:36.000Z",
+     "looks": 2,
+     "node": "screen:orders",
+     "platform": "android",
+     "route": null,
+     "run_id": "a6601a33-eec3-4ea4-96c8-2920943e5ead",
+     "seen": true
+    },
+    "ios": {
+     "build": "1.5.0",
+     "device": {
+      "h": 422,
+      "kind": "phone",
+      "landscape": false,
+      "w": 195
+     },
+     "frame_url": "/api/artifacts/qa-runs/a58fc22a-1809-4d49-83db-a019e80e7c4b/frames/0012.png",
+     "last_seen_at": "2026-10-24T10:00:36.000Z",
+     "looks": 2,
+     "node": "screen:orders",
+     "platform": "ios",
+     "route": null,
+     "run_id": "a58fc22a-1809-4d49-83db-a019e80e7c4b",
+     "seen": true
+    },
+    "web": {
+     "build": "1.5.0",
+     "device": {
+      "h": 400,
+      "kind": "browser",
+      "landscape": true,
+      "w": 640
+     },
+     "frame_url": "/api/artifacts/qa-runs/df63a932-2ddb-41b0-a40d-ea8304b7b8f4/frames/0013.png",
+     "last_seen_at": "2026-10-24T10:00:39.000Z",
+     "looks": 2,
+     "node": "screen:/account/orders",
+     "platform": "web",
+     "route": "/account/orders",
+     "run_id": "df63a932-2ddb-41b0-a40d-ea8304b7b8f4",
+     "seen": true
+    }
+   }
+  },
+  {
+   "area": "account",
+   "blocked_reason": null,
+   "change": null,
+   "code_only": false,
+   "code_texts": [
+    "Wishlist",
+    "Wool scarf",
+    "$29",
+    "Canvas sneakers",
+    "$72"
+   ],
+   "flows": [],
+   "from": [
+    {
+     "id": "screen:profile",
+     "label": "Tap \"Wishlist\""
+    }
+   ],
+   "id": "screen:wishlist",
+   "last_build": "1.5.0",
+   "last_seen_at": "2026-10-24T10:00:45.000Z",
+   "name": "Wishlist",
+   "never_seen": false,
+   "nodes": [
+    "screen:wishlist",
+    "screen:/account/wishlist"
+   ],
+   "platforms": [
+    "ios",
+    "web"
+   ],
+   "presence": {
+    "android": "absent",
+    "ios": "seen",
+    "web": "seen"
+   },
+   "route": "/account/wishlist",
+   "similarity": {
+    "badge": "missing",
+    "label": "Not on every platform",
+    "pairs": [
+     {
+      "a": "ios",
+      "b": "web",
+      "badge": "same",
+      "reasons": [],
+      "score": 1.0
+     }
+    ],
+    "reasons": [
+     "Not in the Android code",
+     "Looks and reads the same on iOS and Web"
+    ],
+    "score": 1.0
+   },
+   "states": [
+    {
+     "at": "2026-10-24T10:00:45.000Z",
+     "frame_url": "/api/artifacts/qa-runs/df63a932-2ddb-41b0-a40d-ea8304b7b8f4/frames/0015.png",
+     "label": "Loaded",
+     "platforms": [
+      "ios",
+      "web"
+     ],
+     "state": "loaded"
+    }
+   ],
+   "to": [],
+   "variants": {
+    "ios": {
+     "build": "1.5.0",
+     "device": {
+      "h": 422,
+      "kind": "phone",
+      "landscape": false,
+      "w": 195
+     },
+     "frame_url": "/api/artifacts/qa-runs/a58fc22a-1809-4d49-83db-a019e80e7c4b/frames/0014.png",
+     "last_seen_at": "2026-10-24T10:00:42.000Z",
+     "looks": 1,
+     "node": "screen:wishlist",
+     "platform": "ios",
+     "route": null,
+     "run_id": "a58fc22a-1809-4d49-83db-a019e80e7c4b",
+     "seen": true
+    },
+    "web": {
+     "build": "1.5.0",
+     "device": {
+      "h": 400,
+      "kind": "browser",
+      "landscape": true,
+      "w": 640
+     },
+     "frame_url": "/api/artifacts/qa-runs/df63a932-2ddb-41b0-a40d-ea8304b7b8f4/frames/0015.png",
+     "last_seen_at": "2026-10-24T10:00:45.000Z",
+     "looks": 1,
+     "node": "screen:/account/wishlist",
+     "platform": "web",
+     "route": "/account/wishlist",
+     "run_id": "df63a932-2ddb-41b0-a40d-ea8304b7b8f4",
+     "seen": true
+    }
+   }
+  },
+  {
+   "area": "support",
+   "blocked_reason": null,
+   "change": null,
+   "code_only": true,
+   "code_texts": [
+    "Help",
+    "Delivery and returns",
+    "Contact us"
+   ],
+   "flows": [],
+   "from": [],
+   "id": "screen:help",
+   "last_build": null,
+   "last_seen_at": null,
+   "name": "Help",
+   "never_seen": true,
+   "nodes": [
+    "screen:/help",
+    "screen:help"
+   ],
+   "platforms": [
+    "ios",
+    "android",
+    "web"
+   ],
+   "presence": {
+    "android": "unseen",
+    "ios": "unseen",
+    "web": "unseen"
+   },
+   "route": "/help",
+   "similarity": {
+    "badge": "unchecked",
+    "label": "Not compared yet",
+    "pairs": [
+     {
+      "a": "ios",
+      "b": "android",
+      "badge": "unchecked",
+      "reasons": [],
+      "score": null
+     },
+     {
+      "a": "ios",
+      "b": "web",
+      "badge": "unchecked",
+      "reasons": [],
+      "score": null
+     },
+     {
+      "a": "android",
+      "b": "web",
+      "badge": "unchecked",
+      "reasons": [],
+      "score": null
+     }
+    ],
+    "reasons": [
+     "Not seen live yet, so there is nothing to compare"
+    ],
+    "score": null
+   },
+   "states": [],
+   "to": [],
+   "variants": {
+    "android": {
+     "build": null,
+     "device": {
+      "h": null,
+      "kind": "phone",
+      "landscape": false,
+      "w": null
+     },
+     "frame_url": null,
+     "last_seen_at": null,
+     "looks": 0,
+     "node": "screen:help",
+     "platform": "android",
+     "route": null,
+     "run_id": null,
+     "seen": false
+    },
+    "ios": {
+     "build": null,
+     "device": {
+      "h": null,
+      "kind": "phone",
+      "landscape": false,
+      "w": null
+     },
+     "frame_url": null,
+     "last_seen_at": null,
+     "looks": 0,
+     "node": "screen:help",
+     "platform": "ios",
+     "route": null,
+     "run_id": null,
+     "seen": false
+    },
+    "web": {
+     "build": null,
+     "device": {
+      "h": null,
+      "kind": "browser",
+      "landscape": false,
+      "w": null
+     },
+     "frame_url": null,
+     "last_seen_at": null,
+     "looks": 0,
+     "node": "screen:/help",
+     "platform": "web",
+     "route": "/help",
+     "run_id": null,
+     "seen": false
+    }
+   }
+  },
+  {
+   "area": "support",
+   "blocked_reason": null,
+   "change": null,
+   "code_only": true,
+   "code_texts": [
+    "Settings",
+    "Notifications",
+    "Currency",
+    "USD",
+    "Privacy"
+   ],
+   "flows": [],
+   "from": [],
+   "id": "screen:settings",
+   "last_build": null,
+   "last_seen_at": null,
+   "name": "Settings",
+   "never_seen": true,
+   "nodes": [
+    "screen:settings"
+   ],
+   "platforms": [
+    "ios",
+    "android"
+   ],
+   "presence": {
+    "android": "unseen",
+    "ios": "unseen",
+    "web": "absent"
+   },
+   "route": null,
+   "similarity": {
+    "badge": "missing",
+    "label": "Not on every platform",
+    "pairs": [
+     {
+      "a": "ios",
+      "b": "android",
+      "badge": "unchecked",
+      "reasons": [],
+      "score": null
+     }
+    ],
+    "reasons": [
+     "Not in the Web code",
+     "Not seen live yet, so there is nothing to compare"
+    ],
+    "score": null
+   },
+   "states": [],
+   "to": [],
+   "variants": {
+    "android": {
+     "build": null,
+     "device": {
+      "h": null,
+      "kind": "phone",
+      "landscape": false,
+      "w": null
+     },
+     "frame_url": null,
+     "last_seen_at": null,
+     "looks": 0,
+     "node": "screen:settings",
+     "platform": "android",
+     "route": null,
+     "run_id": null,
+     "seen": false
+    },
+    "ios": {
+     "build": null,
+     "device": {
+      "h": null,
+      "kind": "phone",
+      "landscape": false,
+      "w": null
+     },
+     "frame_url": null,
+     "last_seen_at": null,
+     "looks": 0,
+     "node": "screen:settings",
+     "platform": "ios",
+     "route": null,
+     "run_id": null,
+     "seen": false
+    }
+   }
+  }
+ ],
+ "since": {
+  "at": "2026-10-20T12:00:00.000Z",
+  "default": true,
+  "kind": "date",
+  "label": "the last 7 days",
+  "value": null
+ },
+ "slug": "juniper"
+}

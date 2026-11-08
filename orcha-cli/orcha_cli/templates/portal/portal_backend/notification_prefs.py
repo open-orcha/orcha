@@ -74,9 +74,9 @@ CATEGORIES = (
         "description": "Scheduled routines starting, failing or creating work.",
     },
     {
-        "key": "verdikt",
-        "label": "Verdikt / evidence results",
-        "description": "QA runs and evidence attached to finished work.",
+        "key": "qa",
+        "label": "Quality",
+        "description": "What QA found on work that was sent to it.",
     },
     {
         "key": "settings",
@@ -115,7 +115,6 @@ KIND_TO_CATEGORY = {
     "plan_approval": "approvals",          # push outbox: opening plan posted
     "task_plan": "approvals",              # desktop: plan waiting for approval
     "task_verified": "approvals",
-    "verdikt_autofix_stopped": "approvals",  # mig 068: auto-fix loop handed the task to a person
     "decision_made": "approvals",
     "agent_suggested": "approvals",
     "agent_suggestion_decided": "approvals",
@@ -159,10 +158,8 @@ KIND_TO_CATEGORY = {
     "routine_failed": "routines",
     "routine_run_requested": "routines",
     "routine_task_created": "routines",
-    # verdikt / evidence
-    "verdikt_triggered": "verdikt",
-    "verdikt_run": "verdikt",
-    "verdikt_cancelled": "verdikt",
+    # QA results
+    "qa_result": "qa",
     # membership & settings
     "member_invited": "settings",
     "member_removed": "settings",
@@ -170,15 +167,13 @@ KIND_TO_CATEGORY = {
     "member_grants_changed": "settings",
     "member_demoted_to_viewer": "settings",
     "github_identity_bound": "settings",
-    "verdikt_settings_changed": "settings",
 }
 
 # Unknown kinds: first matching prefix wins, else FALLBACK_CATEGORY.
 _PREFIX_FALLBACK = (
     ("budget", "budget"),
     ("routine", "routines"),
-    ("verdikt", "verdikt"),
-    ("evidence", "verdikt"),
+    ("qa_", "qa"),
     ("member", "settings"),
     ("settings", "settings"),
     ("escalat", "escalations"),
@@ -236,7 +231,7 @@ BUILTIN_RULES = {
     "tasks": _rule("mine", "in_app", "desktop"),
     "messages": _rule("mine", "in_app", "desktop"),
     "routines": _rule("all", "in_app"),
-    "verdikt": _rule("all", "in_app", "desktop"),
+    "qa": _rule("mine", "in_app", "desktop"),
     "settings": _rule("all", "in_app"),
 }
 
@@ -259,7 +254,7 @@ PRESETS = (
             "tasks": _rule("mine", "in_app"),
             "messages": _rule("mine", "in_app"),
             "routines": _rule("off", "in_app"),
-            "verdikt": _rule("off", "in_app"),
+            "qa": _rule("mine", "in_app"),
             "settings": _rule("off", "in_app"),
         },
     },
@@ -404,7 +399,8 @@ def _merge_rule(base: dict, over: Optional[dict]) -> dict:
 
 
 def _safe_rules(raw) -> dict:
-    """Tolerant read of a stored rules map: drop anything no longer valid."""
+    """Tolerant read of a stored rules map: drop anything no longer valid (a category this
+    release no longer has, such as one a removed feature owned, is ignored)."""
     out = {}
     if not isinstance(raw, dict):
         return out

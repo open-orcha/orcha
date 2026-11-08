@@ -174,8 +174,7 @@ it("Run again creates a distinct draft, navigates to it, and leaves Start explic
   vi.stubGlobal("fetch", fetch);
   renderPage("/workflows/release?cid=project");
   await screen.findByRole("heading", { name: "Mobile release", level: 1 });
-  fireEvent.click(screen.getByRole("button", { name: "More workflow actions" }));
-  fireEvent.click(screen.getByRole("menuitem", { name: "Run again…" }));
+  fireEvent.click(screen.getByRole("button", { name: "Run again…" }));
   expect(writes).toEqual([]);
   expect(screen.getByText(/can change its setup before choosing Start/)).toBeVisible();
   fireEvent.click(screen.getByRole("button", { name: "Create editable draft" }));

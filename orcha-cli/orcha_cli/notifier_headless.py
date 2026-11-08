@@ -16,6 +16,18 @@ from . import sandbox as _sandbox
 _CODEX_HOOK_TRUST_BYPASS: dict = {}
 
 
+def _qa_tool_flags(cwd, codex: bool) -> list:
+    """The QA tool server for a project with QA on (orcha_cli/qa/launch.py); [] otherwise."""
+    try:
+        from .qa import launch as qa_launch
+
+        sandboxed = _sandbox.SandboxConfig.load(cwd).enabled
+        build = qa_launch.codex_flags if codex else qa_launch.claude_flags
+        return build(cwd, sandboxed=sandboxed)
+    except Exception:
+        return []
+
+
 def codex_supports_hook_trust_bypass(executable, services) -> bool:
     """Probe (once per executable) whether `codex exec` accepts the hook-trust bypass."""
     key = str(executable)
@@ -95,6 +107,7 @@ def spawn_headless(
         if last_message_path:
             argv += ["--output-last-message", str(last_message_path)]
         argv.extend(extra)
+        argv.extend(_qa_tool_flags(cwd, codex=True))
         argv.append(
             prompt
             if resume_session_id
@@ -123,6 +136,7 @@ def spawn_headless(
         ):
             argv.append("--dangerously-skip-permissions")
         argv.extend(extra)
+        argv.extend(_qa_tool_flags(cwd, codex=False))
 
     persona_note = (
         " --append-system-prompt <persona+digest>"

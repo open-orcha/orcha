@@ -1,0 +1,97 @@
+/* "Orcha at work": the motion every job page shares. Calm, compositor-only
+   (transform and opacity), no layout shift; everything stops under reduced motion. */
+
+.fill {
+  transform-origin: 0 50%;
+  transition: transform 600ms var(--ease-swift);
+}
+
+/* The current phase: its dot breathes, its segment carries a slow light. */
+.breathe {
+  animation: work-breathe 2.4s ease-in-out infinite;
+}
+@keyframes work-breathe {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-primary) 35%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 5px color-mix(in srgb, var(--color-primary) 0%, transparent);
+  }
+}
+.glide {
+  position: absolute;
+  inset: 0;
+  width: 40%;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--color-panel) 70%, transparent), transparent);
+  animation: work-glide 2.2s var(--ease-swift) infinite;
+}
+@keyframes work-glide {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(260%);
+  }
+}
+
+/* The status dot of a running job. */
+.pulse {
+  animation: work-pulse 1.8s ease-in-out infinite;
+}
+@keyframes work-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+/* A new line in the activity log, or a new row in what is produced: it rises in. */
+.land {
+  animation: work-land 420ms var(--ease-rise) both;
+}
+@keyframes work-land {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+
+/* The file Orcha is reading right now: a soft sweep across its row. */
+.reading {
+  position: relative;
+  overflow: hidden;
+}
+.reading::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  width: 30%;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--color-fg) 14%, transparent), transparent);
+  animation: work-glide 2.6s var(--ease-swift) infinite;
+}
+
+/* The done view's tiles and outputs cascade in once. */
+.cascade {
+  animation: work-land 460ms var(--ease-rise) both;
+  animation-delay: calc(var(--i, 0) * 60ms);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fill {
+    transition: none;
+  }
+  .breathe,
+  .pulse,
+  .land,
+  .cascade {
+    animation: none;
+  }
+  .glide,
+  .reading::after {
+    display: none;
+  }
+}

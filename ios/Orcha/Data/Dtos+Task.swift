@@ -1,10 +1,9 @@
 import Foundation
 
 /* =============================================================================
-   Task slice DTOs — evidence pack (proof of work), Verdikt runs, goal ancestry,
+   Task slice DTOs — evidence pack (proof of work), goal ancestry,
    routines ("Make recurring…"), reassign and the AI manager pre-review.
-   Shapes mirror the portal backend (evidence_routes.py, verdikt_integration.run_public,
-   goal_ancestry_routes.py, routine_routes.py, task_assignment_routes.py) and the web
+   Shapes mirror the portal backend (evidence_routes.py, goal_ancestry_routes.py, routine_routes.py, task_assignment_routes.py) and the web
    `evidenceTypes.ts`. Every field is optional/defaulted: an older server that lacks a
    key must still decode.
    ============================================================================= */
@@ -24,11 +23,10 @@ struct EvidencePackDto: Decodable, Equatable {
     var prUrls: [String] = []
     var links: [EvidenceLinkDto] = []
     var dod: EvidenceDodDto?
-    var verdikt: VerdiktRunDto?
     var summary: EvidenceSummaryDto?
 
     enum CodingKeys: String, CodingKey {
-        case runs, tests, changes, flags, branch, links, dod, verdikt, summary
+        case runs, tests, changes, flags, branch, links, dod, summary
         case taskId = "task_id"
         case builtAt = "built_at"
         case roundStartedAt = "round_started_at"
@@ -48,7 +46,6 @@ struct EvidencePackDto: Decodable, Equatable {
         prUrls = (try? c.decodeIfPresent([String].self, forKey: .prUrls)) ?? []
         links = (try? c.decodeIfPresent([EvidenceLinkDto].self, forKey: .links)) ?? []
         dod = try? c.decodeIfPresent(EvidenceDodDto.self, forKey: .dod)
-        verdikt = try? c.decodeIfPresent(VerdiktRunDto.self, forKey: .verdikt)
         summary = try? c.decodeIfPresent(EvidenceSummaryDto.self, forKey: .summary)
     }
 }
@@ -229,21 +226,16 @@ struct EvidenceSummaryDto: Decodable, Equatable {
     var dod: EvidenceDodCounts?
     var tests: EvidenceTestsDto?
     var riskFlags: Int = 0
-    var verdikt: VerdiktBriefDto?
-    var autofix: AutofixSummaryDto?
 
     enum CodingKeys: String, CodingKey {
-        case dod, tests, verdikt, autofix
+        case dod, tests
         case riskFlags = "risk_flags"
     }
 
-    init(dod: EvidenceDodCounts? = nil, tests: EvidenceTestsDto? = nil, riskFlags: Int = 0,
-         verdikt: VerdiktBriefDto? = nil, autofix: AutofixSummaryDto? = nil) {
+    init(dod: EvidenceDodCounts? = nil, tests: EvidenceTestsDto? = nil, riskFlags: Int = 0) {
         self.dod = dod
         self.tests = tests
         self.riskFlags = riskFlags
-        self.verdikt = verdikt
-        self.autofix = autofix
     }
 
     init(from decoder: Decoder) throws {
@@ -251,8 +243,6 @@ struct EvidenceSummaryDto: Decodable, Equatable {
         dod = try? c.decodeIfPresent(EvidenceDodCounts.self, forKey: .dod)
         tests = try? c.decodeIfPresent(EvidenceTestsDto.self, forKey: .tests)
         riskFlags = (try? c.decodeIfPresent(Int.self, forKey: .riskFlags)) ?? 0
-        verdikt = try? c.decodeIfPresent(VerdiktBriefDto.self, forKey: .verdikt)
-        autofix = try? c.decodeIfPresent(AutofixSummaryDto.self, forKey: .autofix)
     }
 }
 
@@ -281,99 +271,6 @@ struct EvidenceDodCounts: Decodable, Equatable {
         proven = (try? c.decodeIfPresent(Int.self, forKey: .proven)) ?? 0
         notProven = (try? c.decodeIfPresent(Int.self, forKey: .notProven)) ?? 0
         needsHuman = (try? c.decodeIfPresent(Int.self, forKey: .needsHuman)) ?? 0
-    }
-}
-
-struct VerdiktBriefDto: Decodable, Equatable {
-    var status: String
-    var verdict: String?
-}
-
-/// The Verdikt auto-fix loop's compact state (mig 068).
-struct AutofixSummaryDto: Decodable, Equatable {
-    var status: String
-    var attemptsMade: Int = 0
-    var maxAttempts: Int = 0
-    var currentAttempt: Int = 0
-    var stopKind: String?
-    var stopReason: String?
-
-    enum CodingKeys: String, CodingKey {
-        case status
-        case attemptsMade = "attempts_made"
-        case maxAttempts = "max_attempts"
-        case currentAttempt = "current_attempt"
-        case stopKind = "stop_kind"
-        case stopReason = "stop_reason"
-    }
-}
-
-// MARK: - Verdikt
-
-/// One Verdikt run (`verdikt_integration.run_public`).
-struct VerdiktRunDto: Decodable, Equatable, Identifiable {
-    let id: String
-    /// manual | auto
-    var trigger: String?
-    /// queued | running | completed | failed | cancelled | timeout | unavailable
-    var status: String
-    /// pass | fail | blocked | warning | unprocessable | running
-    var verdict: String?
-    var reason: String?
-    var targetKind: String?
-    var locator: String?
-    /// Portal-relative redirect to Verdikt's report.
-    var reportUrl: String?
-    var error: String?
-    var createdAt: String?
-    var finishedAt: String?
-    var verdiktRunId: String?
-
-    enum CodingKeys: String, CodingKey {
-        case id, trigger, status, verdict, reason, locator, error
-        case targetKind = "target_kind"
-        case reportUrl = "report_url"
-        case createdAt = "created_at"
-        case finishedAt = "finished_at"
-        case verdiktRunId = "verdikt_run_id"
-    }
-}
-
-/// `GET /api/tasks/{tid}/verdikt/runs`.
-struct VerdiktRunsResponse: Decodable {
-    var settings: VerdiktSettingsBrief?
-    var runs: [VerdiktRunDto] = []
-
-    enum CodingKeys: String, CodingKey { case settings, runs }
-
-    init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        settings = try? c.decodeIfPresent(VerdiktSettingsBrief.self, forKey: .settings)
-        runs = (try? c.decodeIfPresent([VerdiktRunDto].self, forKey: .runs)) ?? []
-    }
-}
-
-struct VerdiktSettingsBrief: Decodable, Equatable {
-    var configured: Bool = false
-    var enabled: Bool = false
-    var baseUrl: String?
-
-    enum CodingKeys: String, CodingKey {
-        case configured, enabled
-        case baseUrl = "base_url"
-    }
-
-    init(configured: Bool, enabled: Bool, baseUrl: String? = nil) {
-        self.configured = configured
-        self.enabled = enabled
-        self.baseUrl = baseUrl
-    }
-
-    init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        configured = (try? c.decodeIfPresent(Bool.self, forKey: .configured)) ?? false
-        enabled = (try? c.decodeIfPresent(Bool.self, forKey: .enabled)) ?? false
-        baseUrl = try? c.decodeIfPresent(String.self, forKey: .baseUrl)
     }
 }
 

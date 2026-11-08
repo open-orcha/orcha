@@ -44,8 +44,9 @@ that ship with it. End users don't read this repo; they install it once and run
   invites, roles).
 - **New since 2026-08-26:**
   - The Embodent name and a redesigned portal, with light mode.
-  - Verdikt proof of work, with an auto-fix loop: a failed check sends the
-    task back to the agent with the evidence.
+  - Proof of work on the verification gate: the tests that ran, the changes
+    and the definition of done checked line by line.
+  - Built-in QA for apps: the **QA** project tab and the `orcha-qa-*` skills.
   - Agent worktrees are always on. Bring an agent's changes into main, or
     update its worktree from main, with `orcha worktrees bring-in` /
     `update-from-main` (#288).
@@ -260,7 +261,7 @@ share the same container scope via that `.claude/orcha.json`.
 verification gate, container lifecycle, the agent-to-agent **info + task**
 request bus, server-sent-event push (`/wait` + SSE), the wake daemon
 (`orcha notifier`), per-agent continuity (`orcha rehydrate`/`snapshot`,
-`/orcha-snapshot`), Verdikt checks, agent worktrees, and the web, desktop and
+`/orcha-snapshot`), proof-of-work evidence, agent worktrees, and the web, desktop and
 mobile apps. Open work is tracked in
 [GitHub issues](https://github.com/open-orcha/orcha/issues).
 

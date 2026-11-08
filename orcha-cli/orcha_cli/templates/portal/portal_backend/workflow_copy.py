@@ -58,7 +58,7 @@ def completed_setup(svc, source, person):
             "description": t["description"] or "", "definition_of_done": t["definition_of_done"] or "",
             "priority": t["priority"], "assignee_id": kept[-1] if kept else None,
             "depends_on": deps[t["id"]], "outcomes": outcomes.get(t["id"], []),
-            "routes": routes.get(t["id"], []),
+            "routes": routes.get(t["id"], []), "qa": routing.qa_spec(t), "block": routing.block_of(t),
         })
         # Enabling autonomy is reserved to the project owner, including on a copy.
         if t["autonomy"] == "on":

@@ -164,7 +164,12 @@ export function Inspector({ title, meta, onClose, expandHref, onExpand, actions,
 }
 
 /* ---- Tabs ----------------------------------------------------------------- */
-export interface TabSpec { key: string; label: ReactNode; count?: number | null; disabled?: boolean; icon?: string; countTone?: "neutral" | "warn" }
+export interface TabSpec {
+  key: string; label: ReactNode; count?: number | null; disabled?: boolean; icon?: string; countTone?: "neutral" | "warn";
+  /** Anything after the label a plain count can't say (a live dot, a badge). Carries its own screen-reader text. */
+  badge?: ReactNode;
+  title?: string;
+}
 
 /**
  * Horizontal overflow for a tab strip: keeps the selected tab scrolled into
@@ -201,18 +206,24 @@ function TabInner({ t }: { t: TabSpec }) {
       {t.icon ? <Icon name={t.icon} cls="v2-ico" /> : null}
       <span className="v2-tab-label">{t.label}</span>
       {t.count != null ? <span className={"v2-count" + (t.countTone === "warn" ? " v2-tone-warn" : "")}>{t.count > 99 ? "99+" : t.count}</span> : null}
+      {t.badge ?? null}
     </>
   );
 }
 
-export function Tabs({ tabs, value, onChange, label, idPrefix, className }: {
+export function Tabs({ tabs, value, onChange, label, idPrefix, className, variant = "underline", panelId }: {
   tabs: TabSpec[]; value: string; onChange: (key: string) => void; label: string; idPrefix?: string; className?: string;
+  /** "segmented": the same tablist drawn as a segmented control, for a second level under underline tabs. */
+  variant?: "underline" | "segmented";
+  /** The one panel every tab drives, when they don't each have their own. */
+  panelId?: string;
 }) {
   const auto = useId();
   const pre = idPrefix ?? auto;
   const ref = useRef<HTMLDivElement | null>(null);
   useTabStripOverflow(ref, value);
   const enabled = tabs.filter((t) => !t.disabled);
+  const seg = variant === "segmented";
   const onKey = (e: ReactKeyboardEvent) => {
     const i = enabled.findIndex((t) => t.key === value);
     let j = -1;
@@ -230,7 +241,7 @@ export function Tabs({ tabs, value, onChange, label, idPrefix, className }: {
     });
   };
   return (
-    <div ref={ref} role="tablist" aria-label={label} className={"v2-tabs" + (className ? " " + className : "")} onKeyDown={onKey}>
+    <div ref={ref} role="tablist" aria-label={label} className={(seg ? "v2-seg" : "v2-tabs") + (className ? " " + className : "")} onKeyDown={onKey}>
       {tabs.map((t) => (
         <button
           key={t.key}
@@ -238,10 +249,12 @@ export function Tabs({ tabs, value, onChange, label, idPrefix, className }: {
           type="button"
           role="tab"
           aria-selected={t.key === value}
-          aria-controls={`${pre}-panel-${t.key}`}
+          aria-controls={panelId ?? `${pre}-panel-${t.key}`}
           tabIndex={t.key === value ? 0 : -1}
           disabled={t.disabled}
-          className={"v2-tab" + (t.key === value ? " is-selected" : "")}
+          title={t.title}
+          data-tab={t.key}
+          className={seg ? "v2-seg-item" : "v2-tab" + (t.key === value ? " is-selected" : "")}
           onClick={() => onChange(t.key)}
         >
           <TabInner t={t} />

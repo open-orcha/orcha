@@ -11,6 +11,7 @@ from portal_backend.application import app
 from portal_backend import database
 
 _run_migrations_getter = None
+_qa_sweeper_started = False
 
 
 def configure_compatibility(run_migrations_getter):
@@ -70,36 +71,29 @@ def start_local_index_warmer() -> None:
     threading.Thread(target=_loop, name="local-index-warmer", daemon=True).start()
 
 
-def start_verdikt_sweeper() -> None:
-    """Background check for in-flight Verdikt runs + the auto-fix loop (mig 068).
-
-    Results used to be polled only while someone viewed the task or a preview ran; this daemon
-    thread refreshes every in-flight run every ORCHA_VERDIKT_SWEEP_SECONDS (default 12; 0 turns
-    it off) and applies the auto-fix loop to finished ones, so a fail at 3am still sends the
-    task back. Idle cost: one indexed count per pass. Idempotent with the notifier's
-    POST /api/containers/{cid}/verdikt/sweep and any person's "Check now" (each finished run is
-    judged exactly once). Each pass swallows its own failures."""
+def start_qa_session_sweeper() -> None:
+    """End QA sessions nobody is running even when no page is open to read them. Daemon thread;
+    the sweep reads first and writes only when something ended, so a quiet portal never touches
+    the database's write lock, and each pass swallows its own failures."""
     import threading
 
-    try:
-        every = float(os.environ.get("ORCHA_VERDIKT_SWEEP_SECONDS", "12"))
-    except ValueError:
-        every = 12.0
-    if every <= 0:
-        return
+    global _qa_sweeper_started
+    if _qa_sweeper_started:
+        return  # a second startup in one process (the tests) needs no second sweeper
+    _qa_sweeper_started = True
 
     def _loop() -> None:
-        from portal_backend import verdikt_autofix
+        from portal_backend import qa_explorations
 
-        time.sleep(5)  # let migrations settle before the first pass
+        time.sleep(3)  # let migrations settle before the first pass
         while True:
             try:
-                verdikt_autofix.sweep(None)
-            except Exception:  # noqa: BLE001 — never let the thread die
-                pass
-            time.sleep(max(2.0, every))
+                qa_explorations.sweep_all()
+            except Exception as error:  # noqa: BLE001 - e.g. a schema that failed to migrate
+                print(f"[qa-sweep] {type(error).__name__}: {error}", flush=True)
+            time.sleep(qa_explorations.SWEEPER_SECONDS)
 
-    threading.Thread(target=_loop, name="verdikt-sweeper", daemon=True).start()
+    threading.Thread(target=_loop, name="qa-session-sweeper", daemon=True).start()
 
 
 def startup_migrate() -> None:

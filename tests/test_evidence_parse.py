@@ -227,24 +227,13 @@ def test_assess_dod_failing_and_missing_tests():
     assert none[0]["status"] == "not_proven" and "No test command" in none[0]["evidence"]
 
 
-def test_assess_dod_verdikt_verdicts_win():
-    v = {"by_item": {0: {"outcome": "pass", "run_short": "abcd1234"},
-                     1: {"outcome": "fail", "actual": "button is red", "run_short": "abcd1234"},
-                     2: {"outcome": "blocked", "run_short": "abcd1234"}}}
-    out = ep.assess_dod(["Login works", "Button is blue", "Dark mode works"], tests=_tests("none"),
-                        changes={}, changed_paths=[], verdikt=v)
-    assert [o["status"] for o in out] == ["proven", "not_proven", "needs_human"]
-    assert out[1]["evidence"] == "Verdikt run abcd1234: fail — button is red"
-
-
 def test_summary_line():
     dod = {"total": 4, "proven": 3}
     assert ep.summary_line(dod, {"status": "passed", "passed": 42}, [{"kind": "auth"}]) == \
         "3/4 DoD items evidenced · 42 tests passed · 1 risk flag"
     assert ep.summary_line({"total": 0}, {"status": "none"}, []) == "no tests ran"
-    assert ep.summary_line(dod, {"status": "failed", "failed": 2, "errors": 1}, [], {"status": "completed", "verdict": "fail"}) == \
-        "3/4 DoD items evidenced · 3 tests failing · Verdikt fail"
-    assert "Verdikt unavailable" in ep.summary_line(dod, {"status": "none"}, [], {"status": "unavailable"})
+    assert ep.summary_line(dod, {"status": "failed", "failed": 2, "errors": 1}, []) == \
+        "3/4 DoD items evidenced · 3 tests failing"
 
 
 def test_claims_are_attributed_one_to_one():

@@ -6,7 +6,7 @@ from decimal import Decimal
 
 from fastapi import HTTPException, Query, Request
 
-from portal_backend import sql
+from portal_backend import qa_run_tasks, sql
 from portal_backend.application import app
 from portal_backend.database import db_cursor
 from portal_backend.guards import require_container, valid_uuid
@@ -186,6 +186,7 @@ def container_metrics(
             (cid, since),
         )
         tasks_verified = int(cur.fetchone()["n"])
+        qa = qa_run_tasks.metrics(cur, cid, since)
         cur.execute("SELECT now() AS db_now")
         db_now = cur.fetchone()["db_now"]
 
@@ -263,4 +264,5 @@ def container_metrics(
         "totals": totals,
         "per_agent": per_agent,
         "daily": [daily[d] for d in day_keys],
+        "qa": qa,
     }

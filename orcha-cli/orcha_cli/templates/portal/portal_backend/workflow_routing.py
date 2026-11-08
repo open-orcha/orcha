@@ -39,8 +39,60 @@ def findings_of(value):
 def wants_flow(draft):
     return bool(
         draft.get("repeat_groups")
-        or any(t.get("outcomes") or t.get("routes") for t in draft.get("tasks", []))
+        or any(
+            t.get("outcomes") or t.get("routes") or t.get("qa")
+            for t in draft.get("tasks", [])
+        )
     )
+
+
+# A QA step's default outcomes: the rollup reports one of them (qa_handoff.outcome_for).
+QA_OUTCOMES = ({"name": "pass", "kind": "success"}, {"name": "fail", "kind": "failure"})
+QA_FAIL_KINDS = ("failure", "changes")
+TRIAGE_OUTCOMES = (
+    {"name": "fix", "kind": "changes"},
+    {"name": "clear", "kind": "success"},
+    {"name": "needs_person", "kind": "custom"},
+)
+
+
+def qa_flow(spec, groups):
+    """A QA step's outcomes and routes, filling what the draft left out. As a repeat group's
+    review step a success leaves the group and anything else goes back to the group's first
+    step; otherwise a success goes on and anything else asks the owner."""
+    triage = spec["qa"]["kind"] == "triage"
+    declared = spec.get("outcomes") or [dict(o) for o in (TRIAGE_OUTCOMES if triage else QA_OUTCOMES)]
+    kinds = {o.get("kind", "custom") for o in declared}
+    if "success" not in kinds or not kinds & set(QA_FAIL_KINDS):
+        conflict(
+            "qa_outcomes",
+            "A QA step needs one outcome that means it passed and one that means it failed.",
+            status=422,
+            task_id=spec["client_key"],
+        )
+    if spec.get("routes"):
+        return declared, spec["routes"]
+    group = next((g for g in groups if g["review_task"] == spec["client_key"]), None)
+    routes = []
+    for o in declared:
+        passed = o.get("kind") == "success"
+        if triage and o["name"] == "needs_person":
+            routes.append({"outcome": o["name"], "destination": "ask_owner"})
+        elif group and passed:
+            routes.append({"outcome": o["name"], "destination": "exit_group"})
+        elif group:
+            routes.append(
+                {
+                    "outcome": o["name"],
+                    "destination": "return",
+                    "destination_task": group["member_tasks"][0],
+                }
+            )
+        else:
+            routes.append(
+                {"outcome": o["name"], "destination": "next" if passed else "ask_owner"}
+            )
+    return declared, routes
 
 
 def semantics_for(draft):
@@ -74,6 +126,9 @@ def draft_flow(specs, groups, key_map=None):
 
     outcomes, routes = {}, {}
     for spec in specs:
+        if spec.get("qa"):
+            declared, rules = qa_flow(spec, groups)
+            spec = {**spec, "outcomes": declared, "routes": rules}
         tid = m.get(spec["client_key"], spec["client_key"])
         if spec.get("outcomes"):
             outcomes[tid] = [
@@ -100,6 +155,31 @@ def draft_flow(specs, groups, key_map=None):
         for g in groups
     ]
     return outcomes, routes, mapped
+
+
+def qa_spec(task):
+    """A task's stored QA step, or None."""
+    value = task.get("qa_step")
+    value = json.loads(value) if isinstance(value, str) else value
+    return value or None
+
+
+def save_qa(cur, tid, spec):
+    cur.execute(
+        "UPDATE tasks SET qa_step=%s WHERE id=%s",
+        (json.dumps(spec, sort_keys=True) if spec else None, tid),
+    )
+
+
+def block_of(task):
+    """The Quality block a step came from, `{key, name}`, or None."""
+    value = task.get("qa_block")
+    value = json.loads(value) if isinstance(value, str) else value
+    return value or None
+
+
+def save_block(cur, tid, block):
+    cur.execute("UPDATE tasks SET qa_block=%s WHERE id=%s", (json.dumps(block, sort_keys=True), tid))
 
 
 def load_flow(svc, wid):
@@ -247,6 +327,7 @@ def definition_snapshot(snapshot, outcomes, routes, groups, assignees):
                 "work_revision": t["work_revision"],
                 "assignee_ids": sorted(assignees.get(str(tid), [])),
                 "depends_on": sorted(str(p) for p in snapshot["dependencies"].get(tid, [])),
+                **({"qa": qa_spec(t)} if t.get("qa_step") else {}),
             }
             for tid, t in snapshot["tasks"].items()
         ],
@@ -364,7 +445,8 @@ def resolve(snapshot, flow, tid, outcome):
     rule = next(r for r in routes[tid] if r["outcome"].casefold() == name.casefold())
     kind, target = rule["destination"], rule.get("destination_task")
     branches = {r["destination_task"] for r in routes.get(tid, []) if r["destination"] == "step"}
-    seed = branches - {target}
+    # A step further along the chosen branch stays selected, even when another outcome names it.
+    seed = branches - {target} - (descendants(target, deps) if target else set())
     if kind == "stop":
         seed |= descendants(tid, deps)
     unselected = {

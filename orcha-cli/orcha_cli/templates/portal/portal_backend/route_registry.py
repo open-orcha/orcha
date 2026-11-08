@@ -64,6 +64,19 @@ from portal_backend import (
     project_export_routes,  # portable project templates (mig 059)
     provider_key_routes,
     push_routes,
+    qa_onboarding_routes,  # Orcha QA: the devices the onboarding offers, a session's newest steps
+    qa_run_log_routes,  # Orcha QA: one run's timeline in plain words
+    qa_explorations_routes,  # Orcha QA: keep, repeat, severity, audit, App model (mig 095)
+    qa_drafting_routes,  # Orcha QA: drafting board and sources (mig 095)
+    qa_live_routes,  # Orcha QA: the live device view (latest frame in memory)
+    qa_map_routes,  # Orcha QA: screen timings, speed budgets, crawl queue, build start (mig 095)
+    qa_routes,  # Orcha QA: map, sessions, scenarios (mig 093)
+    qa_handoff_routes,  # Orcha QA: requests, settings, workflow presets (mig 096)
+    qa_run_tasks_routes,  # Orcha QA: run tasks, an agent's runs (mig 097)
+    qa_setup_routes,  # Orcha QA: are the tools on, turn them on
+    qa_scenario_parity_routes,  # scenario history, health, coverage growth (mig 095)
+    qa_runs_routes,  # Orcha QA: the run page (mig 095)
+    qa_report_routes,  # Orcha QA: a task's report, import someone else's (mig 100)
     request_acceptance_routes,
     request_close_routes,
     request_conversion_routes,
@@ -95,7 +108,6 @@ from portal_backend import (
     user_pref_routes,
     version_routes,  # GH #258 PR 9: GET /api/version
     voice_routes,  # dictation: streaming STT proxy + clean-up
-    verdikt_routes,  # Verdikt QA handoff (mig 058)
     managed_message_routes,
     managed_job_routes,
     job_monitor_routes,
@@ -170,6 +182,19 @@ ROUTE_MODULES = (
     project_export_routes,  # portable project templates (mig 059)
     provider_key_routes,
     push_routes,
+    qa_onboarding_routes,  # Orcha QA: the devices the onboarding offers, a session's newest steps
+    qa_run_log_routes,  # Orcha QA: one run's timeline in plain words
+    qa_explorations_routes,  # Orcha QA: keep, repeat, severity, audit, App model (mig 095)
+    qa_drafting_routes,  # Orcha QA: drafting board and sources (mig 095)
+    qa_live_routes,  # Orcha QA: the live device view (latest frame in memory)
+    qa_map_routes,  # Orcha QA: screen timings, speed budgets, crawl queue, build start (mig 095)
+    qa_routes,  # Orcha QA: map, sessions, scenarios (mig 093)
+    qa_handoff_routes,  # Orcha QA: requests, settings, workflow presets (mig 096)
+    qa_run_tasks_routes,  # Orcha QA: run tasks, an agent's runs (mig 097)
+    qa_setup_routes,  # Orcha QA: are the tools on, turn them on
+    qa_scenario_parity_routes,  # scenario history, health, coverage growth (mig 095)
+    qa_runs_routes,  # Orcha QA: the run page (mig 095)
+    qa_report_routes,  # Orcha QA: a task's report, import someone else's (mig 100)
     request_acceptance_routes,
     request_close_routes,
     request_conversion_routes,
@@ -199,7 +224,6 @@ ROUTE_MODULES = (
     templates_routes,  # project mode (Code | General) + industry templates
     terminal_config_routes,
     user_pref_routes,
-    verdikt_routes,  # Verdikt QA handoff (mig 058)
     version_routes,
     managed_message_routes,
     managed_job_routes,

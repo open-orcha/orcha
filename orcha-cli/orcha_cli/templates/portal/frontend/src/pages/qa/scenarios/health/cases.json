@@ -1,0 +1,31 @@
+{
+  "_comment": "Shared fixture for the suspicious-scenario rule (#188): src/orcha/scenarios/scenario_health.py and web/src/lib/scenarios/scenario-health.ts must agree on every case (tests/unit/worker/test_scenario_health.py, web/src/lib/scenarios/scenario-health.test.ts). `expect` is the list of reason codes, empty when the scenario looks like a real one.",
+  "suspicious": [
+    { "name": "Orcha 3c96e42c · Build the Questions board (website only, local branch)", "description": null, "criteria": ["The Questions board renders"], "expect": ["task_id", "work_order"] },
+    { "name": "Orcha 64cc305f · Questions board: fix QA issues and open a PR (do not merge)", "description": null, "criteria": [], "expect": ["task_id", "work_order"] },
+    { "name": "Questions board: fix QA issues and open a PR (do not merge)", "description": null, "criteria": ["Questions load"], "expect": ["work_order"] },
+    { "name": "JIRA-1423 checkout total", "description": null, "criteria": ["Total updates when a coupon is applied"], "expect": ["task_id"] },
+    { "name": "Task 7f3a9b2: refactor the header", "description": null, "criteria": [], "expect": ["task_id", "work_order"] },
+    { "name": "Refactor the settings screen", "description": null, "criteria": ["Settings still open"], "expect": ["work_order"] },
+    { "name": "Fix the login redirect", "description": null, "criteria": ["Signed-in user lands on Home"], "expect": ["work_order"] },
+    { "name": "Questions board", "description": "Implement the board on a local branch, then push and open a pull request.", "criteria": ["The board shows questions"], "expect": ["work_order"] },
+    { "name": "Questions board loads", "description": null, "criteria": ["Implement the QuestionsBoard component", "Write unit tests for the board", "Open a PR against main"], "expect": ["instructions"] },
+    { "name": "Questions board loads", "description": null, "criteria": ["Questions are listed newest first", "Run the tests and commit the code"], "expect": ["instructions"] },
+    { "name": "Sign in with email", "description": "A returning user signs in with email and password.", "criteria": ["The Home screen shows the user's name", "No error banner appears"], "expect": [] },
+    { "name": "Create an account", "description": null, "criteria": ["The welcome screen appears after sign up"], "expect": [] },
+    { "name": "Build a custom pizza", "description": "The user builds a pizza with three toppings.", "criteria": ["The cart shows the pizza with three toppings"], "expect": [] },
+    { "name": "Open the settings page", "description": null, "criteria": ["Open Settings from the profile menu", "The settings page lists Notifications"], "expect": [] },
+    { "name": "Merge two contacts", "description": "Merging duplicate contacts keeps both phone numbers.", "criteria": ["One contact remains with both numbers"], "expect": [] },
+    { "name": "Order #1042 shows in history", "description": null, "criteria": ["The order appears in the order history"], "expect": [] },
+    { "name": "Branch locator finds the nearest branch", "description": null, "criteria": ["The nearest branch is shown first"], "expect": [] },
+    { "name": "Add a card to the wallet", "description": null, "criteria": ["The new card shows in the wallet"], "expect": [] },
+    { "name": "Update profile photo", "description": null, "criteria": ["The new photo shows on the profile"], "expect": [] },
+    { "name": "Deep link 0x1f opens the product", "description": null, "criteria": ["The product page opens"], "expect": [] },
+    { "name": "Ship to a new address", "description": null, "criteria": ["The order confirmation shows the new address"], "expect": [] },
+    { "name": "Debug menu opens", "description": null, "criteria": ["Open the main menu", "The debug panel lists the build number"], "expect": [] },
+    { "name": "Redeem a promo code", "description": null, "criteria": ["Add a promo code at checkout", "The total drops by 10%"], "expect": [] },
+    { "name": "Create a class", "description": "A teacher creates a class and invites students.", "criteria": ["Create a class named Biology", "The class shows in the list"], "expect": [] },
+    { "name": "Polish language switch", "description": null, "criteria": ["The app shows Polish labels"], "expect": [] },
+    { "name": "Home featured API returns 500", "description": null, "criteria": ["The featured section shows an error state"], "expect": [] }
+  ]
+}

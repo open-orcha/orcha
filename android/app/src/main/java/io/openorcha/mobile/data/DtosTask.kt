@@ -1,9 +1,9 @@
 package io.openorcha.mobile.data
 
 /**
- * Task-detail parity DTOs (web portal PR #270): proof-of-work evidence pack, Verdikt runs,
+ * Task-detail parity DTOs (web portal PR #270): proof-of-work evidence pack,
  * goal ancestry, the AI manager pre-review, routines ("Make recurring…"), reassign and the
- * reviewer picker. Mirrors `portal_backend/evidence_routes.py`, `verdikt_integration.run_public`,
+ * reviewer picker. Mirrors `portal_backend/evidence_routes.py`,
  * `goal_ancestry*.py`, `routine_routes.py` and the web `evidenceTypes.ts` / `goalApi.ts` /
  * `routinesApi.ts`. Every field defaults so an older server (missing keys) still decodes.
  */
@@ -28,7 +28,6 @@ data class EvidencePackDto(
     val links: List<EvidenceLink> = emptyList(),
     val claim: EvidenceClaim? = null,
     val dod: EvidenceDod = EvidenceDod(),
-    val verdikt: VerdiktRunDto? = null,
     val summary: EvidenceSummaryDto = EvidenceSummaryDto(),
 )
 
@@ -149,80 +148,11 @@ data class EvidenceSummaryTests(
 )
 
 @Serializable
-data class EvidenceSummaryVerdikt(val status: String = "", val verdict: String? = null)
-
-@Serializable
-data class EvidenceAutofixSummary(
-    val status: String = "stopped",
-    @SerialName("attempts_made") val attemptsMade: Int = 0,
-    @SerialName("max_attempts") val maxAttempts: Int = 0,
-    @SerialName("current_attempt") val currentAttempt: Int = 0,
-    @SerialName("stop_kind") val stopKind: String? = null,
-    @SerialName("stop_label") val stopLabel: String? = null,
-    @SerialName("stop_reason") val stopReason: String? = null,
-)
-
-@Serializable
 data class EvidenceSummaryDto(
     val dod: EvidenceSummaryDod? = null,
     val tests: EvidenceSummaryTests? = null,
     @SerialName("risk_flags") val riskFlags: Int = 0,
-    val verdikt: EvidenceSummaryVerdikt? = null,
     val line: String = "",
-    val autofix: EvidenceAutofixSummary? = null,
-)
-
-/* ---------- Verdikt: GET/POST /api/tasks/{tid}/verdikt/runs ---------- */
-
-@Serializable
-data class VerdiktCriterionDto(
-    @SerialName("dod_index") val dodIndex: Int = 0,
-    val text: String = "",
-    val outcome: String? = null,
-    val expected: String? = null,
-    val actual: String? = null,
-)
-
-@Serializable
-data class VerdiktRunDto(
-    val id: String = "",
-    /** manual | auto */
-    val trigger: String = "manual",
-    /** queued | running | completed | failed | cancelled | timeout | unavailable */
-    val status: String = "",
-    /** pass | fail | blocked | warning | unprocessable | running | null */
-    val verdict: String? = null,
-    val reason: String? = null,
-    @SerialName("target_kind") val targetKind: String? = null,
-    val locator: String? = null,
-    val criteria: List<VerdiktCriterionDto> = emptyList(),
-    /** Portal-relative redirect to the Verdikt report. */
-    @SerialName("report_url") val reportUrl: String? = null,
-    val error: String? = null,
-    @SerialName("created_at") val createdAt: String? = null,
-    @SerialName("finished_at") val finishedAt: String? = null,
-    @SerialName("previous_round") val previousRound: Boolean = false,
-)
-
-@Serializable
-data class VerdiktSettingsDto(
-    val configured: Boolean = false,
-    val enabled: Boolean = false,
-    @SerialName("base_url") val baseUrl: String? = null,
-    @SerialName("target_kind") val targetKind: String = "web",
-    @SerialName("target_locator") val targetLocator: String? = null,
-)
-
-@Serializable
-data class VerdiktRunsResponse(
-    val settings: VerdiktSettingsDto? = null,
-    val runs: List<VerdiktRunDto> = emptyList(),
-)
-
-@Serializable
-data class VerdiktTriggerBody(
-    @SerialName("actor_agent_id") val actorAgentId: String,
-    val locator: String? = null,
 )
 
 /* ---------- goal ancestry: GET /api/tasks/{tid}/goal-chain ---------- */

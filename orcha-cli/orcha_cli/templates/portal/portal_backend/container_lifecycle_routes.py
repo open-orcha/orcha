@@ -515,7 +515,9 @@ def list_containers(
         wakes; NULL/stale ⇒ portal-only (CRUD works, nothing wakes).
     """
     login = proxy_login(request)
-    with db_cursor() as (_, cur):
+    # Every page and CLI status check reads this: a write transaction here held the one write lock
+    # against every worker, and was most of a busy portal's `database is locked`.
+    with db_cursor(readonly=True) as (_, cur):
         member_filter = ""
         params: tuple = ()
         if login:

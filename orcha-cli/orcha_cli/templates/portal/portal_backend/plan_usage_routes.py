@@ -138,7 +138,7 @@ def put_plan_usage(request: Request, body: PlanUsageSnapshotIn):
 @app.get("/api/plan-usage", response_model=PlanUsageList, tags=["plan-usage"])
 def get_plan_usage(request: Request):
     """Every desktop host's latest snapshot, newest first."""
-    with db_cursor() as (conn, cur):
+    with db_cursor(readonly=True) as (_, cur):
         _gate(cur, request, write=False)
         cur.execute(
             """SELECT host, payload, captured_at, updated_at FROM plan_usage_snapshots
@@ -151,7 +151,7 @@ def get_plan_usage(request: Request):
 @app.get("/api/plan-usage/summary", response_model=PlanUsageSummary, tags=["plan-usage"])
 def get_plan_usage_summary(request: Request):
     """The newest snapshot only, or {"snapshot": null} when no desktop has published."""
-    with db_cursor() as (conn, cur):
+    with db_cursor(readonly=True) as (_, cur):
         _gate(cur, request, write=False)
         cur.execute(
             """SELECT host, payload, captured_at, updated_at FROM plan_usage_snapshots
@@ -180,7 +180,7 @@ class PlanUsageDisplay(BaseModel):
 @app.get("/api/plan-usage/display", response_model=PlanUsageDisplay, tags=["plan-usage"])
 def get_plan_usage_display(request: Request):
     """Whether the plan-usage summary shows on this stack, and which providers (default off)."""
-    with db_cursor() as (conn, cur):
+    with db_cursor(readonly=True) as (_, cur):
         _gate(cur, request, write=False)
         cur.execute("SELECT show, providers, updated_at FROM plan_usage_display WHERE id=1")
         row = cur.fetchone()

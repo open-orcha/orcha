@@ -212,7 +212,7 @@ def list_container_running_runs(cid: str, request: Request):
     'running' row forever, blocking all future conversation claims for that agent."""
     if not valid_uuid(cid):
         raise HTTPException(400, "container_id is not a valid UUID")
-    with db_cursor() as (_, cur):
+    with db_cursor(readonly=True) as (_, cur):
         require_container(cur, cid)
         require_member_read(cur, request, cid)  # PS-08
         # Remote-runner Task 5: `sandbox_container_id` marks a row whose liveness is the
