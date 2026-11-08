@@ -66,7 +66,10 @@ def test_migration_042_exists_and_is_next_sequential():
     # 094 adds Orcha QA onboarding (qa_onboarding).
     # 095 adds what the QA screens show beyond 093 and 094 (docs/orcha-qa-ui-parity.md).
     # 096 adds the QA handoff: requests, settings and acceptance verdicts (docs/orcha-qa-plan.md).
-    assert numbers[-1] == 97, f"097 must be the latest migration, saw {numbers[-1]:03d}"
+    # 098 adds the device a Quality step runs on (qa_requests.device); 099 a task's own choice to go
+    # to Quality when it finishes (tasks.qa_on_done); 100 imported Quality reports (qa_reports);
+    # 101 run conditions on scenarios, findings, requests and sessions.
+    assert numbers[-1] == 101, f"101 must be the latest migration, saw {numbers[-1]:03d}"
 
 
 def test_agents_git_email_column_applied(db):
