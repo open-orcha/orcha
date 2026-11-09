@@ -22,7 +22,13 @@ struct ChatMarkdownView: View {
                 blockView(block)
             }
         }
-        .environment(\.openURL, OpenURLAction { url in
+        .environment(\.openURL, Self.linkRouting(onTapTask: onTapTask, onTapPortal: onTapPortal))
+    }
+
+    /// Where a tapped link goes: portal chips and task refs stay in the app; only http(s)
+    /// links open outside it (portal parity — javascript:, data: and custom schemes stay inert).
+    static func linkRouting(onTapTask: ((String) -> Void)?, onTapPortal: ((PortalLink) -> Void)?) -> OpenURLAction {
+        OpenURLAction { url in
             if let link = PortalLinks.link(fromURL: url) {
                 onTapPortal?(link)
                 return .handled
@@ -31,10 +37,23 @@ struct ChatMarkdownView: View {
                 onTapTask?(taskId)
                 return .handled
             }
-            // Portal parity: only http(s) links are followable — anything else
-            // (javascript:, data:, custom schemes) stays inert text.
             return ["http", "https"].contains(url.scheme?.lowercased() ?? "") ? .systemAction : .discarded
-        })
+        }
+    }
+
+    /// Inline markdown + task-ref links (and portal chips when `portalLinks`), with every link
+    /// run made visually distinct (accent + underline) whatever the ambient foreground.
+    static func styledInline(_ text: String, tasks: [TaskDto], portalLinks: Bool, portalBase: String?,
+                             accent: Color) -> AttributedString {
+        var attr = portalLinks
+            ? ChatMarkdown.inline(text, tasks: tasks, portalBase: portalBase)
+            : ChatMarkdown.inline(text, tasks: tasks)
+        let linkRanges = attr.runs.filter { $0.link != nil }.map(\.range)
+        for range in linkRanges {
+            attr[range].underlineStyle = .single
+            attr[range].foregroundColor = accent
+        }
+        return attr
     }
 
     @ViewBuilder
@@ -81,17 +100,25 @@ struct ChatMarkdownView: View {
         }
     }
 
-    /// Inline markdown + task-ref links, with every link run made visually
-    /// distinct (accent + underline) whatever the ambient foreground.
     private func styledInline(_ text: String) -> AttributedString {
-        var attr = onTapPortal == nil
-            ? ChatMarkdown.inline(text, tasks: tasks)
-            : ChatMarkdown.inline(text, tasks: tasks, portalBase: portalBase)
-        let linkRanges = attr.runs.filter { $0.link != nil }.map(\.range)
-        for range in linkRanges {
-            attr[range].underlineStyle = .single
-            attr[range].foregroundColor = p.accent
-        }
-        return attr
+        Self.styledInline(text, tasks: tasks, portalLinks: onTapPortal != nil, portalBase: portalBase, accent: p.accent)
+    }
+}
+
+/// GH #378: one run of inline markdown with the thread's links and routing (task refs open the
+/// task, portal chips route in the app, only http(s) leaves it) — for text that must honour
+/// `.lineLimit`, such as a collapsible comment.
+struct ChatInlineText: View {
+    @Environment(\.palette) private var p
+    let text: String
+    var tasks: [TaskDto] = []
+    var onTapTask: ((String) -> Void)?
+    var portalBase: String? = nil
+    var onTapPortal: ((PortalLink) -> Void)? = nil
+
+    var body: some View {
+        Text(ChatMarkdownView.styledInline(text, tasks: tasks, portalLinks: onTapPortal != nil,
+                                           portalBase: portalBase, accent: p.accent))
+            .environment(\.openURL, ChatMarkdownView.linkRouting(onTapTask: onTapTask, onTapPortal: onTapPortal))
     }
 }

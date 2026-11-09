@@ -108,6 +108,7 @@ import io.openorcha.mobile.ui.components.LStatusGlyph
 import io.openorcha.mobile.ui.components.LTag
 import io.openorcha.mobile.ui.components.LType
 import io.openorcha.mobile.ui.components.MarkdownText
+import io.openorcha.mobile.ui.components.linkedInlineMarkdown
 import io.openorcha.mobile.ui.components.lPrimaryFill
 import io.openorcha.mobile.ui.components.lPrimaryText
 import io.openorcha.mobile.ui.components.ltype
@@ -121,7 +122,7 @@ import io.openorcha.mobile.ui.theme.Orcha
    dependencies, Activity / Runs panes, and a bottom comment composer.
    ============================================================================= */
 
-private enum class DetailPane { Activity, Runs }
+internal enum class DetailPane { Activity, Runs }
 
 @Composable
 fun TaskDetailScreen(
@@ -356,6 +357,8 @@ fun TaskDetailScreen(
                 item(key = "verify") {
                     VerificationCard(
                         task = task,
+                        tasks = state.snapshot?.tasks.orEmpty(),
+                        onOpenTask = onOpenTask,
                         busy = state.actionInFlight,
                         onReview = { verifyRejecting = false; showVerify = true },
                         onReject = { verifyRejecting = true; showVerify = true },
@@ -418,22 +421,18 @@ fun TaskDetailScreen(
                 }
             }
             item(key = "panes") {
-                Column(verticalArrangement = Arrangement.spacedBy(LSpace.m)) {
-                    LSegmented(
-                        options = listOf(
-                            DetailPane.Activity to "Activity ${activityEntries(task, state.taskMessages).size}",
-                            DetailPane.Runs to "Runs ${state.taskRuns.size}",
-                        ),
-                        selection = pane,
-                        onSelect = { paneName = it.name },
-                    )
-                    AnimatedContent(pane, transitionSpec = { fadeIn() togetherWith fadeOut() }, label = "pane") { current ->
-                        when (current) {
-                            DetailPane.Activity -> ActivityTimeline(task, state.taskMessages, agents, onOpenThread)
-                            DetailPane.Runs -> RunsTimeline(state.taskRuns, onOpenRun)
-                        }
-                    }
-                }
+                TaskDetailPanes(
+                    task = task,
+                    messages = state.taskMessages,
+                    runs = state.taskRuns,
+                    agents = agents,
+                    tasks = state.snapshot?.tasks.orEmpty(),
+                    pane = pane,
+                    onSelectPane = { paneName = it.name },
+                    onOpenThread = onOpenThread,
+                    onOpenTask = onOpenTask,
+                    onOpenRun = onOpenRun,
+                )
             }
             state.error?.let { item(key = "error") { Banner(BannerKind.Danger, it) } }
         }
@@ -619,6 +618,8 @@ private fun TaskMetaRow(task: TaskDto, agents: List<AgentDto>) {
 @Composable
 private fun VerificationCard(
     task: TaskDto,
+    tasks: List<TaskDto>,
+    onOpenTask: (String) -> Unit,
     busy: Boolean,
     onReview: () -> Unit,
     onReject: () -> Unit,
@@ -638,7 +639,7 @@ private fun VerificationCard(
                 Column(Modifier.commentRevealTarget(reveal), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text("Result", style = ltype(LType.Micro), color = p.faint)
                     var resultExpanded by rememberSaveable(task.id) { mutableStateOf(false) }
-                    ExpandableCommentText(inlineMarkdown(result), expanded = resultExpanded, onExpandedChange = { resultExpanded = it }, reveal = reveal)
+                    ExpandableCommentText(linkedInlineMarkdown(result, tasks, onOpenTask), expanded = resultExpanded, onExpandedChange = { resultExpanded = it }, reveal = reveal)
                 }
             }
             proof()
@@ -865,12 +866,61 @@ private fun activityEntries(task: TaskDto, messages: List<TaskMessageDto>): List
     }
 }.sortedBy { it.sortKey }
 
+/**
+ * The Activity / Runs switch. GH #378: which comments are open (by id) is kept here, above the switch,
+ * so a trip to Runs and back keeps them open for as long as the task page lives (and across rotation).
+ */
 @Composable
-private fun ActivityTimeline(task: TaskDto, messages: List<TaskMessageDto>, agents: List<AgentDto>, onOpenThread: () -> Unit) {
+internal fun TaskDetailPanes(
+    task: TaskDto,
+    messages: List<TaskMessageDto>,
+    runs: List<RunDto>,
+    agents: List<AgentDto>,
+    tasks: List<TaskDto>,
+    pane: DetailPane,
+    onSelectPane: (DetailPane) -> Unit,
+    onOpenThread: () -> Unit,
+    onOpenTask: (String) -> Unit,
+    onOpenRun: (RunDto) -> Unit,
+) {
+    var expandedIds by rememberSaveable(task.id) { mutableStateOf(emptyList<String>()) }
+    Column(verticalArrangement = Arrangement.spacedBy(LSpace.m)) {
+        LSegmented(
+            options = listOf(
+                DetailPane.Activity to "Activity ${activityEntries(task, messages).size}",
+                DetailPane.Runs to "Runs ${runs.size}",
+            ),
+            selection = pane,
+            onSelect = onSelectPane,
+        )
+        AnimatedContent(pane, transitionSpec = { fadeIn() togetherWith fadeOut() }, label = "pane") { current ->
+            when (current) {
+                DetailPane.Activity -> ActivityTimeline(
+                    task, messages, agents, tasks,
+                    expandedIds = expandedIds,
+                    onToggle = { id -> expandedIds = CommentExpansion.toggled(expandedIds.toSet(), id).toList() },
+                    onOpenThread = onOpenThread,
+                    onOpenTask = onOpenTask,
+                )
+                DetailPane.Runs -> RunsTimeline(runs, onOpenRun)
+            }
+        }
+    }
+}
+
+@Composable
+private fun ActivityTimeline(
+    task: TaskDto,
+    messages: List<TaskMessageDto>,
+    agents: List<AgentDto>,
+    tasks: List<TaskDto>,
+    expandedIds: List<String>,
+    onToggle: (String) -> Unit,
+    onOpenThread: () -> Unit,
+    onOpenTask: (String) -> Unit,
+) {
     val p = Orcha.palette
     val entries = remember(task, messages) { activityEntries(task, messages) }
-    // GH #378: which comments are open, by id, for as long as this task page lives (survives rotation).
-    var expandedIds by rememberSaveable(task.id) { mutableStateOf(emptyList<String>()) }
     Column {
         if (messages.isNotEmpty()) {
             Text(
@@ -897,9 +947,9 @@ private fun ActivityTimeline(task: TaskDto, messages: List<TaskMessageDto>, agen
                     }
                     if (e.isMessage) {
                         ExpandableCommentText(
-                            inlineMarkdown(e.text),
+                            linkedInlineMarkdown(e.text, tasks, onOpenTask),
                             expanded = e.id in expandedIds,
-                            onExpandedChange = { expandedIds = CommentExpansion.toggled(expandedIds.toSet(), e.id).toList() },
+                            onExpandedChange = { onToggle(e.id) },
                             reveal = reveal,
                         )
                     }

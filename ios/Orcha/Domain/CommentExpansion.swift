@@ -28,6 +28,9 @@ enum CommentExpansion {
     /// The scroll anchor for an Activity row.
     static func rowAnchor(_ id: String) -> String { "activity-\(id)" }
 
+    /// Scroll anchor for the verification card's Result.
+    static let resultAnchor = "verification-result"
+
     static func controlLabel(expanded: Bool) -> String { expanded ? "Show less" : "Show more" }
 
     /// What VoiceOver reads as the control's value.

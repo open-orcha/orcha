@@ -28,6 +28,9 @@ struct TaskDetailScreen: View {
     @State private var recurringSheetTask: TaskDto?
     @State private var acceptTick = 0
     @State private var linkedTaskId: String?
+    /// GH #378: open Activity comments by id. Kept here, above the Activity / Runs switch, so a trip
+    /// to Runs and back keeps them open for as long as this task page lives.
+    @State private var expandedCommentIds: Set<String> = []
     /// Portal-link chips in the description (task / request / agent / GitHub) push here.
     @State private var portalRoute: WorkspaceRoute?
     @Environment(\.openURL) private var openURL
@@ -140,7 +143,11 @@ struct TaskDetailScreen: View {
                 reviewTag: MobileUx.reviewTag(for: task, identity: model.identity),
                 onReview: { verifySheetTask = task },
                 onReject: { rejectSheetTask = task },
-                onAccept: { accept(task) }
+                onAccept: { accept(task) },
+                tasks: model.snapshot?.tasks ?? [],
+                onTapTask: { linkedTaskId = $0 },
+                portalBase: model.portalBase,
+                onTapPortal: openPortal
             )
             .transition(.opacity.combined(with: .move(edge: .top)))
         }
@@ -178,7 +185,10 @@ struct TaskDetailScreen: View {
             )
             switch pane {
             case .activity:
-                ActivityTimeline(task: task, messages: model.taskMessages, agents: agents, taskId: taskId)
+                ActivityTimeline(task: task, messages: model.taskMessages, agents: agents, taskId: taskId,
+                                 expandedIds: $expandedCommentIds, tasks: model.snapshot?.tasks ?? [],
+                                 onTapTask: { linkedTaskId = $0 }, portalBase: model.portalBase,
+                                 onTapPortal: openPortal)
             case .runs:
                 RunsTimeline(runs: model.taskRuns)
             }
@@ -325,6 +335,11 @@ private struct VerificationCard: View {
     let onReview: () -> Void
     let onReject: () -> Void
     let onAccept: () -> Void
+    var tasks: [TaskDto] = []
+    var onTapTask: ((String) -> Void)?
+    var portalBase: String? = nil
+    var onTapPortal: ((PortalLink) -> Void)? = nil
+    @Environment(\.revealComment) private var revealComment
     @State private var resultExpanded = false
 
     var body: some View {
@@ -341,12 +356,16 @@ private struct VerificationCard: View {
                 if let result = task.result ?? task.messageSummary?.last.map({ ActivityCopy.humanize($0.body) }) {
                     VStack(alignment: .leading, spacing: 4) {
                         caption("Result")
-                        ExpandableComment(expanded: resultExpanded, onToggle: { resultExpanded.toggle() }) {
-                            Text(ChatMarkdown.inline(result))
+                        // GH #378: Show less after reading past the Result's top scrolls back to it.
+                        ExpandableComment(expanded: resultExpanded, onToggle: { resultExpanded.toggle() },
+                                          onCollapsedOffscreen: { revealComment?(CommentExpansion.resultAnchor) }) {
+                            ChatInlineText(text: result, tasks: tasks, onTapTask: onTapTask,
+                                           portalBase: portalBase, onTapPortal: onTapPortal)
                                 .ltype(.body)
                                 .foregroundStyle(p.text2)
                         }
                     }
+                    .id(CommentExpansion.resultAnchor)
                 }
                 TaskProofOfWork(taskId: task.id, reloadKey: task.status)
                 ManagerReviewRow(task: task)
@@ -585,9 +604,13 @@ private struct ActivityTimeline: View {
     let messages: [TaskMessageDto]
     let agents: [AgentDto]
     let taskId: String
+    /// GH #378: open comments by id, owned by the task page so the Runs pane does not reset them.
+    @Binding var expandedIds: Set<String>
+    var tasks: [TaskDto] = []
+    var onTapTask: ((String) -> Void)?
+    var portalBase: String? = nil
+    var onTapPortal: ((PortalLink) -> Void)? = nil
     @Environment(\.revealComment) private var revealComment
-    /// GH #378: open comments by id, for as long as this task page lives.
-    @State private var expandedIds: Set<String> = []
 
     fileprivate struct Entry: Identifiable {
         let id: String
@@ -667,7 +690,8 @@ private struct ActivityTimeline: View {
                                   onCollapsedOffscreen: { revealComment?(CommentExpansion.rowAnchor(entry.id)) }) {
                     header(entry)
                 } content: {
-                    Text(ChatMarkdown.inline(entry.text))
+                    ChatInlineText(text: entry.text, tasks: tasks, onTapTask: onTapTask,
+                                   portalBase: portalBase, onTapPortal: onTapPortal)
                         .ltype(.body)
                         .foregroundStyle(p.text2)
                 }
