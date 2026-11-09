@@ -43,10 +43,14 @@ struct TaskGoalChainBar: View {
     @ViewBuilder
     private func crumbView(_ crumb: GoalCrumb) -> some View {
         switch crumb {
-        case .objective(let text, let project):
-            if let text, Self.clip(text, 60) != text {
+        case .objective(let raw, let project):
+            // One line before clipping and showing: the label is a single line, so a line
+            // break would hide every word after it, even when opened (GH #378).
+            let text = raw.map(GoalChainUx.oneLine)
+            if let text, GoalChainUx.clip(text, GoalChainUx.objectiveMaxChars) != text {
                 Button { objectiveOpen.toggle() } label: {
-                    objectiveLabel(objectiveOpen ? text : Self.clip(text, 60), color: p.text2)
+                    objectiveLabel(objectiveOpen ? text : GoalChainUx.clip(text, GoalChainUx.objectiveMaxChars),
+                                   color: p.text2)
                         .frame(minHeight: 44)
                         .contentShape(Rectangle())
                 }
@@ -67,7 +71,7 @@ struct TaskGoalChainBar: View {
             NavigationLink(value: WorkspaceRoute.task(id)) {
                 HStack(spacing: 4) {
                     if let status { LStatusGlyph(status: status, size: 12) }
-                    Text(Self.clip(title, 40)).lineLimit(1)
+                    Text(GoalChainUx.clip(GoalChainUx.oneLine(title), 40)).lineLimit(1)
                 }
                 .foregroundStyle(p.text2)
                 .frame(minHeight: 44)
@@ -91,10 +95,6 @@ struct TaskGoalChainBar: View {
         }
         .foregroundStyle(color)
         .lineLimit(1)
-    }
-
-    private static func clip(_ text: String, _ max: Int) -> String {
-        text.count > max ? String(text.prefix(max - 1)) + "…" : text
     }
 
     private func load() async {

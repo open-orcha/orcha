@@ -171,6 +171,42 @@ private func decode<T: Decodable>(_ type: T.Type, _ json: String) throws -> T {
         #expect(ManagerReviewUx.via(ReviewRoutingDto(routedVia: "reports_to", managerDepth: 1, assigneeAlias: "Atlas")) == "via Atlas’s manager")
     }
 
+    /// GH #378 review round 4: the objective crumb is one line, so an objective written on
+    /// several lines showed only its first line, even after it was opened.
+    @Test func goalChainObjectiveWithLineBreaksKeepsEveryLine() {
+        let short = "Read the first line\nSECOND LINE SHOULD REMAIN READABLE"
+        let long = "Read the first line\nSECOND LINE SHOULD REMAIN READABLE even when we expand a long objective on tap"
+        func objective(_ text: String) -> GoalCrumb? {
+            GoalChainUx.crumbs(GoalChainDto(goalChain: [
+                GoalNodeDto(kind: "objective", title: "proj", text: text),
+                GoalNodeDto(kind: "parent", id: "p1", title: "Parent\n  on two lines"),
+                GoalNodeDto(kind: "task", id: "t", title: "Me"),
+            ])).first
+        }
+        // Short: every word fits the 60-character label, so it shows whole and needs no button.
+        #expect(objective(short) == .objective(text: "Read the first line SECOND LINE SHOULD REMAIN READABLE",
+                                               projectTitle: "proj"))
+        let shortLine = GoalChainUx.oneLine(short)
+        #expect(GoalChainUx.clip(shortLine, GoalChainUx.objectiveMaxChars) == shortLine)
+        // Long: shortened until opened; opened, it is the whole objective on one line.
+        let longLine = GoalChainUx.oneLine(long)
+        #expect(objective(long) == .objective(text: longLine, projectTitle: "proj"))
+        #expect(!longLine.contains("\n"))
+        #expect(longLine.hasSuffix("SECOND LINE SHOULD REMAIN READABLE even when we expand a long objective on tap"))
+        let clipped = GoalChainUx.clip(longLine, GoalChainUx.objectiveMaxChars)
+        #expect(clipped != longLine)
+        #expect(clipped.count == GoalChainUx.objectiveMaxChars)
+        #expect(clipped.hasSuffix("…"))
+        #expect(!clipped.contains("\n"))
+        // Parent titles and other whitespace fold the same way (Android `clip` parity).
+        let crumbs = GoalChainUx.crumbs(GoalChainDto(goalChain: [
+            GoalNodeDto(kind: "parent", id: "p1", title: "Parent\n  on two lines"),
+        ]))
+        #expect(crumbs == [.parent(id: "p1", title: "Parent on two lines", status: nil)])
+        #expect(GoalChainUx.oneLine("  \t\n ") == "")
+        #expect(objective("  \n\t ") == .objective(text: nil, projectTitle: "proj"))
+    }
+
     @Test func cronPresets() {
         #expect(TaskRoutineUx.cron(.daily, hour: 7, minute: 30, weekday: 1) == "30 7 * * *")
         #expect(TaskRoutineUx.cron(.weekdays, hour: 9, minute: 0, weekday: 1) == "0 9 * * 1-5")
