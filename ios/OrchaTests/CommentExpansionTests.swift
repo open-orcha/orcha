@@ -40,6 +40,18 @@ enum CommentFixtures {
         #expect(CommentExpansion.rowAnchor("m1") != CommentExpansion.rowAnchor("m2"))
     }
 
+    @Test func showLessOnAnyScreenTargetsTheTextsTopJustUnderTheEdge() {
+        // Read on 1000 points past a text that starts at 150: come back to just above its top.
+        #expect(CommentExpansion.revealOffset(textTop: 150, contentOffsetY: 1150, insetTop: 0) == 142)
+        // Under a navigation bar the visible top is the inset, not zero.
+        #expect(CommentExpansion.revealOffset(textTop: 150, contentOffsetY: 1000, insetTop: 100) == 42)
+        // Never above the scroll view's own start.
+        #expect(CommentExpansion.revealOffset(textTop: 4, contentOffsetY: 300, insetTop: 100) == -100)
+        // Top already in sight: stay put.
+        #expect(CommentExpansion.revealOffset(textTop: 150, contentOffsetY: 100, insetTop: 0) == nil)
+        #expect(CommentExpansion.revealOffset(textTop: 150, contentOffsetY: 100, insetTop: 50) == nil)
+    }
+
     @Test func labelsAndAnnouncedState() {
         #expect(CommentExpansion.controlLabel(expanded: false) == "Show more")
         #expect(CommentExpansion.controlLabel(expanded: true) == "Show less")

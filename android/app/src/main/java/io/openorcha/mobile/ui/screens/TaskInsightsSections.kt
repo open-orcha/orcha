@@ -25,6 +25,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -114,31 +115,32 @@ internal fun GoalChainBreadcrumb(chain: GoalChainDto?, onOpenTask: (String) -> U
                         .semantics { contentDescription = "Parent task: $label" },
                 )
             } else {
-                val full = TaskInsightsUx.goalCrumbFull(node)
-                if (full != null) {
-                    // GH #378: a cut-off objective opens in full on tap (the row wraps to fit it).
-                    var open by rememberSaveable(full) { mutableStateOf(false) }
-                    Text(
-                        if (open) full else label,
-                        style = ltype(LType.Meta), color = p.faint,
-                        maxLines = if (open) Int.MAX_VALUE else 1, overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier
-                            .align(Alignment.CenterVertically)
-                            .clickable(role = Role.Button, onClickLabel = if (open) "Shorten objective" else "Show full objective") { open = !open }
-                            .heightIn(min = 48.dp)
-                            .padding(vertical = 14.dp)
-                            .semantics {
-                                contentDescription = "Objective: $full"
-                                stateDescription = if (open) "Expanded" else "Collapsed"
-                            },
-                    )
-                } else {
-                    Text(
-                        label,
-                        style = ltype(LType.Meta), color = p.faint, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.align(Alignment.CenterVertically).semantics { contentDescription = "Objective: $label" },
-                    )
-                }
+                // GH #378: the objective opens in full on tap whenever it is cut off: shortened to 60
+                // characters, or wider than the screen at the reader's text size (the row wraps to fit it).
+                val full = TaskInsightsUx.goalCrumbFull(node) ?: label
+                var open by rememberSaveable(full) { mutableStateOf(false) }
+                var overflowing by remember(full) { mutableStateOf(false) }
+                val expandable = open || full != label || overflowing
+                Text(
+                    if (open) full else label,
+                    style = ltype(LType.Meta), color = p.faint,
+                    maxLines = if (open) Int.MAX_VALUE else 1, overflow = TextOverflow.Ellipsis,
+                    onTextLayout = { if (!open) overflowing = it.hasVisualOverflow },
+                    modifier = Modifier
+                        .align(Alignment.CenterVertically)
+                        .then(
+                            if (expandable) {
+                                Modifier
+                                    .clickable(role = Role.Button, onClickLabel = if (open) "Shorten objective" else "Show full objective") { open = !open }
+                                    .heightIn(min = 48.dp)
+                                    .padding(vertical = 14.dp)
+                            } else Modifier,
+                        )
+                        .semantics {
+                            contentDescription = "Objective: $full"
+                            if (expandable) stateDescription = if (open) "Expanded" else "Collapsed"
+                        },
+                )
             }
         }
     }

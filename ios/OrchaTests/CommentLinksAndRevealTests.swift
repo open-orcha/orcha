@@ -47,6 +47,36 @@ import UIKit
         #expect(scroll.contentOffset.y <= 150, "the Result starts at 150 and must be back in view")
     }
 
+    /// GH #378 review round 3: Show less on a screen with no scroll-back wiring of its own (any
+    /// `ExpandableText`) still brings the text's top back into view.
+    @Test func showLessOnAnyScreenScrollsBackToTheText() async throws {
+        let box = RevealMarker.Box()
+        let host = UIHostingController(rootView: PlainScrollHost(box: box))
+        let scene = try #require(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 320, height: 600)
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        host.view.layoutIfNeeded()
+        try await Task.sleep(for: .milliseconds(300))
+        let scroll = try #require(scrollView(in: host.view))
+        // The reader scrolls on, well past the text's top (at 150).
+        scroll.setContentOffset(CGPoint(x: 0, y: 1200), animated: false)
+        host.view.layoutIfNeeded()
+        let visibleTop = { scroll.contentOffset.y + scroll.adjustedContentInset.top }
+        #expect(visibleTop() > 150)
+        box.revealTop(animated: false)
+        try await Task.sleep(for: .milliseconds(300))
+        host.view.layoutIfNeeded()
+        #expect(visibleTop() <= 150, "the text's top must be back in view")
+        #expect(visibleTop() >= 130, "and just above it, not back at the start of the page")
+        // Already in view: a second Show less does not move the page.
+        let settled = scroll.contentOffset.y
+        box.revealTop(animated: false)
+        #expect(scroll.contentOffset.y == settled)
+    }
+
     private func scrollView(in view: UIView) -> UIScrollView? {
         if let scroll = view as? UIScrollView { return scroll }
         return view.subviews.lazy.compactMap { scrollView(in: $0) }.first
@@ -82,5 +112,21 @@ private struct ResultRevealHost: View {
             }
         }
         .coordinateSpace(.named(CommentExpansion.scrollSpace))
+    }
+}
+
+/// An ordinary screen: a plain ScrollView with long text and more content below it, no ScrollViewReader.
+private struct PlainScrollHost: View {
+    let box: RevealMarker.Box
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 0) {
+                Color.clear.frame(height: 150)
+                Text(String(repeating: "A long description with enough words to read and scroll. ", count: 65))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .background { RevealMarker(box: box) }
+                Color.clear.frame(height: 3000)
+            }
+        }
     }
 }

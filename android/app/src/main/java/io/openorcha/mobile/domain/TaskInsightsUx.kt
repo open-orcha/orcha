@@ -198,7 +198,8 @@ object TaskInsightsUx {
         else -> clip(node.title, 60)
     }
 
-    /** GH #378: the objective in full when its crumb label is cut (null when nothing was cut). */
+    /** GH #378: the objective in full when the 60-character crumb label shortened it (null otherwise; the
+     *  breadcrumb also opens it when the label fits 60 characters but not the screen). */
     fun goalCrumbFull(node: GoalNodeDto): String? {
         if (node.kind != "objective") return null
         val full = node.text?.takeIf { it.isNotBlank() }?.replace(Regex("\\s+"), " ")?.trim() ?: return null

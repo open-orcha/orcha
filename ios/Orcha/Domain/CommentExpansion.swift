@@ -25,6 +25,16 @@ enum CommentExpansion {
     /// left further down the page (Android brings the comment into view the same way).
     static func revealsOnCollapse(expanded: Bool, topY: CGFloat) -> Bool { expanded && topY < 0 }
 
+    /// Where a scroll view must move so text whose top sits at `textTop` (content coordinates) is back in
+    /// sight just under the visible top edge, or nil when that top is already visible. Used by Show less on
+    /// screens that do not wire their own scroll-back, so collapsing never strands the reader further down.
+    static func revealOffset(textTop: CGFloat, contentOffsetY: CGFloat, insetTop: CGFloat,
+                             margin: CGFloat = 8) -> CGFloat? {
+        let visibleTop = contentOffsetY + insetTop
+        guard textTop < visibleTop - 0.5 else { return nil }
+        return max(textTop - margin - insetTop, -insetTop)
+    }
+
     /// The scroll anchor for an Activity row.
     static func rowAnchor(_ id: String) -> String { "activity-\(id)" }
 

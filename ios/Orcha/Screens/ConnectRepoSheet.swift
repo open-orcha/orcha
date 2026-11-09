@@ -205,10 +205,13 @@ private struct RepoRow: View {
                         }
                     }
                     if let description = repo.description, description.isEmpty == false {
-                        Text(description)
-                            .ltype(.meta)
-                            .foregroundStyle(p.muted)
-                            .lineLimit(2)
+                        // GH #378: a cut-off description opens in place; tapping the rest of the row
+                        // still connects the repository.
+                        ExpandableText(collapsedLines: 2) {
+                            Text(description)
+                                .ltype(.meta)
+                                .foregroundStyle(p.muted)
+                        }
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -233,6 +236,8 @@ private struct RepoRow: View {
     private var accessibilityText: String {
         var parts = [repo.fullName]
         if repo.isPrivate { parts.append("private") }
+        // VoiceOver reads the whole description with the row, so it never depends on Show more.
+        if let description = repo.description, description.isEmpty == false { parts.append(description) }
         if bound { parts.append("currently connected") }
         return parts.joined(separator: ", ")
     }

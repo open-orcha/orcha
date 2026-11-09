@@ -6,7 +6,8 @@ import SwiftUI
 /// the capped text's height is compared with a hidden, unconstrained copy at the same width, so short
 /// comments never get a control and Dynamic Type or a narrow screen re-measures on its own. The caller
 /// owns `expanded` per comment id, so recycled rows never inherit it. `onCollapsedOffscreen` runs when
-/// Show less is tapped after the comment's top has scrolled out of sight, so the caller can scroll back.
+/// Show less is tapped after the comment's top has scrolled out of sight, so the caller can scroll back;
+/// without it, Show less scrolls the nearest enclosing scroll view back to the comment's top itself.
 /// `header` (author and time) reads with the text as one VoiceOver element; the control stays its own button.
 struct ExpandableComment<Header: View, Content: View>: View {
     @Environment(\.palette) private var p
@@ -24,6 +25,8 @@ struct ExpandableComment<Header: View, Content: View>: View {
     /// Where the comment's top sits in the task page's scroll view. A plain reference, so scrolling
     /// never re-renders the comment.
     @State private var top = TopEdge()
+    /// The comment's own UIKit view, for scrolling back on screens without `onCollapsedOffscreen`.
+    @State private var marker = RevealMarker.Box()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -46,6 +49,11 @@ struct ExpandableComment<Header: View, Content: View>: View {
             .accessibilityElement(children: .combine)
             if CommentExpansion.showsControl(overflowed: overflowed, expanded: expanded) {
                 Button {
+                    if expanded, onCollapsedOffscreen == nil {
+                        // Scroll first, then collapse below the reader's eye: the comment's top does not
+                        // move while it shrinks, so the target stays right.
+                        marker.revealTop(animated: !reduceMotion)
+                    }
                     let reveal = CommentExpansion.revealsOnCollapse(expanded: expanded, topY: top.minY)
                     withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.2)) {
                         onToggle()
@@ -69,6 +77,7 @@ struct ExpandableComment<Header: View, Content: View>: View {
                 .accessibilityIdentifier("comment-toggle")
             }
         }
+        .background { RevealMarker(box: marker) }
         .onGeometryChange(for: CGFloat.self) { proxy in
             proxy.frame(in: .named(CommentExpansion.scrollSpace)).minY
         } action: { minY in
@@ -126,6 +135,46 @@ extension ExpandableText where Header == EmptyView {
 
 private final class TopEdge {
     var minY: CGFloat = 0
+}
+
+/// An invisible UIKit view the size of the comment. SwiftUI's ScrollView and List are both UIKit scroll
+/// views underneath, so from here Show less can find whichever one holds the comment on any screen and
+/// scroll its top back into sight, with no wiring in the screen itself (GH #378 review round 3).
+struct RevealMarker: UIViewRepresentable {
+    final class Box {
+        weak var view: UIView?
+
+        /// Scrolls every enclosing scroll view that has the comment's top above its visible area.
+        @MainActor func revealTop(animated: Bool) {
+            guard let view else { return }
+            var ancestor = view.superview
+            while let current = ancestor {
+                if let scroll = current as? UIScrollView {
+                    let frame = view.convert(view.bounds, to: scroll)
+                    if let y = CommentExpansion.revealOffset(textTop: frame.minY,
+                                                             contentOffsetY: scroll.contentOffset.y,
+                                                             insetTop: scroll.adjustedContentInset.top) {
+                        scroll.setContentOffset(CGPoint(x: scroll.contentOffset.x, y: y), animated: animated)
+                    }
+                }
+                ancestor = current.superview
+            }
+        }
+    }
+
+    let box: Box
+
+    func makeUIView(context: Context) -> UIView {
+        let view = UIView()
+        view.isUserInteractionEnabled = false
+        view.isAccessibilityElement = false
+        view.accessibilityElementsHidden = true
+        view.backgroundColor = .clear
+        box.view = view
+        return view
+    }
+
+    func updateUIView(_ view: UIView, context: Context) { box.view = view }
 }
 
 /// Scrolls an Activity row back to the top of the task page (set by the page that owns the scroll view).
