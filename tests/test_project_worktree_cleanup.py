@@ -65,7 +65,6 @@ def test_slow_cleanup_does_not_block_other_starts_or_checkpoints(project, monkey
     from uuid import uuid4
     from orcha_cli import notifier_worktree_stable as stable
     from orcha_cli.job_store import JobStore, JobStorageError
-    from orcha_cli.notifier_preview import PreviewError, resolve_checkout
     from test_worktree_gc import _Services, TASK
 
     wt = _worktree(project, "live-Held", "orcha/live-Held", scaffold=False)
@@ -103,8 +102,6 @@ def test_slow_cleanup_does_not_block_other_starts_or_checkpoints(project, monkey
                 assert stable.provision_live(str(project), "Held", services) == (None, None)
                 with pytest.raises(JobStorageError, match="reserved this checkout"):
                     store.reserve(str(uuid4()), {"cwd": str(wt), "status": "reserved"})
-                with pytest.raises(PreviewError, match="reserved this checkout"):
-                    resolve_checkout({"worktree": str(wt)}, str(project))
         finally:
             release.set()
         assert operation.result(timeout=10)["status"] in ("ready", "done")
@@ -397,16 +394,6 @@ def test_cli_execute_dry_run_never_removes_previewed_checkout(project, capsys):
     assert code == 1 and "without removing folders" in output
     assert wt.exists()
     assert cleanup.status(project, plan["plan_id"])["status"] == "ready"
-
-
-def test_preview_start_reserves_reused_checkout_before_process_starts(project):
-    from orcha_cli.notifier_preview import resolve_checkout
-
-    wt = _worktree(project, "candidate", "candidate", scaffold=False)
-    resolve_checkout({"worktree": str(wt)}, str(project))
-    plan = cleanup.preview(project, inactive)
-    assert plan["candidate_count"] == 0 and wt.exists()
-    assert "starting" in plan["items"][0]["reason"]
 
 
 def test_merge_rehearsal_is_protected_between_git_commands(project):

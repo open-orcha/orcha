@@ -1,0 +1,412 @@
+/* Scenarios > Coverage: the fog-of-war map. SVG + CSS transitions only; reduced motion keeps
+   the fog still and every state shown at once. */
+
+.palette {
+  --cov-strong: var(--v2-ok);
+  --cov-covered: var(--v2-label-8);
+  --cov-thin: var(--v2-warn);
+  --cov-failing: var(--v2-danger);
+  --cov-untested: var(--v2-text-3);
+  --cov-fog: var(--v2-text-disabled);
+  --cov-grid: color-mix(in srgb, var(--v2-text) 9%, transparent);
+  --cov-ground: var(--v2-band);
+  --cov-tile: var(--v2-surface);
+  --cov-label: var(--v2-text);
+  --cov-label-dim: var(--v2-text-3);
+  --cov-territory: color-mix(in srgb, var(--v2-text) 2.5%, transparent);
+  --cov-territory-line: color-mix(in srgb, var(--v2-text) 12%, transparent);
+  --cov-glint: color-mix(in srgb, var(--v2-panel) 55%, transparent);
+}
+
+.stage {
+  position: relative;
+  overflow: hidden;
+  border-radius: var(--radius-xl);
+  border: 1px solid var(--color-border);
+  background: var(--cov-ground);
+}
+
+:global([data-theme="dark"]) .palette {
+  --cov-grid: color-mix(in srgb, var(--v2-text) 5.5%, transparent);
+  --cov-territory: color-mix(in srgb, var(--v2-text) 1.8%, transparent);
+  --cov-territory-line: color-mix(in srgb, var(--v2-text) 9%, transparent);
+  --cov-glint: color-mix(in srgb, var(--v2-text) 10%, transparent);
+}
+
+.svg {
+  display: block;
+  width: 100%;
+  user-select: none;
+}
+
+.territory {
+  fill: var(--cov-territory);
+  stroke: var(--cov-territory-line);
+  stroke-dasharray: 2 4;
+}
+
+.territoryLabel {
+  fill: var(--cov-label-dim);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+/* A tile: its state colour (`--c`) tints the body, the outline and the glow. */
+.tile {
+  cursor: pointer;
+  outline: none;
+}
+.tile[data-state="strong"] {
+  --c: var(--cov-strong);
+}
+.tile[data-state="covered"] {
+  --c: var(--cov-covered);
+}
+.tile[data-state="thin"] {
+  --c: var(--cov-thin);
+}
+.tile[data-state="failing"] {
+  --c: var(--cov-failing);
+}
+.tile[data-state="untested"] {
+  --c: var(--cov-untested);
+}
+
+.body {
+  fill: color-mix(in oklab, var(--c) 16%, var(--cov-tile));
+  stroke: color-mix(in oklab, var(--c) 55%, transparent);
+  stroke-width: 1;
+  transition:
+    fill 700ms ease,
+    stroke 700ms ease;
+}
+:global([data-theme="dark"]) .body {
+  fill: color-mix(in oklab, var(--c) 9%, var(--cov-tile));
+  stroke: color-mix(in oklab, var(--c) 55%, transparent);
+}
+.tile[data-state="strong"] .body {
+  fill: color-mix(in oklab, var(--c) 26%, var(--cov-tile));
+}
+:global([data-theme="dark"]) .tile[data-state="strong"] .body {
+  fill: color-mix(in oklab, var(--c) 16%, var(--cov-tile));
+}
+.tile[data-state="untested"] .body {
+  fill: var(--cov-tile);
+  stroke: color-mix(in oklab, var(--c) 30%, transparent);
+}
+.tile[data-seen="true"][data-state="untested"] .body {
+  stroke: color-mix(in oklab, var(--c) 80%, transparent);
+  stroke-dasharray: 4 3;
+}
+.tile:hover .body,
+.tile:focus-visible .body {
+  stroke: var(--c);
+  stroke-width: 1.5;
+}
+.tile[data-selected="true"] .body {
+  stroke: var(--c);
+  stroke-width: 2;
+}
+.tile[data-state="untested"]:hover .body,
+.tile[data-state="untested"][data-selected="true"] .body {
+  stroke: var(--cov-label-dim);
+}
+
+/* The state colour as a soft halo, for the strongest and the failing. */
+.halo {
+  fill: none;
+  stroke: var(--c);
+  stroke-width: 2;
+  opacity: 0;
+  transition: opacity 700ms ease;
+}
+:global([data-theme="dark"]) .tile[data-state="strong"] .halo,
+:global([data-theme="dark"]) .tile[data-state="failing"] .halo {
+  opacity: 0.38;
+}
+.tile[data-state="failing"] .halo {
+  opacity: 0.2;
+}
+
+.sheen,
+.light {
+  pointer-events: none;
+}
+.light {
+  opacity: 0.55;
+}
+:global([data-theme="dark"]) .light {
+  opacity: 1;
+}
+
+.bar {
+  fill: var(--c);
+  transition: fill 700ms ease;
+}
+.tile[data-state="untested"] .bar {
+  fill: transparent;
+}
+
+.name {
+  fill: var(--cov-label);
+  font-size: 12px;
+  font-weight: 560;
+  letter-spacing: -0.005em;
+  pointer-events: none;
+}
+.meta {
+  fill: var(--cov-label-dim);
+  font-size: 10.5px;
+  pointer-events: none;
+  font-variant-numeric: tabular-nums;
+}
+.metaState {
+  fill: color-mix(in oklab, var(--c) 85%, var(--cov-label));
+  font-weight: 600;
+}
+.tile[data-state="untested"] .name {
+  fill: var(--cov-label-dim);
+}
+
+/* Labels arrive with their tile's fog lifting. */
+.labels {
+  transition: opacity 600ms ease;
+  transition-delay: var(--delay, 0ms);
+}
+.labels[data-veiled="true"] {
+  opacity: 0;
+}
+
+/* Fog: painted once into a bitmap (fog-paint.ts). The veil of thick fog over every tile fades
+   on arrival; only its opacity animates, which the browser composites without re-painting. */
+.fog {
+  pointer-events: none;
+}
+.fogHaze {
+  fill: var(--cov-fog);
+  opacity: 0.45;
+}
+:global([data-theme="dark"]) .fogHaze {
+  opacity: 0.26;
+}
+.veil {
+  opacity: 1;
+  transition: opacity 1100ms cubic-bezier(0.3, 0.6, 0.2, 1) 250ms;
+  will-change: opacity;
+}
+.veil[data-veiled="false"] {
+  opacity: 0;
+}
+
+/* Run in the last day: a light that breathes a few times, then rests as a faint ring. */
+.glow {
+  fill: none;
+  stroke: var(--c);
+  stroke-width: 3;
+  opacity: 0.25;
+  pointer-events: none;
+  animation: breathe 1.8s ease-in-out 1.6s 4;
+}
+@keyframes breathe {
+  0%,
+  100% {
+    opacity: 0.2;
+  }
+  50% {
+    opacity: 0.85;
+  }
+}
+
+/* Switching platform sweeps a band of light across the map. */
+.sweep {
+  pointer-events: none;
+  animation: sweep 900ms cubic-bezier(0.5, 0, 0.2, 1) both;
+  transform-box: view-box;
+}
+@keyframes sweep {
+  from {
+    transform: translateX(-40%);
+    opacity: 0;
+  }
+  30% {
+    opacity: 1;
+  }
+  to {
+    transform: translateX(110%);
+    opacity: 0;
+  }
+}
+
+.tooltip {
+  position: absolute;
+  z-index: 5;
+  pointer-events: none;
+  min-width: 170px;
+  max-width: 260px;
+  transform: translate(-50%, calc(-100% - 10px));
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--color-border);
+  background: color-mix(in oklab, var(--color-raised) 92%, transparent);
+  backdrop-filter: blur(10px);
+  box-shadow: var(--shadow-md);
+  padding: 8px 10px;
+  animation: pop 140ms ease-out both;
+}
+@keyframes pop {
+  from {
+    opacity: 0;
+    transform: translate(-50%, calc(-100% - 4px));
+  }
+}
+
+/* Headline numbers count up; platform bars fill. */
+.num {
+  font-variant-numeric: tabular-nums;
+}
+.barFill {
+  transform-origin: left;
+  animation: fill 900ms cubic-bezier(0.3, 0.6, 0.2, 1) 300ms both;
+}
+@keyframes fill {
+  from {
+    transform: scaleX(0);
+  }
+}
+
+.panel {
+  animation: slide 260ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+@keyframes slide {
+  from {
+    opacity: 0;
+    transform: translateX(24px);
+  }
+}
+@media (max-width: 767px) {
+  @keyframes slide {
+    from {
+      opacity: 0;
+      transform: translateY(24px);
+    }
+  }
+}
+
+.rise {
+  animation: rise 320ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  animation-delay: calc(var(--i, 0) * 50ms);
+}
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+
+/* Computing: a checklist that ticks through the steps; the current one breathes. */
+.step {
+  animation: rise 320ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  animation-delay: calc(var(--i, 0) * 90ms);
+}
+.stepMark {
+  display: inline-flex;
+  width: 16px;
+  height: 16px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  border: 1.5px solid var(--color-border);
+  color: white;
+  transition:
+    background-color 300ms ease,
+    border-color 300ms ease;
+}
+.step[data-step-state="done"] .stepMark {
+  background: var(--cov-covered);
+  border-color: var(--cov-covered);
+}
+.step[data-step-state="active"] .stepMark {
+  border-color: var(--color-primary);
+  animation: stepPulse 1.2s ease-in-out infinite;
+}
+@keyframes stepPulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in oklab, var(--color-primary) 40%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 5px color-mix(in oklab, var(--color-primary) 0%, transparent);
+  }
+}
+.recomputing {
+  animation: recomputeIn 200ms ease-out both;
+}
+@keyframes recomputeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
+
+/* Empty and loading: a small territory breathing. */
+.ghostTile {
+  fill: var(--cov-tile);
+  stroke: var(--cov-territory-line);
+  animation: ghost 2.4s ease-in-out infinite;
+  animation-delay: calc(var(--i, 0) * 140ms);
+}
+@keyframes ghost {
+  0%,
+  100% {
+    opacity: 0.45;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+.revealTile {
+  animation: reveal 5.6s ease-in-out infinite;
+  animation-delay: calc(var(--i, 0) * 420ms);
+}
+@keyframes reveal {
+  0%,
+  15% {
+    fill: var(--cov-tile);
+  }
+  35%,
+  70% {
+    fill: color-mix(in oklab, var(--c) 30%, var(--cov-tile));
+  }
+  90%,
+  100% {
+    fill: var(--cov-tile);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .glow,
+  .sweep,
+  .barFill,
+  .panel,
+  .rise,
+  .tooltip,
+  .ghostTile,
+  .revealTile,
+  .step,
+  .step .stepMark,
+  .recomputing {
+    animation: none;
+  }
+  .sweep {
+    display: none;
+  }
+  .veil,
+  .labels,
+  .body,
+  .halo,
+  .bar {
+    transition: none;
+  }
+}

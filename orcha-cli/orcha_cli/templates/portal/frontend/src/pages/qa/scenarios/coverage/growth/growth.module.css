@@ -1,0 +1,1062 @@
+/* Coverage › Growth (#413). Two series, validated with the dataviz palette checks in both modes
+   (lightness band, chroma, CVD and normal-vision separation, contrast): your tests in blue,
+   Orcha in green. Status colours stay the Coverage page's own (at risk is its amber).
+
+   Motion follows the shared contract (globals.css "Cinematic motion"): every element's resting
+   style is its final state and keyframes only say where it comes from, transform and opacity
+   (and SVG stroke-dashoffset) only, and under reduced motion (bottom) everything stands finished. */
+
+.palette {
+  --g-yours: #2a78d6;
+  --g-orcha: #178a62;
+  --g-before: #52514e;
+  --g-track: rgb(24 25 28 / 0.06);
+  --g-grid: rgb(24 25 28 / 0.08);
+  --g-risk: #b45309;
+  --g-unknown: #8a8e96;
+  --g-glow: rgb(23 138 98 / 0.32);
+  --g-blade: #24262c;
+  --g-blade-edge: rgb(255 255 255 / 0.12);
+  --g-flash: #ffffff;
+  --g-hero-a: rgb(23 138 98 / 0.1);
+  --g-hero-b: color-mix(in oklab, var(--color-fg) 5%, transparent);
+}
+
+:global([data-theme="dark"]) .palette {
+  --g-yours: #3987e5;
+  --g-orcha: #199e70;
+  --g-before: #c3c2b7;
+  --g-track: rgb(255 255 255 / 0.06);
+  --g-grid: rgb(255 255 255 / 0.07);
+  --g-risk: #fbbf24;
+  --g-unknown: #7c8394;
+  --g-glow: rgb(25 158 112 / 0.42);
+  --g-blade: #2b2d34;
+  --g-blade-edge: rgb(255 255 255 / 0.1);
+  --g-flash: #e9f5ef;
+  --g-hero-a: rgb(25 158 112 / 0.14);
+  --g-hero-b: color-mix(in oklab, var(--color-fg) 6%, transparent);
+}
+
+/* ---------- the headline ---------- */
+
+.hero {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+  border-radius: var(--radius-xl);
+  border: 1px solid var(--color-border);
+  background:
+    radial-gradient(90% 140% at 0% 0%, var(--g-hero-a), transparent 55%),
+    radial-gradient(70% 120% at 100% 100%, var(--g-hero-b), transparent 60%),
+    var(--color-panel);
+}
+:global([data-theme="dark"]) .hero {
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.04), 0 30px 80px -50px rgb(0 0 0 / 0.9);
+}
+
+.bigNum {
+  font-size: 52px;
+  line-height: 1;
+  font-weight: 650;
+  letter-spacing: -0.035em;
+  font-variant-numeric: tabular-nums;
+}
+.beforeNum {
+  font-size: 30px;
+  line-height: 1;
+  font-weight: 560;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+@media (max-width: 640px) {
+  .bigNum {
+    font-size: 40px;
+  }
+  .beforeNum {
+    font-size: 24px;
+  }
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border-radius: 999px;
+  padding: 3px 10px;
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.pillUp {
+  color: color-mix(in oklab, var(--g-orcha) 80%, var(--color-fg));
+  background: color-mix(in oklab, var(--g-orcha) 14%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--g-orcha) 28%, transparent);
+}
+.pillFlat {
+  color: var(--color-fg-2);
+  background: var(--color-panel-2);
+  box-shadow: inset 0 0 0 1px var(--color-border);
+}
+.pillDown {
+  color: var(--g-risk);
+  background: color-mix(in oklab, var(--g-risk) 12%, transparent);
+}
+
+/* The headline meter: the whole app's screens, your tests then Orcha, the baseline's tick. */
+.meter {
+  position: relative;
+  height: 12px;
+  border-radius: 999px;
+  background: var(--g-track);
+}
+.meterFill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  display: flex;
+  overflow: hidden;
+  border-radius: 999px;
+  transform-origin: left center;
+  animation: from-tick 1100ms var(--ease-swift) 220ms both;
+}
+.meterFill > span {
+  height: 100%;
+}
+.meterTick {
+  position: absolute;
+  top: -6px;
+  bottom: -6px;
+  width: 2px;
+  margin-left: -1px;
+  border-radius: 1px;
+  background: var(--g-before);
+  box-shadow: 0 0 0 2px var(--color-panel);
+  animation: tick-in 300ms var(--ease-rise) both;
+}
+.meterTickLabel {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  transform: translateX(-50%);
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--color-muted);
+  font-variant-numeric: tabular-nums;
+  animation: fade-in 300ms ease-out 120ms both;
+}
+
+/* A bar that starts at its baseline tick and grows (or shrinks) to now: `--from` is the
+   baseline's share of the bar's final width. */
+@keyframes from-tick {
+  from {
+    transform: scaleX(var(--from, 0));
+  }
+}
+@keyframes tick-in {
+  from {
+    opacity: 0;
+    transform: scaleY(0.2);
+  }
+}
+
+/* "Measure again" is running: a light band sweeps the meter while Python measures. */
+.scan {
+  position: absolute;
+  inset: -2px 0;
+  overflow: hidden;
+  border-radius: 999px;
+  pointer-events: none;
+}
+.scan::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  width: 30%;
+  background: linear-gradient(90deg, transparent, color-mix(in oklab, var(--color-fg) 22%, transparent), transparent);
+  animation: scan 1.3s var(--ease-swift) infinite;
+}
+@keyframes scan {
+  from {
+    transform: translateX(-110%);
+  }
+  to {
+    transform: translateX(380%);
+  }
+}
+
+.landed {
+  animation: pop-in 320ms var(--ease-rise) both;
+}
+
+/* ---------- per area ---------- */
+
+.track {
+  position: relative;
+  height: 14px;
+  border-radius: 4px;
+  background: var(--g-track);
+  overflow: visible;
+}
+
+/* The now bar: your tests, a 2px surface gap, then what Orcha covers on top. The wrapper
+   grows from the baseline's tick (`from-tick`), so each bar visibly rises from where it was. */
+.nowBar {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  transform-origin: left center;
+  animation: from-tick 900ms var(--ease-swift) both;
+  animation-delay: calc(var(--i, 0) * 55ms + 260ms);
+}
+.seg {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+}
+.segYours {
+  background: var(--g-yours);
+  border-radius: 4px 0 0 4px;
+}
+.segOrcha {
+  background: var(--g-orcha);
+  border-radius: 0 4px 4px 0;
+  box-shadow: -2px 0 0 0 var(--color-panel);
+}
+.segOnly {
+  border-radius: 4px;
+}
+
+/* Where the area was at the baseline: a tick across the track, there first. */
+.before {
+  position: absolute;
+  top: -4px;
+  bottom: -4px;
+  width: 2px;
+  margin-left: -1px;
+  border-radius: 1px;
+  background: var(--g-before);
+  box-shadow: 0 0 0 2px var(--color-panel);
+  z-index: 1;
+  animation: tick-in 260ms var(--ease-rise) both;
+  animation-delay: calc(var(--i, 0) * 55ms + 120ms);
+}
+
+.areaRow {
+  border-radius: 6px;
+  transition: background-color 150ms ease;
+}
+.areaRow:hover,
+.areaRow:focus-visible {
+  background: var(--color-hover);
+}
+
+.swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+}
+.swatchYours {
+  background: var(--g-yours);
+}
+.swatchOrcha {
+  background: var(--g-orcha);
+}
+.swatchBefore {
+  width: 2px;
+  height: 12px;
+  border-radius: 1px;
+  background: var(--g-before);
+}
+.swatchThen {
+  background: color-mix(in oklab, var(--g-before) 38%, transparent);
+}
+
+/* ---------- over time ---------- */
+
+.line {
+  fill: none;
+  stroke: var(--g-orcha);
+  stroke-width: 2.25px;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  animation: draw 1300ms var(--ease-swift) 200ms forwards;
+}
+.lineStill {
+  animation: none;
+  stroke-dashoffset: 0;
+}
+.area {
+  fill: url(#growth-area-fill);
+  animation: fade-in 700ms ease-out 900ms both;
+}
+.grid {
+  stroke: var(--g-grid);
+  stroke-width: 1px;
+}
+.dot {
+  fill: var(--g-orcha);
+  stroke: var(--color-panel);
+  stroke-width: 2px;
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: dot-in 260ms var(--ease-rise) both;
+  animation-delay: calc(200ms + var(--t, 0) * 1300ms);
+}
+.dotBase {
+  fill: var(--color-panel);
+  stroke: var(--g-before);
+  stroke-width: 2px;
+}
+@keyframes dot-in {
+  from {
+    opacity: 0;
+    transform: scale(0.2);
+  }
+}
+.baselineRule {
+  stroke: var(--g-before);
+  stroke-width: 1.5px;
+  stroke-dasharray: 3 3;
+}
+
+/* The time-lapse: the line is revealed up to the playhead (a clip that scales), the playhead
+   glides from day to day. Transitions only run while it plays, one per day. */
+.reveal {
+  transform-box: view-box;
+  transform-origin: 0 0;
+  transition: transform var(--step, 400ms) linear;
+}
+.playhead {
+  transition: transform var(--step, 400ms) linear;
+}
+.playheadLine {
+  stroke: var(--color-fg-2);
+  stroke-width: 1px;
+  stroke-dasharray: 2 3;
+}
+.playheadDot {
+  fill: var(--g-orcha);
+  stroke: var(--color-panel);
+  stroke-width: 2.5px;
+}
+.playheadDot + .playheadHalo {
+  fill: var(--g-glow);
+}
+.playheadHalo {
+  fill: var(--g-glow);
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: halo 1.4s ease-out infinite;
+}
+@keyframes halo {
+  from {
+    opacity: 0.9;
+    transform: scale(0.6);
+  }
+  to {
+    opacity: 0;
+    transform: scale(2.2);
+  }
+}
+
+/* The mini map of the app: each area fills from the bottom to its share that day. */
+.mapTile {
+  cursor: pointer;
+  outline: none;
+}
+.mapBody {
+  fill: var(--color-panel);
+  stroke: var(--color-border-strong);
+  stroke-width: 1;
+  transition: stroke 150ms ease;
+}
+.mapTile:hover .mapBody,
+.mapTile:focus-visible .mapBody {
+  stroke: var(--color-fg-2);
+  stroke-width: 1.5;
+}
+.mapTile[data-picked="true"] .mapBody {
+  stroke: var(--color-fg);
+  stroke-width: 2;
+}
+.mapThen,
+.mapGain {
+  transform-box: fill-box;
+  transform-origin: 50% 100%;
+  transition: transform var(--step, 420ms) var(--ease-swift);
+}
+.mapThen {
+  fill: color-mix(in oklab, var(--g-before) 22%, transparent);
+}
+:global([data-theme="dark"]) .mapThen {
+  fill: color-mix(in oklab, var(--g-before) 14%, transparent);
+}
+.mapGain {
+  fill: color-mix(in oklab, var(--g-orcha) 62%, transparent);
+}
+:global([data-theme="dark"]) .mapGain {
+  fill: color-mix(in oklab, var(--g-orcha) 55%, transparent);
+}
+.mapGlow {
+  fill: none;
+  stroke: var(--g-orcha);
+  stroke-width: 3;
+  opacity: 0;
+  pointer-events: none;
+  animation: map-glow 900ms ease-out both;
+}
+@keyframes map-glow {
+  0% {
+    opacity: 0;
+  }
+  25% {
+    opacity: 0.95;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+.mapLabel,
+.mapPct {
+  paint-order: stroke;
+  stroke: var(--color-panel);
+  stroke-width: 3px;
+  stroke-linejoin: round;
+  pointer-events: none;
+}
+.mapLabel {
+  fill: var(--color-fg);
+  font-size: 10.5px;
+  font-weight: 600;
+}
+.mapPct {
+  fill: var(--color-fg-2);
+  font-size: 10px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.scrub {
+  width: 100%;
+  accent-color: var(--g-orcha);
+}
+
+/* ---------- what Orcha added: achievements ---------- */
+
+.badge {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+  border-radius: var(--radius-xl);
+  border: 1px solid var(--color-border);
+  background: var(--color-panel);
+  transition:
+    transform 180ms var(--ease-rise),
+    border-color 180ms ease;
+}
+.badge[data-earned="true"] {
+  border-color: color-mix(in oklab, var(--g-orcha) 30%, var(--color-border));
+  background:
+    radial-gradient(120% 100% at 0% 0%, color-mix(in oklab, var(--g-orcha) 9%, transparent), transparent 60%),
+    var(--color-panel);
+}
+.badge[data-earned="true"]:hover {
+  transform: translateY(-1px);
+  border-color: color-mix(in oklab, var(--g-orcha) 48%, var(--color-border));
+}
+/* One glint across an earned badge when it arrives. */
+.badge[data-earned="true"]::after {
+  content: "";
+  position: absolute;
+  inset: -20% auto -20% 0;
+  width: 40%;
+  z-index: -1;
+  background: linear-gradient(100deg, transparent, color-mix(in oklab, var(--g-orcha) 16%, transparent), transparent);
+  transform: translateX(-120%) skewX(-12deg);
+  animation: glint 1100ms var(--ease-swift) both;
+  animation-delay: calc(700ms + var(--i, 0) * 140ms);
+}
+@keyframes glint {
+  0% {
+    transform: translateX(-120%) skewX(-12deg);
+    opacity: 1;
+  }
+  100% {
+    transform: translateX(320%) skewX(-12deg);
+    opacity: 1;
+  }
+}
+
+.medal {
+  position: relative;
+  display: grid;
+  width: 40px;
+  height: 40px;
+  flex: none;
+  place-items: center;
+  border-radius: 999px;
+  color: var(--color-muted);
+  background: var(--color-panel-2);
+  box-shadow: inset 0 0 0 1.5px var(--color-border-strong);
+}
+.badge[data-earned="true"] .medal {
+  color: #fff;
+  background: radial-gradient(circle at 35% 30%, color-mix(in oklab, var(--g-orcha) 70%, white), var(--g-orcha) 65%);
+  box-shadow:
+    0 0 0 3px color-mix(in oklab, var(--g-orcha) 16%, transparent),
+    0 6px 18px -6px var(--g-glow);
+  animation: medal 520ms cubic-bezier(0.3, 1.5, 0.5, 1) both;
+  animation-delay: calc(240ms + var(--i, 0) * 140ms);
+}
+@keyframes medal {
+  from {
+    opacity: 0;
+    transform: scale(0.4) rotate(-20deg);
+  }
+}
+
+/* ---------- baseline: the shutter ---------- */
+
+.viewfinder {
+  position: absolute;
+  inset: 14px;
+  pointer-events: none;
+}
+.viewfinder > i {
+  position: absolute;
+  width: 22px;
+  height: 22px;
+  border-color: color-mix(in oklab, var(--color-fg) 55%, transparent);
+  border-style: solid;
+  border-width: 0;
+}
+.viewfinder > i:nth-child(1) {
+  top: 0;
+  left: 0;
+  border-top-width: 2px;
+  border-left-width: 2px;
+  border-top-left-radius: 6px;
+}
+.viewfinder > i:nth-child(2) {
+  top: 0;
+  right: 0;
+  border-top-width: 2px;
+  border-right-width: 2px;
+  border-top-right-radius: 6px;
+}
+.viewfinder > i:nth-child(3) {
+  bottom: 0;
+  left: 0;
+  border-bottom-width: 2px;
+  border-left-width: 2px;
+  border-bottom-left-radius: 6px;
+}
+.viewfinder > i:nth-child(4) {
+  bottom: 0;
+  right: 0;
+  border-bottom-width: 2px;
+  border-right-width: 2px;
+  border-bottom-right-radius: 6px;
+}
+.focusing > i {
+  animation: focus-hunt 1.1s ease-in-out infinite;
+}
+.focusing > i:nth-child(1) {
+  --fx: 6px;
+  --fy: 6px;
+}
+.focusing > i:nth-child(2) {
+  --fx: -6px;
+  --fy: 6px;
+}
+.focusing > i:nth-child(3) {
+  --fx: 6px;
+  --fy: -6px;
+}
+.focusing > i:nth-child(4) {
+  --fx: -6px;
+  --fy: -6px;
+}
+@keyframes focus-hunt {
+  50% {
+    transform: translate(var(--fx), var(--fy));
+  }
+}
+
+.blades {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+.blade {
+  fill: var(--g-blade);
+  stroke: var(--g-blade-edge);
+  stroke-width: 0.6;
+  transform-box: view-box;
+  transform-origin: 0 0;
+  transform: translateY(-140px);
+}
+.bladeTwist {
+  transform-box: view-box;
+  transform-origin: 0 0;
+}
+.shoot .blade {
+  animation: blade 760ms cubic-bezier(0.55, 0, 0.3, 1) both;
+}
+.shoot .bladeTwist {
+  animation: twist 760ms cubic-bezier(0.55, 0, 0.3, 1) both;
+}
+@keyframes blade {
+  0% {
+    transform: translateY(-140px);
+  }
+  38%,
+  52% {
+    transform: translateY(0);
+  }
+  100% {
+    transform: translateY(-140px);
+  }
+}
+@keyframes twist {
+  0% {
+    transform: rotate(-28deg);
+  }
+  38%,
+  52% {
+    transform: rotate(0deg);
+  }
+  100% {
+    transform: rotate(-28deg);
+  }
+}
+.flash {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: var(--g-flash);
+  opacity: 0;
+}
+.shoot .flash {
+  animation: flash 760ms ease-out both;
+}
+@keyframes flash {
+  0%,
+  44% {
+    opacity: 0;
+  }
+  54% {
+    opacity: 0.9;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+/* The frozen picture: a print that develops and drops into place. */
+.print {
+  border-radius: 10px;
+  background: var(--color-raised);
+  padding: 10px 10px 14px;
+  box-shadow:
+    0 18px 40px -18px rgb(0 0 0 / 0.45),
+    0 0 0 1px var(--color-border);
+  transform: rotate(-1.6deg);
+  animation: print-in 620ms cubic-bezier(0.2, 0.9, 0.25, 1.05) both;
+}
+@keyframes print-in {
+  from {
+    opacity: 0;
+    transform: translateY(-26px) rotate(2deg) scale(0.96);
+  }
+}
+.develop {
+  animation: develop 900ms ease-out 120ms both;
+}
+@keyframes develop {
+  from {
+    opacity: 0.15;
+    filter: blur(3px);
+  }
+}
+.frozen {
+  filter: grayscale(1) contrast(0.92);
+}
+.stamp {
+  animation: stamp 380ms cubic-bezier(0.3, 1.6, 0.5, 1) 520ms both;
+}
+@keyframes stamp {
+  from {
+    opacity: 0;
+    transform: scale(1.6) rotate(-8deg);
+  }
+}
+
+/* ---------- the teaching scene ---------- */
+
+/* One 7.2 s loop: bars stand, the shutter clicks, ticks freeze where they were, green growth
+   rises above the ticks, then it rests and starts again. */
+.teachBar {
+  transform-box: fill-box;
+  transform-origin: 50% 100%;
+  animation: teach-rise 7.2s var(--ease-swift) infinite both;
+  animation-delay: calc(var(--i, 0) * 70ms);
+}
+@keyframes teach-rise {
+  0% {
+    transform: scaleY(0.05);
+    opacity: 0.3;
+  }
+  10%,
+  100% {
+    transform: scaleY(1);
+    opacity: 1;
+  }
+}
+.teachTick {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: teach-tick 7.2s var(--ease-rise) infinite both;
+}
+@keyframes teach-tick {
+  0%,
+  30% {
+    opacity: 0;
+    transform: scaleX(0.3);
+  }
+  34%,
+  92% {
+    opacity: 1;
+    transform: scaleX(1);
+  }
+  100% {
+    opacity: 0;
+  }
+}
+.teachGrow {
+  transform-box: fill-box;
+  transform-origin: 50% 100%;
+  animation: teach-grow 7.2s var(--ease-swift) infinite both;
+  animation-delay: calc(var(--i, 0) * 90ms);
+}
+@keyframes teach-grow {
+  0%,
+  42% {
+    transform: scaleY(0);
+    opacity: 0;
+  }
+  43% {
+    opacity: 1;
+  }
+  62%,
+  92% {
+    transform: scaleY(1);
+    opacity: 1;
+  }
+  100% {
+    transform: scaleY(1);
+    opacity: 0;
+  }
+}
+.teachFlash {
+  animation: teach-flash 7.2s ease-out infinite both;
+}
+@keyframes teach-flash {
+  0%,
+  26% {
+    opacity: 0;
+  }
+  29% {
+    opacity: 0.85;
+  }
+  36%,
+  100% {
+    opacity: 0;
+  }
+}
+.teachBlade {
+  transform-box: view-box;
+  transform-origin: 0 0;
+  animation: teach-blade 7.2s cubic-bezier(0.55, 0, 0.3, 1) infinite both;
+}
+@keyframes teach-blade {
+  0%,
+  22% {
+    transform: translateY(-140px);
+  }
+  27%,
+  29% {
+    transform: translateY(0);
+  }
+  36%,
+  100% {
+    transform: translateY(-140px);
+  }
+}
+.teachCaption {
+  animation: teach-caption 7.2s ease-in-out infinite both;
+}
+.teachCaption[data-at="1"] {
+  animation-name: teach-caption-1;
+}
+.teachCaption[data-at="2"] {
+  animation-name: teach-caption-2;
+}
+@keyframes teach-caption {
+  0%,
+  24% {
+    opacity: 1;
+  }
+  28%,
+  100% {
+    opacity: 0;
+  }
+}
+@keyframes teach-caption-1 {
+  0%,
+  28% {
+    opacity: 0;
+  }
+  32%,
+  44% {
+    opacity: 1;
+  }
+  48%,
+  100% {
+    opacity: 0;
+  }
+}
+@keyframes teach-caption-2 {
+  0%,
+  48% {
+    opacity: 0;
+  }
+  52%,
+  94% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+.paused,
+.paused * {
+  animation-play-state: paused !important;
+}
+
+/* ---------- loading (skeleton bars breathing) ---------- */
+
+.ghostLoading {
+  animation: breathe 1.6s ease-in-out infinite;
+  animation-delay: calc(var(--i, 0) * 120ms);
+}
+
+/* ---------- data depth ---------- */
+
+.rowIn {
+  animation: row-in 420ms var(--ease-rise) both;
+  animation-delay: calc(var(--i, 0) * 90ms + 80ms);
+}
+@keyframes row-in {
+  from {
+    opacity: 0;
+    transform: translateX(-10px);
+    filter: blur(2px);
+  }
+}
+.rowGoing {
+  transition:
+    transform 380ms var(--ease-swift),
+    opacity 380ms ease;
+  transform: translateX(24px) scale(0.98);
+  opacity: 0;
+}
+.cellLit {
+  animation: cell-lit 900ms var(--ease-rise) both;
+  animation-delay: calc(var(--j, 0) * 90ms + 150ms);
+}
+@keyframes cell-lit {
+  0% {
+    transform: scaleY(0.2);
+    opacity: 0;
+  }
+  50% {
+    box-shadow: 0 0 0 3px var(--g-glow);
+  }
+}
+
+/* ---------- the weekly summary preview ---------- */
+
+.chat {
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--color-border);
+  background: var(--color-panel);
+}
+.chatAvatar {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  flex: none;
+  place-items: center;
+  border-radius: 8px;
+  color: #fff;
+  background: linear-gradient(140deg, var(--g-orcha), color-mix(in oklab, var(--g-orcha) 55%, #0b2f22));
+}
+.chatQuote {
+  border-radius: 6px;
+  background: color-mix(in oklab, var(--color-fg) 4%, transparent);
+  padding-inline: 8px;
+}
+.typing > i {
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  margin-right: 3px;
+  border-radius: 999px;
+  background: var(--color-muted);
+  animation: typing 1s ease-in-out infinite;
+}
+.typing > i:nth-child(2) {
+  animation-delay: 150ms;
+}
+.typing > i:nth-child(3) {
+  animation-delay: 300ms;
+}
+@keyframes typing {
+  50% {
+    transform: translateY(-3px);
+    opacity: 0.4;
+  }
+}
+.block {
+  animation: rise-in 380ms var(--ease-rise) both;
+  animation-delay: calc(var(--i, 0) * 120ms);
+}
+
+.risk {
+  color: var(--g-risk);
+}
+.unknown {
+  color: var(--g-unknown);
+}
+
+@keyframes draw {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+@keyframes breathe {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 0.8;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .meterFill,
+  .meterTick,
+  .meterTickLabel,
+  .nowBar,
+  .before,
+  .line,
+  .area,
+  .dot,
+  .playheadHalo,
+  .mapGlow,
+  .badge::after,
+  .medal,
+  .badge[data-earned="true"] .medal,
+  .print,
+  .develop,
+  .stamp,
+  .teachBar,
+  .teachTick,
+  .teachGrow,
+  .teachFlash,
+  .teachBlade,
+  .teachCaption,
+  .ghostLoading,
+  .rowIn,
+  .cellLit,
+  .block,
+  .landed,
+  .typing > i,
+  .focusing > i,
+  .shoot .blade,
+  .shoot .bladeTwist,
+  .shoot .flash {
+    animation: none !important;
+  }
+  .line {
+    stroke-dashoffset: 0;
+  }
+  .scan,
+  .badge::after,
+  .playheadHalo {
+    display: none;
+  }
+  .reveal,
+  .playhead,
+  .mapThen,
+  .mapGain,
+  .rowGoing,
+  .badge {
+    transition: none;
+  }
+  /* The finished frame of the teaching scene: the ticks where coverage was, growth above. */
+  .teachTick,
+  .teachGrow {
+    opacity: 1;
+    transform: none;
+  }
+  .teachCaption {
+    opacity: 0;
+  }
+  .teachCaption[data-at="2"] {
+    opacity: 1;
+  }
+  .teachFlash {
+    opacity: 0;
+  }
+  .teachBlade {
+    transform: translateY(-140px);
+  }
+}
+
+@media (forced-colors: active) {
+  .segYours,
+  .segOrcha,
+  .before,
+  .meterTick {
+    forced-color-adjust: none;
+  }
+  .segOrcha {
+    background: repeating-linear-gradient(45deg, CanvasText 0 2px, Canvas 2px 5px);
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.97);
+  }
+}
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}

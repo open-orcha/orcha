@@ -84,8 +84,7 @@ it("start submits only selected prepared task revisions and leaves human holds a
   const fetch = vi.fn(async (url: string) => jsonResponse(url.includes("start-check") ? exampleImpact(detail, url) : detail)); vi.stubGlobal("fetch", fetch); const onSaved = vi.fn();
   render(<MemoryRouter><WorkflowActions detail={detail} scope={scope()} verified stale={false} onSaved={onSaved} /></MemoryRouter>);
   fireEvent.click(screen.getByRole("button", { name: "Review start" })); const dialog = await screen.findByRole("dialog");
-  await within(dialog).findByRole("checkbox", { name: /Build Android/ }); expect(within(dialog).getByRole("button", { name: "Start selected tasks" })).toBeDisabled();
-  fireEvent.click(within(dialog).getByRole("checkbox", { name: /Build Android/ }));
+  expect(await within(dialog).findByRole("checkbox", { name: /Build Android/ })).toBeChecked(); expect(within(dialog).getByRole("checkbox", { name: /Write guide/ })).not.toBeChecked();
   expect(within(dialog).getByRole("button", { name: "Start selected tasks" })).toBeDisabled();
   fireEvent.click(within(dialog).getByRole("button", { name: "Check selected tasks" }));
   await waitFor(() => expect(within(dialog).getByRole("button", { name: "Start selected tasks" })).toBeEnabled());

@@ -1,0 +1,286 @@
+/*
+ * The Explore tab's own motion: the header's contour map and ticker, the history's timeline
+ * rail and screenshot fans, an exploration's route unfolding screen by screen, the live view's
+ * latest screen, and the empty state's charting scene. Same contract as ../motion.module.css:
+ * resting styles are final states, transform and opacity (and stroke-dashoffset) only, and
+ * under reduced motion everything stands finished and still.
+ */
+
+/* ---------- header ---------- */
+
+.contour {
+  position: absolute;
+  inset: -10% -6% -10% 40%;
+  pointer-events: none;
+  color: var(--color-primary);
+  opacity: 0.16;
+  -webkit-mask-image: radial-gradient(70% 80% at 75% 35%, 20%, transparent 75%);
+  mask-image: radial-gradient(70% 80% at 75% 35%, 20%, transparent 75%);
+}
+[data-theme="dark"] .contour {
+  opacity: 0.24;
+}
+@keyframes contour-in {
+  from {
+    opacity: 0;
+    transform: scale(1.04);
+  }
+}
+.contour {
+  animation: contour-in 1400ms var(--ease-rise) both;
+}
+
+/* The ticker: one dot per exploration, newest first, dropping in. */
+@keyframes tick-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.6);
+  }
+}
+.tick {
+  animation: tick-in 320ms var(--ease-rise) both;
+  animation-delay: calc(300ms + var(--i, 0) * 35ms);
+}
+
+/* ---------- history: the timeline ---------- */
+
+@keyframes rail-draw {
+  from {
+    transform: scaleY(0);
+  }
+}
+.rail {
+  transform-origin: 50% 0;
+  animation: rail-draw 900ms var(--ease-swift) both;
+  animation-delay: var(--d, 120ms);
+}
+@keyframes node-in {
+  from {
+    opacity: 0;
+    transform: scale(0.5);
+  }
+}
+.node {
+  animation: node-in 360ms var(--ease-rise) both;
+  animation-delay: calc(160ms + var(--i, 0) * 45ms);
+}
+
+/* ---------- a card's screenshot fan: spreads out on hover and focus ---------- */
+
+.fan {
+  --spread: 0px;
+}
+/* The newest print stays put; the earlier ones slide out to its left, into the card's own
+   space, so the fan never runs into the score beside it. */
+.fanItem {
+  transform: translateX(calc((var(--k) - var(--n) + 1) * var(--spread))) rotate(var(--r, 0deg));
+  transition: transform 320ms var(--ease-rise);
+}
+.card:hover .fan,
+.card:focus-within .fan {
+  --spread: 16px;
+}
+.card:hover .fanItem,
+.card:focus-within .fanItem {
+  transform: translateX(calc((var(--k) - var(--n) + 1) * var(--spread))) rotate(0deg);
+}
+
+/* ---------- a card's route, unfolding screen by screen ---------- */
+
+@keyframes unfold {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+}
+.route {
+  animation: unfold 260ms var(--ease-rise) both;
+}
+@keyframes frame-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.94);
+  }
+}
+.routeFrame {
+  animation: frame-in 380ms var(--ease-rise) both;
+  animation-delay: calc(var(--i, 0) * 70ms);
+}
+/* The path between two screens draws in just before the next one lands. */
+@keyframes leg-draw {
+  from {
+    transform: scaleX(0);
+  }
+}
+.leg {
+  transform-origin: 0 50%;
+  animation: leg-draw 260ms var(--ease-swift) both;
+  animation-delay: calc(var(--i, 0) * 70ms - 40ms);
+}
+@keyframes pin-drop {
+  0% {
+    opacity: 0;
+    transform: translateY(-10px) scale(0.6);
+  }
+  70% {
+    transform: translateY(1px) scale(1.06);
+  }
+}
+.pin {
+  animation: pin-drop 420ms var(--ease-rise) both;
+  animation-delay: calc(var(--i, 0) * 70ms + 260ms);
+}
+
+/* ---------- live ---------- */
+
+@keyframes frame-swap {
+  from {
+    opacity: 0;
+    transform: scale(1.02);
+  }
+}
+.liveFrame {
+  animation: frame-swap 420ms var(--ease-rise) both;
+}
+/* A scan line passing down the latest screen while the explorer works. */
+@keyframes scan {
+  from {
+    transform: translateY(-100%);
+  }
+  to {
+    transform: translateY(260%);
+  }
+}
+.scan {
+  animation: scan 2.6s var(--ease-swift) infinite;
+}
+
+/* The landing: the check pops in, then the line about the map. */
+@keyframes landed {
+  0% {
+    opacity: 0;
+    transform: scale(0.4);
+  }
+  70% {
+    transform: scale(1.15);
+  }
+}
+.landed {
+  animation: landed 460ms var(--ease-rise) both;
+}
+.landedLine {
+  animation: frame-in 420ms var(--ease-rise) both;
+  animation-delay: 900ms;
+}
+
+/* ---------- empty state: an exploration charting the app ---------- */
+
+.scene {
+  --step: 0;
+}
+.area {
+  transition:
+    border-color 400ms ease,
+    background-color 400ms ease;
+}
+.areaFog {
+  transition: opacity 600ms var(--ease-swift);
+}
+.areaShown .areaFog {
+  opacity: 0;
+}
+.areaShown {
+  border-color: var(--color-border-strong);
+  background: var(--color-panel);
+}
+.areaScreen {
+  opacity: 0;
+  transform: translateY(3px);
+  transition:
+    opacity 360ms ease,
+    transform 360ms var(--ease-rise);
+  transition-delay: 220ms;
+}
+.areaShown .areaScreen {
+  opacity: 1;
+  transform: none;
+}
+.traveler {
+  transition: transform 820ms var(--ease-swift);
+  will-change: transform;
+}
+.leg2 {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  transition: stroke-dashoffset 820ms var(--ease-swift);
+}
+.legDrawn {
+  stroke-dashoffset: 0;
+}
+.scenePin {
+  opacity: 0;
+  transform: translateY(-8px);
+  transition:
+    opacity 300ms ease,
+    transform 420ms var(--ease-rise);
+}
+.scenePinShown {
+  opacity: 1;
+  transform: none;
+}
+.sceneReport {
+  opacity: 0;
+  transform: translateX(10px);
+  transition:
+    opacity 420ms ease,
+    transform 520ms var(--ease-rise);
+}
+.sceneReportShown {
+  opacity: 1;
+  transform: none;
+}
+/* Between takes the whole scene fades out, resets unseen, and fades back in. */
+.sceneBody {
+  transition: opacity 380ms ease;
+}
+.sceneResetting {
+  opacity: 0;
+}
+.sceneResetting * {
+  transition: none !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .contour,
+  .tick,
+  .rail,
+  .node,
+  .route,
+  .routeFrame,
+  .leg,
+  .pin,
+  .liveFrame,
+  .scan,
+  .landed,
+  .landedLine {
+    animation: none !important;
+  }
+  .scan {
+    display: none;
+  }
+  .fanItem,
+  .card:hover .fanItem,
+  .card:focus-within .fanItem {
+    transition: none;
+  }
+  .area,
+  .areaFog,
+  .areaScreen,
+  .traveler,
+  .leg2,
+  .scenePin,
+  .sceneReport,
+  .sceneBody {
+    transition: none !important;
+  }
+}

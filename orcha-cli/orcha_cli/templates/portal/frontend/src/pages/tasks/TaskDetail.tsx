@@ -67,13 +67,21 @@ import {
 import { FilesChanged } from "../../components/FilesChanged";
 import { runBlobSource } from "../../components/filePreview/sources";
 import { modeWords, useProjectMode } from "../../lib/projectMode";
-import { AutofixSection, EvidencePack } from "./evidence";
+import { EvidencePack } from "./evidence";
 import { DeliverablesEvidence, DeliverablesSection } from "./deliverables";
 import { GoalChain } from "./goal";
 import { WorkflowTaskReturn } from "../workflows/WorkflowTaskReturn";
 import { WorkerDetailsNotice } from "../workflows/WorkflowReadViews";
 import { WorkflowTaskInspector, WorkflowTaskStatus, useTaskWorkflow, workflowMemberHref } from "../workflows/WorkflowTaskContext";
 import { WorkflowTaskEntry } from "../workflows/WorkflowTaskEntry";
+import { TaskQaSection } from "../qa/TaskQaSection";
+import { RunResultCard } from "../qa/runTask/RunResultCard";
+import { isRunTaskRow } from "../qa/runTask/model";
+import { useRunTaskIds } from "../qa/runTask/useRunTasks";
+import { FINISHED_ALONE_WORD, qualityName } from "../qa/runTask/finishing";
+import { SendToQaDialog } from "../qa/requests/SendToQaDialog";
+import { OnDoneFields, useOnDoneDraft } from "../qa/requests/OnDoneControl";
+import { setTaskOnDone } from "../qa/requests/on-done";
 import { TaskAuthority, useWorkflowPlanApproval } from "./TaskAuthority";
 import { pausedById, useContainerBudgets, type AgentBudgetStatus } from "../agents/budget/budgetModel";
 import { BudgetPausedChip } from "../agents/budget/AgentBudgetSection";
@@ -253,11 +261,15 @@ function ClampedDesc({ text, tasks }: { text: string; tasks?: Task[] }) {
 /** POST /done stores `{result, by_agent_id}` — the envelope, not the result:
  *  unwrap it (the claimer is already named by the gate / activity, and a raw
  *  agent id is never shown — D4/D12). Any other object passes through. */
+/** A person's reason for a plan decision. A run started by a click records a note to its agent instead. */
+const personReason = (reason: string | null | undefined) => (reason && !/That is the approval of your plan/.test(reason) ? reason : "");
+
 export function unwrapDoneResult(r: unknown): unknown {
   if (!r || typeof r !== "object" || Array.isArray(r)) return r;
   const o = r as Record<string, unknown>;
   const keys = Object.keys(o);
-  if (!keys.includes("result") || !keys.every((k) => k === "result" || k === "by_agent_id")) return r;
+  // `qa_run` is the run's own record: the Run result card reads it, never this text view.
+  if (!keys.includes("result") || !keys.every((k) => k === "result" || k === "by_agent_id" || k === "qa_run")) return r;
   return o.result;
 }
 function ResultView({ r: raw, tasks }: { r: unknown; tasks?: Task[] }) {
@@ -828,7 +840,7 @@ export function GateSurface({
           <span className="wk-dm">
             {pd.actor ? " by " + pd.actor : ""}
             {pd.at ? " · " + relTime(pd.at) : ""}
-            {pd.reason ? " — " + trunc(pd.reason, 140) : ""}
+            {personReason(pd.reason) ? " — " + trunc(pd.reason!, 140) : ""}
           </span>
         </div>
       </div>
@@ -956,7 +968,7 @@ export function GateSurface({
         ) : null}
       </div>
       <div className="td-g-rows">
-        {isVerify ? <EvidencePack taskId={t.id} actorId={actor ? String(actor.id) : null} noActorReason={noHuman} defaultOpen={!noDiff} /> : null}
+        {isVerify ? <EvidencePack taskId={t.id} defaultOpen={!noDiff} /> : null}
         <div className="td-g-row field">
           <span className="td-g-k">{isPlan ? "Plan" : "Result"}</span>
           <div className="td-g-v tx">
@@ -1305,29 +1317,17 @@ type ActItem =
 /** Backend marker messages the thread carries as plain text:
  *   decision_routing.py        "[DECISION · <subject> = APPROVED|REJECTED by <alias>]( — <reason>)"
  *   task_verification_routes   "[verification rejected] <feedback>"
- *   verdikt_autofix (mig 068)  "[Verdikt auto-fix] Verdikt failed this task on attempt N of M …"
- *                              "[Verdikt auto-fix] Stopped: <reason>"
+ *   qa_run_tasks               "[Run result] …", "[Run stopped] …", "[Needs a person] …", "[Finished by …] …"
  *  Parsed into structured timeline events (D12) instead of comment cards. */
 export type ThreadMarker =
   | { kind: "decision"; subject: string; approved: boolean; actor: string | null; reason: string }
   | { kind: "verify_rejected"; feedback: string }
   | { kind: "verify_approved"; feedback: string }
-  | { kind: "autofix_rework"; attempt: number; max: number; detail: string }
-  | { kind: "autofix_stopped"; reason: string };
+  | { kind: "run_ended"; stopped: boolean; summary: string }
+  | { kind: "came_to_person" }
+  | { kind: "finished_alone"; by: string | null };
 export function parseThreadMarker(body: string | null | undefined): ThreadMarker | null {
   const b = String(body || "");
-  const af = /^\[Verdikt auto-fix\]\s*([\s\S]*)$/.exec(b.trim());
-  if (af) {
-    const rest = af[1].trim();
-    const st = /^Stopped:\s*([\s\S]*)$/.exec(rest);
-    if (st) return { kind: "autofix_stopped", reason: st[1].trim() };
-    const n = /attempt (\d+) of (\d+)/.exec(rest);
-    const fc = rest.indexOf("Failed criteria:");
-    // the failed criteria (expected vs actual) — links stay in the agent's copy, not the timeline
-    const detail = (fc >= 0 ? rest.slice(fc + "Failed criteria:".length) : rest.split("\n").slice(2).join("\n")).split("\n\n")[0]
-      .split("\n").filter((l) => !/^\s*(Screenshot|Other screenshots):/.test(l)).join("\n").trim();
-    return { kind: "autofix_rework", attempt: n ? Number(n[1]) : 0, max: n ? Number(n[2]) : 0, detail };
-  }
   const d = /^\[DECISION · ([\w-]+) = (APPROVED|REJECTED) by ([^\]]+)\](?:\s+—\s+([\s\S]*))?$/.exec(b.trim());
   if (d) {
     const actor = d[3].trim();
@@ -1337,6 +1337,12 @@ export function parseThreadMarker(body: string | null | undefined): ThreadMarker
   if (v) return { kind: "verify_rejected", feedback: v[1].trim() };
   const ok = /^\[verification approved\]\s*([\s\S]*)$/.exec(b.trim());
   if (ok) return { kind: "verify_approved", feedback: ok[1].trim() };
+  // A run's own lines: the first says it; the facts and links below it live on the Run result card.
+  const run = /^\[Run (result|stopped)\]\s*(.*)/.exec(b.trim());
+  if (run) return { kind: "run_ended", stopped: run[1] === "stopped", summary: run[2].trim() };
+  if (/^\[Needs a person\]/.test(b.trim())) return { kind: "came_to_person" };
+  const alone = /^\[Finished by [^\]]+\][\s\S]*?(?:\.\s+(\S+) let )/.exec(b.trim());
+  if (alone || /^\[Finished by [^\]]+\]/.test(b.trim())) return { kind: "finished_alone", by: alone?.[1] ?? null };
   return null;
 }
 /** The most recent "[verification rejected] …" message, if any. */
@@ -1351,19 +1357,14 @@ export function latestRejection(msgs: ThreadMsg[]): { feedback: string; at: stri
 /** A decision marker as a one-line timeline event. `author` is the message's
  *  author alias — parity r2: the backend now attributes the verification note to
  *  the verifying human (task_verification_routes), so the line names them. */
+function RunMarkerEvent({ mk, at }: { mk: Extract<ThreadMarker, { kind: "run_ended" | "came_to_person" | "finished_alone" }>; at: string }) {
+  if (mk.kind === "run_ended") return <TimelineEvent icon={mk.stopped ? "x" : "check"} at={at} body={mk.summary || undefined} bodyLines={2}>{mk.stopped ? "The run stopped before it finished" : "The run finished"}</TimelineEvent>;
+  if (mk.kind === "came_to_person") return <TimelineEvent icon="eye" at={at}>Came to a person: not everything is proven</TimelineEvent>;
+  return <TimelineEvent icon="check" at={at} body={mk.by ? `Turned on by ${mk.by}` : undefined}><b>{FINISHED_ALONE_WORD}</b>: every line was proven</TimelineEvent>;
+}
+
 function markerEventNode(mk: ThreadMarker, at: string, author?: string | null): ReactNode {
-  if (mk.kind === "autofix_rework" || mk.kind === "autofix_stopped") {
-    // the system identity (system:verdikt), never a person
-    const who = <span className="td-tl-who">Verdikt auto-fix</span>;
-    if (mk.kind === "autofix_stopped") {
-      return <TimelineEvent icon={/^Verdikt passed/.test(mk.reason) ? "check" : "alert"} actor={who} at={at} body={mk.reason} bodyLines={2}>stopped</TimelineEvent>;
-    }
-    return (
-      <TimelineEvent icon="x" actor={who} at={at} body={mk.detail || undefined} bodyLines={2}>
-        sent it back to the agent — Verdikt failed attempt {mk.attempt || "?"} of {mk.max || "?"}
-      </TimelineEvent>
-    );
-  }
+  if (mk.kind === "run_ended" || mk.kind === "came_to_person" || mk.kind === "finished_alone") return <RunMarkerEvent mk={mk} at={at} />;
   if (mk.kind === "verify_rejected" || mk.kind === "verify_approved") {
     const by = author && author !== "system" ? author : null;
     const rej = mk.kind === "verify_rejected";
@@ -1379,7 +1380,7 @@ function markerEventNode(mk: ThreadMarker, at: string, author?: string | null): 
   return (
     <TimelineEvent icon={mk.approved ? "check" : "x"} actor={mk.actor ? <span className="td-tl-who">{mk.actor}</span> : null} at={at}>
       {mk.actor ? verb : verb.charAt(0).toUpperCase() + verb.slice(1)}
-      {mk.reason ? <> — “{trunc(mk.reason, 120)}”</> : null}
+      {personReason(mk.reason) ? <> — “{trunc(mk.reason, 120)}”</> : null}
     </TimelineEvent>
   );
 }
@@ -1429,7 +1430,7 @@ function taskEvents(t: Task, runs: Run[], snap: Snapshot | null, opts: { planMar
       node: (
         <TimelineEvent icon={ok ? "check" : "x"} actor={who(pd.actor)} at={pd.at}>
           {ok ? "approved the plan" : "requested changes to the plan"}
-          {pd.reason ? <> — “{trunc(pd.reason, 120)}”</> : null}
+          {personReason(pd.reason) ? <> — “{trunc(pd.reason, 120)}”</> : null}
         </TimelineEvent>
       ),
     });
@@ -2481,6 +2482,8 @@ export function NewTaskModal({ onClose, onCreated, initialAssignee }: {
   const [errField, setErrField] = useState<"title" | "dod" | null>(null);
   const [creating, setCreating] = useState(false);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
+  // "Send to Quality when finished": off unless the project sends every task; a click decides.
+  const [qaPick, setQaPick] = useState<boolean | null>(null);
   const titleRef = useRef<HTMLInputElement | null>(null);
   const dodRef = useRef<HTMLTextAreaElement | null>(null);
   const priRef = useRef<HTMLButtonElement | null>(null);
@@ -2499,7 +2502,9 @@ export function NewTaskModal({ onClose, onCreated, initialAssignee }: {
   const customOk = pri !== "custom" || (priCustom.trim() !== "" && Number.isFinite(customN) && customN >= 1 && String(customN) === priCustom.trim());
   const bucket = pri === "custom" ? priorityBucket(customOk ? customN : DEFAULT_PRIORITY) : PRIORITY_BUCKETS.find((b) => b.k === pri) || PRIORITY_BUCKETS[2];
   const projectName = snap?.container?.name || "";
-  const dirty = !!(title.trim() || desc.trim() || dod.trim() || deps.length || pChain.trim() || pHandoff.trim() || pAutonomy.trim() || pNotes.trim());
+  const qaDraft = useOnDoneDraft(cid || "", null, qaPick === true);
+  const qaOn = qaPick ?? qaDraft.settings.trigger === "always";
+  const dirty = !!(title.trim() || desc.trim() || dod.trim() || deps.length || pChain.trim() || pHandoff.trim() || pAutonomy.trim() || pNotes.trim() || qaPick !== null);
   const protoN = [pChain, pHandoff, pAutonomy, pNotes].filter((x) => x.trim()).length;
 
   const requestClose = () => {
@@ -2570,6 +2575,17 @@ export function NewTaskModal({ onClose, onCreated, initialAssignee }: {
       return;
     }
     setCreating(false);
+    if (r.ok && r.d.task_id && (qaPick !== null || qaOn)) {
+      // Turned off where the project sends every task: "not this one". Left as the project says: nothing to save.
+      const enabled = qaOn ? true : qaDraft.settings.trigger === "manual" ? null : false;
+      if (enabled !== null) {
+        try {
+          await setTaskOnDone(r.d.task_id, h.id, { ...qaDraft.choice(), enabled });
+        } catch (e) {
+          toast("Task created, but Send to Quality when finished was not saved: " + (e instanceof Error ? e.message : String(e)), "warn");
+        }
+      }
+    }
     if (r.ok) {
       const where =
         r.d.status === "pending" ? " — starts when dependencies clear" : r.d.assignee_alias ? " · assigned to " + r.d.assignee_alias : "";
@@ -2773,6 +2789,19 @@ export function NewTaskModal({ onClose, onCreated, initialAssignee }: {
               <Icon name="shield" cls="v2-ico" />
               {protoN ? "Protocol · " + protoN : "Protocol"}
             </button>
+            {qaDraft.ready.length ? (
+              <button
+                type="button"
+                className={"nt-chip" + (qaOn ? "" : " is-empty")}
+                aria-pressed={qaOn}
+                data-qa-on-done-chip="true"
+                title="When its agent finishes this task, Quality tests it on the device you pick, and the result comes back to the task"
+                onClick={() => setQaPick(!qaOn)}
+              >
+                <Icon name="phone" cls="v2-ico" />
+                {qaOn ? "Quality · " + qaDraft.words() : "Send to Quality when finished"}
+              </button>
+            ) : null}
           </div>
           {/* borderless lines under one hairline, placeholder-as-label (Linear composer);
               each keeps an accessible name */}
@@ -2799,6 +2828,11 @@ export function NewTaskModal({ onClose, onCreated, initialAssignee }: {
               </label>
             ))}
           </div>
+          {qaOn && qaDraft.ready.length ? (
+            <div className="nt-qa" role="group" aria-label="Send to Quality when finished" data-qa-on-done-fields="true">
+              <OnDoneFields d={qaDraft} />
+            </div>
+          ) : null}
           {err && !errField ? (
             <div className="nt-err" id="nt_err" role="alert">
               <Icon name="alert" cls="v2-ico" />
@@ -3092,14 +3126,6 @@ export interface ThreadCache {
 /** "overview" (the default) and "activity" both show the Activity panel. */
 const actsTab = (tab: TabKey): "activity" | "runs" => (tab === "runs" ? "runs" : "activity");
 
-/** Mig 068: the Verdikt auto-fix loop on the task — status, attempts timeline, Stop. Shown
- *  while a loop of the current review cycle exists (also while the task is back with its agent). */
-function TaskAutofix({ t }: { t: Task }) {
-  const actor = useActor();
-  const noHuman = useNoHumanReason();
-  return <AutofixSection taskId={t.id} status={t.status} actorId={actor ? String(actor.id) : null} noActorReason={noHuman} />;
-}
-
 
 function TaskDetail({
   t,
@@ -3150,7 +3176,9 @@ function TaskDetail({
     </div>
   );
   const full = mode === "full";
-  const description = t.description ? (
+  // A run task's description is the instruction its agent follows; the Run result card says what ran.
+  const runTask = isRunTaskRow(t, useRunTaskIds());
+  const description = runTask ? null : t.description ? (
     full ? (
       <Md className="td-desc wk-text wk-md" text={t.description} tasks={snap?.tasks} />
     ) : (
@@ -3189,7 +3217,7 @@ function TaskDetail({
         <WorkflowTaskReturn taskId={t.id} />
         <GoalChain taskId={t.id} />
         <h1 className="td-title v2-t-display" title={full ? undefined : t.title}>
-          {t.title}
+          {runTask ? qualityName(t.title) : t.title}
         </h1>
         {!full ? (
           <div className="td-meta" aria-label="Summary">
@@ -3253,6 +3281,7 @@ function TaskDetail({
           </div>
         ) : null}
         <WorkflowTaskInspector taskId={t.id} />
+        {runTask ? <RunResultCard key={"run-" + t.id} task={t} /> : null}
         {full ? description : gate}
         {full ? gate : description}
         {rejection ? (
@@ -3265,14 +3294,13 @@ function TaskDetail({
             {rejection.feedback ? <Md className="wk-text wk-md td-changes-b" text={rejection.feedback} tasks={snap?.tasks} /> : null}
           </div>
         ) : null}
-        {!blockLegacy && t.status !== "completed" && t.status !== "cancelled" ? <TaskAutofix key={"af-" + t.id} t={t} /> : null}
         {!gated ? (
           <div className="td-block">
             <div className="td-block-k">Definition of done</div>
             <Md className="wk-text wk-md" text={t.definition_of_done || "—"} tasks={snap?.tasks} />
           </div>
         ) : null}
-        {t.result && (blockLegacy || !(t.status === "needs_verification" && !acted)) ? (
+        {t.result && !runTask && (blockLegacy || !(t.status === "needs_verification" && !acted)) ? (
           <div className={"td-block" + (rejection ? " is-rejected" : "")} data-result-rejected={rejection ? "true" : undefined}>
             <div className="td-block-k">{rejection ? "Previous result · rejected" : "Result"}</div>
             <div className="wk-text">
@@ -3296,6 +3324,8 @@ function TaskDetail({
         ) : null}
         {/* non-code deliverables (reports, tables, images, PDFs) + version history */}
         <DeliverablesSection key={"dlv-" + t.id} task={t} full={full} />
+        {/* QA (requests, proved lines, sessions, findings, drafted scenarios, verdicts) — nothing when the task has none */}
+        {runTask ? null : <TaskQaSection key={"qa-" + t.id} taskId={t.id} task={t} />}
       </div>
       <div className="td-rail">
         {phone ? (
@@ -3463,6 +3493,7 @@ export function TaskDetailPane({
   // "Make recurring…": a routine pre-filled as a COPY of this task (the task is never changed)
   const recurGate = useMakeRecurringGate();
   const [recurOpen, setRecurOpen] = useState(false);
+  const [sendToQaOpen, setSendToQaOpen] = useState(false);
   const [dispatchBusy, setDispatchBusy] = useState(false);
   // TG-50: hold / release / unassign — the human dispatch controls
   // (POST /api/tasks/{tid}/readiness and /unassign, both human-authority)
@@ -3509,6 +3540,9 @@ export function TaskDetailPane({
   // fades the title in once the H1 scrolls under the header (never twice)
   const [h1Visible, setH1Visible] = useState(true);
   const tid = t ? t.id : null;
+  // A run task reads as one clean task: its id is nobody's business.
+  const runIds = useRunTaskIds();
+  const isRun = !!t && isRunTaskRow(t, runIds);
   useEffect(() => {
     if (mode !== "full" || !tid) return;
     const h1 = paneRef.current?.querySelector(".td-title");
@@ -3539,7 +3573,7 @@ export function TaskDetailPane({
     const aiAssignee = assignee && assignee.kind !== "human" ? assignee : null;
     menu = [
       { label: "Copy link", icon: "link", onSelect: () => copy(taskLink, "Link") },
-      { label: "Copy task ID", icon: "copy", hint: shortId(t.id), onSelect: () => copy(String(t.id), "Task ID") },
+      ...(isRun ? [] : [{ label: "Copy task ID", icon: "copy", hint: shortId(t.id), onSelect: () => copy(String(t.id), "Task ID") } as MenuItemSpec]),
       ...(pr ? [{ label: "Open pull request", icon: "pr", hint: "#" + pr.number, onSelect: () => void window.open(pr.url, "_blank", "noopener") } as MenuItemSpec] : []),
       "separator",
       { label: "Open runs", icon: "live", onSelect: () => onTab("runs") },
@@ -3554,6 +3588,12 @@ export function TaskDetailPane({
           ? { label: "Pair in terminal", icon: "play", hint: aiAssignee.alias, disabled: true, disabledReason: noHuman }
           : { label: "Pair in terminal", icon: "play", disabled: true, disabledReason: "No agent assigned — assign an agent to pair in a terminal" },
     ];
+    // Any task can go to QA; a person sends it from here, an agent through its own tools.
+    if (!blockLegacy && !t.is_root) {
+      menu.push("separator", actor
+        ? { label: "Send to QA…", icon: "phone", onSelect: () => setSendToQaOpen(true) }
+        : { label: "Send to QA…", icon: "phone", disabled: true, disabledReason: noHuman });
+    }
     if (!blockLegacy) menu.push({ label: "Workflow membership…", icon: "tasks", onSelect: () => setWorkflowEntryOpen(true) });
     if (member) menu.push({ label: member.detail.hidden ? "View hidden workflow" : "Open workflow task controls", icon: "tasks", href: workflowMemberHref(member.detail, t.id) });
     const recurItem = makeRecurringItem(recurGate, () => setRecurOpen(true), t);
@@ -3591,10 +3631,10 @@ export function TaskDetailPane({
         className="td-pagehead"
         titleAs="div"
         glyph={t ? <WorkflowTaskStatus taskId={t.id} fallback={t.status} size={14} /> : undefined}
-        id={t ? <span className="v2-t-id td-id" title={"Task " + t.id}>{shortId(t.id)}</span> : undefined}
+        id={t && !isRun ? <span className="v2-t-id td-id" title={"Task " + t.id}>{shortId(t.id)}</span> : undefined}
         // the inspector's title lives in the body (D12: never twice); the
         // full view keeps Linear's "ID  Title ☆ ⋯" header row
-        title={t ? (mode === "full" ? t.title : null) : "Task"}
+        title={t ? (mode === "full" ? (isRun ? qualityName(t.title) : t.title) : null) : "Task"}
         trailing={
           t ? (
             <>
@@ -3608,7 +3648,7 @@ export function TaskDetailPane({
             {t && mode === "full" ? (
               <span className="td-head-acts">
                 <IconButton icon="link" label="Copy link" variant="outline" size="sm" onClick={() => copy(taskLink, "Link")} />
-                <IconButton icon="copy" label={"Copy task ID (" + shortId(t.id) + ")"} variant="outline" size="sm" onClick={() => copy(String(t.id), "Task ID")} />
+                {isRun ? null : <IconButton icon="copy" label={"Copy task ID (" + shortId(t.id) + ")"} variant="outline" size="sm" onClick={() => copy(String(t.id), "Task ID")} />}
                 {pr ? (
                   <a
                     className={iconButtonClass({ size: "sm", variant: "outline" }, "td-pr-btn")}
@@ -3637,6 +3677,7 @@ export function TaskDetailPane({
       <style>{composerCss}</style>
       {header}
       {t && recurOpen ? <MakeRecurringDialog task={t} onClose={() => setRecurOpen(false)} /> : null}
+      {t && sendToQaOpen ? <SendToQaDialog task={t} onClose={() => setSendToQaOpen(false)} /> : null}
       {t && unassignOpen && !blockLegacy ? (
         <Dialog
           title="Unassign this task?"

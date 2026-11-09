@@ -18,6 +18,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { requestsChanged } from "./qaRequestBus";
 import { fetchSnapshot } from "../api/client";
 import { applyContainerIcons } from "../cloud/projects/projectIcons";
 import { refreshProjectsIfWatched } from "./projects";
@@ -35,7 +36,9 @@ export type Connection = "live" | "polling" | "reconnecting" | "offline";
 export const STALE_MS = 10_000;
 /** A snapshot GET that has not answered after this long is aborted (QA: hung
  *  backends must not pile up one request per poll tick). */
-export const SNAPSHOT_TIMEOUT_MS = 15_000;
+export const SNAPSHOT_TIMEOUT_MS = 25_000;
+/** Failed reads in a row before it counts as an outage: a slow or loaded machine loses single reads. */
+export const OUTAGE_FAILURES = 3;
 /** An identity provider that has not settled after this long is treated as
  *  UNVERIFIED: the project shows read-only (never fail-open to a guessed
  *  human) and the ask is retried with backoff (IDENTITY_RETRY_MS). */
@@ -137,12 +140,14 @@ export function isAnsweredKind(k: SnapshotErrorKind): boolean {
 
 /** Pure connection classifier (unit-tested) — never reports "live" on failure. */
 export function classifyConnection(
-  o: { error: string | null; lastOkAt: number | null; streamOpen: boolean; now: number },
+  o: { error: string | null; lastOkAt: number | null; streamOpen: boolean; now: number; failures?: number },
 ): { connection: Connection; stale: boolean } {
   const stale = o.lastOkAt != null && o.now - o.lastOkAt > STALE_MS;
-  if (o.lastOkAt == null) return { connection: o.error ? "offline" : "polling", stale: false };
-  if (o.error) return { connection: stale ? "offline" : "reconnecting", stale };
-  if (stale) return { connection: "reconnecting", stale };
+  // `failures`: reads lost in a row. Slow is not an outage: a read still on its way counts for nothing.
+  const outage = (o.failures ?? OUTAGE_FAILURES) >= OUTAGE_FAILURES;
+  if (o.lastOkAt == null) return { connection: o.error && outage ? "offline" : "polling", stale: false };
+  if (o.error) return { connection: stale && outage ? "offline" : "reconnecting", stale };
+  if (stale && o.failures !== 0) return { connection: "reconnecting", stale };
   return { connection: o.streamOpen ? "live" : "polling", stale };
 }
 
@@ -351,6 +356,8 @@ export function SnapshotProvider({ children, pollMs = 3000 }: { children: ReactN
     };
   }, []);
   const firstSnapRef = useRef(true);
+  const failuresRef = useRef(0);
+  const [failures, setFailures] = useState(0);
 
   const refresh = useCallback(async () => {
     const my = ++seqRef.current;
@@ -392,6 +399,8 @@ export function SnapshotProvider({ children, pollMs = 3000 }: { children: ReactN
       setError(null);
       setErrorStatus(null);
       setErrorDetail(null);
+      failuresRef.current = 0;
+      setFailures(0);
       setLastOkAt(Date.now());
       setBump((b) => b + 1);
       if (failingRef.current) {
@@ -407,6 +416,8 @@ export function SnapshotProvider({ children, pollMs = 3000 }: { children: ReactN
       if (my < appliedRef.current) return; // stale failure never hides newer data
       appliedRef.current = my;
       const aborted = e instanceof Error && e.name === "AbortError";
+      failuresRef.current += 1;
+      setFailures(failuresRef.current);
       setError(aborted ? "request timed out" : e instanceof Error ? e.message : String(e));
       const ee = e as { status?: unknown; detail?: unknown } | null;
       const st = !aborted && ee && typeof ee.status === "number" ? ee.status : null;
@@ -468,8 +479,9 @@ export function SnapshotProvider({ children, pollMs = 3000 }: { children: ReactN
       es.onopen = () => { if (alive) setStreamOpen(true); };
       es.onmessage = (ev) => {
         try {
-          const ts = (JSON.parse(ev.data) as { ts?: number }).ts;
-          if (ts != null) cursor = ts;
+          const data = JSON.parse(ev.data) as { ts?: number; event?: string };
+          if (data.ts != null) cursor = data.ts;
+          if (data.event === "qa_request_changed") requestsChanged();
         } catch { /* non-JSON keepalive */ }
         if (pending) return;
         pending = true;
@@ -505,7 +517,7 @@ export function SnapshotProvider({ children, pollMs = 3000 }: { children: ReactN
   }, []);
   useEffect(() => { setStaleNow(false); }, [lastOkAt]);
   const { connection, stale } = classifyConnection({
-    error, lastOkAt, streamOpen,
+    error, lastOkAt, streamOpen, failures,
     now: staleNow && lastOkAt != null ? lastOkAt + STALE_MS + 1 : (lastOkAt ?? 0),
   });
 

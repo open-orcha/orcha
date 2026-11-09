@@ -12,11 +12,13 @@
  *   view=list|board              (default list; board = the read-only "tasks by status" view)
  *   tab=overview|activity|runs   (detail tab; default overview)
  *   full=1                       selected task as a full view (list hidden)
+ *   runs=hide                    leave Quality run tasks out (absent = the persisted choice, shown by default)
  *   new=1                        open the New task composer (palette "New task")
  * Unknown values are ignored, never thrown.
  */
 import type { Task } from "../../types";
 import { sortState, type SortState } from "../../lib/sort";
+import { isRunTaskRow } from "../qa/runTask/model";
 
 export const GROUP_ORDER: { k: string; label: string }[] = [
   { k: "needs_verification", label: "Needs verification" },
@@ -98,6 +100,16 @@ export interface TaskQuery {
   view: ViewKey;
   tab: TabKey;
   full: boolean;
+  /** Leave Quality run tasks out of the list. */
+  hideRuns: boolean;
+}
+
+const HIDE_RUNS_KEY = "orcha:v2:tasks:hideRuns";
+export function storedHideRuns(): boolean {
+  try { return localStorage.getItem(HIDE_RUNS_KEY) === "1"; } catch { return false; }
+}
+export function keepHideRuns(hide: boolean): void {
+  try { if (hide) localStorage.setItem(HIDE_RUNS_KEY, "1"); else localStorage.removeItem(HIDE_RUNS_KEY); } catch { /* private mode */ }
 }
 
 const oneOf = <T extends string>(v: string | null, allowed: readonly T[], dflt: T): T =>
@@ -120,6 +132,7 @@ export function parseTaskQuery(search: string): TaskQuery {
     view: oneOf(p.get("view"), ["list", "board"] as const, "list"),
     tab: oneOf(p.get("tab"), ["overview", "activity", "runs"] as const, "overview"),
     full: p.get("full") === "1",
+    hideRuns: p.has("runs") ? p.get("runs") === "hide" : storedHideRuns(),
   };
 }
 
@@ -185,8 +198,9 @@ export function matchesQuery(t: Task, q: string): boolean {
   });
 }
 
-export function filterTasks(tasks: Task[], q: TaskQuery): Task[] {
+export function filterTasks(tasks: Task[], q: TaskQuery, runIds?: ReadonlySet<string>): Task[] {
   return tasks.filter((t) => {
+    if (q.hideRuns && isRunTaskRow(t, runIds)) return false;
     if (q.status.length) {
       const inKnown = KNOWN_STATUSES.includes(t.status);
       if (!(q.status.includes(t.status) || (!inKnown && q.status.includes("other")))) return false;

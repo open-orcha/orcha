@@ -1,10 +1,10 @@
 import SwiftUI
 
 /// Proof of work — the web `EvidencePack` inside the verification card. One calm summary
-/// line ("3/4 DoD · 42 tests passed · 1 risk · Verdikt pass") with a Details toggle that
+/// line ("3/4 DoD · 42 tests passed · 1 risk") with a Details toggle that
 /// expands in place to the full pack: the definition of done line by line (proven /
 /// not proven / needs a human, with the run output behind each), the tests the runs
-/// actually ran, the changes with risk flags and links, and Verdikt.
+/// actually ran, and the changes with risk flags and links.
 /// Truthful states: loading, unavailable (reason + Retry), no evidence yet.
 struct TaskProofOfWork: View {
     @Environment(AppModel.self) private var model
@@ -48,13 +48,8 @@ struct TaskProofOfWork: View {
                 .accessibilityLabel(expanded ? "Hide proof of work details" : "Show proof of work details")
             }
             if expanded, let pack {
-                EvidenceDetails(pack: pack, taskId: taskId) { run in
-                    var updated = pack
-                    updated.verdikt = run
-                    self.pack = updated
-                    Task { await load() }
-                }
-                .transition(.opacity)
+                EvidenceDetails(pack: pack)
+                    .transition(.opacity)
             }
         }
         .task(id: reloadKey) { await load() }
@@ -108,7 +103,7 @@ struct TaskProofOfWork: View {
     }
 }
 
-/// "3/4 DoD · 42 tests passed · 1 risk · Verdikt pass" — colour only in the small word.
+/// "3/4 DoD · 42 tests passed · 1 risk" — colour only in the small word.
 struct EvidenceSummaryLine: View {
     @Environment(\.palette) private var p
     let parts: [EvidencePart]
@@ -148,8 +143,6 @@ extension Palette {
 private struct EvidenceDetails: View {
     @Environment(\.palette) private var p
     let pack: EvidencePackDto
-    let taskId: String
-    let onVerdiktChanged: (VerdiktRunDto) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: LSpace.m) {
@@ -157,7 +150,6 @@ private struct EvidenceDetails: View {
             section("Definition of done") { DodList(items: pack.dod?.items ?? []) }
             section("Tests") { TestsList(pack: pack) }
             section("Changes") { ChangesBlock(pack: pack) }
-            TaskVerdiktSection(taskId: taskId, latest: pack.verdikt, onChanged: onVerdiktChanged)
             Text(EvidenceUx.builtLine(
                 runs: pack.runs.count,
                 ago: MobileUx.agoLabel(pack.builtAt),

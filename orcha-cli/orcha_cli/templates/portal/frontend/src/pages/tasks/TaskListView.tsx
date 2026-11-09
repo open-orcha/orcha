@@ -35,6 +35,9 @@ import { LivePill } from "../../components/primitives";
 import { IconButton } from "../../components/primitives";
 import { GroupHeader } from "../../components/primitives";
 import { Board, BoardCard, BoardColumn } from "../../components/primitives";
+import { isRunTaskRow } from "../qa/runTask/model";
+import { useRunTaskIds } from "../qa/runTask/useRunTasks";
+import { qualityName } from "../qa/runTask/finishing";
 import { FilterPills } from "../../components/primitives";
 import { PageToolbar } from "../../shell/PageChrome";
 import {
@@ -211,7 +214,9 @@ export function TaskRow({ t, snap, selected, onSelect, compact, groupedBy, revie
 }) {
   const act = latestActivity(t);
   const { member } = useTaskWorkflow(t.id);
-  const chips = member && !member.detail.hidden ? [<Chip key="workflow" size="sm">Workflow</Chip>] : taskChips(snap, t, { reviewOn, level }).slice(0, phone ? 1 : 2);
+  const run = isRunTaskRow(t, useRunTaskIds());
+  const quality = run ? [<Chip key="quality" size="sm" className="tl-qualitychip" icon={<Icon name="shield" cls="v2-ico" />} title="A Quality run">Quality</Chip>] : [];
+  const chips = member && !member.detail.hidden ? [<Chip key="workflow" size="sm">Workflow</Chip>, ...quality].slice(0, phone ? 1 : 2) : [...quality, ...taskChips(snap, t, { reviewOn, level })].slice(0, phone ? 1 : 2);
   const hideWho = groupedBy === "assignee" && assigneesOf(t).length <= 1;
   return (
     <Row
@@ -224,7 +229,7 @@ export function TaskRow({ t, snap, selected, onSelect, compact, groupedBy, revie
       <PriorityIcon priority={t.priority} className="tl-prio" />
       <span className="tl-id">{shortId(t.id)}</span>
       <WorkflowTaskStatus taskId={t.id} fallback={t.status} className="tl-st" />
-      <span className="tl-title">{t.title}{member && !member.detail.hidden && <WorkflowTaskStatus taskId={t.id} fallback={t.status} className="wf-task-label" showLabel />}</span>
+      <span className="tl-title">{run ? qualityName(t.title) : t.title}{member && !member.detail.hidden && <WorkflowTaskStatus taskId={t.id} fallback={t.status} className="wf-task-label" showLabel />}</span>
       {chips.length ? <span className="tl-chips">{chips}</span> : null}
       <span className="tl-who">
         <Who snap={snap} t={t} hide={hideWho} />
@@ -539,7 +544,7 @@ function PopIconButton({ label, icon, glyph, badge, active, dataAttr, popLabel, 
 /* ---- toolbar -------------------------------------------------------------------- */
 export function TasksToolbar({
   query, qDraft, setQDraft, statusCounts, loaded = true, assignees, setStatus, setAssignee, setView, setGroup, sortKey, setSort,
-  density, setDensity, nFilters, shown, total, clearFilters,
+  density, setDensity, nFilters, shown, total, clearFilters, runCount, setHideRuns,
 }: {
   query: TaskQuery; qDraft: string; setQDraft: (v: string) => void; statusCounts: Record<string, number>;
   /** false until the project snapshot has landed: scope counts are unknown, never "0" */
@@ -548,6 +553,8 @@ export function TasksToolbar({
   setStatus: (v: string[]) => void; setAssignee: (v: string | null) => void; setView: (v: "list" | "board") => void;
   setGroup: (g: string) => void; sortKey: SortKey; setSort: (k: SortKey) => void; density: Density; setDensity: (d: Density) => void;
   nFilters: number; shown: number; total: number; clearFilters: () => void;
+  /** How many tasks are Quality runs, shown or not. None: no filter to offer. */
+  runCount: number; setHideRuns: (hide: boolean) => void;
 }) {
   const { snap } = useSnapshot();
   const phone = usePhone();
@@ -625,7 +632,7 @@ export function TasksToolbar({
     ...assignees.map((a) => ({ k: a, label: a, icon: <Avatar alias={a} kind={agentByAlias(snap, a)?.kind ?? "ai"} size={16} decorative /> })),
   ];
   const customStatus = query.status.length > 0 && scope == null;
-  const filterBadge = (customStatus ? 1 : 0) + (query.assignee ? 1 : 0) || null;
+  const filterBadge = (customStatus ? 1 : 0) + (query.assignee ? 1 : 0) + (query.hideRuns ? 1 : 0) || null;
   const sortLabel = SORT_KEYS.find((x) => x.k === sortKey)?.label || "";
   const board = query.view === "board";
 
@@ -636,6 +643,10 @@ export function TasksToolbar({
       <PopIconButton label="Filter" glyph={<FilterGlyph />} badge={filterBadge} active={!!filterBadge} dataAttr="data-filter-btn" popLabel="Filter by status and assignee">
         <StatusChecks value={query.status} counts={statusCounts} onChange={setStatus} />
         <RadioList<string> legend="Assignee" name="tasksAssignee" value={query.assignee || ""} options={assigneeOpts} onChange={(k) => setAssignee(k || null)} />
+        {runCount ? (
+          <RadioList<string> legend="Quality runs" name="tasksRuns" value={query.hideRuns ? "hide" : "show"}
+            options={[{ k: "show", label: "Show", hint: String(runCount) }, { k: "hide", label: "Hide" }]} onChange={(k) => setHideRuns(k === "hide")} />
+        ) : null}
       </PopIconButton>
       <PopIconButton label={"Display options — " + (board ? "" : "grouping: " + query.group + " · ") + "ordering: " + sortLabel} icon="sliders" dataAttr="data-display-btn" popLabel="Display options">
         {!board ? (

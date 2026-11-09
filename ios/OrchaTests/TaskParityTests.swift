@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import Orcha
 
-/// Task-detail parity slice: evidence pack / Verdikt / goal chain / routine / assign DTO
+/// Task-detail parity slice: evidence pack / goal chain / routine / assign DTO
 /// decoding, plus the pure presentation logic ported from the web portal.
 
 private func decode<T: Decodable>(_ type: T.Type, _ json: String) throws -> T {
@@ -30,21 +30,16 @@ private func decode<T: Decodable>(_ type: T.Type, _ json: String) throws -> T {
                           "evidence":"42 passed","claim":"all green"},
                          {"index":1,"text":"Looks right","status":"needs_human","basis":"none","evidence":null}],
                 "total":2,"proven":1,"not_proven":0,"needs_human":1},
-         "verdikt":{"id":"v1","task_id":"t1","trigger":"auto","status":"completed","verdict":"pass",
-                    "report_url":"/api/tasks/t1/verdikt/runs/v1/report","criteria":[],"screenshots":[],
-                    "handoff":{},"target_kind":"web","locator":"http://x"},
          "summary":{"dod":{"total":2,"proven":1,"not_proven":0,"needs_human":1},
                     "tests":{"status":"passed","passed":42,"failed":0,"skipped":1,"errors":0,"suites":3},
-                    "risk_flags":1,"verdikt":{"status":"completed","verdict":"pass"},"line":"x","autofix":null},
-         "autofix":null,"rebuilt":false}
+                    "risk_flags":1,"line":"x"},
+         "rebuilt":false}
         """)
         #expect(pack.dod?.items.count == 2)
         #expect(pack.dod?.items.first?.claim == "all green")
         #expect(pack.tests?.latest.first?.counts?.passed == 42)
         #expect(pack.tests?.earlier == 2)
         #expect(pack.flags.first?.label == "Migration")
-        #expect(pack.verdikt?.verdict == "pass")
-        #expect(pack.verdikt?.reportUrl == "/api/tasks/t1/verdikt/runs/v1/report")
         #expect(pack.summary?.riskFlags == 1)
         #expect(pack.links.count == 2)
     }
@@ -86,11 +81,7 @@ private func decode<T: Decodable>(_ type: T.Type, _ json: String) throws -> T {
         #expect(assigned.alias == "forge" && assigned.woke == true)
     }
 
-    @Test func verdiktRunsAndManagerReviewDecode() throws {
-        let runs = try decode(VerdiktRunsResponse.self, """
-        {"task_id":"t","settings":{"configured":true,"enabled":true,"base_url":"http://v"},"runs":[],"autofix":null}
-        """)
-        #expect(runs.settings?.enabled == true)
+    @Test func managerReviewDecodes() throws {
         let rows = try decode([TaskReviewExtrasDto].self, """
         [{"id":"t","manager_review":{"status":"approved","manager_alias":"atlas","reasons":"covers the DoD"}},
          {"id":"u","manager_review":null}]
@@ -106,27 +97,25 @@ private func decode<T: Decodable>(_ type: T.Type, _ json: String) throws -> T {
         let s = EvidenceSummaryDto(
             dod: EvidenceDodCounts(total: 4, proven: 3, notProven: 0, needsHuman: 1),
             tests: EvidenceTestsDto(status: "passed", passed: 42),
-            riskFlags: 1,
-            verdikt: VerdiktBriefDto(status: "completed", verdict: "pass")
+            riskFlags: 1
         )
         #expect(EvidenceUx.summaryParts(s).map(\.text) == [
-            "3/4 DoD items evidenced", "42 tests passed", "1 risk flag", "Verdikt pass",
+            "3/4 DoD items evidenced", "42 tests passed", "1 risk flag",
         ])
         #expect(EvidenceUx.summaryParts(s, short: true).map(\.text) == [
-            "3/4 DoD", "42 tests passed", "1 risk", "Verdikt pass",
+            "3/4 DoD", "42 tests passed", "1 risk",
         ])
     }
 
     @Test func summaryTonesAndFailures() {
         let s = EvidenceSummaryDto(
             dod: EvidenceDodCounts(total: 2, proven: 1, notProven: 1),
-            tests: EvidenceTestsDto(status: "failed", passed: 3, failed: 1, errors: 1),
-            verdikt: VerdiktBriefDto(status: "running")
+            tests: EvidenceTestsDto(status: "failed", passed: 3, failed: 1, errors: 1)
         )
         let parts = EvidenceUx.summaryParts(s)
+        #expect(parts.count == 2)
         #expect(parts[0].tone == .bad)
         #expect(parts[1].text == "2 tests failing")
-        #expect(parts[2].text == "Verdikt running")
         let none = EvidenceUx.summaryParts(EvidenceSummaryDto(tests: EvidenceTestsDto(status: "none")))
         #expect(none.map(\.text) == ["no tests ran"])
     }

@@ -34,7 +34,7 @@ it.each(["refused", "revision", "wrong_workflow", "missing_task"])("refuses a %s
   render(<MemoryRouter><WorkflowActions detail={detail} scope={scope()} verified stale={false} onSaved={vi.fn()} /></MemoryRouter>);
   fireEvent.click(screen.getByRole("button", { name: "Review start" }));
   if (failure === "refused") {
-    fireEvent.click(await screen.findByRole("checkbox", { name: /Build Android/ }));
+    await screen.findByRole("checkbox", { name: /Build Android/ });
     expect(screen.getByText("Build Android has a turn still stopping")).toBeVisible();
     expect(screen.getByRole("checkbox", { name: /Build Android/ })).toBeChecked();
   } else await screen.findByRole("alert");

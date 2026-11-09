@@ -9,6 +9,10 @@ without mixing them into transport or orchestration code.
 # remains the primary intervention; this floor only catches true runaways.
 HARD_CAP_MIN_SECS = 1200.0
 
+# A Quality run holds a device session that dies with its worker, so a clean-context
+# replacement starts the run over. It gets room to finish; a stuck one still stalls out.
+QUALITY_CAP_SECS = 5400.0
+
 # Progressing workers checkpoint and respawn at the hard cap. This bound preserves
 # a final runaway backstop if repeated clean-context restarts do not finish the task.
 HARD_CAP_RESPAWN_MAX = 3

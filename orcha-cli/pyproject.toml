@@ -30,6 +30,20 @@ classifiers = [
   "Topic :: Software Development :: Build Tools",
 ]
 
+[project.optional-dependencies]
+# `orcha qa` (docs/orcha-qa-plan.md): the MCP tool server and the device layer that drives an
+# iOS simulator (idb_companion + fb-idb) or an Android emulator (uiautomator2 + adb). Imported
+# lazily, so the base CLI never needs them.
+qa = [
+  "mcp>=2.2",
+  "fb-idb>=1.1.7",
+  "uiautomator2>=3.5",
+  "adbutils>=2.9.3",
+  "pillow>=10",
+  "playwright>=1.62,<2",
+  "httpx>=0.27",  # the physical iPhone session speaks WebDriver to its local Appium server
+]
+
 [project.urls]
 Homepage = "https://github.com/open-orcha/orcha"
 Issues = "https://github.com/open-orcha/orcha/issues"
@@ -45,6 +59,7 @@ build-backend = "hatchling.build"
 [tool.hatch.build]
 include = [
   "orcha_cli/**/*.py",
+  "orcha_cli/qa/device/*.js",
   "orcha_cli/templates/**",
 ]
 # The built React bundle ships INSIDE the package (stacks serve it with no Node

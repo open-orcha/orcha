@@ -18,8 +18,17 @@ function add(title: string) {
 }
 function pick(index: number, name: string) { fireEvent.click(task(index).getByRole("button", { name: "Add prerequisite" })); fireEvent.click(screen.getByRole("menuitem", { name })); }
 function task(index: number) { return within(screen.getByRole("group", { name: `Task ${index}` })); }
+/** Pick an item from a menu button. Menus are portaled to the page. */
+function choose(button: HTMLElement, name: string) { fireEvent.click(button); fireEvent.click(screen.getByRole("menuitemradio", { name })); }
 
 describe("local workflow preparation", () => {
+  it("offers no Quality or Triage steps while Quality is off in workflows", () => {
+    render(<WorkflowDraftEditor scope={scope()} saveUnavailableReason={reason} />);
+    expect(screen.queryByRole("button", { name: "Add Quality step" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Add a Quality workflow" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Add triage step" })).toBeNull();
+  });
+
   it("keeps dependencies on rename, blocks cycles and refuses silent removal of referenced tasks", () => {
     render(<WorkflowDraftEditor scope={scope()} saveUnavailableReason={reason} />);
     add("Build Android"); add("Review builds");
@@ -119,19 +128,19 @@ describe("flexible workflow authoring", () => {
     const [first, second] = task(2).getAllByLabelText("Outcome name");
     fireEvent.change(first, { target: { value: "Approved" } }); fireEvent.change(second, { target: { value: "Changes requested" } });
     // Sending work back and ending a loop are offered only once the step is a loop's review point.
-    expect(task(2).queryByRole("option", { name: /Send back to|End the feedback loop/ })).toBeNull();
+    fireEvent.click(task(2).getAllByRole("button", { name: /^Then/ })[0]);
+    expect(screen.queryByRole("menuitemradio", { name: /Send back to|End the feedback loop/ })).toBeNull();
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
     expect(task(2).getByText(/make this step a feedback loop’s review point first/)).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Add feedback loop" }));
     const loop = within(screen.getByRole("group", { name: "Loop 1" }));
     fireEvent.change(loop.getByLabelText("Loop name"), { target: { value: "Draft and review" } });
     fireEvent.click(loop.getByRole("checkbox", { name: "Write the post" })); fireEvent.click(loop.getByRole("checkbox", { name: "Review the post" }));
-    fireEvent.change(loop.getByLabelText("Review point"), { target: { value: (loop.getByRole("option", { name: "Review the post" }) as HTMLOptionElement).value } });
-    fireEvent.change(loop.getByLabelText("Leave the group when"), { target: { value: "Approved" } });
-    const [thenFirst, thenSecond] = task(2).getAllByLabelText("Then");
-    fireEvent.change(thenFirst, { target: { value: "exit_group" } });
-    const back = within(thenSecond as HTMLElement).getByRole("option", { name: "Send back to Write the post (loop)" }) as HTMLOptionElement;
-    fireEvent.change(thenSecond, { target: { value: back.value } });
-    expect(task(1).queryByRole("option", { name: /Send back to/ })).toBeNull();
+    choose(loop.getAllByRole("button", { name: "Choose…" })[0], "Review the post");
+    choose(loop.getAllByRole("button", { name: "Choose…" })[0], "Review the post reports Approved");
+    const [thenFirst, thenSecond] = task(2).getAllByRole("button", { name: /^Then/ });
+    choose(thenFirst, "End the feedback loop");
+    choose(thenSecond, "Send back to Write the post (loop)");
     const draft = readDraft(s);
     expect(draftProblems(draft).filter((p) => p.key !== "name" && p.key !== "goal")).toEqual([]);
     const [write, review] = draft.tasks;
@@ -149,12 +158,11 @@ describe("flexible workflow authoring", () => {
     add("Write"); add("Publish"); pick(2, "Write");
     fireEvent.click(task(1).getByRole("button", { name: "Add outcome" }));
     fireEvent.change(task(1).getByLabelText("Outcome name"), { target: { value: "Ready" } });
-    const branch = within(task(1).getByLabelText("Then") as HTMLElement).getByRole("option", { name: "Go to Publish only" }) as HTMLOptionElement;
-    fireEvent.change(task(1).getByLabelText("Then"), { target: { value: branch.value } });
+    choose(task(1).getByRole("button", { name: /^Then/ }), "Go to Publish only");
     expect(draftProblems(readDraft(s)).filter((p) => p.key !== "name" && p.key !== "goal")).toEqual([]);
     fireEvent.click(task(2).getByRole("button", { name: "Remove prerequisite Write" }));
     expect(draftProblems(readDraft(s)).map((p) => p.message)).toContain("Write: “Ready” goes to a step that no longer waits for this one. Choose where it goes.");
-    expect((task(1).getByLabelText("Then") as HTMLSelectElement).selectedOptions[0].textContent).toBe("Choose where this goes…");
+    expect(task(1).getByRole("button", { name: /^Then/ })).toHaveTextContent("Choose where this goes…");
     fireEvent.click(task(1).getByRole("button", { name: "Add outcome" }));
     fireEvent.change(task(1).getAllByLabelText("Outcome name")[1], { target: { value: "ready " } });
     expect(draftProblems(readDraft(s)).map((p) => p.message)).toContain("Write: give each outcome a different name.");
@@ -168,7 +176,7 @@ describe("flexible workflow authoring", () => {
     const loop = within(screen.getByRole("group", { name: "Loop 1" }));
     fireEvent.change(loop.getByLabelText("Loop name"), { target: { value: "Edit loop" } });
     fireEvent.click(loop.getByRole("checkbox", { name: "Write" })); fireEvent.click(loop.getByRole("checkbox", { name: "Review" }));
-    fireEvent.change(loop.getByLabelText("Review point"), { target: { value: (loop.getByRole("option", { name: "Review" }) as HTMLOptionElement).value } });
+    choose(loop.getAllByRole("button", { name: "Choose…" })[0], "Review");
     expect(loop.getByText("Add outcomes to Review first.")).toBeVisible();
     expect(draftProblems(readDraft(s)).map((p) => p.message)).toContain("Edit loop ends on an outcome its review step does not have.");
     cleanup();

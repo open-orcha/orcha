@@ -21,14 +21,18 @@ import { WorkflowLoopDecision, WorkflowLoopDecisionPrompt } from "./WorkflowLoop
 import { WorkflowWhyPath } from "./WorkflowRouteSummary";
 import { WorkflowRoundContext } from "./WorkflowRoundContext";
 import { formatServerTime } from "./WorkflowTaskRows";
+import { WorkflowQaStepPanel } from "./WorkflowQaStep";
+import type { QaRequest } from "../qa/requests/api";
 
-export function WorkflowTaskInspector({ detail, task, cid, scope, verified, stale, agents, actorName, onSaved, onClose, onExpand, request, onRequest, reviewRequest }: {
+export function WorkflowTaskInspector({ detail, task, cid, scope, verified, stale, agents, actorName, onSaved, onClose, onExpand, request, onRequest, reviewRequest, qa }: {
   detail: WorkflowDetail; task: WorkflowTask; cid: string; scope: DraftScope; verified: boolean; stale: boolean;
   agents: { id: string; alias: string }[]; actorName: (id: string) => string;
   onSaved: (result: WorkflowDetail) => void; onClose: () => void; onExpand: () => void;
   request: TaskActionRequest | null; onRequest: (action: TaskActionRequest["action"]) => void;
   /** A row-menu "Review result…" request (§4.5); a new number opens the review dialog. */
   reviewRequest: number | null;
+  /** This step's QA rounds, when it is a QA step. */
+  qa?: { requests: QaRequest[]; nonce: number } | null;
 }) {
   const operation = useWorkflowOperation(scope, `workflow:${detail.id}`);
   const unresolved = operation?.state === "sending" || operation?.state === "uncertain";
@@ -60,6 +64,7 @@ export function WorkflowTaskInspector({ detail, task, cid, scope, verified, stal
           {task.display_state.release_available_at && <li>If the worker stays silent, Release lost worker becomes available at <time dateTime={task.display_state.release_available_at}>{formatServerTime(task.display_state.release_available_at)}</time>. Refresh to check availability.</li>}
         </ul>
       </Section>
+      {qa && <WorkflowQaStepPanel requests={qa.requests} nonce={qa.nonce} triage={task.qa?.kind === "triage"} />}
       {detail.semantics_version === 2 && ((task.outcomes ?? []).length > 0 || task.repeat_group_id) && <WorkflowRoundContext detail={detail} task={task} />}
       <WorkflowWhyPath detail={detail} task={task} />
       {task.awaiting_loop_decision && <Section title="Decision needed">

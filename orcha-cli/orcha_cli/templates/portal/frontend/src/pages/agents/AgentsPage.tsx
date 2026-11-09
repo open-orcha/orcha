@@ -52,6 +52,7 @@ import { LiveChangesContext } from "./liveChangesContext";
 import { LiveChangesButton, LiveChangesPanel } from "./LiveChangesPanel";
 import { AgentBudgetSection, BudgetPausedChip } from "./budget/AgentBudgetSection";
 import { AgentPerformanceCard } from "./performance/AgentPerformanceCard";
+import { AgentQualityRuns } from "../qa/runTask/AgentQualityRuns";
 import { pausedById, useContainerBudgets } from "./budget/budgetModel";
 import { AgentConfigHistory } from "./history/AgentConfigHistory";
 import { BrandLogo } from "../../components/primitives/BrandLogo";
@@ -1055,6 +1056,7 @@ export function AgentsPage() {
         <div id="detailMain">
           <TabPanel tabKey="runs" idPrefix="agtab" active={tab === "runs" && !isHuman}>
             <div className="ag-panel" id="runsWrap">
+              <AgentQualityRuns agentId={String(a.id)} alias={a.alias} />
               <RunsFeed agent={a} feed={feed} />
             </div>
           </TabPanel>

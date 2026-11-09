@@ -5,6 +5,7 @@
  */
 import { Badge } from "../../components/primitives/Badge";
 import { Button } from "../../components/primitives/Button";
+import { MenuButton } from "../../components/primitives";
 import { draftTaskName, type DraftOutcome, type DraftRepeatGroup, type DraftTask, type RouteDestination } from "./workflowDraft";
 
 const KINDS: { key: DraftOutcome["kind"]; label: string }[] = [
@@ -49,14 +50,14 @@ export function WorkflowOutcomeFields({ task, tasks, ownerName, loopMembers, onC
         return <div key={i} className="wf-route is-edit" role="group" aria-label={`Outcome ${i + 1}`}>
           <span className="wf-route-name">
             <input className={`wf-in wf-tone-${TONE[o.kind]}`} aria-label="Outcome name" maxLength={40} placeholder={`Outcome ${i + 1}`} value={o.name} onChange={(e) => set(i, { name: e.target.value })} />
-            <select className="wf-sel" aria-label="Kind" value={o.kind} onChange={(e) => set(i, { kind: e.target.value as DraftOutcome["kind"] })}>{KINDS.map((k) => <option key={k.key} value={k.key}>{k.label}</option>)}</select>
+            <MenuButton size="sm" label="Kind" value={KINDS.find((k) => k.key === o.kind)?.label} menuLabel={`Kind of outcome ${i + 1}`} items={KINDS.map((k) => ({ label: k.label, checked: k.key === o.kind, onSelect: () => set(i, { kind: k.key }) }))} />
           </span>
           <span className="arr" aria-hidden="true">{o.destination === "return" ? "↺" : "→"}</span>
-          <select className="wf-sel dest" aria-label="Then" value={value} onChange={(e) => {
-            const [destination, key] = e.target.value.split(":");
-            set(i, { destination: destination as RouteDestination, destinationTask: key });
-          }}>{!choices.some((c) => c.value === value) && <option value={value} disabled>Choose where this goes…</option>}
-            {choices.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}</select>
+          <MenuButton size="sm" className="wf-menu-dest" label="Then" value={choices.find((c) => c.value === value)?.label ?? "Choose where this goes…"} menuLabel={`Where outcome ${i + 1} goes`}
+            items={choices.map((c) => ({ label: c.label, checked: c.value === value, onSelect: () => {
+              const [destination, key] = c.value.split(":");
+              set(i, { destination: destination as RouteDestination, destinationTask: key });
+            } }))} />
           <span className="wf-muted">{MOVE[o.destination]}</span>
           <Button size="sm" variant="ghost" onClick={() => onChange(outcomes.filter((_, j) => j !== i))}>Remove outcome {i + 1}</Button>
         </div>;
@@ -85,10 +86,10 @@ export function WorkflowLoopFields({ groups, tasks, ownerName, onChange }: { gro
             <div className="wf-chipline">{tasks.map((t, i) => <label key={t.key} className={`wf-choice-chip${g.members.includes(t.key) ? " is-on" : ""}`}><input type="checkbox" checked={g.members.includes(t.key)} onChange={(e) => set(g.key, {
               members: e.target.checked ? [...g.members, t.key] : g.members.filter((k) => k !== t.key), ...(e.target.checked || t.key !== g.review ? {} : { review: "", exitOutcome: "" }),
             })} /><span aria-hidden="true">{i + 1} </span>{draftTaskName(t, tasks)}</label>)}</div></div>
-          <label className="wf-field"><span>Review point</span><select className="wf-sel" value={g.review} onChange={(e) => set(g.key, { review: e.target.value, exitOutcome: "" })}>
-            <option value="">Choose…</option>{members.map((t) => <option key={t.key} value={t.key}>{draftTaskName(t, tasks)}</option>)}</select></label>
-          <div className="wf-field"><label htmlFor={`wf-exit-${g.key}`}>Leave the group when</label><select id={`wf-exit-${g.key}`} className="wf-sel" value={g.exitOutcome} onChange={(e) => set(g.key, { exitOutcome: e.target.value })}>
-            <option value="">Choose…</option>{(review?.outcomes ?? []).filter((o) => o.name.trim()).map((o) => <option key={o.name} value={o.name.trim()}>{review ? `${draftTaskName(review, tasks)} reports ${o.name.trim()}` : o.name.trim()}</option>)}</select>
+          <div className="wf-field"><span>Review point</span><MenuButton size="sm" value={review ? draftTaskName(review, tasks) : "Choose…"} menuLabel={`Review point of loop ${index + 1}`} disabled={!members.length}
+            items={members.map((t) => ({ label: draftTaskName(t, tasks), checked: t.key === g.review, onSelect: () => set(g.key, { review: t.key, exitOutcome: "" }) }))} /></div>
+          <div className="wf-field"><span>Leave the group when</span><MenuButton size="sm" value={g.exitOutcome && review ? `${draftTaskName(review, tasks)} reports ${g.exitOutcome}` : "Choose…"} menuLabel={`Exit outcome of loop ${index + 1}`} disabled={!(review?.outcomes ?? []).some((o) => o.name.trim())}
+              items={(review?.outcomes ?? []).filter((o) => o.name.trim()).map((o) => ({ label: `${draftTaskName(review!, tasks)} reports ${o.name.trim()}`, checked: o.name.trim() === g.exitOutcome, onSelect: () => set(g.key, { exitOutcome: o.name.trim() }) }))} />
             {review && !(review.outcomes ?? []).length && <span className="wf-muted">Add outcomes to {draftTaskName(review, tasks)} first.</span>}</div>
           <div className="wf-field"><label htmlFor={`wf-max-${g.key}`}>Most rounds, including the first</label><input id={`wf-max-${g.key}`} className="wf-in wf-in-num" type="number" min={1} max={20} value={g.maxRounds} onChange={(e) => set(g.key, { maxRounds: Math.max(1, Math.min(20, Number(e.target.value) || 1)) })} />
             <span className="wf-muted">Required. The default is 5; you can lower it. Raising it later is a separate owner decision.</span></div>

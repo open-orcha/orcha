@@ -81,6 +81,17 @@ APP_TABLES = [
     "workflow_notification_receipts", "workflow_evidence_sets", "workflow_evidence",
     "workflow_terminal_receipts",
     "workflow_runner_credentials", "workflow_launch_permits", "workflow_stop_intents",
+    # mig 093 — Orcha QA
+    "qa_targets", "qa_features", "qa_sessions", "qa_frames", "qa_map_nodes", "qa_map_edges",
+    "qa_map_builds", "qa_steps", "qa_findings", "qa_flows", "qa_walks", "qa_scenarios",
+    "qa_scenario_evidence", "qa_scenario_suggestions", "qa_verdicts", "qa_measured", "qa_app_models", "qa_onboarding", "qa_session_messages",
+    "qa_scenario_versions", "qa_scenario_health_flags", "qa_scenario_health_audits", "qa_check_fix_dismissals",
+    "qa_coverage_baselines", "qa_coverage_points", "qa_coverage_links", "qa_data_variations", "qa_scenario_files",
+    "qa_example_secrets",
+    "qa_session_logs", "qa_session_requests", "qa_criterion_feedback",
+    "qa_perf_settings",
+    # mig 096 — QA handoff
+    "qa_acceptance_verdicts", "qa_requests", "qa_settings",
 ]
 
 
@@ -522,3 +533,17 @@ def pytest_terminal_summary(terminalreporter):
     for held, readonly, where, test in sorted(SLOW_TRANSACTIONS, reverse=True):
         terminalreporter.write_line(
             f"[db]   {held * 1000:.0f} ms at {where}{' (readonly)' if readonly else ''} in {test}")
+
+
+async def fresh_task_id(client, cid, actor):
+    """A task of its own, for a test that needs its sessions on different tasks."""
+    r = await client.post(f"/api/containers/{cid}/tasks", json={"title": "A run", "definition_of_done": "It ran.", "created_by_agent_id": actor})
+    assert r.status_code == 201, r.text
+    return r.json()["task_id"]
+
+
+async def run_task_id(client, cid, actor):
+    """The task a QA session starts on, as the tool server gets it: no session exists without one."""
+    r = await client.post(f"/api/containers/{cid}/qa/run-task", json={"actor_agent_id": actor, "kind": "check", "platform": "web"})
+    assert r.status_code == 200, r.text
+    return r.json()["task_id"]

@@ -75,6 +75,8 @@ export function WorkflowInput({ detail, scope, stale, open, onOpen, onClose, onS
   const partial = taskPartial || more || !!error || support !== true;
   const count = plans.filter((i) => !i.assignedToOther).length + results.filter((i) => !i.assignedToOther).length
     + attention.items.filter((i) => i.kind === "request" && !i.assignedToOther).length;
+  // A step that stopped for its owner is decided on the step itself, not in this list.
+  const held = detail.tasks.filter((t) => t.awaiting_owner_decision && !t.withdrawn_at).length;
   const shown = items.filter((i) => others || !i.assignedToOther);
   const chosen = items.find((i) => i.key === selection);
   const resolved = () => { setOffset(0); setRetry((r) => r + 1); void refresh(); };
@@ -90,7 +92,7 @@ export function WorkflowInput({ detail, scope, stale, open, onOpen, onClose, onS
   }
   if (detail.hidden) return null;
   return <>
-    <div className="wf-input-strip" role="status"><strong>Needs your input</strong><span>{busy || authority.pending || !snap ? "Checking decisions…" : `${partial ? "At least " : ""}${count} ${count === 1 ? "decision" : "decisions"}`}</span>
+    <div className={`wf-input-strip${!busy && !authority.pending && snap && !partial && count === 0 && !held ? " is-quiet" : ""}`} role="status"><strong>Needs your input</strong><span>{busy || authority.pending || !snap ? "Checking decisions…" : `${partial ? "At least " : ""}${count} ${count === 1 ? "decision" : "decisions"}${held ? ` · ${held} ${held === 1 ? "step waits" : "steps wait"} for you below` : ""}`}</span>
       <Button size="sm" variant="ghost" onClick={open ? onClose : onOpen}>{open ? "Back to workflow" : "View"}</Button>
       {detail.owner_human_id === scope.identity && <Button size="sm" variant="ghost" onClick={onChecklist}>Finish checklist</Button>}
     </div>

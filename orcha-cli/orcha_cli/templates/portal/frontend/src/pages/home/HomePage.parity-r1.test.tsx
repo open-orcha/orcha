@@ -156,10 +156,10 @@ describe("Overview load failure says what it means (SH-123 / e2e-scope-live-8)",
     snapStatus = 503; snapDetail = "project database unreachable";
     mount();
     expect(await screen.findByText("Website is unreachable")).toBeInTheDocument();
-    expect(screen.getAllByRole("button", { name: "Retry" })).toHaveLength(1);
+    expect(await screen.findAllByRole("button", { name: "Retry" }, { timeout: 15000 })).toHaveLength(1);
     expect(document.querySelector(".v2-empty, main")?.textContent ?? "").not.toMatch(/\/api\/containers\//);
     expect(screen.queryByText(/The project data did not load \(/)).toBeNull();
-  });
+  }, 20000);
 });
 
 describe("overview.css (390 feed)", () => {

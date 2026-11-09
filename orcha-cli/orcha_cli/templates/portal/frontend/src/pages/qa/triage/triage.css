@@ -1,0 +1,18 @@
+/* The Triage inbox's own parts; the shared diagnosis card lives in qa.css. */
+.qa-tri-turn { display: inline-flex; align-items: center; gap: 5px; color: var(--v2-text-2); font-size: var(--v2-fs-meta); white-space: nowrap; }
+.qa-tri-src { margin: 0; color: var(--v2-text-2); font-size: var(--v2-fs-meta); line-height: 1.45; overflow-wrap: anywhere; }
+
+.qa-tri-row { grid-template-columns: 78px minmax(0, 1fr) auto auto 64px; }
+.qa-tri-row.qa-tri-row { display: grid; }
+.qa-tri-platform { margin-inline-end: 6px; color: var(--v2-text-3); font-size: var(--v2-fs-meta); }
+.qa-tri-row .v2-chip { justify-self: start; }
+.qa-tri-row > :nth-child(3) { justify-self: end; }
+
+/* A phone: the title keeps the line, and the diagnosis goes under it. */
+@media (max-width: 640px) {
+  .qa-tri-row { grid-template-columns: 74px minmax(0, 1fr) auto; row-gap: 2px; height: auto; min-height: 44px; padding-block: 6px; }
+  .qa-tri-row > :nth-child(2) { grid-column: 2 / -1; grid-row: 1; white-space: normal; overflow-wrap: anywhere; }
+  .qa-tri-row > :nth-child(3) { grid-column: 2; grid-row: 2; justify-self: start; }
+  .qa-tri-row > :nth-child(4) { grid-column: 3; grid-row: 2; }
+  .qa-tri-row > :nth-child(5) { grid-column: 1; grid-row: 2; }
+}

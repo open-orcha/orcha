@@ -1,7 +1,7 @@
 import Foundation
 
 /// Task-detail parity surface (web portal → Embodent iOS): proof-of-work evidence,
-/// Verdikt runs, goal ancestry, the AI manager pre-review, "Make recurring…"
+/// goal ancestry, the AI manager pre-review, "Make recurring…"
 /// routines and reassign. Reads + the human writes the web shows to a person.
 extension OrchaApiClient {
 
@@ -10,11 +10,6 @@ extension OrchaApiClient {
     /// `GET /api/tasks/{tid}/evidence` — the evidence pack (DoD lines, tests, risk flags, changes).
     func taskEvidence(_ base: String, _ tid: String) async throws -> EvidencePackDto {
         try await get(base, "/api/tasks/\(tid)/evidence")
-    }
-
-    /// `GET /api/tasks/{tid}/verdikt/runs` — Verdikt settings + this task's run history.
-    func verdiktRuns(_ base: String, _ tid: String) async throws -> VerdiktRunsResponse {
-        try await get(base, "/api/tasks/\(tid)/verdikt/runs")
     }
 
     /// `GET /api/tasks/{tid}/goal-chain` — objective › parent(s) › this task.
@@ -40,11 +35,6 @@ extension OrchaApiClient {
     }
 
     // MARK: writes (human actor)
-
-    /// `POST /api/tasks/{tid}/verdikt/runs` — hand this task's definition of done to Verdikt.
-    func triggerVerdikt(_ base: String, _ tid: String, actor: String) async throws -> VerdiktRunDto {
-        try await postDecoding(base, "/api/tasks/\(tid)/verdikt/runs", ["actor_agent_id": actor])
-    }
 
     /// `POST /api/tasks/{tid}/assign` with `reassign: true` — releases the prior assignee.
     func assignTaskToAgent(_ base: String, _ tid: String, actor: String, agentId: String) async throws -> AssignResultDto {

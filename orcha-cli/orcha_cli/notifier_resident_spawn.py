@@ -69,6 +69,13 @@ def spawn_resident(
     ):
         argv.append("--dangerously-skip-permissions")
     argv.extend(extra)
+    try:
+        # QA tools for a project with QA on (orcha_cli/qa/launch.py); never inside a sandbox.
+        from .qa import launch as qa_launch
+
+        argv.extend(qa_launch.claude_flags(cwd, sandboxed=_sandbox.SandboxConfig.load(cwd).enabled))
+    except Exception:
+        pass
 
     mode = f"--resume {resume_session_id}" if resume_session_id else "cold"
     model_note = f" --model {model}" if model else ""

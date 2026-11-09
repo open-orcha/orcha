@@ -264,7 +264,7 @@ const NC_LABEL: Record<string, string> = {
   task_verified: "Task verified", request_answered: "Request answered",
   plan_decided: "Decision made", task_assigned: "Task assigned",
   task_ready: "Task ready", task_message: "Task update",
-  task_unassigned: "Task unassigned", request_closed: "Request closed",
+  task_unassigned: "Task unassigned", request_closed: "Request closed", qa_result: "Quality result",
 };
 /** Label for a notification type the portal does not know (pure, tested):
  * the type HUMANIZED ("some_unknown_type" → "Some unknown type", as the old
@@ -752,7 +752,7 @@ function ConnectionIndicator() {
   const title =
     connection === "live" ? "Live updates connected" + (last ? " · last update " + last : "")
     : connection === "polling" ? (snap ? "Live stream unavailable — refreshing every 3 s" : "Connecting to Embodent…") + (last ? " · last update " + last : "")
-    : connection === "reconnecting" ? "Reconnecting… lost contact with the Embodent backend" + (last ? " · showing data from " + last : "")
+    : connection === "reconnecting" ? "Embodent is slow to answer · trying again" + (last ? " · showing data from " + last : "")
     : last ? "Offline — showing data from " + last + " (not live)" : "Offline — no data loaded";
   if (connection === "live") return <span className="v2-sr" role="status">{title}</span>;
   return (
@@ -909,7 +909,7 @@ export interface ShellProps {
 }
 
 const SECTION_HREF: Record<string, string> = {
-  home: "/", workflows: "/workflows", tasks: "/tasks", routines: "/routines", agents: "/agents", org: "/org", requests: "/requests", code: "/code", github: "/github",
+  home: "/", workflows: "/workflows", tasks: "/tasks", routines: "/routines", agents: "/agents", org: "/org", requests: "/requests", qa: "/qa", code: "/code", github: "/github",
   metrics: "/metrics", settings: "/settings", members: "/members", needs: "/needs", activity: "/activity",
 };
 

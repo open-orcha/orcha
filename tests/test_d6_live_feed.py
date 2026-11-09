@@ -46,7 +46,7 @@ def test_snapshot_provider_subscribes_to_the_container_event_stream():
     assert '"/events?since_ts=" + cursor' in js, \
         "stream not seeded with a since_ts cursor (would replay the full history — review P1)"
     assert "cursor == null" in js and "Date.now() / 1000" in js, "doesn't seed the cursor at 'now' on first connect"
-    assert "if (ts != null) cursor = ts" in js, "doesn't advance the cursor per event (reconnect would replay)"
+    assert "if (data.ts != null) cursor = data.ts" in js, "doesn't advance the cursor per event (reconnect would replay)"
     # parity r2: an answered 403/404 backs the reconnect off to ANSWERED_BACKOFF_MS; otherwise 3s
     assert "es?.close()" in js and "setTimeout(connect, answeredRef.current ? ANSWERED_BACKOFF_MS : 3000)" in js, \
         "doesn't manage reconnect from the cursor"

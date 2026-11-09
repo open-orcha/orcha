@@ -4,10 +4,8 @@ from __future__ import annotations
 
 from . import notifier_fast_lane as _fast_lane
 from . import notifier_housekeeper as _housekeeper
-from . import notifier_preview as _preview
 from . import notifier_request_sweep as _request_sweep
 from . import notifier_routines as _routines
-from . import notifier_verdikt_sweep as _verdikt_sweep
 from . import notifier_worktree_gc as _worktree_gc
 from . import sandbox as _sandbox
 
@@ -181,7 +179,6 @@ def cmd_notifier(args, *, services) -> None:
     last_error_log = float("-inf")
     turn_watcher = None if args.dry_run else _fast_lane.TurnEventWatcher(api_base, cid).start()
     idle_wait = _fast_lane.idle_wait
-    previews = _preview.PreviewState()
     # GH #315: agent-worktree housekeeping (inventory + sweep: git and du per worktree, 20+ min
     # with thousands of worktrees) runs on its own thread, one pass at a time, so it never holds
     # up the heartbeat or the wake scan (the portal chip reads "Not running" after 120 s
@@ -279,19 +276,10 @@ def cmd_notifier(args, *, services) -> None:
                 _request_sweep.maybe_sweep_expired(api_base, cid, services, quiet=args.quiet,
                                                    dry_run=args.dry_run)
                 loop_timer.lap("requests")
-                # Verdikt preview environments (mig 064): build + serve a task's worktree for
-                # a Verdikt run, report it ready, stop it after the run / TTL (never raises).
-                _preview.service_previews(api_base, cid, previews, project_cwd, quiet=args.quiet,
-                                          dry_run=args.dry_run)
-                loop_timer.lap("previews")
-                # Verdikt background check (mig 068): refresh in-flight runs + apply the auto-fix
-                # loop (every ~12s while runs are in flight, else once a minute; never raises).
-                _verdikt_sweep.maybe_sweep(api_base, cid, quiet=args.quiet, dry_run=args.dry_run)
-                loop_timer.lap("verdikt")
                 # Agent worktrees (mig 067): run Settings › Agent worktrees requests, sweep
                 # clean / past-grace worktrees (pre-existing ones too), report the inventory —
                 # on the housekeeping thread (GH #315); a poke while a pass runs coalesces.
-                housekeeper.poke(_worktree_gc.local_busy(live_workers, live_residents, previews))
+                housekeeper.poke(_worktree_gc.local_busy(live_workers, live_residents))
                 loop_timer.lap("worktrees")
                 tick(api_base, cid, dry_run=args.dry_run, cooldown=args.cooldown,
                      min_idle=args.min_idle, quiet=args.quiet,
@@ -324,7 +312,6 @@ def cmd_notifier(args, *, services) -> None:
         housekeeper.stop()
         if turn_watcher:
             turn_watcher.stop()
-        _preview.stop_all(api_base, previews)
         try:
             if pid_file.read_text().strip() == str(os.getpid()):
                 pid_file.unlink()

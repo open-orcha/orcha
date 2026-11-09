@@ -55,6 +55,8 @@ def agent_next(
         # BEGIN IMMEDIATE serialises writers; on Postgres the sub-select's row lock (SKIP
         # LOCKED) sends a concurrent claimer on to the next ready task instead of the same one.
         # `status='ready'` is re-checked on the outer row as a belt-and-braces guard.
+        # A workflow's step takes its turn from the workflow's scheduler, never from this claim:
+        # taken here it shows Running with no worker and the turn is lost.
         cur.execute(
             f"""UPDATE tasks SET status='in_progress', started_at = COALESCE(started_at, now())
                 WHERE status='ready' AND id = (
@@ -62,6 +64,7 @@ def agent_next(
                   JOIN agent_tasks at ON at.task_id = t.id AND at.agent_id = %s
                    AND at.assignment_status IN ('assigned','accepted','working')
                   WHERE t.container_id=%s AND t.status='ready' AND t.is_root = false
+                    AND t.workflow_id IS NULL
                   ORDER BY t.priority, t.created_at
                   LIMIT 1{sql.for_update(skip_locked=True)})
                 RETURNING id, title, description, definition_of_done, priority, protocol,

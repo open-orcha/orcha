@@ -10,16 +10,13 @@ import io.openorcha.mobile.data.RoutineCreateBody
 import io.openorcha.mobile.data.RoutineDto
 import io.openorcha.mobile.data.SchedulePreviewDto
 import io.openorcha.mobile.data.StoredContainer
-import io.openorcha.mobile.data.VerdiktRunsResponse
 import io.openorcha.mobile.data.createRoutine
 import io.openorcha.mobile.data.getGoalChain
 import io.openorcha.mobile.data.getTaskEvidence
-import io.openorcha.mobile.data.getVerdiktRuns
 import io.openorcha.mobile.data.listRoutinesFromTask
 import io.openorcha.mobile.data.previewSchedule
 import io.openorcha.mobile.data.reassignTask
 import io.openorcha.mobile.data.setTaskReviewer
-import io.openorcha.mobile.data.triggerVerdikt
 import io.ktor.client.plugins.ResponseException
 import io.ktor.client.statement.bodyAsText
 import kotlinx.coroutines.CoroutineScope
@@ -40,7 +37,6 @@ data class TaskInsightsState(
     val evidenceLoading: Boolean = false,
     val evidenceError: String? = null,
     val goalChain: GoalChainDto? = null,
-    val verdikt: VerdiktRunsResponse? = null,
     val routines: List<RoutineDto> = emptyList(),
     /** a sheet / inline action is in flight */
     val busy: Boolean = false,
@@ -70,7 +66,6 @@ class TaskInsightsController(private val scope: CoroutineScope, private val api:
         loadJob = scope.launch {
             val evidence = async { runCatching { api.getTaskEvidence(base, taskId) } }
             val chain = async { runCatching { api.getGoalChain(base, taskId) } }
-            val verdikt = async { runCatching { api.getVerdiktRuns(base, taskId) } }
             val routines = async { runCatching { api.listRoutinesFromTask(base, container.id, taskId).routines } }
             val ev = evidence.await()
             _state.update {
@@ -84,7 +79,6 @@ class TaskInsightsController(private val scope: CoroutineScope, private val api:
             _state.update {
                 it.copy(
                     goalChain = chain.await().getOrNull() ?: it.goalChain,
-                    verdikt = verdikt.await().getOrNull() ?: it.verdikt,
                     routines = routines.await().getOrNull() ?: it.routines,
                 )
             }
@@ -100,11 +94,6 @@ class TaskInsightsController(private val scope: CoroutineScope, private val api:
     fun setReviewer(container: StoredContainer, taskId: String, reviewerId: String?, onDone: () -> Unit) =
         act(container, if (reviewerId == null) "Reviewer cleared — anyone can verify" else "Reviewer assigned", onDone) { actor ->
             api.setTaskReviewer(container.baseUrl, taskId, actor, reviewerId)
-        }
-
-    fun runVerdikt(container: StoredContainer, taskId: String, onDone: () -> Unit) =
-        act(container, "Sent to Verdikt", { load(container, taskId); onDone() }) { actor ->
-            api.triggerVerdikt(container.baseUrl, taskId, actor)
         }
 
     fun createRoutine(container: StoredContainer, body: (String) -> RoutineCreateBody, onDone: () -> Unit) {

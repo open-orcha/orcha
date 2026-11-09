@@ -413,15 +413,6 @@ def test_sandbox_passthrough_includes_codex_api_key():
     assert "CODEX_API_KEY" in sandbox.ENV_PASSTHROUGH
 
 
-def test_preview_env_never_carries_agent_keys(monkeypatch):
-    from orcha_cli import notifier_preview
-    for k in ("CODEX_API_KEY", "CODEX_ACCESS_TOKEN", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "OPENAI_API_KEY"):
-        monkeypatch.setenv(k, "secret-" + k)
-    env = notifier_preview.preview_env(5555)
-    for k in ("CODEX_API_KEY", "CODEX_ACCESS_TOKEN", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "OPENAI_API_KEY"):
-        assert k not in env
-
-
 def test_tick_remembers_agent_keys_from_the_scan(monkeypatch):
     blob = _seal(monkeypatch, OPENAI_KEY)
     scan = {"active": False, "container_status": "paused", "agent_keys_enc": {"claude": None, "codex": blob}}

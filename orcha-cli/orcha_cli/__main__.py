@@ -32,6 +32,7 @@ from .cli_text import (
     _strip_frontmatter,
 )
 from .notifier import cmd_notifier, stop_daemon_for_container
+from .qa.cli import cmd_qa
 
 
 def _resolve_bridge_port(api_base: str) -> int | None:
@@ -109,6 +110,7 @@ def build_parser() -> argparse.ArgumentParser:
         "resume": cmd_resume,
         "stop": cmd_stop,
         "worktrees": cmd_worktrees,
+        "qa": cmd_qa,
     }
     return assemble_parser(_cli_version(), handlers)
 

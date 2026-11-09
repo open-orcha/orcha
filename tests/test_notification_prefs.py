@@ -15,6 +15,7 @@ Covers, in order:
     carry it.
 """
 import itertools
+import json
 import pathlib
 from datetime import datetime, timezone
 
@@ -137,12 +138,11 @@ def test_every_known_kind_maps_to_exactly_one_real_category():
         ("task_assigned", "tasks"),
         ("task_message", "messages"),
         ("routine_failed", "routines"),
-        ("verdikt_run", "verdikt"),
         ("member_invited", "settings"),
         # unknown kinds degrade by prefix, then to the fallback
         ("budget_something_new", "budget"),
         ("routine_skipped", "routines"),
-        ("evidence_uploaded", "verdikt"),
+        ("evidence_uploaded", np.FALLBACK_CATEGORY),
         ("member_left", "settings"),
         ("request_reopened", "requests"),
         ("totally_new_thing", np.FALLBACK_CATEGORY),
@@ -164,7 +164,7 @@ A_KIND = {  # one representative kind per category
     "tasks": "task_assigned",
     "messages": "task_message",
     "routines": "routine_failed",
-    "verdikt": "verdikt_run",
+    "qa": "qa_result",
     "settings": "member_invited",
 }
 
@@ -345,6 +345,16 @@ def test_resolve_tolerates_garbage_rows():
     assert eff["quiet_hours"] is None and eff["pause"] is None
 
 
+def test_resolve_ignores_a_stored_category_that_no_longer_exists():
+    """A person's saved rules may still name a category a removed feature owned ("verdikt"):
+    reading them must not break, and the retired key never comes back."""
+    stored = {"verdikt": {"scope": "off", "channels": {"desktop": False}}, "tasks": {"scope": "off"}}
+    eff = np.resolve({"rules": stored}, {"rules": stored})
+    assert "verdikt" not in eff["rules"] and set(eff["rules"]) == set(np.CATEGORY_KEYS)
+    assert eff["rules"]["tasks"]["scope"] == "off"
+    assert np._safe_rules(stored) == {"tasks": {"scope": "off"}}
+
+
 # ================================================================ validation
 
 
@@ -428,6 +438,22 @@ async def test_trust_off_get_resolves_local_operator(client, container, make_age
     assert d["channels"]["slack"]["available"] is False
     assert d["channels"]["push"]["available"] is False
     assert d["catalog"]["locks"][0]["category"] == "budget"
+
+
+async def test_stored_prefs_with_a_retired_category_still_read(client, container, make_agent, db):
+    h = await make_agent("root", "operator", kind="human")
+    cid = container["id"]
+    r = await client.put(_url(cid), json={"rules": {"tasks": {"scope": "off"}}})
+    assert r.status_code == 200, r.text
+    stored = {"rules": {"verdikt": {"scope": "off"}, "tasks": {"scope": "off"}}, "muted": False}
+    db.execute("UPDATE notification_prefs SET prefs=%s WHERE member_agent_id=%s",
+               (json.dumps(stored), h["agent_id"]))
+    r = await client.get(_url(cid))
+    assert r.status_code == 200, r.text
+    d = r.json()
+    assert d["project"]["rules"] == {"tasks": {"scope": "off"}}
+    assert "verdikt" not in d["effective"]["rules"]
+    assert "verdikt" not in [c["key"] for c in d["catalog"]["categories"]]
 
 
 async def test_no_human_is_409_and_bad_ids_400(client, container):

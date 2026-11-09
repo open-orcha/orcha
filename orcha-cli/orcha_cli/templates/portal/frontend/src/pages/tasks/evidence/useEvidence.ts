@@ -3,16 +3,14 @@
  *
  *  useEvidence(taskId, bump?)        GET /api/tasks/{tid}/evidence — re-fetched when
  *                                    `bump` changes (pass the snapshot bump), polled every
- *                                    4 s while a Verdikt run is open and every 15 s while
- *                                    one of the task's runs is still going. A stale answer
+ *                                    15 s while one of the task's runs is still going. A stale answer
  *                                    for a previous task is dropped.
  *  useEvidenceSummaries(cid, bump?)  GET /api/containers/{cid}/evidence-summaries — the
  *                                    one-line summaries for Needs-you rows.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
-import { VERDIKT_OPEN, type EvidencePack, type EvidenceSummary } from "./evidenceTypes";
+import type { EvidencePack, EvidenceSummary } from "./evidenceTypes";
 
-export const VERDIKT_POLL_MS = 4000;
 export const RUN_POLL_MS = 15000;
 
 export interface EvidenceState {
@@ -22,8 +20,6 @@ export interface EvidenceState {
   loading: boolean;
   reload: () => void;
   rebuild: () => Promise<void>;
-  /** replace the pack's Verdikt run optimistically after a trigger/cancel answer */
-  setPack: (p: EvidencePack) => void;
   /** the server has no evidence route (older backend) or answered something that is not a
    *  pack — the gate then shows no Proof row rather than a broken one */
   unsupported: boolean;
@@ -114,13 +110,12 @@ export function useEvidence(taskId: string | null | undefined, bump?: unknown): 
   }, [taskId, bump, tick]);
 
   // poll while something is still moving
-  const vOpen = !!pack?.verdikt && VERDIKT_OPEN.indexOf(pack.verdikt.status) >= 0;
   const runLive = !!pack?.runs?.some((r) => r.status === "running");
   useEffect(() => {
-    if (!taskId || (!vOpen && !runLive)) return;
-    const h = setTimeout(() => setTick((n) => n + 1), vOpen ? VERDIKT_POLL_MS : RUN_POLL_MS);
+    if (!taskId || !runLive) return;
+    const h = setTimeout(() => setTick((n) => n + 1), RUN_POLL_MS);
     return () => clearTimeout(h);
-  }, [taskId, vOpen, runLive, pack]);
+  }, [taskId, runLive, pack]);
 
   const reload = useCallback(() => setTick((n) => n + 1), []);
   const rebuild = useCallback(async () => {
@@ -143,8 +138,7 @@ export function useEvidence(taskId: string | null | undefined, bump?: unknown): 
       if (my === tok.current) setLoading(false);
     }
   }, [taskId]);
-  const setPack = useCallback((p: EvidencePack) => setPackState(p), []);
-  return { pack, error, loading, reload, rebuild, setPack, unsupported };
+  return { pack, error, loading, reload, rebuild, unsupported };
 }
 
 export function useEvidenceSummaries(cid: string | null | undefined, bump?: unknown): Record<string, EvidenceSummary> | null {
@@ -164,27 +158,4 @@ export function useEvidenceSummaries(cid: string | null | undefined, bump?: unkn
       });
   }, [cid, bump]);
   return map;
-}
-
-/** POST helper returning ok/status/parsed body (never throws). */
-export async function postJSON<T = unknown>(url: string, body?: unknown): Promise<{ ok: boolean; status: number; d: T & { detail?: unknown } }> {
-  try {
-    const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body ?? {}) });
-    let d: unknown = {};
-    try {
-      d = await r.json();
-    } catch {
-      /* empty */
-    }
-    return { ok: r.ok, status: r.status, d: d as T & { detail?: unknown } };
-  } catch {
-    return { ok: false, status: 0, d: { detail: "the portal could not be reached" } as T & { detail?: unknown } };
-  }
-}
-
-export function detailText(d: { detail?: unknown } | null | undefined): string {
-  const x = d?.detail;
-  if (typeof x === "string") return x;
-  if (Array.isArray(x) && x[0] && typeof x[0] === "object" && "msg" in x[0]) return String((x[0] as { msg: unknown }).msg);
-  return "";
 }

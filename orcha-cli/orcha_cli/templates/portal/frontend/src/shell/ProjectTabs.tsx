@@ -18,6 +18,7 @@
  * sectionCounts) stays in each tab's tooltip + accessible name, labelled with
  * what it measures ("15 open tasks").
  */
+import { useQaLive } from "../pages/qa/live/useQaLive";
 import { useLayoutEffect, useRef, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { useSnapshot } from "../state/SnapshotProvider";
@@ -86,6 +87,7 @@ export function ProjectTabs({ page }: { page: string }) {
   const sections = sectionsForMode(projectSections(), useProjectMode(cid).mode);
   const counts = sectionCounts(snap);
   const projectName = snap?.container?.name || "Project";
+  const liveQa = useQaLive(cid);
 
   // The Shell `page` prop is authoritative (a page mounted at a nested path
   // still lights its tab); fall back to the pathname match.
@@ -150,6 +152,8 @@ export function ProjectTabs({ page }: { page: string }) {
             >
               <Icon name={s.icon} cls="v2-ico v2-ptab-ico" />
               <span className="v2-ptab-label">{s.label}</span>
+              {s.key === "qa" && liveQa ? <span className="qa-livedot v2-ptab-live" title="A run is going" /> : null}
+              {s.key === "qa" && liveQa ? <span className="v2-sr">, a run is going</span> : null}
               {countTitle ? <span className="v2-sr">, {countTitle}</span> : null}
             </Link>
           );

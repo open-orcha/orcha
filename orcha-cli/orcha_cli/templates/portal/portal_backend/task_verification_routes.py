@@ -21,7 +21,6 @@ from portal_backend.review_routing import (
     supersede_pending_prereview as _supersede_pending_prereview,
 )
 from portal_backend.schemas.task_operations import TaskVerify
-from portal_backend.verdikt_autofix import end_for_person as _end_autofix
 from portal_backend.task_autonomy_service import completion_submission, record_approval
 from portal_backend.task_approval_policy import ApprovalPhase
 
@@ -92,9 +91,6 @@ def verify_task(tid: str, body: TaskVerify, request: Request):
                 cur, t["container_id"], tid, reason="human_verified",
                 actor_id=body.actor_agent_id,
             )
-
-        # Mig 068: a person deciding ends a running Verdikt auto-fix loop (human authority).
-        _end_autofix(cur, t, body.actor_agent_id, "accepted" if body.approve else "rejected")
 
         if t.get("workflow_id"):
             from portal_backend.workflow_evidence_service import evidence_reference

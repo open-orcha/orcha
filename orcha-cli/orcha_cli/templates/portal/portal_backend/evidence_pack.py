@@ -11,7 +11,6 @@ A pack is built from what the task's OWN runs recorded in the current verificati
              the agent's own report attached as a labelled claim
   links    — Live changes / captured diff per run, the task's Runs tab, PR URLs that appear in
              the recorded output
-  verdikt  — the latest Verdikt handoff for the task (merged at read time, never stored here)
 
 The pack is cached in task_evidence_packs keyed by `basis` (a signature of every input); a read
 whose basis differs rebuilds it. It never changes task state: a human still verifies.
@@ -28,7 +27,7 @@ from typing import Any
 from portal_backend import evidence_parse as ep
 from portal_backend import sql
 
-PACK_VERSION = 2  # bump when the heuristics change: cached packs rebuild on next read
+PACK_VERSION = 4  # bump when the heuristics change: cached packs rebuild on next read
 MAX_RUNS = 12
 PR_URL = re.compile(r"https://github\.com/[\w.-]+/[\w.-]+/pull/\d+")
 URL = re.compile(r"https?://[^\s'\"<>)\]]+")
@@ -59,13 +58,14 @@ def _result_text(result: Any) -> str:
 
 def _round_start(cur, tid: str):
     """When the current verification round began: the last REJECTED verification of the task
-    — a person's reject, or the Verdikt auto-fix loop sending it back (mig 068) — whose rework
-    runs are what the new claim rests on; else None (all runs count)."""
+    (a person's reject, or an automatic send-back recorded by an earlier release, kept so old
+    rounds still split where they did), whose rework runs are what the new claim rests on; else
+    None (all runs count)."""
     cur.execute(
         f"""SELECT max(created_at) AS at FROM events
             WHERE entity_type='task' AND entity_id=%s
               AND ((event_type='verified' AND NOT {sql.json_bool_is_true('detail', 'approved')})
-                   OR event_type='verdikt_auto_rework')""",
+                   OR event_type IN ('verdikt_auto_rework', 'qa_reopened'))""",
         (tid,),
     )
     row = cur.fetchone()
@@ -100,9 +100,12 @@ def basis_for(cur, task: dict) -> tuple[str, list[dict], Any]:
     """(signature, round runs, round start). The signature covers everything the pack is
     derived from, so a pack is rebuilt exactly when one of its inputs changed."""
     runs, start = _round_runs(cur, str(task["id"]))
+    from portal_backend import qa_handoff
+
     parts = [
         f"v{PACK_VERSION}",
         str(task.get("status")),
+        qa_handoff.proof_signature(qa_handoff.proof_for_task(cur, str(task["id"]), start)),
         hashlib.sha1((task.get("definition_of_done") or "").encode()).hexdigest()[:12],
         hashlib.sha1(_result_text(task.get("result")).encode()).hexdigest()[:12],
         _iso(start) or "-",
@@ -213,10 +216,14 @@ def build_pack(cur, task: dict) -> dict:
         links.append({"kind": "pr", "label": "PR #" + u.rsplit("/", 1)[-1], "href": u})
     preview_urls = [u.rstrip(".,") for u in URL.findall(claim_text or "") if not PR_URL.match(u)][:3]
 
-    # ---- DoD (Verdikt verdicts are merged at read time by `with_verdikt`)
+    # ---- DoD
     items = ep.split_dod(task.get("definition_of_done") or "")
     changed_paths = [f["path"] for f in files]
-    dod_items = ep.assess_dod(items, tests=tests, changes=changes, changed_paths=changed_paths, claim_text=claim_text)
+    from portal_backend import qa_handoff
+
+    proof = qa_handoff.proof_for_task(cur, tid, start)
+    dod_items = ep.assess_dod(items, tests=tests, changes=changes, changed_paths=changed_paths, claim_text=claim_text,
+                              qa_lines=proof["lines"])
 
     return {
         "version": PACK_VERSION,
@@ -237,6 +244,7 @@ def build_pack(cur, task: dict) -> dict:
         "claim": {"text": claim_text[:4000], "truncated": len(claim_text) > 4000} if claim_text else None,
         "dod_text": task.get("definition_of_done") or "",
         "dod": {"items": dod_items, **ep.dod_summary(dod_items)},
+        "qa": proof["requests"],
         "flags": changes["flags"],
         "_changed_paths": changed_paths,
     }
@@ -262,90 +270,66 @@ def ensure_pack(cur, task: dict, *, reason: str = "read", force: bool = False) -
         if basis == row["basis"]:
             return dict(row["pack"]), False
     pack = build_pack(cur, task)
+    return _save_pack(cur, task, pack, reason, force=force), True
+
+
+def _save_pack(cur, task: dict, pack: dict, reason: str, *, force: bool = False) -> dict:
+    """Store the pack and return the one now stored. Two builds of the same basis can race (the
+    build when a task enters needs_verification and the first read of it): the first one stored
+    stays, so every read of that basis sees one pack and one built_at. `force` always replaces."""
+    keep = "" if force else " WHERE task_evidence_packs.basis <> EXCLUDED.basis"
     cur.execute(
         """INSERT INTO task_evidence_packs (task_id, container_id, basis, pack, built_reason, built_at)
            VALUES (%s, %s, %s, %s, %s, now())
            ON CONFLICT (task_id) DO UPDATE
              SET basis=EXCLUDED.basis, pack=EXCLUDED.pack, built_reason=EXCLUDED.built_reason,
-                 built_at=now()""",
-        (tid, str(task["container_id"]), pack["basis"], json.dumps(pack, default=str), reason),
+                 built_at=now()""" + keep,
+        (str(task["id"]), str(task["container_id"]), pack["basis"], json.dumps(pack, default=str), reason),
     )
+    if force:
+        return pack
+    cur.execute("SELECT pack FROM task_evidence_packs WHERE task_id=%s", (str(task["id"]),))
+    row = cur.fetchone()
+    return dict(row["pack"]) if row else pack
+
+
+def fresh_pack(task: dict, *, reason: str = "read", force: bool = False) -> tuple[dict, bool]:
+    """`ensure_pack` that takes no write lock while it builds: a pack reads git, and a write
+    transaction held across that stops every other writer. Not from inside a transaction."""
+    from portal_backend.database import db_cursor
+
+    tid = str(task["id"])
+    with db_cursor(readonly=True) as (_, cur):
+        cur.execute("SELECT basis, pack FROM task_evidence_packs WHERE task_id=%s", (tid,))
+        row = cur.fetchone()
+        if row and not force and basis_for(cur, task)[0] == row["basis"]:
+            return dict(row["pack"]), False
+        pack = build_pack(cur, task)
+    with db_cursor() as (conn, cur):
+        pack = _save_pack(cur, task, pack, reason, force=force)
+        conn.commit()
     return pack, True
 
 
-def _ts(v) -> datetime | None:
-    if isinstance(v, datetime):
-        return v
-    try:
-        return datetime.fromisoformat(str(v)) if v else None
-    except ValueError:
-        return None
-
-
-def in_round(pack: dict, vrun: dict | None) -> bool:
-    """True when `vrun` was handed off in the pack's current verification round (after the
-    last rejected verification). A verdict from an earlier round judged the previous claim,
-    not the rework, so it must not prove anything now."""
-    if not vrun:
-        return False
-    start, created = _ts(pack.get("round_started_at")), _ts(vrun.get("created_at"))
-    return start is None or created is None or created >= start
-
-
-_UNSET = object()
-
-
-def with_verdikt(pack: dict, vrun: dict | None, verdict_run: Any = _UNSET) -> dict:
-    """The public pack: Verdikt merged into the DoD checklist + summary.
-    `vrun` is the task's latest serialized verdikt_runs row (verdikt_integration.run_public)
-    or None — it drives the Verdikt section and the summary's Verdikt part.
-    `verdict_run` is the run whose per-criterion verdicts feed the DoD checklist: the latest
-    COMPLETED run of the current round (a later retry that was cancelled or could not reach
-    Verdikt must not erase a real verdict). Defaults to `vrun`. Runs from a previous round
-    never count (see `in_round`); a stale latest run is flagged `previous_round`."""
+def public_pack(pack: dict) -> dict:
+    """The public pack: private keys dropped and the summary the gate and Needs-you rows show."""
     out = {k: v for k, v in pack.items() if not k.startswith("_")}
     items = [dict(i) for i in (pack.get("dod") or {}).get("items") or []]
-    if verdict_run is _UNSET:
-        verdict_run = vrun
-    if vrun and not in_round(pack, vrun):
-        vrun = {**vrun, "previous_round": True}
-    if verdict_run and not in_round(pack, verdict_run):
-        verdict_run = None
-    if verdict_run and verdict_run.get("status") == "completed" and verdict_run.get("criteria"):
-        by_item: dict[int, dict] = {}
-        for c in verdict_run["criteria"]:
-            idx = c.get("dod_index")
-            if isinstance(idx, int):
-                by_item[idx] = {**c, "run_short": (verdict_run.get("verdikt_run_id") or "")[:8]}
-        if by_item:
-            tests = pack.get("tests") or {}
-            texts = [i["text"] for i in items]
-            items = ep.assess_dod(
-                texts, tests=tests, changes=pack.get("changes") or {},
-                changed_paths=pack.get("_changed_paths") or [f["path"] for f in (pack.get("changes") or {}).get("list") or []],
-                claim_text=((pack.get("claim") or {}).get("text") or ""),
-                verdikt={"by_item": by_item},
-            )
     dod = {"items": items, **ep.dod_summary(items)}
     out["dod"] = dod
-    out["verdikt"] = vrun
-    # a run from a previous round says nothing about the current claim: keep it out of the line
-    vsum = {"status": vrun.get("status"), "verdict": vrun.get("verdict")} if vrun and not vrun.get("previous_round") else None
     out["summary"] = {
         "dod": {k: dod[k] for k in ("total", "proven", "not_proven", "needs_human")},
         "tests": {k: (pack.get("tests") or {}).get(k) for k in ("status", "passed", "failed", "skipped", "errors", "suites")},
         "risk_flags": len(pack.get("flags") or []),
-        "verdikt": vsum,
-        "line": ep.summary_line(dod, pack.get("tests") or {}, pack.get("flags") or [], vsum),
+        "line": ep.summary_line(dod, pack.get("tests") or {}, pack.get("flags") or []),
     }
     return out
 
 
 def on_task_needs_verification(tid: str, *, background: bool = True) -> None:
     """Best-effort hook for the moment a task enters needs_verification (called AFTER the
-    /done commit — never inside it): build + persist the pack, then let the Verdikt
-    integration decide whether this project auto-triggers a run. Runs in a daemon thread by
-    default so /done never waits on git or Verdikt. Never raises."""
+    /done commit — never inside it): build + persist the pack. Runs in a daemon thread by
+    default so /done never waits on git. Never raises."""
     if background:
         import threading
 
@@ -355,17 +339,10 @@ def on_task_needs_verification(tid: str, *, background: bool = True) -> None:
     try:
         from portal_backend.database import db_cursor
 
-        with db_cursor() as (conn, cur):
+        with db_cursor(readonly=True) as (_, cur):
             task = _load_task(cur, tid)
-            if not task or task["status"] != "needs_verification":
-                return
-            pack, _ = ensure_pack(cur, task, reason="needs_verification")
-            conn.commit()
-        from portal_backend import verdikt_autofix as vaf
-        from portal_backend import verdikt_integration as vi
-
-        # mig 068: a rework handed back with no code change at all ends the auto-fix loop
-        vaf.on_rework_done(tid, pack)
-        vi.maybe_auto_trigger(tid, pack)
+        if not task or task["status"] != "needs_verification":
+            return
+        fresh_pack(task, reason="needs_verification")
     except Exception:  # noqa: BLE001 — a hook must never break the transition
         return

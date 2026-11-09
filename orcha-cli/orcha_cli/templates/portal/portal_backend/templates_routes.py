@@ -301,7 +301,7 @@ def get_project_template(key: str):
 def get_project_profile(cid: str, request: Request):
     """The project's mode ('code' | 'general'), DoD presets and last applied template."""
     _require_cid(cid)
-    with db_cursor() as (_, cur):
+    with db_cursor(readonly=True) as (_, cur):
         require_container(cur, cid)
         require_member_read(cur, request, cid)
         return _profile(cur, cid)

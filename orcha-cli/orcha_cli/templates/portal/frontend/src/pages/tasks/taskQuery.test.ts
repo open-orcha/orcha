@@ -15,7 +15,7 @@ const T = (id: string, status: string, priority: number, extra: Partial<Task> = 
 
 describe("parseTaskQuery", () => {
   it("defaults to today's behaviour when params are absent", () => {
-    expect(parseTaskQuery("")).toEqual({ q: "", status: [], assignee: null, sort: null, group: "status", view: "list", tab: "overview", full: false });
+    expect(parseTaskQuery("")).toEqual({ q: "", status: [], assignee: null, sort: null, group: "status", view: "list", tab: "overview", full: false, hideRuns: false });
   });
   it("ignores unknown values instead of throwing", () => {
     const q = parseTaskQuery("?status=bogus,ready&sort=sideways&group=x&view=grid&tab=nope&full=yes");

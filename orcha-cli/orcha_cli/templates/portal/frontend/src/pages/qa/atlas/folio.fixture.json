@@ -1,0 +1,1354 @@
+{
+ "areas": [
+  {
+   "differs": 1,
+   "key": "library",
+   "name": "Library",
+   "screens": [
+    "screen:library",
+    "screen:/books/*"
+   ],
+   "seen": 2,
+   "summary": "Your books and their details"
+  },
+  {
+   "differs": 1,
+   "key": "reading",
+   "name": "Reading",
+   "screens": [
+    "screen:reader",
+    "screen:highlights"
+   ],
+   "seen": 2,
+   "summary": "The reader and what you keep from it"
+  },
+  {
+   "differs": 0,
+   "key": "account",
+   "name": "Account",
+   "screens": [
+    "screen:settings",
+    "screen:/account"
+   ],
+   "seen": 2,
+   "summary": null
+  },
+  {
+   "differs": 0,
+   "key": "discover",
+   "name": "Discover",
+   "screens": [
+    "screen:store",
+    "screen:search"
+   ],
+   "seen": 1,
+   "summary": "Finding the next book"
+  },
+  {
+   "differs": 0,
+   "key": "clubs",
+   "name": "Book clubs",
+   "screens": [
+    "screen:/clubs"
+   ],
+   "seen": 1,
+   "summary": "Reading with others"
+  },
+  {
+   "differs": 0,
+   "key": "other",
+   "name": "Other screens",
+   "screens": [
+    "screen:seen-7117f862"
+   ],
+   "seen": 1,
+   "summary": null
+  }
+ ],
+ "builds": [
+  {
+   "at": "2026-10-25T16:00:00.000Z",
+   "id": "71d3312f-31ac-4866-8f74-a9e3619b1c43",
+   "label": "2.1.0",
+   "made_at": "2026-10-23T09:00:00Z"
+  },
+  {
+   "at": "2026-10-25T16:00:00.000Z",
+   "id": "87f04642-4c2c-442e-bc6f-4e79c20b1c1c",
+   "label": "2.1.0",
+   "made_at": "2026-10-23T09:00:00Z"
+  },
+  {
+   "at": "2026-10-25T16:00:00.000Z",
+   "id": "5dcdac8f-2a11-4aea-b7b4-2ea8a132b52b",
+   "label": "2.1.0",
+   "made_at": "2026-10-23T09:00:00Z"
+  },
+  {
+   "at": "2026-10-20T16:00:00.000Z",
+   "id": "e9184e74-7551-4072-b6a7-6ec53bac6de9",
+   "label": "2.0.0",
+   "made_at": "2026-10-18T09:00:00Z"
+  },
+  {
+   "at": "2026-10-20T16:00:00.000Z",
+   "id": "b1ff6d5a-3677-4435-9912-e4301e60f996",
+   "label": "2.0.0",
+   "made_at": "2026-10-18T09:00:00Z"
+  },
+  {
+   "at": "2026-10-20T16:00:00.000Z",
+   "id": "2e85dfda-de1a-4c4d-aa4f-933e337cce48",
+   "label": "2.0.0",
+   "made_at": "2026-10-18T09:00:00Z"
+  }
+ ],
+ "counts": {
+  "areas": 6,
+  "changed": 0,
+  "different": 0,
+  "differs": 2,
+  "looks": 19,
+  "matched": 9,
+  "minor": 1,
+  "missing": 1,
+  "never_seen": 1,
+  "same": 5,
+  "screens": 10,
+  "seen": 9,
+  "unchecked": 2,
+  "unmatched": 1
+ },
+ "devices": {
+  "android": {
+   "kind": "phone",
+   "landscape": false
+  },
+  "ios": {
+   "kind": "tablet",
+   "landscape": false
+  },
+  "web": {
+   "kind": "browser",
+   "landscape": false
+  }
+ },
+ "flows": [
+  {
+   "count": 0,
+   "from": "screen:/books/*",
+   "label": "Tap",
+   "seen": false,
+   "to": "screen:reader"
+  },
+  {
+   "count": 0,
+   "from": "screen:highlights",
+   "label": "Tap",
+   "seen": false,
+   "to": "screen:settings"
+  },
+  {
+   "count": 0,
+   "from": "screen:library",
+   "label": "Tap",
+   "seen": false,
+   "to": "screen:/books/*"
+  },
+  {
+   "count": 0,
+   "from": "screen:library",
+   "label": "Tap Book clubs",
+   "seen": false,
+   "to": "screen:/clubs"
+  },
+  {
+   "count": 0,
+   "from": "screen:library",
+   "label": "Tap Continue reading",
+   "seen": false,
+   "to": "screen:reader"
+  },
+  {
+   "count": 0,
+   "from": "screen:library",
+   "label": "Tap Settings",
+   "seen": false,
+   "to": "screen:settings"
+  },
+  {
+   "count": 0,
+   "from": "screen:library",
+   "label": "Tap Store",
+   "seen": false,
+   "to": "screen:store"
+  },
+  {
+   "count": 0,
+   "from": "screen:reader",
+   "label": "Tap",
+   "seen": false,
+   "to": "screen:highlights"
+  }
+ ],
+ "generated_at": "2026-10-27T12:00:00.000Z",
+ "map_build": {
+  "error": null,
+  "finished_at": "2026-10-27T12:57:28.965Z",
+  "id": "2e4fb13e-aa5f-4ba3-961a-ce8ee88e92b8",
+  "started_at": "2026-10-27T12:57:28.826Z",
+  "status": "done"
+ },
+ "name": "Folio",
+ "platforms": [
+  "ios",
+  "android",
+  "web"
+ ],
+ "project_id": "55979d7b-30a4-4a0d-8fe7-592f5df8ac2d",
+ "refresh": {
+  "cost_usd": null,
+  "depth": null,
+  "estimate_usd": 0.3,
+  "minutes": 3,
+  "note": null,
+  "state": "idle"
+ },
+ "screens": [
+  {
+   "area": "library",
+   "blocked_reason": null,
+   "change": null,
+   "code_only": false,
+   "code_texts": [
+    "Library",
+    "Continue reading",
+    "Last … opened",
+    "… pages",
+    "Downloaded"
+   ],
+   "flows": [],
+   "from": [],
+   "id": "screen:library",
+   "last_build": "2.1.0",
+   "last_seen_at": "2026-10-25T10:00:03.000Z",
+   "name": "Library",
+   "never_seen": false,
+   "nodes": [
+    "screen:library",
+    "screen:/library"
+   ],
+   "platforms": [
+    "ios",
+    "android",
+    "web"
+   ],
+   "presence": {
+    "android": "seen",
+    "ios": "seen",
+    "web": "seen"
+   },
+   "route": "/library",
+   "similarity": {
+    "badge": "same",
+    "label": "Same",
+    "pairs": [
+     {
+      "a": "ios",
+      "b": "android",
+      "badge": "same",
+      "reasons": [],
+      "score": 1.0
+     },
+     {
+      "a": "ios",
+      "b": "web",
+      "badge": "same",
+      "reasons": [],
+      "score": 1.0
+     },
+     {
+      "a": "android",
+      "b": "web",
+      "badge": "same",
+      "reasons": [],
+      "score": 1.0
+     }
+    ],
+    "reasons": [
+     "Looks and reads the same on iOS, Android and Web"
+    ],
+    "score": 1.0
+   },
+   "states": [
+    {
+     "at": "2026-10-25T10:00:03.000Z",
+     "frame_url": "/api/artifacts/qa-runs/6171f2b4-3957-4c2e-9573-688711c0e85b/frames/0002.png",
+     "label": "Loaded",
+     "platforms": [
+      "ios",
+      "android",
+      "web"
+     ],
+     "state": "loaded"
+    }
+   ],
+   "to": [
+    {
+     "id": "screen:/books/*",
+     "label": "Tap"
+    },
+    {
+     "id": "screen:/clubs",
+     "label": "Tap Book clubs"
+    },
+    {
+     "id": "screen:reader",
+     "label": "Tap Continue reading"
+    },
+    {
+     "id": "screen:settings",
+     "label": "Tap Settings"
+    },
+    {
+     "id": "screen:store",
+     "label": "Tap Store"
+    }
+   ],
+   "variants": {
+    "android": {
+     "build": "2.1.0",
+     "device": {
+      "h": 446,
+      "kind": "phone",
+      "landscape": false,
+      "w": 206
+     },
+     "frame_url": "/api/artifacts/qa-runs/0331d381-d954-4867-8627-bd116215329a/frames/0002.png",
+     "last_seen_at": "2026-10-25T10:00:03.000Z",
+     "looks": 1,
+     "node": "screen:library",
+     "platform": "android",
+     "route": null,
+     "run_id": "0331d381-d954-4867-8627-bd116215329a",
+     "seen": true
+    },
+    "ios": {
+     "build": "2.1.0",
+     "device": {
+      "h": 481,
+      "kind": "tablet",
+      "landscape": false,
+      "w": 361
+     },
+     "frame_url": "/api/artifacts/qa-runs/f311715d-e8c7-4b0a-8d8b-4112a68f5d6a/frames/0002.png",
+     "last_seen_at": "2026-10-25T10:00:03.000Z",
+     "looks": 1,
+     "node": "screen:library",
+     "platform": "ios",
+     "route": null,
+     "run_id": "f311715d-e8c7-4b0a-8d8b-4112a68f5d6a",
+     "seen": true
+    },
+    "web": {
+     "build": "2.1.0",
+     "device": {
+      "h": 400,
+      "kind": "browser",
+      "landscape": true,
+      "w": 640
+     },
+     "frame_url": "/api/artifacts/qa-runs/6171f2b4-3957-4c2e-9573-688711c0e85b/frames/0002.png",
+     "last_seen_at": "2026-10-25T10:00:03.000Z",
+     "looks": 1,
+     "node": "screen:/library",
+     "platform": "web",
+     "route": "/library",
+     "run_id": "6171f2b4-3957-4c2e-9573-688711c0e85b",
+     "seen": true
+    }
+   }
+  },
+  {
+   "area": "library",
+   "blocked_reason": null,
+   "change": null,
+   "code_only": false,
+   "code_texts": [
+    "Article image: …",
+    "… pages",
+    "Start reading",
+    "Add to shelf"
+   ],
+   "flows": [],
+   "from": [
+    {
+     "id": "screen:library",
+     "label": "Tap"
+    }
+   ],
+   "id": "screen:/books/*",
+   "last_build": "2.1.0",
+   "last_seen_at": "2026-10-25T10:00:06.000Z",
+   "name": "Book detail",
+   "never_seen": false,
+   "nodes": [
+    "screen:seen-562a2d73",
+    "screen:/books/*",
+    "screen:book-detail"
+   ],
+   "platforms": [
+    "ios",
+    "android",
+    "web"
+   ],
+   "presence": {
+    "android": "seen",
+    "ios": "seen",
+    "web": "seen"
+   },
+   "route": "/books/*",
+   "similarity": {
+    "badge": "minor",
+    "label": "Minor differences",
+    "pairs": [
+     {
+      "a": "ios",
+      "b": "android",
+      "badge": "minor",
+      "reasons": [
+       "Only iOS shows “Start reading”",
+       "Only Android shows “Read now”"
+      ],
+      "score": 0.857
+     },
+     {
+      "a": "ios",
+      "b": "web",
+      "badge": "same",
+      "reasons": [],
+      "score": 1.0
+     },
+     {
+      "a": "android",
+      "b": "web",
+      "badge": "minor",
+      "reasons": [
+       "Only Android shows “Read now”",
+       "Only Web shows “Start reading”"
+      ],
+      "score": 0.857
+     }
+    ],
+    "reasons": [
+     "Only iOS and Web show “Start reading”",
+     "Only Android shows “Read now”"
+    ],
+    "score": 0.857
+   },
+   "states": [
+    {
+     "at": "2026-10-25T10:00:06.000Z",
+     "frame_url": "/api/artifacts/qa-runs/6171f2b4-3957-4c2e-9573-688711c0e85b/frames/0004.png",
+     "label": "Loaded",
+     "platforms": [
+      "ios",
+      "android",
+      "web"
+     ],
+     "state": "loaded"
+    }
+   ],
+   "to": [
+    {
+     "id": "screen:reader",
+     "label": "Tap"
+    }
+   ],
+   "variants": {
+    "android": {
+     "build": "2.1.0",
+     "device": {
+      "h": 446,
+      "kind": "phone",
+      "landscape": false,
+      "w": 206
+     },
+     "frame_url": "/api/artifacts/qa-runs/0331d381-d954-4867-8627-bd116215329a/frames/0004.png",
+     "last_seen_at": "2026-10-25T10:00:06.000Z",
+     "looks": 1,
+     "node": "screen:seen-562a2d73",
+     "platform": "android",
+     "route": null,
+     "run_id": "0331d381-d954-4867-8627-bd116215329a",
+     "seen": true
+    },
+    "ios": {
+     "build": "2.1.0",
+     "device": {
+      "h": 481,
+      "kind": "tablet",
+      "landscape": false,
+      "w": 361
+     },
+     "frame_url": "/api/artifacts/qa-runs/f311715d-e8c7-4b0a-8d8b-4112a68f5d6a/frames/0004.png",
+     "last_seen_at": "2026-10-25T10:00:06.000Z",
+     "looks": 1,
+     "node": "screen:book-detail",
+     "platform": "ios",
+     "route": null,
+     "run_id": "f311715d-e8c7-4b0a-8d8b-4112a68f5d6a",
+     "seen": true
+    },
+    "web": {
+     "build": "2.1.0",
+     "device": {
+      "h": 400,
+      "kind": "browser",
+      "landscape": true,
+      "w": 640
+     },
+     "frame_url": "/api/artifacts/qa-runs/6171f2b4-3957-4c2e-9573-688711c0e85b/frames/0004.png",
+     "last_seen_at": "2026-10-25T10:00:06.000Z",
+     "looks": 1,
+     "node": "screen:/books/*",
+     "platform": "web",
+     "route": "/books/*",
+     "run_id": "6171f2b4-3957-4c2e-9573-688711c0e85b",
+     "seen": true
+    }
+   }
+  },
+  {
+   "area": "reading",
+   "blocked_reason": null,
+   "change": null,
+   "code_only": false,
+   "code_texts": [
+    "Chapter …",
+    "Aa",
+    "Highlight",
+    "Bookmark"
+   ],
+   "flows": [],
+   "from": [
+    {
+     "id": "screen:/books/*",
+     "label": "Tap"
+    },
+    {
+     "id": "screen:library",
+     "label": "Tap Continue reading"
+    }
+   ],
+   "id": "screen:reader",
+   "last_build": "2.1.0",
+   "last_seen_at": "2026-10-25T10:00:09.000Z",
+   "name": "Reader",
+   "never_seen": false,
+   "nodes": [
+    "screen:reader",
+    "screen:/read/*"
+   ],
+   "platforms": [
+    "ios",
+    "web"
+   ],
+   "presence": {
+    "android": "unknown",
+    "ios": "seen",
+    "web": "seen"
+   },
+   "route": "/read/*",
+   "similarity": {
+    "badge": "same",
+    "label": "Same",
+    "pairs": [
+     {
+      "a": "ios",
+      "b": "web",
+      "badge": "same",
+      "reasons": [],
+      "score": 1.0
+     }
+    ],
+    "reasons": [
+     "Looks and reads the same on iOS and Web",
+     "Orcha has not matched it on Android yet"
+    ],
+    "score": 1.0
+   },
+   "states": [
+    {
+     "at": "2026-10-25T10:00:09.000Z",
+     "frame_url": "/api/artifacts/qa-runs/6171f2b4-3957-4c2e-9573-688711c0e85b/frames/0006.png",
+     "label": "Loaded",
+     "platforms": [
+      "ios",
+      "web"
+     ],
+     "state": "loaded"
+    }
+   ],
+   "to": [
+    {
+     "id": "screen:highlights",
+     "label": "Tap"
+    }
+   ],
+   "variants": {
+    "ios": {
+     "build": "2.1.0",
+     "device": {
+      "h": 361,
+      "kind": "tablet",
+      "landscape": true,
+      "w": 481
+     },
+     "frame_url": "/api/artifacts/qa-runs/f311715d-e8c7-4b0a-8d8b-4112a68f5d6a/frames/0006.png",
+     "last_seen_at": "2026-10-25T10:00:09.000Z",
+     "looks": 1,
+     "node": "screen:reader",
+     "platform": "ios",
+     "route": null,
+     "run_id": "f311715d-e8c7-4b0a-8d8b-4112a68f5d6a",
+     "seen": true
+    },
+    "web": {
+     "build": "2.1.0",
+     "device": {
+      "h": 400,
+      "kind": "browser",
+      "landscape": true,
+      "w": 640
+     },
+     "frame_url": "/api/artifacts/qa-runs/6171f2b4-3957-4c2e-9573-688711c0e85b/frames/0006.png",
+     "last_seen_at": "2026-10-25T10:00:09.000Z",
+     "looks": 1,
+     "node": "screen:/read/*",
+     "platform": "web",
+     "route": "/read/*",
+     "run_id": "6171f2b4-3957-4c2e-9573-688711c0e85b",
+     "seen": true
+    }
+   }
+  },
+  {
+   "area": "reading",
+   "blocked_reason": null,
+   "change": null,
+   "code_only": false,
+   "code_texts": [
+    "Highlights",
+    "… highlights",
+    "Share"
+   ],
+   "flows": [],
+   "from": [
+    {
+     "id": "screen:reader",
+     "label": "Tap"
+    }
+   ],
+   "id": "screen:highlights",
+   "last_build": "2.1.0",
+   "last_seen_at": "2026-10-25T10:00:12.000Z",
+   "name": "Highlights",
+   "never_seen": false,
+   "nodes": [
+    "screen:highlights"
+   ],
+   "platforms": [
+    "ios",
+    "android"
+   ],
+   "presence": {
+    "android": "seen",
+    "ios": "seen",
+    "web": "absent"
+   },
+   "route": null,
+   "similarity": {
+    "badge": "missing",
+    "label": "Not on every platform",
+    "pairs": [
+     {
+      "a": "ios",
+      "b": "android",
+      "badge": "same",
+      "reasons": [],
+      "score": 1.0
+     }
+    ],
+    "reasons": [
+     "Not in the Web code",
+     "Looks and reads the same on iOS and Android"
+    ],
+    "score": 1.0
+   },
+   "states": [
+    {
+     "at": "2026-10-25T10:00:12.000Z",
+     "frame_url": "/api/artifacts/qa-runs/f311715d-e8c7-4b0a-8d8b-4112a68f5d6a/frames/0008.png",
+     "label": "Loaded",
+     "platforms": [
+      "ios",
+      "android"
+     ],
+     "state": "loaded"
+    }
+   ],
+   "to": [
+    {
+     "id": "screen:settings",
+     "label": "Tap"
+    }
+   ],
+   "variants": {
+    "android": {
+     "build": "2.1.0",
+     "device": {
+      "h": 446,
+      "kind": "phone",
+      "landscape": false,
+      "w": 206
+     },
+     "frame_url": "/api/artifacts/qa-runs/0331d381-d954-4867-8627-bd116215329a/frames/0006.png",
+     "last_seen_at": "2026-10-25T10:00:09.000Z",
+     "looks": 1,
+     "node": "screen:highlights",
+     "platform": "android",
+     "route": null,
+     "run_id": "0331d381-d954-4867-8627-bd116215329a",
+     "seen": true
+    },
+    "ios": {
+     "build": "2.1.0",
+     "device": {
+      "h": 481,
+      "kind": "tablet",
+      "landscape": false,
+      "w": 361
+     },
+     "frame_url": "/api/artifacts/qa-runs/f311715d-e8c7-4b0a-8d8b-4112a68f5d6a/frames/0008.png",
+     "last_seen_at": "2026-10-25T10:00:12.000Z",
+     "looks": 1,
+     "node": "screen:highlights",
+     "platform": "ios",
+     "route": null,
+     "run_id": "f311715d-e8c7-4b0a-8d8b-4112a68f5d6a",
+     "seen": true
+    }
+   }
+  },
+  {
+   "area": "account",
+   "blocked_reason": null,
+   "change": null,
+   "code_only": false,
+   "code_texts": [
+    "Settings",
+    "Reading",
+    "Notifications",
+    "Account"
+   ],
+   "flows": [],
+   "from": [
+    {
+     "id": "screen:highlights",
+     "label": "Tap"
+    },
+    {
+     "id": "screen:library",
+     "label": "Tap Settings"
+    }
+   ],
+   "id": "screen:settings",
+   "last_build": "2.1.0",
+   "last_seen_at": "2026-10-25T10:00:18.000Z",
+   "name": "Settings",
+   "never_seen": false,
+   "nodes": [
+    "screen:/settings",
+    "screen:settings"
+   ],
+   "platforms": [
+    "ios",
+    "android",
+    "web"
+   ],
+   "presence": {
+    "android": "seen",
+    "ios": "seen",
+    "web": "seen"
+   },
+   "route": "/settings",
+   "similarity": {
+    "badge": "same",
+    "label": "Same",
+    "pairs": [
+     {
+      "a": "ios",
+      "b": "android",
+      "badge": "same",
+      "reasons": [],
+      "score": 1.0
+     },
+     {
+      "a": "ios",
+      "b": "web",
+      "badge": "same",
+      "reasons": [],
+      "score": 1.0
+     },
+     {
+      "a": "android",
+      "b": "web",
+      "badge": "same",
+      "reasons": [],
+      "score": 1.0
+     }
+    ],
+    "reasons": [
+     "Looks and reads the same on iOS, Android and Web"
+    ],
+    "score": 1.0
+   },
+   "states": [
+    {
+     "at": "2026-10-25T10:00:18.000Z",
+     "frame_url": "/api/artifacts/qa-runs/f311715d-e8c7-4b0a-8d8b-4112a68f5d6a/frames/0012.png",
+     "label": "Loaded",
+     "platforms": [
+      "ios",
+      "android",
+      "web"
+     ],
+     "state": "loaded"
+    }
+   ],
+   "to": [],
+   "variants": {
+    "android": {
+     "build": "2.1.0",
+     "device": {
+      "h": 446,
+      "kind": "phone",
+      "landscape": false,
+      "w": 206
+     },
+     "frame_url": "/api/artifacts/qa-runs/0331d381-d954-4867-8627-bd116215329a/frames/0008.png",
+     "last_seen_at": "2026-10-25T10:00:12.000Z",
+     "looks": 1,
+     "node": "screen:settings",
+     "platform": "android",
+     "route": null,
+     "run_id": "0331d381-d954-4867-8627-bd116215329a",
+     "seen": true
+    },
+    "ios": {
+     "build": "2.1.0",
+     "device": {
+      "h": 481,
+      "kind": "tablet",
+      "landscape": false,
+      "w": 361
+     },
+     "frame_url": "/api/artifacts/qa-runs/f311715d-e8c7-4b0a-8d8b-4112a68f5d6a/frames/0012.png",
+     "last_seen_at": "2026-10-25T10:00:18.000Z",
+     "looks": 1,
+     "node": "screen:settings",
+     "platform": "ios",
+     "route": null,
+     "run_id": "f311715d-e8c7-4b0a-8d8b-4112a68f5d6a",
+     "seen": true
+    },
+    "web": {
+     "build": "2.1.0",
+     "device": {
+      "h": 400,
+      "kind": "browser",
+      "landscape": true,
+      "w": 640
+     },
+     "frame_url": "/api/artifacts/qa-runs/6171f2b4-3957-4c2e-9573-688711c0e85b/frames/0010.png",
+     "last_seen_at": "2026-10-25T10:00:15.000Z",
+     "looks": 1,
+     "node": "screen:/settings",
+     "platform": "web",
+     "route": "/settings",
+     "run_id": "6171f2b4-3957-4c2e-9573-688711c0e85b",
+     "seen": true
+    }
+   }
+  },
+  {
+   "area": "account",
+   "blocked_reason": null,
+   "change": null,
+   "code_only": false,
+   "code_texts": [
+    "Profile",
+    "Reading goal",
+    "Books this year"
+   ],
+   "flows": [],
+   "from": [],
+   "id": "screen:/account",
+   "last_build": "2.1.0",
+   "last_seen_at": "2026-10-25T10:00:18.000Z",
+   "name": "Profile",
+   "never_seen": false,
+   "nodes": [
+    "screen:profile",
+    "screen:/account"
+   ],
+   "platforms": [
+    "ios",
+    "web"
+   ],
+   "presence": {
+    "android": "unknown",
+    "ios": "unseen",
+    "web": "seen"
+   },
+   "route": "/account",
+   "similarity": {
+    "badge": "unchecked",
+    "label": "Not compared yet",
+    "pairs": [
+     {
+      "a": "ios",
+      "b": "web",
+      "badge": "unchecked",
+      "reasons": [],
+      "score": null
+     }
+    ],
+    "reasons": [
+     "Not seen on iOS yet, so Orcha cannot compare it there",
+     "Orcha has not matched it on Android yet"
+    ],
+    "score": null
+   },
+   "states": [
+    {
+     "at": "2026-10-25T10:00:18.000Z",
+     "frame_url": "/api/artifacts/qa-runs/6171f2b4-3957-4c2e-9573-688711c0e85b/frames/0012.png",
+     "label": "Loaded",
+     "platforms": [
+      "web"
+     ],
+     "state": "loaded"
+    }
+   ],
+   "to": [],
+   "variants": {
+    "ios": {
+     "build": null,
+     "device": {
+      "h": null,
+      "kind": "phone",
+      "landscape": false,
+      "w": null
+     },
+     "frame_url": null,
+     "last_seen_at": null,
+     "looks": 0,
+     "node": "screen:profile",
+     "platform": "ios",
+     "route": null,
+     "run_id": null,
+     "seen": false
+    },
+    "web": {
+     "build": "2.1.0",
+     "device": {
+      "h": 400,
+      "kind": "browser",
+      "landscape": true,
+      "w": 640
+     },
+     "frame_url": "/api/artifacts/qa-runs/6171f2b4-3957-4c2e-9573-688711c0e85b/frames/0012.png",
+     "last_seen_at": "2026-10-25T10:00:18.000Z",
+     "looks": 1,
+     "node": "screen:/account",
+     "platform": "web",
+     "route": "/account",
+     "run_id": "6171f2b4-3957-4c2e-9573-688711c0e85b",
+     "seen": true
+    }
+   }
+  },
+  {
+   "area": "discover",
+   "blocked_reason": null,
+   "change": null,
+   "code_only": false,
+   "code_texts": [
+    "Store",
+    "New this week",
+    "Top charts"
+   ],
+   "flows": [],
+   "from": [
+    {
+     "id": "screen:library",
+     "label": "Tap Store"
+    }
+   ],
+   "id": "screen:store",
+   "last_build": "2.1.0",
+   "last_seen_at": "2026-10-25T10:00:15.000Z",
+   "name": "Store",
+   "never_seen": false,
+   "nodes": [
+    "screen:store",
+    "screen:/store"
+   ],
+   "platforms": [
+    "ios",
+    "web"
+   ],
+   "presence": {
+    "android": "unknown",
+    "ios": "seen",
+    "web": "seen"
+   },
+   "route": "/store",
+   "similarity": {
+    "badge": "same",
+    "label": "Same",
+    "pairs": [
+     {
+      "a": "ios",
+      "b": "web",
+      "badge": "same",
+      "reasons": [],
+      "score": 1.0
+     }
+    ],
+    "reasons": [
+     "Looks and reads the same on iOS and Web",
+     "Orcha has not matched it on Android yet"
+    ],
+    "score": 1.0
+   },
+   "states": [
+    {
+     "at": "2026-10-25T10:00:15.000Z",
+     "frame_url": "/api/artifacts/qa-runs/f311715d-e8c7-4b0a-8d8b-4112a68f5d6a/frames/0010.png",
+     "label": "Loaded",
+     "platforms": [
+      "ios",
+      "web"
+     ],
+     "state": "loaded"
+    }
+   ],
+   "to": [],
+   "variants": {
+    "ios": {
+     "build": "2.1.0",
+     "device": {
+      "h": 481,
+      "kind": "tablet",
+      "landscape": false,
+      "w": 361
+     },
+     "frame_url": "/api/artifacts/qa-runs/f311715d-e8c7-4b0a-8d8b-4112a68f5d6a/frames/0010.png",
+     "last_seen_at": "2026-10-25T10:00:15.000Z",
+     "looks": 1,
+     "node": "screen:store",
+     "platform": "ios",
+     "route": null,
+     "run_id": "f311715d-e8c7-4b0a-8d8b-4112a68f5d6a",
+     "seen": true
+    },
+    "web": {
+     "build": "2.1.0",
+     "device": {
+      "h": 400,
+      "kind": "browser",
+      "landscape": true,
+      "w": 640
+     },
+     "frame_url": "/api/artifacts/qa-runs/6171f2b4-3957-4c2e-9573-688711c0e85b/frames/0008.png",
+     "last_seen_at": "2026-10-25T10:00:12.000Z",
+     "looks": 1,
+     "node": "screen:/store",
+     "platform": "web",
+     "route": "/store",
+     "run_id": "6171f2b4-3957-4c2e-9573-688711c0e85b",
+     "seen": true
+    }
+   }
+  },
+  {
+   "area": "discover",
+   "blocked_reason": null,
+   "change": null,
+   "code_only": true,
+   "code_texts": [
+    "Search",
+    "Titles, authors or topics",
+    "Recent searches"
+   ],
+   "flows": [],
+   "from": [],
+   "id": "screen:search",
+   "last_build": null,
+   "last_seen_at": null,
+   "name": "Search",
+   "never_seen": true,
+   "nodes": [
+    "screen:/search",
+    "screen:search"
+   ],
+   "platforms": [
+    "ios",
+    "web"
+   ],
+   "presence": {
+    "android": "unknown",
+    "ios": "unseen",
+    "web": "unseen"
+   },
+   "route": "/search",
+   "similarity": {
+    "badge": "unchecked",
+    "label": "Not compared yet",
+    "pairs": [
+     {
+      "a": "ios",
+      "b": "web",
+      "badge": "unchecked",
+      "reasons": [],
+      "score": null
+     }
+    ],
+    "reasons": [
+     "Not seen live yet, so there is nothing to compare",
+     "Orcha has not matched it on Android yet"
+    ],
+    "score": null
+   },
+   "states": [],
+   "to": [],
+   "variants": {
+    "ios": {
+     "build": null,
+     "device": {
+      "h": null,
+      "kind": "phone",
+      "landscape": false,
+      "w": null
+     },
+     "frame_url": null,
+     "last_seen_at": null,
+     "looks": 0,
+     "node": "screen:search",
+     "platform": "ios",
+     "route": null,
+     "run_id": null,
+     "seen": false
+    },
+    "web": {
+     "build": null,
+     "device": {
+      "h": null,
+      "kind": "browser",
+      "landscape": false,
+      "w": null
+     },
+     "frame_url": null,
+     "last_seen_at": null,
+     "looks": 0,
+     "node": "screen:/search",
+     "platform": "web",
+     "route": "/search",
+     "run_id": null,
+     "seen": false
+    }
+   }
+  },
+  {
+   "area": "clubs",
+   "blocked_reason": null,
+   "change": null,
+   "code_only": false,
+   "code_texts": [
+    "Book clubs",
+    "Join a club",
+    "… members"
+   ],
+   "flows": [],
+   "from": [
+    {
+     "id": "screen:library",
+     "label": "Tap Book clubs"
+    }
+   ],
+   "id": "screen:/clubs",
+   "last_build": "2.1.0",
+   "last_seen_at": "2026-10-25T10:00:21.000Z",
+   "name": "Reading club invitations",
+   "never_seen": false,
+   "nodes": [
+    "screen:book-clubs",
+    "screen:/clubs"
+   ],
+   "platforms": [
+    "ios",
+    "web"
+   ],
+   "presence": {
+    "android": "unknown",
+    "ios": "seen",
+    "web": "seen"
+   },
+   "route": "/clubs",
+   "similarity": {
+    "badge": "same",
+    "label": "Same",
+    "pairs": [
+     {
+      "a": "ios",
+      "b": "web",
+      "badge": "same",
+      "reasons": [],
+      "score": 1.0
+     }
+    ],
+    "reasons": [
+     "Looks and reads the same on iOS and Web",
+     "Orcha has not matched it on Android yet"
+    ],
+    "score": 1.0
+   },
+   "states": [
+    {
+     "at": "2026-10-25T10:00:21.000Z",
+     "frame_url": "/api/artifacts/qa-runs/6171f2b4-3957-4c2e-9573-688711c0e85b/frames/0014.png",
+     "label": "Loaded",
+     "platforms": [
+      "ios",
+      "web"
+     ],
+     "state": "loaded"
+    }
+   ],
+   "to": [],
+   "variants": {
+    "ios": {
+     "build": "2.1.0",
+     "device": {
+      "h": 481,
+      "kind": "tablet",
+      "landscape": false,
+      "w": 361
+     },
+     "frame_url": "/api/artifacts/qa-runs/f311715d-e8c7-4b0a-8d8b-4112a68f5d6a/frames/0014.png",
+     "last_seen_at": "2026-10-25T10:00:21.000Z",
+     "looks": 1,
+     "node": "screen:book-clubs",
+     "platform": "ios",
+     "route": null,
+     "run_id": "f311715d-e8c7-4b0a-8d8b-4112a68f5d6a",
+     "seen": true
+    },
+    "web": {
+     "build": "2.1.0",
+     "device": {
+      "h": 400,
+      "kind": "browser",
+      "landscape": true,
+      "w": 640
+     },
+     "frame_url": "/api/artifacts/qa-runs/6171f2b4-3957-4c2e-9573-688711c0e85b/frames/0014.png",
+     "last_seen_at": "2026-10-25T10:00:21.000Z",
+     "looks": 1,
+     "node": "screen:/clubs",
+     "platform": "web",
+     "route": "/clubs",
+     "run_id": "6171f2b4-3957-4c2e-9573-688711c0e85b",
+     "seen": true
+    }
+   }
+  },
+  {
+   "area": "other",
+   "blocked_reason": null,
+   "change": null,
+   "code_only": false,
+   "code_texts": [],
+   "flows": [],
+   "from": [],
+   "id": "screen:seen-7117f862",
+   "last_build": "2.1.0",
+   "last_seen_at": "2026-10-25T10:00:15.000Z",
+   "name": "Welcome to Folio",
+   "never_seen": false,
+   "nodes": [
+    "screen:seen-7117f862"
+   ],
+   "platforms": [
+    "android"
+   ],
+   "presence": {
+    "android": "seen",
+    "ios": "unknown",
+    "web": "unknown"
+   },
+   "route": null,
+   "similarity": {
+    "badge": "unmatched",
+    "label": "Not matched yet",
+    "pairs": [],
+    "reasons": [
+     "Found on Android only so far: Orcha has not matched it on iOS and Web yet"
+    ],
+    "score": null
+   },
+   "states": [
+    {
+     "at": "2026-10-25T10:00:15.000Z",
+     "frame_url": "/api/artifacts/qa-runs/0331d381-d954-4867-8627-bd116215329a/frames/0010.png",
+     "label": "Loaded",
+     "platforms": [
+      "android"
+     ],
+     "state": "loaded"
+    }
+   ],
+   "to": [],
+   "variants": {
+    "android": {
+     "build": "2.1.0",
+     "device": {
+      "h": 446,
+      "kind": "phone",
+      "landscape": false,
+      "w": 206
+     },
+     "frame_url": "/api/artifacts/qa-runs/0331d381-d954-4867-8627-bd116215329a/frames/0010.png",
+     "last_seen_at": "2026-10-25T10:00:15.000Z",
+     "looks": 1,
+     "node": "screen:seen-7117f862",
+     "platform": "android",
+     "route": null,
+     "run_id": "0331d381-d954-4867-8627-bd116215329a",
+     "seen": true
+    }
+   }
+  }
+ ],
+ "since": {
+  "at": "2026-10-20T12:00:00.000Z",
+  "default": true,
+  "kind": "date",
+  "label": "the last 7 days",
+  "value": null
+ },
+ "slug": "folio"
+}

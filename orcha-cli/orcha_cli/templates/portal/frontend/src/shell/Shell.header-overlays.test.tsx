@@ -58,8 +58,9 @@ describe("project tab bar (D1)", () => {
     const nav = await screen.findByRole("navigation", { name: /sections$/ });
     const links = within(nav).getAllByRole("link");
     const labels = links.map((a) => a.querySelector(".v2-ptab-label")?.textContent);
-    expect(labels.slice(0, 7)).toEqual(["Overview", "Workflows", "Tasks", "Routines", "Agents", "Org", "Requests"]);
+    expect(labels.slice(0, 8)).toEqual(["Overview", "Workflows", "Tasks", "Routines", "Agents", "Org", "Requests", "Quality"]);
     expect(labels).toContain("Activity");
+    expect(links.find((a) => a.querySelector(".v2-ptab-label")?.textContent === "Quality")?.getAttribute("href")).toBe("/qa");
     const cur = links.filter((a) => a.getAttribute("aria-current") === "page");
     expect(cur).toHaveLength(1);
     expect(cur[0].getAttribute("href")).toBe("/tasks");
