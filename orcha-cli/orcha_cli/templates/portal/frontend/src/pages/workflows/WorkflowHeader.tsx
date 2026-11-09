@@ -34,6 +34,8 @@ export function workflowMenuReason(detail: WorkflowDetail, action: WorkflowMenuA
 /** The single primary button: the first enabled of start → resume → finish, else finish. */
 export function workflowPrimaryAction(detail: WorkflowDetail, verified: boolean): WorkflowMenuAction {
   for (const a of ["start", "resume"] as const) if (!workflowMenuReason(detail, a, verified)) return a;
+  // A workflow that ended has nothing to finish: its next step is running it again.
+  if (["completed", "cancelled"].includes(detail.status) && !workflowMenuReason(detail, "run_again", verified)) return "run_again";
   return "finish";
 }
 

@@ -189,3 +189,5 @@
 
 /* pager wrapper (carries the "N items in this view" tooltip) */
 .nd-pager { display: inline-flex; align-items: center; }
+
+.nd-qualitychip { margin-inline-start: 8px; vertical-align: 1px; }

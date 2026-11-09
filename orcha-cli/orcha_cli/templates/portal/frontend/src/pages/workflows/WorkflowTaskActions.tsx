@@ -145,6 +145,7 @@ export function WorkflowTaskActions({ detail, task, scope, verified, stale, agen
           : <p>Preparing does not start this task or release any hold.</p>}
         <label>Done when<textarea maxLength={4000} value={criteria} onChange={(e) => setCriteria(e.target.value)} /></label>
         <label>Assignee<select value={assignee} onChange={(e) => setAssignee(e.target.value)}><option value="">Choose an assignee</option>{agents.map((a) => <option key={a.id} value={a.id}>{a.alias}</option>)}</select></label>
+        {!criteria.trim() || !assignee ? <p className="wf-muted">{!criteria.trim() ? "Say when this task is done to prepare it." : "Choose who takes this task to prepare it."}</p> : null}
       </> : <label>Reason<textarea maxLength={4000} value={reason} onChange={(e) => setReason(e.target.value)} /></label>}
       {action === "hold" && <p>The task will not start while this hold remains. Existing prerequisites and start holds stay in place.</p>}
       {action === "release" && <><p>Only the selected holds are removed. All other holds, owner decisions and prerequisites remain; releasing a hold does not promise the task will run.</p>

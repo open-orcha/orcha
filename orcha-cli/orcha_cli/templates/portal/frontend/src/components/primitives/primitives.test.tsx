@@ -148,6 +148,19 @@ describe("List / Row", () => {
 });
 
 describe("Tabs", () => {
+  it("segmented: the same tablist drawn as a control, with one panel and a spoken badge", () => {
+    render(<Tabs variant="segmented" label="Views" idPrefix="vw" panelId="the-panel" value="a" onChange={() => {}}
+      tabs={[{ key: "a", label: "A", icon: "map", title: "2 waiting", badge: <span>2</span> }, { key: "b", label: "B" }]} />);
+    expect(screen.getByRole("tablist", { name: "Views" })).toHaveClass("v2-seg");
+    const a = screen.getByRole("tab", { name: /^A/ });
+    expect(a).toHaveClass("v2-seg-item");
+    expect(a).toHaveAttribute("aria-controls", "the-panel");
+    expect(a).toHaveAttribute("title", "2 waiting");
+    expect(a).toHaveAttribute("data-tab", "a");
+    expect(a.textContent).toBe("A2");
+    expect(a.querySelector("svg")).not.toBeNull();
+  });
+
   it("roving tabindex with ←/→ and aria wiring", () => {
     function T() {
       const [v, setV] = useState("conversation");

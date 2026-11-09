@@ -133,7 +133,7 @@ function LoopRounds({ detail, group }: { detail: WorkflowDetail; group: RepeatGr
     <p className="wf-muted">Exits when {review.title} reports {group.exit_outcome.replaceAll("_", " ")}.</p>
     {rounds.length === 0 && <p className="wf-muted">No rounds yet: the loop opens when its first step starts.</p>}
     <ol className="wf-earlier">{rounds.map((r) => <li key={r.n}><strong>Round {r.n}</strong>
-      {r.outcome ? <> · <Badge tone={outcomeTone(r.outcome === group.exit_outcome ? "accepted" : "changes_requested")}>{r.outcome.replaceAll("_", " ")}</Badge></> : r.n === group.current_round ? <span className="wf-muted"> · in progress</span> : null}
+      {r.outcome ? <> · <Badge tone={outcomeTone(r.outcome === group.exit_outcome ? "accepted" : "changes_requested")}>{r.outcome.replaceAll("_", " ")}</Badge></> : r.n === group.current_round ? <span className="wf-muted"> · {["exited", "stopped"].includes(group.state) ? "finished" : "in progress"}</span> : null}
       {r.ended && <span className="wf-muted"> · {ENDINGS[r.ended] ?? r.ended}</span>}
       {r.findings.length > 0 && <ul>{r.findings.map((f, i) => <li key={i}>{f.text}</li>)}</ul>}</li>)}</ol>
   </TimelineCard>;
@@ -144,11 +144,11 @@ export function WorkflowReviewHistory({ detail, renderActions }: { detail: Workf
   return <section className="wf-history" aria-label="Review history">
     <div className="wf-tl-head"><h3>Review history</h3></div>
     <p className="wf-tl-intro">Each correction and review uses a fresh task. Accepting a report does not resolve its findings or finish this workflow.
-      <span className="wf-muted"> Round limit {detail.round_limit}{used !== undefined && <> · used {used}</>}.</span></p>
+      {!detail.repeat_groups?.length && <span className="wf-muted"> Round limit {detail.round_limit}{used !== undefined && <> · used {used}</>}.</span>}</p>
     {detail.semantics_version === 2 && !!detail.repeat_groups?.length && <Timeline label="Feedback loop rounds" className="wf-tl">
       {detail.repeat_groups.map((g) => <LoopRounds key={g.id} detail={detail} group={g} />)}</Timeline>}
     {detail.review_rounds === undefined ? <EmptyState compact title="Review history is unavailable on this server version." />
-      : detail.review_rounds.length === 0 ? <EmptyState compact title="No review rounds recorded yet." />
+      : detail.review_rounds.length === 0 ? (detail.repeat_groups?.length ? null : <EmptyState compact title="No review rounds recorded yet." />)
       : <Timeline label="Review rounds" className="wf-tl">{detail.review_rounds.map((round) => <ReviewRoundCard key={round.id} detail={detail} round={round} renderActions={renderActions} />)}</Timeline>}
     {detail.limit_reached && <HistoryBar><span>Limit reached — no new starts. The owner can review the limits; the workflow has not finished.</span></HistoryBar>}
   </section>;

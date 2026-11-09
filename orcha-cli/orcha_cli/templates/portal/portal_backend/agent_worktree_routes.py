@@ -322,9 +322,6 @@ def _busy_worktrees(cur, cid) -> list[str]:
         """SELECT DISTINCT wr.worktree FROM worker_runs wr JOIN agents a ON a.id = wr.agent_id
             WHERE a.container_id=%s AND wr.status='running' AND wr.worktree IS NOT NULL""", (cid,))
     busy = [r["worktree"] for r in cur.fetchall()]
-    cur.execute("""SELECT DISTINCT worktree FROM verdikt_previews WHERE container_id=%s
-                    AND status IN ('requested','starting','ready') AND worktree IS NOT NULL""", (cid,))
-    busy += [r["worktree"] for r in cur.fetchall()]
     return sorted(set(busy))
 
 

@@ -122,7 +122,7 @@ def get_agent_protocol(aid: str, request: Request, task_id: str | None = None):
         ):
             cur.execute(
                 "SELECT id, title, description, definition_of_done, protocol, "
-                "created_by_agent_id, workflow_id, container_id "
+                "created_by_agent_id, workflow_id, container_id, qa_step "
                 "FROM tasks WHERE id=%s AND is_root=false",
                 (task_id,),
             )
@@ -130,7 +130,7 @@ def get_agent_protocol(aid: str, request: Request, task_id: str | None = None):
         if row is None:
             cur.execute(
                 """SELECT t.id, t.title, t.description, t.definition_of_done, t.protocol,
-                          t.created_by_agent_id, t.workflow_id, t.container_id
+                          t.created_by_agent_id, t.workflow_id, t.container_id, t.qa_step
                    FROM tasks t
                    JOIN agent_tasks at ON at.task_id = t.id
                    WHERE at.agent_id=%s AND at.assignment_status IN ('assigned','accepted','working')

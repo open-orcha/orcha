@@ -9,6 +9,7 @@ import { WorkflowTaskAcceptanceRecord } from "./WorkflowTaskAcceptanceRecord";
 import { hasWorkflowRoutes, WorkflowApiError, workflowPaths, workflowRequest, workflowWriteReason } from "./workflowApi";
 import type { WorkflowDetail, WorkflowTask } from "./workflowContract.generated";
 import "./workflows.css";
+import { heldBy } from "./WorkflowTaskRows";
 
 type ReadState = "loading" | "ready" | "unsupported" | "unavailable" | "forbidden";
 type Membership = { detail: WorkflowDetail; task: WorkflowTask };
@@ -139,6 +140,8 @@ export function WorkflowTaskInspector({ taskId }: { taskId: string }) {
   const { snap, identityPending } = useSnapshot();
   const authority = useActingAuthority();
   if (!index || index.state === "unsupported" || member?.detail.hidden) return null;
+  // Most tasks are in no workflow: nothing to say about that here.
+  if (index.state === "ready" && !member && !index.error) return null;
   const verified = !identityPending && !!authority.human;
   return <PropertySection title="Workflow"><Property label="Membership" layout="stack"><section aria-label="Task workflow" className="wf-task-context">
     {index.state === "loading" && <p role="status">Checking workflow membership… Task changes wait until this check finishes.</p>}
@@ -153,7 +156,7 @@ export function WorkflowTaskInspector({ taskId }: { taskId: string }) {
       <WorkflowTaskAcceptanceRecord task={member.task} />
       <p>Review finished results in the workflow task controls. Plan approval is a separate decision.</p>
       {workflowWriteReason(member.detail.capability, verified) && <p>{workflowWriteReason(member.detail.capability, verified)}</p>}
-      {member.task.blockers.length > 0 && <ul aria-label="Workflow blockers">{member.task.blockers.map((b, i) => <li key={i}>{b.message}</li>)}</ul>}
+      {heldBy(member.task).length > 0 && <ul aria-label="Workflow blockers">{heldBy(member.task).map((b, i) => <li key={i}>{b.message}</li>)}</ul>}
       {member.task.display_state.warning && <p className="wf-warning">{member.task.display_state.warning}</p>}
       {member.task.display_state.release_available_at && <p>If the worker stays silent, lost-worker release becomes available at <time dateTime={member.task.display_state.release_available_at}>{new Date(member.task.display_state.release_available_at).toLocaleString()}</time>. Refresh to check availability.</p>}
       <p><Link to={workflowMemberHref(member.detail, taskId)}>Open workflow task controls</Link> to review holds, dependencies, stop and recovery options.</p>

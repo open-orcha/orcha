@@ -3686,6 +3686,16 @@
             "maxItems": 8,
             "title": "Routes"
           },
+          "qa": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/QaStepSpec"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "expected_work_revision": {
             "anyOf": [
               {
@@ -4412,6 +4422,26 @@
             "type": "array",
             "maxItems": 8,
             "title": "Routes"
+          },
+          "qa": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/QaStepSpec"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "block": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/QaStepBlock"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "additionalProperties": false,
@@ -4831,6 +4861,122 @@
           "objectives_total"
         ],
         "title": "Progress"
+      },
+      "QaStepBlock": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Key"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Name"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "key",
+          "name"
+        ],
+        "title": "QaStepBlock",
+        "description": "The Quality block a step came from, for its label. The step stays a normal step."
+      },
+      "QaStepSpec": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "map",
+              "explore",
+              "draft",
+              "check",
+              "triage"
+            ],
+            "title": "Kind"
+          },
+          "platform": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "ios",
+                  "android",
+                  "web"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Platform"
+          },
+          "device": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device"
+          },
+          "scenario_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 50,
+            "title": "Scenario Ids"
+          },
+          "tags": {
+            "items": {
+              "type": "string",
+              "maxLength": 60
+            },
+            "type": "array",
+            "maxItems": 20,
+            "title": "Tags"
+          },
+          "focus": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Focus"
+          },
+          "minutes": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 480.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Minutes"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "kind"
+        ],
+        "title": "QaStepSpec",
+        "description": "Makes a step a QA step (version 2): activating it files a QA request, and the rolled-up\nresult reports the step's outcome. Outcomes default to `pass` and `fail` (`triage`: `fix`,\n`clear` and `needs_person`), the assignee to the project's QA agent. A person accepts the\nstep, unless the project's `final_decision` is `quality` and every rule of it holds."
       },
       "Receipt": {
         "properties": {
@@ -7439,6 +7585,26 @@
             },
             "type": "array",
             "title": "Routes"
+          },
+          "qa": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/QaStepSpec"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "block": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/QaStepBlock"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "route_state": {
             "anyOf": [

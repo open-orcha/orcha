@@ -1,0 +1,356 @@
+/* Refresh atlas as a story (refresh-story.tsx): the band while the high-level pass runs, and the
+   landing when it ends. Transform, opacity and stroke-dashoffset only; the aperture turns only
+   while a pass runs, and nothing moves under reduced motion. */
+
+.band {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--color-border);
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--color-fg) 8%, transparent), transparent 55%),
+    var(--color-panel);
+  overflow: hidden;
+  animation: bandIn 420ms var(--ease-rise) both;
+}
+@media (min-width: 768px) {
+  .band {
+    padding: 12px 24px;
+  }
+}
+/* A light passing along the band while the pass works (transform only). */
+.band[data-stage]::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--color-fg) 7%, transparent), transparent);
+  transform: translateX(-100%);
+  animation: bandScan 2.6s ease-in-out infinite;
+}
+@keyframes bandIn {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+}
+@keyframes bandScan {
+  to {
+    transform: translateX(100%);
+  }
+}
+
+.aperture {
+  display: inline-flex;
+  flex: none;
+  width: 40px;
+  height: 40px;
+  color: var(--color-primary);
+}
+.aperture svg {
+  width: 100%;
+  height: 100%;
+}
+.apertureRim {
+  fill: color-mix(in srgb, currentColor 8%, transparent);
+  stroke: color-mix(in srgb, currentColor 45%, transparent);
+  stroke-width: 1.5;
+}
+.blades {
+  transform-origin: 20px 20px;
+  transform-box: view-box;
+}
+.aperture[data-spinning="true"] .blades {
+  animation: turn 6s linear infinite;
+}
+.blade {
+  fill: color-mix(in srgb, currentColor 16%, transparent);
+  stroke: color-mix(in srgb, currentColor 55%, transparent);
+  stroke-width: 0.8;
+}
+.apertureEye {
+  fill: var(--color-panel);
+  stroke: currentColor;
+  stroke-width: 1.4;
+}
+@keyframes turn {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* The stages, lit as the pass reaches each. */
+.rail {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 0;
+  margin-top: 8px;
+}
+.stage {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--color-muted);
+}
+.stageMark {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  border: 1.5px solid color-mix(in srgb, var(--color-muted) 50%, transparent);
+  color: var(--color-primary-fg);
+}
+.stage[data-state="done"] {
+  color: var(--color-fg-2);
+}
+.stage[data-state="done"] .stageMark {
+  border-color: var(--color-primary);
+  background: var(--color-primary);
+  animation: markIn 280ms var(--ease-rise) both;
+}
+.stage[data-state="now"] {
+  color: var(--color-fg);
+  font-weight: 600;
+}
+.stage[data-state="now"] .stageMark {
+  border-color: var(--color-primary);
+}
+.stage[data-state="now"] .stageMark::after {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--color-primary);
+}
+.stage[data-state="now"] .stageMark::before {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border-radius: 999px;
+  border: 1.5px solid var(--color-primary);
+  animation: ringOut 1.6s cubic-bezier(0, 0, 0.2, 1) infinite;
+}
+.stageLine {
+  display: inline-block;
+  width: 28px;
+  height: 1.5px;
+  margin: 0 6px 0 2px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--color-muted) 30%, transparent);
+  transform-origin: left center;
+}
+.stage[data-state="done"] .stageLine {
+  background: var(--color-primary);
+  animation: lineIn 420ms var(--ease-swift) both;
+}
+@keyframes markIn {
+  from {
+    transform: scale(0.4);
+    opacity: 0;
+  }
+}
+@keyframes ringOut {
+  from {
+    transform: scale(0.7);
+    opacity: 0.9;
+  }
+  to {
+    transform: scale(1.6);
+    opacity: 0;
+  }
+}
+@keyframes lineIn {
+  from {
+    transform: scaleX(0);
+  }
+}
+
+.progress {
+  width: 180px;
+  height: 4px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--color-muted) 18%, transparent);
+}
+.progressFill {
+  height: 100%;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--color-fg) 70%, transparent), var(--color-fg));
+  transform-origin: left center;
+  transition: transform 700ms var(--ease-rise);
+}
+
+/* The screenshots the pass has taken so far, each developing in as it lands. */
+.shots {
+  display: none;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+}
+@media (min-width: 900px) {
+  .shots {
+    display: flex;
+  }
+}
+.shot {
+  width: 34px;
+  height: 56px;
+  overflow: hidden;
+  border-radius: 7px;
+  border: 1.5px solid color-mix(in srgb, var(--color-fg) 55%, var(--color-bg));
+  background: var(--color-bg);
+  box-shadow: 0 6px 14px -10px color-mix(in srgb, var(--atlas-shade) 50%, transparent);
+  transition: transform 180ms var(--ease-rise);
+  animation: develop 900ms var(--ease-rise) both;
+  animation-delay: calc(var(--i, 0) * 40ms);
+}
+.shot:hover {
+  transform: translateY(-2px);
+}
+.shot:focus-visible {
+  outline: 2px solid var(--color-ring);
+  outline-offset: 2px;
+}
+.shot img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: 50% 0%;
+}
+@keyframes develop {
+  from {
+    opacity: 0;
+    filter: blur(5px) saturate(0.2);
+    transform: scale(1.12);
+  }
+}
+
+/* ---------- the landing ---------- */
+
+.landed {
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--atlas-same) 10%, transparent), transparent 60%),
+    var(--color-panel);
+}
+.landMark {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  color: var(--atlas-same);
+  animation: landPop 520ms var(--ease-rise) both;
+}
+.landMarkWarn {
+  border-radius: 999px;
+  color: var(--atlas-minor);
+  background: color-mix(in srgb, var(--atlas-minor) 12%, transparent);
+}
+.landMark svg {
+  width: 100%;
+  height: 100%;
+}
+.landRing {
+  fill: color-mix(in srgb, currentColor 12%, transparent);
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-dasharray: 1;
+  animation: draw 600ms var(--ease-swift) both;
+}
+.landTick {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 1;
+  animation: draw 380ms var(--ease-swift) 420ms both;
+}
+@keyframes draw {
+  from {
+    stroke-dashoffset: 1;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+@keyframes landPop {
+  0% {
+    transform: scale(0.6);
+    opacity: 0;
+  }
+  60% {
+    transform: scale(1.08);
+    opacity: 1;
+  }
+}
+.landShow,
+.landClose {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  border-radius: 999px;
+  font-size: 12.5px;
+  font-weight: 560;
+  transition:
+    background-color 160ms ease,
+    transform 160ms var(--ease-rise);
+}
+.landShow {
+  padding: 0 12px;
+  color: var(--color-fg);
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-control);
+}
+.landShow:hover {
+  background: var(--color-hover);
+}
+.landClose {
+  width: 28px;
+  justify-content: center;
+  color: var(--color-muted);
+}
+.landClose:hover {
+  color: var(--color-fg);
+  background: var(--color-hover);
+}
+.landShow:focus-visible,
+.landClose:focus-visible {
+  outline: 2px solid var(--color-ring);
+  outline-offset: 2px;
+}
+.landShow:active,
+.landClose:active {
+  transform: scale(0.96);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .band,
+  .band[data-stage]::after,
+  .aperture[data-spinning="true"] .blades,
+  .stage[data-state="done"] .stageMark,
+  .stage[data-state="now"] .stageMark::before,
+  .stage[data-state="done"] .stageLine,
+  .shot,
+  .landMark,
+  .landRing,
+  .landTick {
+    animation: none;
+  }
+  .progressFill,
+  .shot,
+  .landShow,
+  .landClose {
+    transition: none;
+  }
+}

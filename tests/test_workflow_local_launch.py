@@ -1159,3 +1159,14 @@ async def test_a_live_workflow_turn_is_never_reaped_as_stranded_while_its_worker
     continued = await notifier_launch(client, await ann_candidate(project, client), monkeypatch)
     assert continued.status_code == 201, continued.text
     await project.activate(project.ann, continued.json())
+
+
+async def test_a_step_waiting_for_its_turn_cannot_be_claimed_with_next(client, work_headers):
+    p = Project(client)
+    await p.start("serial", [("a", p.ann, []), ("b", p.ann, [])])
+    with db_cursor() as (_, cur):
+        cur.execute("SELECT status FROM tasks WHERE id=%s", (p.tasks["b"],))
+        assert cur.fetchone()["status"] == "ready"
+        cur.execute("INSERT INTO agent_tasks(agent_id,task_id,assignment_status) VALUES (%s,%s,'assigned') ON CONFLICT DO NOTHING", (p.ann, p.tasks["b"]))
+    res = await client.post(f"/api/agents/{p.ann}/next", headers=await work_headers(p.ann))
+    assert res.status_code == 200 and res.json()["task"] is None

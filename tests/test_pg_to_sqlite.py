@@ -113,9 +113,17 @@ def test_fk_order_puts_parents_first_and_ignores_self_references():
     assert order == db_convert.fk_order(list(reversed(tables)), edges)  # stable
 
 
-def test_fk_order_reports_a_cycle():
-    with pytest.raises(db_convert.ConvertError, match="cycle"):
-        db_convert.fk_order(["a", "b"], [("a", "b"), ("b", "a")])
+def test_fk_order_breaks_a_cycle_stably():
+    # The Quality tables reference each other in a loop (session -> request -> finding ->
+    # session); the load runs with foreign keys off and checks them after, so the loop is
+    # broken at its first table by name, and the rest still come after their parents.
+    tables = ["x_root", "qa_sessions", "qa_requests", "qa_findings", "z_leaf"]
+    edges = [("qa_sessions", "qa_requests"), ("qa_requests", "qa_findings"), ("qa_findings", "qa_sessions"),
+             ("qa_sessions", "x_root"), ("z_leaf", "qa_findings")]
+    order = db_convert.fk_order(tables, edges)
+    assert order == ["x_root", "qa_findings", "qa_requests", "z_leaf", "qa_sessions"]
+    assert all(order.index(p) < order.index(c) for c, p in edges if (c, p) != ("qa_findings", "qa_sessions"))
+    assert order == db_convert.fk_order(list(reversed(tables)), edges)  # stable
 
 
 class _FakePg:

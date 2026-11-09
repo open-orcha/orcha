@@ -171,7 +171,7 @@ fun TaskDetailScreen(
     val workflow = (membership as? io.openorcha.mobile.ui.TaskMembership.Member)?.workflow
     val member = membership != null && membership !is io.openorcha.mobile.ui.TaskMembership.None
     val closable = !member && task != null && !task.isRoot && task.status !in setOf("completed", "cancelled")
-    // Parity features (evidence, Verdikt, goal chain, routines, reassign, reviewer): own state, see TaskInsightsController.
+    // Parity features (evidence, goal chain, routines, reassign, reviewer): own state, see TaskInsightsController.
     val insights = rememberTaskInsights()
     val ins by insights.state.collectAsState()
     val container = state.selectedContainer
@@ -368,10 +368,7 @@ fun TaskDetailScreen(
                         proof = {
                             EvidenceProofBlock(
                                 insights = ins,
-                                baseUrl = container?.baseUrl,
-                                canRunVerdikt = container?.humanAgentId != null,
                                 onRetry = { container?.let { insights.load(it, task.id) } },
-                                onRunVerdikt = { container?.let { insights.runVerdikt(it, task.id) {} } },
                             )
                         },
                     )
@@ -379,16 +376,6 @@ fun TaskDetailScreen(
             }
             if (task.status != "needs_verification" && TaskInsightsUx.managerReviewLine(task.managerReview) != null) {
                 item(key = "mgr") { LCard(padding = LSpace.l) { ManagerReviewNote(task, reviewerName(task, agents)) } }
-            }
-            val latestVerdikt = ins.verdikt?.runs?.maxByOrNull { it.createdAt.orEmpty() }
-            if (task.status != "needs_verification" && latestVerdikt != null) {
-                item(key = "verdikt") {
-                    LCard(padding = LSpace.l) {
-                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            VerdiktSection(latestVerdikt, ins.verdikt?.settings, task.id, container?.baseUrl, canRun = false, busy = ins.busy, onRun = {})
-                        }
-                    }
-                }
             }
             if (isPlanWaiting(task)) {
                 item(key = "plan") { PlanWaitingCard(task) { showPlan = true } }

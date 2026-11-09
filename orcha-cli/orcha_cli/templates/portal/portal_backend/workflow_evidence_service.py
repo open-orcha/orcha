@@ -214,6 +214,28 @@ def capture_workflow_submission(cur, run_id, *, generation, work_revision,
     return evidence_reference(cur, evidence_set["id"])
 
 
+def capture_qa_result(cur, task, execution, *, text, note):
+    """Add a QA step's rolled-up result to the step's open evidence set, supplied by its worker. A
+    set already frozen stays as it is. The set holds one item per kind and phase, and a QA step's
+    run log lands in the terminal phase, so this one takes `log_excerpt` at submission. Returns
+    whether it landed. This never accepts anything."""
+    cur.execute("SELECT * FROM workflow_evidence_sets WHERE id=%s" + sql.for_update(),
+                (execution["current_evidence_set_id"],))
+    evidence_set = cur.fetchone()
+    if not evidence_set or evidence_set["state"] != "pending":
+        return False
+    cur.execute("SELECT 1 AS hit FROM workflow_evidence WHERE evidence_set_id=%s AND kind='log_excerpt' "
+                "AND snapshot_phase='submission'", (evidence_set["id"],))
+    if cur.fetchone():
+        return False
+    try:
+        _save_item(cur, task, evidence_set, kind="log_excerpt", source="worker", phase="submission",
+                   data=text.encode("utf-8"), actor_id=execution["claimant_id"], note=note)
+    except EvidenceStorageError:
+        return False
+    return True
+
+
 def evidence_reference(cur, set_id):
     cur.execute("SELECT * FROM workflow_evidence_sets WHERE id=%s", (set_id,))
     evidence_set = cur.fetchone()

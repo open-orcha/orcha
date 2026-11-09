@@ -7,12 +7,19 @@ import { sendWorkflowOperation, useWorkflowOperation } from "./workflowOperation
 import { WorkflowOperationNotice } from "./WorkflowOperationNotice";
 import { WorkflowImportImpact } from "./WorkflowImport";
 import { WorkflowImportReview, importAcceptances, missingImportReview, type ImportReviews } from "./WorkflowImportReview";
+import { wireQa } from "./workflowQa";
+
+/** The server lists a workflow's steps by priority. In draft order, and all within Normal. */
+const FIRST_STEP_PRIORITY = 21;
+const stepPriority = (i: number) => Math.min(100, FIRST_STEP_PRIORITY + i);
 
 export function toWireDraft(draft: WorkflowDraft): WireDraft {
   return { title: draft.name.trim(), goal: draft.goal.trim(), execution_mode: draft.mode,
     objectives: draft.objectives.map((o) => ({ title: o.title.trim(), criteria: o.criteria.trim() })),
-    tasks: draft.tasks.map((t) => ({ client_key: t.key, title: t.title.trim(), definition_of_done: t.doneWhen.trim(),
-      description: t.description.trim(), assignee_id: t.assignee || null, depends_on: t.dependsOn, priority: 100,
+    tasks: draft.tasks.map((t, i) => ({ client_key: t.key, title: t.title.trim(), definition_of_done: t.doneWhen.trim(),
+      description: t.description.trim(), assignee_id: t.assignee || null, depends_on: t.dependsOn, priority: stepPriority(i),
+      ...(t.qa ? { qa: wireQa(t.qa) } : {}),
+      ...(t.block ? { block: { key: t.block.key, name: t.block.name } } : {}),
       ...(t.outcomes?.length ? {
         outcomes: t.outcomes.map((o) => ({ name: o.name.trim(), kind: o.kind })),
         routes: t.outcomes.map((o) => ({ outcome: o.name.trim(), destination: o.destination, destination_task: o.destinationTask ?? null })),

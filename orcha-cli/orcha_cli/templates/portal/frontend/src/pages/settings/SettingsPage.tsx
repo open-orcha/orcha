@@ -47,7 +47,6 @@ import { AgentLimitRow } from "./AgentLimitRow";
 import { ObjectiveRow } from "./ObjectiveRow";
 import { ReviewRoutingRow } from "./ReviewRoutingRow";
 import { PortabilitySection } from "./portability/PortabilitySection";
-import { VerdiktSettingsSection } from "./integrations/VerdiktSettings";
 import { ProjectModeSection } from "../onboarding/templates/ProjectModeSection";
 import { DefaultBadge, KeyDetail, PROVIDER_DOCS, ProviderRow, RuntimesGroup } from "./providerRows";
 import { AgentKeyToggle, agentEntryOf, providerUnsetCopy, type AgentKeyEntry } from "./AgentKeyToggle";
@@ -1739,12 +1738,14 @@ export function buildSettingsGroups(cid: string | null, ext = extensions): Setti
 
   const gh = byKey("github-access");
   const hasGh = !!gh || hasRoute("/github");
-  // Integrations: GitHub (when this distribution has it) + the Verdikt QA handoff (always)
-  groups.push({
-    key: "github-access", title: "Integrations",
-    sub: hasGh ? "GitHub access, the connected repository and Verdikt QA." : "Verdikt QA for finished work.",
-    render: () => <>{el(gh)}{hasRoute("/github") && <RepoLinkGroup />}{cid ? <VerdiktSettingsSection cid={cid} /> : null}</>,
-  });
+  // Integrations: GitHub, when this distribution has it
+  if (hasGh) {
+    groups.push({
+      key: "github-access", title: "Integrations",
+      sub: "GitHub access and the connected repository.",
+      render: () => <>{el(gh)}{hasRoute("/github") && <RepoLinkGroup />}</>,
+    });
+  }
 
   const mem = byKey("members");
   if (mem) {

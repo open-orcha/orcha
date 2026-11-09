@@ -155,10 +155,10 @@ describe("Code Space states", () => {
     expect(screen.queryByText(/No threads yet/)).toBeNull();
     expect(screen.queryByText(/Couldn.t load \(503\)/)).toBeNull();
     // exactly ONE Retry on screen (the shell's stale bar) — never twice
-    expect(screen.getAllByRole("button", { name: "Retry" })).toHaveLength(1);
+    expect(await screen.findAllByRole("button", { name: "Retry" }, { timeout: 15000 })).toHaveLength(1);
     // the raw DB text is never on the page body
     expect(document.querySelector(".cs-shell")!.textContent).not.toContain("x-db:5432");
-  });
+  }, 20000);
 
   it("parity r2: an unreachable project is named from the project list (snapshot has no name)", async () => {
     stub((url) => {

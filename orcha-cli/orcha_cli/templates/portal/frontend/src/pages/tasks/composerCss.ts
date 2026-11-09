@@ -105,4 +105,5 @@ export const composerCss = String.raw`
   .td-people-item .v2-av { flex: none; }
   .td-people-none { width: 16px; height: 16px; flex: none; border-radius: 50%; border: 1px dashed var(--v2-text-3); }
   .td-people .v2-menu-check { margin-left: 4px; }
+  .nt-qa { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--v2-border-subtle); }
 `;

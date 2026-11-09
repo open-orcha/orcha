@@ -605,6 +605,8 @@ class WorkflowService:
             row["acceptance"] = s["acceptances"].get(tid)
             row["outcomes"] = outcomes.get(tid, [])
             row["routes"] = routes.get(tid, [])
+            row["qa"] = routing.qa_spec(task)
+            row["block"] = routing.block_of(task)
             row["repeat_group_id"] = group_of[tid]["id"] if tid in group_of else None
             row["round"] = group_of[tid]["current_round"] if tid in group_of else None
             report = reports.get((tid, task["work_revision"]))
@@ -1836,6 +1838,16 @@ class WorkflowService:
     def _add(self, w, actor, specs):
         self.active(w)
         p = self.actor(actor, w["container_id"])
+        if any(s.get("qa") and not s.get("assignee_id") for s in specs):
+            from portal_backend import qa_handoff
+
+            qa_agent = qa_handoff.qa_agent_id(self.cur, w["container_id"])
+            specs = [
+                {**s, "assignee_id": qa_agent}
+                if s.get("qa") and not s.get("assignee_id")
+                else s
+                for s in specs
+            ]
         if p["kind"] == "human":
             self.owner(w, actor)
         else:
@@ -1892,6 +1904,10 @@ class WorkflowService:
                     p["kind"] == "human",
                 ),
             )
+            if spec.get("qa"):
+                routing.save_qa(self.cur, tid, spec["qa"])
+            if spec.get("block"):
+                routing.save_block(self.cur, tid, spec["block"])
             if spec.get("assignee_id"):
                 self.assign(self.task(w["id"], tid), spec["assignee_id"])
         s = self.snapshot(w["id"])
@@ -2041,7 +2057,7 @@ class WorkflowService:
 
     def op_add_tasks(self, w, actor, b, tid):
         ids = self._add(w, actor, b["tasks"])
-        if any(t.get("outcomes") or t.get("routes") for t in b["tasks"]):
+        if any(t.get("outcomes") or t.get("routes") or t.get("qa") for t in b["tasks"]):
             if w.get("semantics_version", 1) != 2:
                 conflict(
                     "flexible_disabled",
@@ -2494,6 +2510,10 @@ class WorkflowService:
             "UPDATE tasks SET status=%s,started_at=COALESCE(started_at,%s) WHERE id=%s",
             (state, sql.utcnow(), tid),
         )
+        if run_id and routing.qa_spec(task):
+            from portal_backend import qa_handoff
+
+            qa_handoff.activate_step(self.cur, self.task(w["id"], tid), w)
         self.audit(
             w,
             p,
@@ -2555,7 +2575,8 @@ class WorkflowService:
     def _record_acceptance(self, task, actor, reference, source="verification"):
         p = self.actor(actor, task["container_id"])
         exact = self.hooks.validate_evidence(self.cur, task, reference)
-        permission = self.hooks.authorize_completion(self.cur, task, p, exact)
+        kept = {"permission_source": source} if source == "qa_final_decision" else {}
+        permission = self.hooks.authorize_completion(self.cur, task, p, exact, **kept)
         mode = permission["autonomy"]
         revision = permission["autonomy_revision"]
         if (
@@ -2651,7 +2672,10 @@ class WorkflowService:
             conflict("not_awaiting_review", "This task is not awaiting review.")
         from portal_backend.workflow_review_handoff import require_clean, acceptance_turn
         h = require_clean(self, t)
-        if h and p['kind'] != 'human':
+        # `qa_final_decision` never comes from a client: AcceptTask forbids extra fields, and only
+        # qa_run_tasks sends it. What needs a person's own eyes stays with a person under it too.
+        decided = b.get("qa_final_decision")
+        if h and (p['kind'] != 'human' or decided):
             conflict('human_approval_required', 'A person verifies the finished review loop.', status=403)
         e = self.live_turn(tid, lock=True) or acceptance_turn(self, t)
         if (
@@ -2670,14 +2694,14 @@ class WorkflowService:
             conflict(
                 "evidence_not_saved", "The evidence for this result is not saved yet."
             )
-        if e["source_kind"] == "evidence_review" and p["kind"] != "human":
+        if e["source_kind"] == "evidence_review" and (p["kind"] != "human" or decided):
             # §16.1: an outside result is accepted by a person, whatever the task autonomy.
             conflict(
                 "human_approval_required",
                 "A person must accept an outside result.",
                 status=403,
             )
-        exact = self._record_acceptance(t, actor, b["evidence"])
+        exact = self._record_acceptance(t, actor, b["evidence"], "qa_final_decision" if decided else "verification")
         self.cur.execute(
             "UPDATE tasks SET status='completed',completed_at=%s,awaiting_owner_decision=NULL,owner_decision_at=NULL WHERE id=%s",
             (sql.utcnow(), tid),
@@ -2712,6 +2736,7 @@ class WorkflowService:
                 "same_person_supplier": bool(
                     supplier and str(supplier.get("captured_by")) == str(p["id"])
                 ),
+                **({"decided_by": "system:qa", "decision": decided} if decided else {}),
             },
             tid,
         )
@@ -2730,12 +2755,22 @@ class WorkflowService:
         p = self.actor(actor, w["container_id"])
         t = self.task(w["id"], tid, b["expected_work_revision"])
         e = self.live_turn(tid)
-        if p["kind"] != "human" and (not e or e["claimant_id"] != p["id"]):
-            conflict(
-                "reporter_ineligible",
-                "Only the step's current worker or a person can report its outcome.",
-                status=403,
-            )
+        # `qa_rollup` never comes from a client: OutcomeReport forbids extra fields, and only
+        # qa_handoff calls this with it. A QA step's outcome is what its verdicts say.
+        rollup = b.get("qa_rollup") is True
+        if p["kind"] != "human" and not rollup:
+            if routing.qa_spec(t):
+                conflict(
+                    "qa_step_outcome",
+                    "A QA step's outcome comes from its verdicts; a person can still report one.",
+                    status=403,
+                )
+            if not e or e["claimant_id"] != p["id"]:
+                conflict(
+                    "reporter_ineligible",
+                    "Only the step's current worker or a person can report its outcome.",
+                    status=403,
+                )
         if t["status"] not in {"in_progress", "needs_verification"}:
             conflict(
                 "not_reportable",
@@ -2854,6 +2889,13 @@ class WorkflowService:
             )
         kind = preview["destination"]
         group = next((g for g in flow[2] if g["review_task"] == t["id"]), None)
+        # A member that branches out of its group ends the loop: QA passing skips triage.
+        member = next((g for g in flow[2] if t["id"] in g["member_tasks"]), None)
+        if not group and member and kind == "step" and preview["destination_task_id"] not in member["member_tasks"]:
+            self._end_round(member, "exit")
+            self.cur.execute(
+                "UPDATE workflow_repeat_groups SET state='exited' WHERE id=%s", (member["id"],)
+            )
         if kind == "ask_owner":
             self._loop_wait(t, group, "ask_owner", "awaiting_owner")
             return "ask_owner"
@@ -3017,6 +3059,12 @@ class WorkflowService:
                 if self._started(r)
             }
             frozen = routing.frozen_changes(started, old, new)
+            wanted = {x["task_id"]: x.get("qa") for x in steps}
+            frozen += [
+                {"task_id": r["id"], "reason": "step_qa"}
+                for r in self.rows("SELECT * FROM tasks WHERE workflow_id=%s", (w["id"],))
+                if r["id"] in started and routing.qa_spec(r) != (wanted.get(r["id"]) or None)
+            ]
             if frozen:
                 conflict(
                     "step_started",
@@ -3024,6 +3072,10 @@ class WorkflowService:
                     changes=frozen,
                 )
         self._save_flow(w, *new)
+        self.cur.execute("UPDATE tasks SET qa_step=NULL WHERE workflow_id=%s", (w["id"],))
+        for x in steps:
+            if x.get("qa"):
+                routing.save_qa(self.cur, x["task_id"], x["qa"])
         self.audit(
             w,
             p,
@@ -3531,6 +3583,9 @@ class WorkflowService:
             "UPDATE task_outside_evidence SET state='withdrawn',decided_by=%s,decided_at=%s,decision_reason=%s WHERE task_id=%s AND state='pending'",
             (p["id"], sql.utcnow(), b["reason"], tid),
         )
+        from portal_backend import qa_handoff
+
+        qa_handoff.close_for_tasks(self.cur, [tid], p["id"])
         self.audit(
             w, p, "workflow_task_withdrawn", {"reason": b["reason"]}, tid, scope=True
         )
@@ -3647,6 +3702,9 @@ class WorkflowService:
             self.cur.execute(
                 "DELETE FROM agent_self_wake WHERE task_id=%s", (task["id"],)
             )
+        from portal_backend import qa_handoff
+
+        qa_handoff.close_for_tasks(self.cur, list(s["tasks"]), p["id"])
         self.audit(w, p, "workflow_cancelled", {"reason": b["reason"]})
 
     def live_turns(self, wid):

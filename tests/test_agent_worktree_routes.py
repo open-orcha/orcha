@@ -11,7 +11,7 @@ import json
 
 import pytest
 
-from test_evidence_verdikt import HUBOT, MALLORY, OCTO, VERA, _members
+from test_evidence_pack import HUBOT, MALLORY, OCTO, VERA, _members
 from conftest import ts_ago
 from test_worktree_gc import project, _worktree
 

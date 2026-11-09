@@ -44,7 +44,10 @@ import type { Agent, Snapshot } from "../../types";
 import { StopRunButton } from "../agents/runlog";
 import { AgentFilter } from "./AgentFilter";
 import { FailurePauses } from "./FailurePauses";
-import { EVENT_KIND_LABEL, EVENT_KIND_FILTERS, answerNoun, askPhrase, collapseEvents, filterEvents, foldedSameTask, matchesEventKind, parseEventKind, projectEvents, type ProjectEvent } from "./events";
+import { EVENT_KIND_LABEL, EVENT_KIND_FILTERS, answerNoun, askPhrase, collapseEvents, filterEvents, foldedSameTask, matchesEventKind, parseEventKind, projectEvents, qaEvents, type ProjectEvent } from "./events";
+import { useRequestsChanged } from "../../state/qaRequestBus";
+import { useLoad } from "../qa/parts";
+import { listRequests } from "../qa/requests/api";
 import { groupByDay } from "./feed";
 import { RunLogView } from "./RunLogView";
 import {
@@ -241,7 +244,16 @@ export function ActivityPage() {
     return c;
   }, [data.runs]);
 
-  const events = useMemo(() => (snap ? projectEvents(snap.tasks ?? [], snap.requests ?? []) : []), [snap]);
+  // QA requests live outside the snapshot; a server without them just shows none.
+  const qaChanged = useRequestsChanged();
+  const qaRequests = useLoad(cid ? (s) => listRequests(cid, {}, s) : null, [cid], nonce + qaChanged);
+  const events = useMemo(() => {
+    if (!snap) return [];
+    const whoIs = (id: string | null) => (id ? snap.agents.find((a) => a.id === id)?.alias ?? null : null);
+    const titleOf = (id: string) => (snap.tasks ?? []).find((t) => t.id === id)?.title ?? null;
+    const qa = qaEvents(qaRequests.data ?? [], whoIs, titleOf);
+    return [...projectEvents(snap.tasks ?? [], snap.requests ?? []), ...qa].sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
+  }, [snap, qaRequests.data]);
   const evScoped = filterEvents(events, agentSel ? agentSel.alias : null, taskParam);
   const evCounts = useMemo(() => {
     const c: Record<string, number> = {};
@@ -561,7 +573,7 @@ function EventsFeed({ events, me, loading, filtered, partial, byAlias }: {
           ])}
         </Timeline>
       ) : (
-        <EmptyState title="No events" body={filtered ? "Nothing matches these filters." : "Task messages and requests will appear here."} />
+        <EmptyState title="No events" body={filtered ? "Nothing matches these filters." : "Task messages, requests and QA work will appear here."} />
       )}
       {partial && events.length ? <p className="act-scope">From the first 1000 tasks / requests of this project.</p> : null}
     </div>
@@ -608,6 +620,7 @@ function eventSentence(e: ProjectEvent, me: string | null, onToggleFold?: () => 
       );
     return <>commented on {obj}</>;
   }
+  if (e.kind === "qa") return <>{e.qaVerb} {obj}</>;
   if (e.kind === "answer")
     return (
       <>

@@ -127,8 +127,9 @@ describe("a listed project's 5xx is not an Orcha outage (wave4 Not found)", () =
   it("renders the named stale bar and NO Wi-Fi-off glyph", async () => {
     stubFetch({ snapStatus: 503 });
     mountShell("home", "Overview");
-    await screen.findByText(/Orcha is unreachable/, { selector: ".v2-stalebar-msg" }, { timeout: 5000 });
+    // It takes three lost reads in a row to count as an outage (OUTAGE_FAILURES).
+    await screen.findByText(/Orcha is unreachable/, { selector: ".v2-stalebar-msg" }, { timeout: 15000 });
     await waitFor(() => expect(screen.getByText("Connected — Orcha is unreachable")).toBeInTheDocument());
     expect(document.querySelector(".v2-conn.is-offline")).toBeNull();
-  });
+  }, 20000);
 });

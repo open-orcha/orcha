@@ -10,6 +10,24 @@ export interface DraftTask {
   autonomy: false;
   /** Version 2 only: results this step may report and the rule each one follows. */
   outcomes?: DraftOutcome[];
+  /** Set on a QA step: still a task, assigned to the QA agent, whose activation creates a QA request. */
+  qa?: DraftQaStep;
+  /** The Quality workflow this step came from. Steps of one insertion share `id`; every one stays editable. */
+  block?: DraftBlockTag;
+}
+
+export interface DraftBlockTag { id: string; key: string; name: string }
+
+/** What a QA step asks for (`FlowStep.qa`). */
+export interface DraftQaStep {
+  kind: "map" | "explore" | "draft" | "check" | "triage";
+  platform?: "ios" | "android" | "web" | null;
+  /** The device it runs on, by name (a viewport on the web); empty: the agent picks. */
+  device?: string | null;
+  scenarioIds?: string[];
+  tags?: string[];
+  focus?: string;
+  minutes?: number | null;
 }
 
 export type RouteDestination = "next" | "step" | "return" | "ask_owner" | "exit_group" | "stop";

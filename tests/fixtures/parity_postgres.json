@@ -883,6 +883,12 @@
             "tokens_out": "int"
           }
         ],
+        "qa": {
+          "cost_usd": "float",
+          "runs": "int",
+          "seconds": "int",
+          "stopped": "int"
+        },
         "totals": {
           "est_cost_usd": "float",
           "runs": "int",

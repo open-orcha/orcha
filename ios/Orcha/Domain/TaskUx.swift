@@ -16,12 +16,11 @@ struct EvidencePart: Equatable, Identifiable {
 }
 
 enum EvidenceUx {
-    /// "3/4 DoD items evidenced · 42 tests passed · 1 risk flag · Verdikt pass" — each part
+    /// "3/4 DoD items evidenced · 42 tests passed · 1 risk flag" — each part
     /// only when it is real (web `summaryParts`).
     static func summaryParts(_ s: EvidenceSummaryDto?, short: Bool = false) -> [EvidencePart] {
         guard let s else { return [] }
         var parts: [EvidencePart] = []
-        if let af = autofixPart(s.autofix) { parts.append(af) }
         if let d = s.dod, d.total > 0 {
             let tone: EvidenceTone = d.notProven > 0 ? .bad : (d.proven == d.total ? .ok : .plain)
             parts.append(EvidencePart(
@@ -54,67 +53,7 @@ enum EvidenceUx {
                 tone: .warn
             ))
         }
-        if let v = s.verdikt {
-            parts.append(EvidencePart(key: "verdikt", text: verdiktBrief(status: v.status, verdict: v.verdict), tone: verdiktTone(status: v.status, verdict: v.verdict)))
-        }
         return parts
-    }
-
-    static func autofixPart(_ a: AutofixSummaryDto?) -> EvidencePart? {
-        guard let a else { return nil }
-        if a.status == "running" {
-            return EvidencePart(key: "autofix", text: "Auto-fix: attempt \(a.currentAttempt) of \(a.maxAttempts)", tone: .plain)
-        }
-        let n = a.attemptsMade
-        let why: [String: String] = [
-            "pass": "Verdikt passed on attempt \(n)/\(a.maxAttempts)",
-            "attempt_limit": "Auto-fix stopped: failed \(n) of \(a.maxAttempts) attempts",
-            "no_diff": "Auto-fix stopped: the rework changed no code",
-            "same_failure": "Auto-fix stopped: same failure twice",
-            "budget": "Auto-fix stopped: budget limit",
-            "agent_paused": "Auto-fix stopped: agent paused",
-            "stopped_by_human": "Auto-fix stopped by a person",
-            "turned_off": "Auto-fix turned off",
-            "no_assignee": "Auto-fix stopped: nobody assigned",
-        ]
-        let text = why[a.stopKind ?? ""] ?? "Auto-fix stopped"
-        return EvidencePart(key: "autofix", text: text, tone: a.stopKind == "pass" ? .ok : .warn)
-    }
-
-    /// "Verdikt pass" / "Verdikt running" / "Verdikt timeout".
-    static func verdiktBrief(status: String, verdict: String?) -> String {
-        if status == "completed", let verdict { return "Verdikt \(verdict)" }
-        if status == "queued" { return "Verdikt queued" }
-        if status == "running" { return "Verdikt running" }
-        return "Verdikt \(status)"
-    }
-
-    static func verdiktTone(status: String, verdict: String?) -> EvidenceTone {
-        if status == "completed", let verdict {
-            return verdict == "pass" ? .ok : (verdict == "fail" ? .bad : .warn)
-        }
-        if status == "queued" || status == "running" { return .plain }
-        return status == "cancelled" ? .muted : .warn
-    }
-
-    /// The Verdikt panel's status line (web `STATUS_TEXT` + "Verdict: pass").
-    static func verdiktStatusText(_ run: VerdiktRunDto) -> String {
-        if run.status == "completed", let verdict = run.verdict { return "Verdict: \(verdict)" }
-        switch run.status {
-        case "queued": return "Queued in Verdikt"
-        case "running": return "Verdikt is testing…"
-        case "completed": return "Verdikt finished"
-        case "failed": return "Verdikt run failed"
-        case "unavailable": return "Verdikt unavailable"
-        case "timeout": return "Verdikt timed out"
-        case "cancelled": return "Verdikt run cancelled"
-        default: return "Verdikt \(run.status)"
-        }
-    }
-
-    static func verdiktIsOpen(_ run: VerdiktRunDto?) -> Bool {
-        guard let run else { return false }
-        return run.status == "queued" || run.status == "running"
     }
 
     static func dodStatusLabel(_ status: String) -> String {

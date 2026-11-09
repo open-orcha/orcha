@@ -2,7 +2,6 @@ import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, nati
 import { isExternalWebLink } from '../shared/externalLink'
 import { installMediaPermissions, micAccessStatus, requestMicAccess } from './micPermission'
 import { MIC_CHANNELS, MIC_SETTINGS_URL } from '../shared/mic'
-import { classifyVerdiktLink, launchMacApp, openVerdiktLink } from './verdiktLinks'
 import path from 'node:path'
 import os from 'node:os'
 import { accessSync, chmodSync, constants as fsConstants, cpSync, existsSync, mkdirSync, promises as fsp, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
@@ -790,27 +789,13 @@ function getOrCreatePortalView(stack: Stack): WebContentsView {
   })
   // Portal content may link out (docs, repos): keep same-origin navigation in the
   // embedded view, push everything else to the system browser.
-  // Verdikt hand-offs are same-origin redirects out of the portal: never load them in the
-  // view — launch the Verdikt app (or the browser). See verdiktLinks.ts.
-  const verdiktDeps = { openExternal: (u: string) => shell.openExternal(u), launchApp: launchMacApp, platform: process.platform }
   view.webContents.on('will-navigate', (event, url) => {
-    const vk = classifyVerdiktLink(url, portalOrigin)
-    if (vk) {
-      event.preventDefault()
-      void openVerdiktLink(vk, url, verdiktDeps)
-      return
-    }
     if (!url.startsWith(`${portalOrigin}/`)) {
       event.preventDefault()
       void shell.openExternal(url)
     }
   })
   view.webContents.setWindowOpenHandler(({ url }) => {
-    const vk = classifyVerdiktLink(url, portalOrigin)
-    if (vk) {
-      void openVerdiktLink(vk, url, verdiktDeps)
-      return { action: 'deny' }
-    }
     if (!url.startsWith(`${portalOrigin}/`)) {
       void shell.openExternal(url)
       return { action: 'deny' }

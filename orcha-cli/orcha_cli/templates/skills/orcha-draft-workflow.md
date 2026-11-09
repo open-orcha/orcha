@@ -35,7 +35,12 @@ This is a workspace-local API recipe. The source of truth is `.claude/orcha.json
      "idempotency_key": "<fresh unique key; reuse it on a retry>"
    }
    ```
-   Steps are assigned to AI agents (a step for a person is not supported yet). `depends_on` takes up to 3 `client_key`s. You cannot bring existing tasks into a draft (`existing_task_ids`): that changes real tasks and stays a person's action.
+   Steps are assigned to AI agents (a step for a person is not supported yet). Do not add a QA step unless a person asks for one: Quality in workflows is off for now. **A QA step** is a step with `"qa": {"kind": "check", "platform": "ios", "scenario_ids": [], "tags": [], "focus": "...", "minutes": 20}` (`kind`: `map`, `explore`, `draft` or `check`; the rest optional, and `"device"` names the simulator, emulator or phone it must run on). Leave out its `assignee_id` for the project's QA agent. Its outcomes default to `pass` and `fail`. To have a failure go back to be fixed, put it and the step before it in a repeat group:
+   ```json
+   "repeat_groups": [{"name": "Build and QA", "member_tasks": ["build", "qa"], "review_task": "qa", "exit_outcome": "pass", "max_rounds": 3}]
+   ```
+   Then `pass` leaves the loop and `fail` sends the work back to `build` with QA's findings; outside a group `fail` asks the owner. When the steps run, the QA step files its request by itself, and the agent's verdicts report its outcome. A person still accepts every step. `"kind": "triage"` is a step that diagnoses the failures of the QA step before it: its outcomes default to `fix` (confirmed bugs go back, and only those), `clear` (go on) and `needs_person` (ask the owner). For "Build, QA, fix" or "Build, QA, triage, fix", start from `GET <api_base_url>/api/containers/<cid>/qa/workflow-presets`: each `draft` is this body, ready to fill in.
+ `depends_on` takes up to 3 `client_key`s. You cannot bring existing tasks into a draft (`existing_task_ids`): that changes real tasks and stays a person's action.
 
 4. **Preview** (drop `idempotency_key` for this call; it changes nothing). Fix anything the server flags (`422`/`409`) before saving:
    ```bash

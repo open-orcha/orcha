@@ -1,0 +1,428 @@
+/*
+ * Workflow-driven exploration (#426): the walk rail, the queue, the outcome landings, the App
+ * model and the teaching scene. Same contract as the rest of the exploration page: each
+ * element's resting style is its final state and the keyframes only say where it comes from or
+ * loop around it, so under reduced motion (bottom) everything stands finished and still.
+ * Transform and opacity only (and SVG stroke-dashoffset).
+ */
+
+/* ---------- the walk rail ---------- */
+
+/* The spine between two step nodes: from under this node to the next one. Once the step has
+   landed its segment draws down, so the rail fills as the walk moves on. */
+.segment {
+  position: absolute;
+  left: 13px;
+  top: 38px;
+  bottom: -10px;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--color-border);
+  overflow: hidden;
+}
+.segmentFill {
+  position: absolute;
+  inset: 0;
+  transform-origin: 50% 0;
+  background: linear-gradient(180deg, var(--color-success), var(--color-fg));
+  animation: segment-down 620ms var(--ease-swift) both;
+  animation-delay: 160ms;
+}
+.segmentMissed {
+  background: linear-gradient(180deg, var(--color-danger), var(--color-border-strong));
+}
+@keyframes segment-down {
+  from {
+    transform: scaleY(0);
+  }
+}
+
+/* The step being walked: a ring breathes out of its node. */
+.nodeNow {
+  position: relative;
+}
+.nodeNow::after {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border-radius: 9999px;
+  border: 2px solid var(--color-primary);
+  animation: ring-out 1.8s var(--ease-swift) infinite;
+  pointer-events: none;
+}
+@keyframes ring-out {
+  0% {
+    opacity: 0.7;
+    transform: scale(0.85);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.5);
+  }
+}
+
+/* A step that lands: its node pops, the row rises in with a short wash of colour. */
+.nodeLand {
+  animation: node-land 460ms var(--ease-rise) both;
+}
+@keyframes node-land {
+  0% {
+    transform: scale(0.3);
+    opacity: 0;
+  }
+  60% {
+    transform: scale(1.18);
+    opacity: 1;
+  }
+}
+.rowLand {
+  animation: row-land 520ms var(--ease-rise) both;
+}
+@keyframes row-land {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+.wash {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: color-mix(in srgb, var(--color-primary) 10%, transparent);
+  opacity: 0;
+  animation: wash 1200ms var(--ease-swift) both;
+  pointer-events: none;
+}
+@keyframes wash {
+  0% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+/* A frame thumbnail develops in: it fades up from a slightly larger, darker print. */
+.develop {
+  animation: develop 700ms var(--ease-rise) both;
+}
+@keyframes develop {
+  from {
+    opacity: 0;
+    transform: scale(1.06);
+  }
+}
+
+/* A check passed on a step ticks in, one after another. */
+.check {
+  animation: check-in 360ms var(--ease-rise) both;
+  animation-delay: calc(120ms + var(--i, 0) * 90ms);
+}
+@keyframes check-in {
+  from {
+    opacity: 0;
+    transform: translateX(-4px);
+  }
+}
+
+/* The current frame: a scan line passes over it while the explorer is on that screen. */
+.liveFrame {
+  position: relative;
+  overflow: hidden;
+}
+.liveFrame::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 18%;
+  background: linear-gradient(180deg, transparent, color-mix(in srgb, var(--color-fg) 10%, transparent) 80%, color-mix(in srgb, var(--color-fg) 38%, transparent) 99%, transparent);
+  animation: frame-scan 3.6s var(--ease-swift) infinite;
+  pointer-events: none;
+  will-change: transform;
+}
+@keyframes frame-scan {
+  from {
+    transform: translateY(-100%);
+  }
+  to {
+    transform: translateY(560%);
+  }
+}
+
+/* ---------- outcomes: a landing per walk ---------- */
+
+.landing {
+  animation: landing 620ms var(--ease-rise) both;
+  animation-delay: calc(var(--i, 0) * 80ms);
+}
+@keyframes landing {
+  from {
+    opacity: 0;
+    transform: translateY(14px) scale(0.97);
+  }
+}
+/* The outcome's stamp lands a beat after its card, overshooting a little. */
+.stamp {
+  animation: stamp 520ms var(--ease-rise) both;
+  animation-delay: calc(220ms + var(--i, 0) * 80ms);
+}
+@keyframes stamp {
+  0% {
+    opacity: 0;
+    transform: scale(1.7) rotate(-14deg);
+  }
+  70% {
+    opacity: 1;
+    transform: scale(0.94) rotate(-2deg);
+  }
+  100% {
+    transform: none;
+  }
+}
+/* The draft a passed walk produced slides out from under its card. */
+.produced {
+  animation: produced 520ms var(--ease-rise) both;
+  animation-delay: calc(380ms + var(--i, 0) * 80ms);
+}
+@keyframes produced {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+}
+
+/* ---------- the queue ---------- */
+
+.queueRow {
+  animation: queue-in 380ms var(--ease-rise) both;
+  animation-delay: calc(var(--i, 0) * 45ms);
+}
+@keyframes queue-in {
+  from {
+    opacity: 0;
+    transform: translateX(-6px);
+  }
+}
+.walkingRow {
+  position: relative;
+}
+.walkingRow::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--color-fg) 10%, transparent) 50%, transparent);
+  transform: translateX(-100%);
+  animation: sweep 2.4s var(--ease-swift) infinite;
+  pointer-events: none;
+}
+@keyframes sweep {
+  to {
+    transform: translateX(100%);
+  }
+}
+.dotLive {
+  animation: dot-live 1.4s ease-in-out infinite;
+}
+@keyframes dot-live {
+  0%,
+  100% {
+    opacity: 0.45;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+/* ---------- the App model ---------- */
+
+.meter {
+  transform-origin: 0 50%;
+  animation: meter 800ms var(--ease-swift) both;
+  animation-delay: calc(var(--i, 0) * 60ms);
+}
+@keyframes meter {
+  from {
+    transform: scaleX(0);
+  }
+}
+
+/* ---------- the teaching scene: one flow walked into a scenario ---------- */
+
+.sceneStep {
+  transition:
+    opacity 300ms var(--ease-rise),
+    transform 300ms var(--ease-rise);
+}
+.sceneStepDim {
+  opacity: 0.45;
+}
+.sceneNode {
+  transition: transform 300ms var(--ease-rise);
+}
+.sceneNodeOn {
+  transform: scale(1.12);
+}
+.sceneFrame {
+  transition: opacity 360ms var(--ease-rise), transform 360ms var(--ease-rise);
+}
+.sceneFrameHidden {
+  opacity: 0;
+  transform: translateY(6px) scale(0.98);
+}
+.sceneScenario {
+  transition:
+    opacity 480ms var(--ease-rise),
+    transform 480ms var(--ease-rise);
+}
+.sceneScenarioHidden {
+  opacity: 0;
+  transform: translateX(-18px) scale(0.96);
+}
+.sceneArrow {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  transition: stroke-dashoffset 600ms var(--ease-swift);
+}
+.sceneArrowDrawn {
+  stroke-dashoffset: 0;
+}
+.sceneBody {
+  transition: opacity 360ms ease;
+}
+.sceneResetting {
+  opacity: 0;
+}
+
+/* ---------- the composer: the drafts card's walk preview (plays on hover, focus, picked) ---------- */
+
+.miniDot {
+  animation: mini-dot-on 3.2s var(--ease-swift) infinite paused;
+  animation-delay: var(--d, 0ms);
+}
+@keyframes mini-dot-on {
+  0%,
+  8% {
+    transform: scale(1);
+    background: var(--color-panel);
+  }
+  14%,
+  88% {
+    transform: scale(1);
+    background: var(--color-primary);
+  }
+  11% {
+    transform: scale(1.35);
+  }
+  100% {
+    background: var(--color-panel);
+  }
+}
+.miniLine {
+  transform-origin: 0 50%;
+  animation: mini-line 3.2s var(--ease-swift) infinite paused;
+}
+@keyframes mini-line {
+  0% {
+    transform: scaleX(0);
+  }
+  55%,
+  88% {
+    transform: scaleX(1);
+  }
+  100% {
+    transform: scaleX(0);
+  }
+}
+.miniCard {
+  animation: mini-card 3.2s var(--ease-rise) infinite paused;
+}
+@keyframes mini-card {
+  0%,
+  58% {
+    opacity: 0;
+    transform: translateX(-8px) scale(0.9);
+  }
+  68%,
+  88% {
+    opacity: 1;
+    transform: none;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+.option:hover .miniDot,
+.option:hover .miniLine,
+.option:hover .miniCard,
+.option:focus-visible .miniDot,
+.option:focus-visible .miniLine,
+.option:focus-visible .miniCard,
+.option[aria-checked="true"] .miniDot,
+.option[aria-checked="true"] .miniLine,
+.option[aria-checked="true"] .miniCard {
+  animation-play-state: running;
+}
+
+/* A panel that slides open under the control that opened it. */
+.reveal {
+  animation: reveal 340ms var(--ease-rise) both;
+}
+@keyframes reveal {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+}
+
+@keyframes fade-only {
+  from {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nodeNow::after,
+  .liveFrame::after,
+  .walkingRow::before,
+  .dotLive,
+  .wash {
+    animation: none;
+    display: none;
+  }
+  .nodeLand,
+  .rowLand,
+  .develop,
+  .check,
+  .landing,
+  .stamp,
+  .produced,
+  .queueRow,
+  .reveal {
+    animation: fade-only 200ms ease-out both;
+  }
+  .meter,
+  .segmentFill {
+    animation: none;
+  }
+  .sceneStep,
+  .sceneNode,
+  .sceneFrame,
+  .sceneScenario,
+  .sceneArrow,
+  .sceneBody {
+    transition: none;
+  }
+  /* The composer preview stands finished: every dot on, the line drawn, the scenario shown. */
+  .miniDot {
+    animation: none;
+    background: var(--color-primary);
+    border-color: var(--color-primary);
+  }
+  .miniLine,
+  .miniCard {
+    animation: none;
+  }
+}

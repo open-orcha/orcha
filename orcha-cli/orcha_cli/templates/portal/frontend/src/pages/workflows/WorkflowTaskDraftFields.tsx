@@ -1,24 +1,33 @@
+import type { ReactNode } from "react";
 import { Button, Chip, MenuButton } from "../../components/primitives";
+import { Icon } from "../../components/ui";
 import { dependencyReason, draftTaskName, type DraftTask } from "./workflowDraft";
 import { WorkflowOutcomeFields } from "./WorkflowFlowDraftFields";
+import { qaStepWords, stepKindWord } from "./workflowQa";
 
 /** One draft and one dependency validator serve cards and graph authoring. */
-export function WorkflowTaskDraftFields({ task, tasks, existing = [], agents, onChange, onRemove, removeLabel, flexible = false, ownerName, reviewLoop, loopMembers }: {
+export function WorkflowTaskDraftFields({ task, tasks, existing = [], agents, onChange, onRemove, removeLabel, flexible = false, ownerName, reviewLoop, loopMembers, onEditQa, routes }: {
   task: DraftTask; tasks: DraftTask[]; existing?: { id: string; title: string }[]; flexible?: boolean;
   /** Owner shown on "ask the owner" rules; the loop this step is the review point of (x01 callout 2)
    * and that loop's steps, the only places its outcomes can send work back to. */
   ownerName?: string; reviewLoop?: string; loopMembers?: string[];
   agents: { id: string; alias: string }[]; onChange: (patch: Partial<DraftTask>) => void;
   onRemove: () => void; removeLabel: string;
+  /** Open this Quality or Triage step's fields. */
+  onEditQa?: () => void;
+  /** A Quality or Triage step's fixed outcomes and where they go, in place of the free outcome list. */
+  routes?: ReactNode;
 }) {
   const dependents = tasks.filter((t) => t.dependsOn.includes(task.key));
   const candidates = [
     ...tasks.filter((t) => t.key !== task.key).map((t) => ({ id: t.key, title: draftTaskName(t, tasks), reason: dependencyReason(tasks, task, t) })),
     ...existing.map((t) => ({ ...t, reason: !task.dependsOn.includes(t.id) && task.dependsOn.length >= 3 ? "Remove one prerequisite first (maximum three)." : null })),
   ];
-  return <fieldset className="wf-task-draft wf-card" aria-label={`Task ${tasks.indexOf(task) + 1}`}>
+  const triage = task.qa?.kind === "triage";
+  return <fieldset className={`wf-task-draft wf-card${task.qa ? ` is-qa ${triage ? "is-triage" : "is-quality"}` : ""}`} aria-label={`Task ${tasks.indexOf(task) + 1}`}>
     <legend>{draftTaskName(task, tasks)}</legend>
     <Chip>Draft · Autonomy OFF · Not saved</Chip>
+    {task.qa && <div className="wf-qa-line"><span className="wf-gnode-tile" aria-hidden="true"><Icon name={triage ? "eye" : "shield"} cls="v2-ico" /></span><b>{stepKindWord(task.qa)}</b><span className="wf-muted">{qaStepWords(task.qa)}</span>{onEditQa && <Button size="sm" variant="ghost" onClick={onEditQa}>{triage ? "Edit triage step" : "Edit Quality step"}</Button>}</div>}
     <label>Task summary<input maxLength={200} value={task.title} onChange={(e) => onChange({ title: e.target.value })} /></label>
     <label>Done when (optional while drafting)<textarea maxLength={4000} rows={2} value={task.doneWhen} onChange={(e) => onChange({ doneWhen: e.target.value })} /></label>
     <div className="wf-field"><span>{flexible && reviewLoop ? "Assignee · reports the review outcome" : "Assignee"}</span><MenuButton menuLabel="Choose assignee" label={`Assignee: ${agents.find((a) => a.id === task.assignee)?.alias ?? "Choose later"}`}
@@ -34,7 +43,7 @@ export function WorkflowTaskDraftFields({ task, tasks, existing = [], agents, on
       <MenuButton menuLabel="Choose prerequisite" label="Add prerequisite" items={candidates.filter((c) => !task.dependsOn.includes(c.id)).map((c) => ({ label: c.title, disabled: !!c.reason, disabledReason: c.reason ?? undefined, onSelect: () => onChange({ dependsOn: [...task.dependsOn, c.id] }) }))} />
       {!candidates.length && <p className="wf-muted">Add another task to choose a prerequisite.</p>}
     </div>
-    {flexible && <WorkflowOutcomeFields task={task} tasks={tasks} ownerName={ownerName} loopMembers={loopMembers} onChange={(outcomes) => onChange({ outcomes })} />}
+    {flexible && (routes ?? <WorkflowOutcomeFields task={task} tasks={tasks} ownerName={ownerName} loopMembers={loopMembers} onChange={(outcomes) => onChange({ outcomes })} />)}
     <details><summary>Instructions</summary><label>Instructions<textarea maxLength={4000} rows={3} value={task.description} onChange={(e) => onChange({ description: e.target.value })} /></label></details>
     <Button variant="ghost" disabled={dependents.length > 0} title={dependents.length ? "Change dependents first" : undefined} onClick={onRemove}>{removeLabel}</Button>
     {dependents.length > 0 && <p>Remove or change dependencies in {dependents.map((t) => draftTaskName(t, tasks)).join(", ")} before removing this task.</p>}

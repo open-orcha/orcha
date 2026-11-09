@@ -40,6 +40,8 @@ import type { Snapshot, Task, ThreadMsg } from "../../types";
 import { tasksPageCss } from "./pageCss";
 import { TaskBoard, TaskGroups, TaskRow, TasksToolbar, useDensity, usePhone } from "./TaskListView";
 import { MakeRecurringDialog, makeRecurringItem, useMakeRecurringGate } from "../routines/MakeRecurring";
+import { isRunTaskRow } from "../qa/runTask/model";
+import { useRunTaskIds } from "../qa/runTask/useRunTasks";
 import { tasksListCss } from "./tasksListCss";
 import { mainScrollTop, scrollMainTo } from "../../shell/PageChrome";
 import { workCss } from "./workCss";
@@ -50,6 +52,7 @@ import {
   GROUP_ORDER,
   activeFilterCount,
   filterTasks,
+  keepHideRuns,
   groupTasks,
   keyFromSort,
   parseTaskQuery,
@@ -212,7 +215,8 @@ function TasksPageContent() {
   }, [qDraft, query.q, replaceSearch]);
 
   const tasks = useMemo(() => snap?.tasks ?? [], [snap]);
-  const filtered = useMemo(() => filterTasks(tasks, query), [tasks, query]);
+  const runIds = useRunTaskIds();
+  const filtered = useMemo(() => filterTasks(tasks, query, runIds), [tasks, query, runIds]);
   const selValid = sel != null && tasks.some((x) => x.id === sel);
   const sortSt = sortFromKey(query.sort);
   const sortKey: SortKey = keyFromSort(sortSt);
@@ -475,6 +479,7 @@ function TasksPageContent() {
   const reviewOn = reviewerSupported(snap);
   const truncated = snap?.task_total != null && snap.task_total > tasks.length;
   const nFilters = activeFilterCount(query);
+  const runCount = useMemo(() => tasks.filter((x) => isRunTaskRow(x, runIds)).length, [tasks, runIds]);
 
   const setSort = (k: SortKey) => {
     // URL is the source of truth; the local key keeps the choice as the default next time
@@ -500,10 +505,16 @@ function TasksPageContent() {
   const compact = density === "compact";
   const clearFilters = () => {
     setQDraft("");
-    replaceSearch({ q: null, status: null, assignee: null });
+    keepHideRuns(false);
+    replaceSearch({ q: null, status: null, assignee: null, runs: null });
   };
   const setStatus = (v: string[]) => {
     replaceSearch({ status: v.length ? v.join(",") : null });
+    setTasksShown(TASKS_PAGE);
+  };
+  const setHideRuns = (hide: boolean) => {
+    keepHideRuns(hide);
+    replaceSearch({ runs: hide ? "hide" : null });
     setTasksShown(TASKS_PAGE);
   };
   const setAssignee = (v: string | null) => {
@@ -706,6 +717,8 @@ function TasksPageContent() {
       shown={filtered.length}
       total={tasks.length}
       clearFilters={clearFilters}
+      runCount={runCount}
+      setHideRuns={setHideRuns}
     />
   ) : undefined;
 

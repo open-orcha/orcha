@@ -368,8 +368,8 @@ describe("Overview load states", () => {
     mount();
     expect(await screen.findByText("Couldn't load this project")).toBeInTheDocument();
     expect(screen.queryByText("Nothing needs you right now.")).toBeNull();
-    expect(screen.getAllByRole("button", { name: "Retry" }).length).toBeGreaterThan(0);
-  });
+    expect((await screen.findAllByRole("button", { name: "Retry" }, { timeout: 15000 })).length).toBeGreaterThan(0);
+  }, 20000);
 });
 
 describe("Overview round-2 polish", () => {

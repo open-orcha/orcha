@@ -138,6 +138,46 @@ def _render_resume_context(protocol: Optional[dict]) -> Optional[str]:
             "Check that first. If it is still not ready, schedule another self-wake and exit.")
 
 
+def _qa_step_lines(qa):
+    """A workflow QA step: the skill, the request and what to prove. Its outcome comes from its
+    verdicts, so the worker is not told to report one."""
+    if not qa:
+        return []
+    lines = [f"This is a QA step. Run {qa.get('skill')} for this task"
+             + (f", and pass request_id=\"{qa['request_id']}\" to start_session." if qa.get("request_id") else "."),
+             "Your verdicts are the step's outcome: when you finish with /orcha-done the result is "
+             "reported for you, with your findings. Do not report an outcome yourself. A person "
+             "still accepts this step."]
+    if qa.get("approved_by"):
+        lines.append(f"{qa['approved_by']} started this workflow. That is the approval of your plan: "
+                     "go straight on, and do not stop to ask for plan approval.")
+    if qa.get("platform"):
+        lines.append(f"Platform: {qa['platform']}.")
+    if qa.get("device"):
+        lines.append(f"Device: pass device=\"{qa['device']}\" to start_session. A person chose it; use no other.")
+    if qa.get("focus"):
+        lines.append(f"Focus: {qa['focus']}")
+    if qa.get("conditions"):
+        import json
+
+        lines.append("Conditions: pass conditions=" + json.dumps(qa["conditions"], separators=(",", ":"), ensure_ascii=False)
+                     + " to start_session. A person asked for them.")
+    if qa.get("finding_ids"):
+        lines.append("Findings to diagnose: " + ", ".join(qa["finding_ids"]))
+    if qa.get("scenario_ids"):
+        lines.append("Scenarios: " + ", ".join(qa["scenario_ids"]))
+    if qa.get("tags"):
+        lines.append("Tags: " + ", ".join(qa["tags"]))
+    build = qa.get("build") or {}
+    said = [f"{k} {build[k]}" for k in ("branch", "commit", "url", "app_path") if build.get(k)]
+    if said:
+        lines.append("Build to test: " + ", ".join(said) + ".")
+    if qa.get("acceptance"):
+        lines.append("Prove these lines; name each with verdict(acceptance_line=<n>):")
+        lines.extend(f"{i}. {text}" for i, text in enumerate(qa["acceptance"]))
+    return lines
+
+
 def _round_lines(context):
     """Flexible workflows: the step's outcomes and, in a repeat group, this round's feedback."""
     if not context:
@@ -213,7 +253,10 @@ def _render_workflow(workflow) -> Optional[str]:
             if not isinstance(result, str):
                 result = json.dumps(result, ensure_ascii=False)
             lines.append(f"   Result: {_clip(result, 1500)}")
-    lines.extend(_round_lines(workflow.get("round_context")))
+    qa = workflow.get("qa")
+    context = workflow.get("round_context")
+    lines.extend(_qa_step_lines(qa))
+    lines.extend(_round_lines({**context, "outcomes": []} if qa and context else context))
     group = (workflow.get("round_context") or {}).get("group")
     if not group:
         lines.append("If unfinished work needs another workflow task to review it, use the explicit "

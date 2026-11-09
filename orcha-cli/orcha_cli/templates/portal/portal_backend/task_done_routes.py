@@ -17,8 +17,8 @@ from portal_backend.guards import (
     valid_uuid as _valid_uuid,
 )
 from portal_backend.push_outbox import push_task_verify as _push_task_verify
-from portal_backend.verdikt_autofix import is_running as _autofix_running
 from portal_backend.evidence_pack import on_task_needs_verification as _evidence_on_needs_verification
+from portal_backend.qa_handoff import after_task_done as _qa_after_task_done
 from portal_backend.review_routing import route_finished_work as _route_finished_work
 from portal_backend.schemas.task_operations import TaskDone
 from portal_backend.slack_notify import (
@@ -57,6 +57,14 @@ def mark_done(
     request: Request,
     x_orcha_run_token: Optional[str] = Header(default=None, alias="X-Orcha-Run-Token"),
 ):
+    response = _mark_done(tid, body, request, x_orcha_run_token)
+    # Every way out of `_mark_done`, the early return of a workflow step included, comes through
+    # here with its transaction committed: QA work reports back, other work may start QA.
+    _qa_after_task_done(tid, body.agent_id)
+    return response
+
+
+def _mark_done(tid: str, body: TaskDone, request: Request, x_orcha_run_token: Optional[str]):
     if not _valid_uuid(tid):
         raise HTTPException(400, "task_id is not a valid UUID")
     if not _valid_uuid(body.agent_id):
@@ -266,17 +274,14 @@ def mark_done(
         # manager sits in between, ask it to pre-review. Same txn as the transition.
         review = _route_finished_work(cur, t["container_id"], tid, body.agent_id, body.result)
         conn.commit()
-    # Mig 068: while a Verdikt auto-fix loop runs, the hand-back goes straight to Verdikt —
-    # the human is told once, when the loop stops (pass / limit / no progress …).
-    if not _autofix_running(tid):
-        # Push pipeline (mig 041): the task just became a needs-you item. AFTER the
-        # commit, best-effort — the hook never raises and never touches this txn.
-        _push_task_verify(str(t["container_id"]), tid)
-        # Slack seam (mig 044): if this container has a slack_webhook_url, ping it with a
-        # compact Block Kit "Verify in Orcha" message. Same after-commit, non-fatal contract
-        # as the push hook — a POST failure (or no webhook) never breaks the transition.
-        _slack_notify_needs_verification(str(t["container_id"]), tid)
-    # Proof-of-work (mig 058): build the evidence pack and apply the project's Verdikt
-    # auto-trigger policy — in a background thread, after the commit, never raising.
+    # Push pipeline (mig 041): the task just became a needs-you item. AFTER the
+    # commit, best-effort — the hook never raises and never touches this txn.
+    _push_task_verify(str(t["container_id"]), tid)
+    # Slack seam (mig 044): if this container has a slack_webhook_url, ping it with a
+    # compact Block Kit "Verify in Orcha" message. Same after-commit, non-fatal contract
+    # as the push hook — a POST failure (or no webhook) never breaks the transition.
+    _slack_notify_needs_verification(str(t["container_id"]), tid)
+    # Proof-of-work (mig 058): build the evidence pack — in a background thread, after the
+    # commit, never raising.
     _evidence_on_needs_verification(tid)
     return {"task_id": tid, "status": "needs_verification", "review": review}

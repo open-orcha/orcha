@@ -1,0 +1,368 @@
+/*
+ * Performance motion: sparklines that draw along their path, ranked bars that grow from
+ * their baseline, the run tab's waterfall played like a stopwatch, the "Replay the slowdown"
+ * stage, the live strip and the settings preview.
+ *
+ * Same contract as the exploration and guide kits: every element's resting style is its final
+ * state and the keyframes only say where it comes from, so under reduced motion (bottom) each
+ * view stands finished. Only transform, opacity and SVG stroke-dashoffset move.
+ */
+
+/* ---------- sparklines ---------- */
+
+@keyframes draw {
+  from {
+    stroke-dashoffset: 1;
+  }
+}
+/* A path with pathLength="1" drawing itself from its first point. */
+.draw {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 0;
+  animation: draw 900ms var(--ease-swift) both;
+  animation-delay: var(--d, 0ms);
+}
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+}
+.fadeIn {
+  animation: fade-in 500ms ease-out both;
+  animation-delay: var(--d, 0ms);
+}
+@keyframes dot-pop {
+  from {
+    opacity: 0;
+    transform: scale(0);
+  }
+}
+.dotPop {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: dot-pop 280ms var(--ease-rise) both;
+  animation-delay: var(--d, 0ms);
+}
+/* The newest point of a slow screen breathes three times, then rests: calm, not an alarm. */
+@keyframes halo {
+  0% {
+    opacity: 0.55;
+    transform: scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(2.8);
+  }
+}
+.halo {
+  opacity: 0;
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: halo 1.6s cubic-bezier(0, 0, 0.2, 1) 3;
+  animation-delay: var(--d, 900ms);
+}
+
+/* ---------- ranked rows ---------- */
+
+/* A slow row: a hairline of its heat on the left edge, and a wash that fades out across it. */
+.slowRow {
+  background: linear-gradient(90deg, color-mix(in srgb, var(--color-danger) 7%, transparent), transparent 46%);
+}
+.warmRow {
+  background: linear-gradient(90deg, color-mix(in srgb, var(--color-warning) 5%, transparent), transparent 46%);
+}
+@keyframes fresh {
+  0%,
+  40% {
+    background-color: color-mix(in srgb, var(--color-primary) 10%, transparent);
+  }
+}
+.fresh {
+  animation: fresh 2.4s ease-out both;
+}
+
+/* ---------- the live strip ---------- */
+
+@keyframes live-sweep {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(100%);
+  }
+}
+.sweep {
+  animation: live-sweep 1.6s var(--ease-swift) infinite;
+}
+@keyframes tick-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.96);
+  }
+}
+.tick {
+  animation: tick-in 300ms var(--ease-rise) both;
+}
+/* The stopwatch's hand going round once a second while a run is timing screens. */
+@keyframes hand {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.hand {
+  transform-box: view-box;
+  transform-origin: 50% 50%;
+  animation: hand 1s linear infinite;
+}
+
+/* ---------- the waterfall (run tab) ---------- */
+
+/* Each segment grows over its own share of the play, starting when the playhead reaches it:
+   `--s` is when (ms of the play), `--l` how long. */
+@keyframes wf-grow {
+  from {
+    transform: scaleX(0);
+  }
+}
+.wfGrow {
+  transform-origin: left center;
+  animation: wf-grow var(--l, 300ms) linear both;
+  animation-delay: var(--s, 0ms);
+}
+@keyframes wf-mark {
+  from {
+    opacity: 0;
+    transform: translateY(-3px) scale(0.6);
+  }
+}
+.wfMark {
+  animation: wf-mark 240ms var(--ease-rise) both;
+  animation-delay: var(--s, 0ms);
+}
+@keyframes wf-label {
+  from {
+    opacity: 0;
+    transform: translateX(-4px);
+  }
+}
+.wfLabel {
+  animation: wf-label 260ms var(--ease-rise) both;
+  animation-delay: var(--s, 0ms);
+}
+/* The playhead: a full-width layer whose right edge is the line, slid from the left edge to the
+   right one over the play (`--total`), then gone. */
+@keyframes wf-sweep {
+  from {
+    transform: translateX(-100%);
+    opacity: 1;
+  }
+  97% {
+    opacity: 1;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 0;
+  }
+}
+.wfHead {
+  opacity: 0;
+  animation: wf-sweep var(--total, 1600ms) linear both;
+}
+/* The settle tail: the screen is up but its data is still arriving. */
+.hatch {
+  background-image: repeating-linear-gradient(
+    -45deg,
+    color-mix(in srgb, currentColor 34%, transparent) 0 3px,
+    color-mix(in srgb, currentColor 14%, transparent) 3px 6px
+  );
+}
+
+/* ---------- the replay stage ---------- */
+
+@keyframes shimmer {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(100%);
+  }
+}
+.shimmer {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--color-fg) 7%, transparent) 50%, transparent);
+  animation: shimmer 1.2s var(--ease-swift) infinite;
+}
+@keyframes ripple {
+  0% {
+    opacity: 0.6;
+    transform: scale(0.3);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(2.2);
+  }
+}
+.ripple {
+  animation: ripple 520ms cubic-bezier(0, 0, 0.2, 1) both;
+}
+/* The screen developing in when it appears: from a breath larger and see-through to sharp. */
+.develop {
+  opacity: 0;
+  transform: scale(1.025);
+  transition:
+    opacity 260ms ease-out,
+    transform 420ms var(--ease-rise);
+}
+.develop[data-shown="true"] {
+  opacity: 1;
+  transform: none;
+}
+.loading {
+  opacity: 1;
+  transition: opacity 180ms ease-out;
+}
+.loading[data-shown="true"] {
+  opacity: 0;
+}
+@keyframes land {
+  0% {
+    opacity: 0;
+    transform: translateY(4px) scale(0.92);
+  }
+  60% {
+    opacity: 1;
+    transform: translateY(0) scale(1.04);
+  }
+}
+.land {
+  animation: land 360ms var(--ease-rise) both;
+}
+@keyframes bracket {
+  from {
+    opacity: 0;
+    transform: scaleX(0.2);
+  }
+}
+.bracket {
+  transform-origin: left center;
+  animation: bracket 420ms var(--ease-rise) both;
+}
+
+/* ---------- settings preview ---------- */
+
+.dot {
+  transition:
+    transform 320ms var(--ease-rise),
+    background-color 220ms ease,
+    box-shadow 220ms ease;
+}
+.line {
+  transition: transform 160ms var(--ease-swift);
+}
+
+/* A range input in the app's language: a hairline track filled to the thumb (`--p`), a round
+   thumb that grows a ring on hover and focus. */
+.range {
+  appearance: none;
+  -webkit-appearance: none;
+  height: 20px;
+  background: transparent;
+  cursor: pointer;
+}
+.range:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+.range::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--track-fill, var(--color-primary)) var(--p, 0%), var(--color-border-strong) var(--p, 0%));
+}
+.range::-moz-range-track {
+  height: 4px;
+  border-radius: 999px;
+  background: var(--color-border-strong);
+}
+.range::-moz-range-progress {
+  height: 4px;
+  border-radius: 999px;
+  background: var(--track-fill, var(--color-primary));
+}
+.range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  margin-top: -6px;
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  border: 2px solid var(--track-fill, var(--color-primary));
+  background: var(--color-raised);
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.2);
+  transition:
+    box-shadow 160ms ease,
+    transform 160ms var(--ease-rise);
+}
+.range::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border-radius: 999px;
+  border: 2px solid var(--track-fill, var(--color-primary));
+  background: var(--color-raised);
+}
+.range:hover::-webkit-slider-thumb,
+.range:focus-visible::-webkit-slider-thumb {
+  box-shadow: 0 0 0 5px color-mix(in srgb, var(--track-fill, var(--color-primary)) 22%, transparent);
+}
+.range:active::-webkit-slider-thumb {
+  transform: scale(1.12);
+}
+.range:focus-visible {
+  outline: none;
+}
+@keyframes saved {
+  0% {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+  60% {
+    opacity: 1;
+    transform: scale(1.15);
+  }
+}
+.saved {
+  animation: saved 320ms var(--ease-rise) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .draw,
+  .fadeIn,
+  .dotPop,
+  .fresh,
+  .tick,
+  .wfGrow,
+  .wfMark,
+  .wfLabel,
+  .ripple,
+  .land,
+  .bracket,
+  .saved {
+    animation: none;
+  }
+  .halo,
+  .sweep,
+  .wfHead,
+  .shimmer,
+  .hand {
+    animation: none;
+    opacity: 0;
+  }
+  .hand {
+    opacity: 1;
+  }
+  .develop,
+  .loading,
+  .dot,
+  .line {
+    transition: none;
+  }
+}

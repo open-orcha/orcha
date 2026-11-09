@@ -10,7 +10,28 @@ missing.
 
 ## [Unreleased]
 
+- Quality runs show a live Activity panel on the pending, live session and run pages: what the agent is doing now, what happened before and why it waits (device holder, time waited, a free device to switch to, Cancel), from the new `GET /api/qa/run-log`.
+- Run pages no longer freeze on a slow portal: reads wait for their answer instead of being restarted, retry after failures, and catch up when the tab returns. "Can't reach Embodent" now takes repeated failures.
+- Explorations count real findings as issues and show automatic measured checks (contrast, tap size) apart.
+
+### Added
+- QA handoff: any agent or person can send a task to QA (`orcha qa request`, the `orcha-qa-request` skill, or the
+  portal) with what to test and what to prove. The result comes back on the task's thread, wakes its agent,
+  proves its lines in the evidence pack and notifies people (category QA). `on_fail: reopen` sends a failed
+  task back with the findings, for a set number of rounds. A QA result never verifies a task.
+- Workflow QA steps and triage: a step can be a QA or a triage step, with the presets "Build, QA, fix" and
+  "Build, QA, triage, fix". Triage re-runs each failure at least three times and only confirmed blockers and
+  majors go to the fix step. Flaky scenarios are quarantined, minor bugs go to the backlog, and a person's
+  "not a bug" is remembered.
+
+### Changed
+- QA onboarding: a person's Run click now approves the agent's plan, so it goes straight on. Bringing your
+  tests in is free and immediate: each one becomes a draft pointing at its file, with no agent. A stuck live
+  pass says why, the cost shown is what the run really cost, and the estimate is realistic.
+
 ### Fixed
+- QA onboarding no longer reads `.orcha-worktrees`, `.orcha`, `.claude` or git-ignored folders. A session that
+  could not get a device is no longer listed as a failed run, and the Screen atlas uses the project's name.
 - Desktop: the Mac app no longer keeps showing the macOS "would like to access data
   from other apps" prompt. It used to write the widget's status file into another
   team's App Group folder every 15 seconds. Now a small bundled helper, signed for the
@@ -22,6 +43,14 @@ missing.
   renderer process dies; the next click opens a fresh one (GH #347).
 
 ### Added
+- **QA for apps** (iOS, Android and web): agents can map an app, explore
+  it, draft QA scenarios and check approved ones on a simulator, an emulator or a headless
+  browser. `orcha qa enable` in a project gives its agents the `orcha-qa` tools (`orcha qa mcp`;
+  install `orcha-cli[qa]`, check with `orcha qa doctor`); `orcha qa map build` reads the app's code
+  into the map. New skills: `/orcha-qa-map`, `/orcha-qa-explore`, `/orcha-qa-draft`,
+  `/orcha-qa-check`, `/orcha-qa-test-design`. The new **QA** project tab shows the map, the
+  scenarios (a person approves each draft), the sessions with their findings ("File as task") and
+  the apps; task detail shows a task's QA work. Setup: `docs/orcha-qa-setup.md`.
 - Completed workflows now offer **Run again**, which creates a separate editable draft in the same project. Review its setup and explicitly choose Start; the original workflow and its history are kept (first slice of GH #364).
 - Desktop: a local memory log at
   `~/Library/Application Support/Orcha/logs/memory.jsonl`. A minute after
@@ -89,6 +118,19 @@ missing.
   move each one with `orcha migrate-runtime` (your old Docker data is kept
   until you run `orcha migrate-runtime --purge-docker`). Docker support and
   `docs/legacy-docker-runtime.md` are removed one release later.
+
+### Removed
+- **The Verdikt integration is gone from Embodent.** Verdikt is now a separate product you
+  download and use on its own; Embodent's built-in QA is the new **QA** project tab. Removed:
+  Settings › Integrations › Verdikt, the Verdikt section and auto-fix loop on the verification
+  gate and in task detail, the preview environments the notifier started for Verdikt runs, the
+  background Verdikt check, the "Verdikt / evidence results" notification category, the
+  desktop app's "Open in Verdikt" link handling and the Verdikt sections in the iOS and Android
+  apps. The evidence pack (tests, changes, definition of done) stays. Every `/verdikt` API
+  route is removed (`/api/containers/{cid}/verdikt…`, `/api/tasks/{tid}/verdikt…`,
+  `/api/verdikt/previews/…`); an older mobile build that still calls them gets 404s, and saved
+  notification settings that name the old category are read without it. The old Verdikt
+  tables (migrations 058, 064, 068) are kept, so no data is lost.
 
 ### Fixed
 - Workers stopped waking on task-thread and conversation posts once a run's

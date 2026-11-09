@@ -1,0 +1,323 @@
+/* Motion for a session's page. Same rule as the shared motion block: every element's resting style is its final state and the keyframes only say
+   where it comes from, so under reduced motion things fade in (or simply appear) finished.
+   Transform and opacity only. */
+
+/* ---------- Phase timeline ---------- */
+.phaseActive {
+  animation: phase-breathe 2.4s ease-in-out infinite;
+}
+@keyframes phase-breathe {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-primary) 35%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 5px color-mix(in srgb, var(--color-primary) 0%, transparent);
+  }
+}
+.phaseFill {
+  transform-origin: 0 50%;
+  transition: transform 600ms var(--ease-swift);
+}
+
+/* ---------- Study: what is actually studied ---------- */
+
+/* The code scene: each real path streams in, a scan line sweeps down the list, and a file the
+   explorer opens lights up (and is pinned beside the list). */
+.stream {
+  animation: stream-in 420ms var(--ease-rise) both;
+  animation-delay: calc(var(--i, 0) * 110ms);
+}
+@keyframes stream-in {
+  from {
+    opacity: 0;
+    transform: translateX(-10px);
+  }
+}
+.scanLine {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 56px;
+  background: linear-gradient(180deg, transparent, color-mix(in srgb, var(--color-fg) 13%, transparent) 70%, color-mix(in srgb, var(--color-fg) 45%, transparent) 98%, transparent);
+  animation: scan-down 3.6s var(--ease-swift) infinite;
+  pointer-events: none;
+  will-change: transform;
+}
+@keyframes scan-down {
+  from {
+    transform: translateY(-60px);
+  }
+  to {
+    transform: translateY(var(--scan-to, 420px));
+  }
+}
+.fileLit {
+  background-color: color-mix(in srgb, var(--color-primary) 9%, transparent);
+  animation: file-lit 900ms var(--ease-rise) both;
+}
+.fileLit > span {
+  color: var(--color-fg);
+}
+@keyframes file-lit {
+  from {
+    background-color: color-mix(in srgb, var(--color-primary) 26%, transparent);
+  }
+}
+.pinIn {
+  animation: pin-in 460ms var(--ease-rise) both;
+}
+@keyframes pin-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.96);
+  }
+}
+
+/* The site and device scenes: a scan passes over the live frame, and what the page says is
+   outlined as it is found. */
+.frameScan {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+.frameScan::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 22%;
+  background: linear-gradient(180deg, transparent, color-mix(in srgb, var(--color-fg) 10%, transparent) 80%, color-mix(in srgb, var(--color-fg) 40%, transparent) 99%, transparent);
+  animation: frame-scan 4.2s var(--ease-swift) infinite;
+  will-change: transform;
+}
+@keyframes frame-scan {
+  from {
+    transform: translateY(-100%);
+  }
+  to {
+    transform: translateY(460%);
+  }
+}
+.outlined {
+  outline: 1px dashed color-mix(in srgb, var(--color-primary) 55%, var(--color-border));
+  outline-offset: 2px;
+  background-color: color-mix(in srgb, var(--color-primary) 5%, transparent);
+  border-radius: 6px;
+  animation: outline-in 560ms var(--ease-rise) both;
+  animation-delay: calc(var(--i, 0) * 140ms);
+}
+@keyframes outline-in {
+  0% {
+    opacity: 0;
+    outline-color: transparent;
+    transform: scale(0.97);
+  }
+  55% {
+    opacity: 1;
+    outline-color: var(--color-primary);
+    background-color: color-mix(in srgb, var(--color-primary) 14%, transparent);
+  }
+}
+
+/* Source rows: real names arrive one by one; the ones the explorer opened light up. */
+.chipIn {
+  animation: chip-in 380ms var(--ease-rise) both;
+  animation-delay: calc(var(--i, 0) * 60ms);
+}
+@keyframes chip-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+.chipLit {
+  border-color: color-mix(in srgb, var(--color-primary) 55%, var(--color-border));
+  background-color: color-mix(in srgb, var(--color-primary) 10%, var(--color-panel-2));
+  color: var(--color-fg);
+}
+.timelineLine {
+  transform-origin: 50% 0;
+  animation: segment-y 900ms var(--ease-swift) both;
+}
+@keyframes segment-y {
+  from {
+    transform: scaleY(0);
+  }
+}
+.cardLit {
+  border-color: color-mix(in srgb, var(--color-primary) 45%, var(--color-border));
+  background-color: color-mix(in srgb, var(--color-primary) 6%, var(--color-panel));
+  animation: card-on 700ms var(--ease-rise) both;
+  animation-delay: calc(var(--i, 0) * 90ms);
+}
+@keyframes card-on {
+  from {
+    border-color: var(--color-border);
+    background-color: var(--color-panel);
+    transform: scale(0.98);
+  }
+}
+.cursor {
+  animation: cursor-blink 1.1s steps(2, start) infinite;
+}
+@keyframes cursor-blink {
+  to {
+    visibility: hidden;
+  }
+}
+
+/* A mission dealt onto the table: rises with a slight tilt that settles. */
+.deal {
+  animation: deal 520ms var(--ease-rise) both;
+  animation-delay: calc(var(--d, 0ms) + var(--i, 0) * 140ms);
+}
+@keyframes deal {
+  from {
+    opacity: 0;
+    transform: translateY(14px) rotate(-1.2deg) scale(0.98);
+  }
+}
+
+/* ---------- Explore ---------- */
+.activeMission {
+  position: relative;
+}
+.activeMission::before {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  border: 1px solid color-mix(in srgb, var(--color-primary) 55%, transparent);
+  animation: mission-glow 2.6s ease-in-out infinite;
+  pointer-events: none;
+}
+@keyframes mission-glow {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+.tick {
+  animation: tick 420ms var(--ease-rise) both;
+}
+@keyframes tick {
+  from {
+    transform: scale(0.4);
+    opacity: 0;
+  }
+  60% {
+    transform: scale(1.15);
+  }
+}
+.land {
+  animation: land 560ms var(--ease-rise) both;
+}
+@keyframes land {
+  from {
+    opacity: 0;
+    transform: translateX(16px);
+    background-color: color-mix(in srgb, var(--color-primary) 10%, transparent);
+  }
+}
+
+/* ---------- Check: a scan line passes over each row in turn ---------- */
+.scanRow {
+  position: relative;
+  overflow: hidden;
+}
+.scanRow::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--color-fg) 12%, transparent) 50%, transparent);
+  animation: scan 2.4s var(--ease-swift) infinite;
+  animation-delay: calc(var(--i, 0) * 0.35s);
+  pointer-events: none;
+}
+@keyframes scan {
+  to {
+    transform: translateX(100%);
+  }
+}
+
+/* ---------- Debrief ---------- */
+.cascade {
+  animation: cascade 460ms var(--ease-rise) both;
+  animation-delay: calc(var(--d, 0ms) + var(--i, 0) * 60ms);
+}
+@keyframes cascade {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+}
+/* A journey path draws itself: each segment grows from its left edge, in order. */
+.segment {
+  transform-origin: 0 50%;
+  animation: segment 420ms var(--ease-swift) both;
+  animation-delay: calc(var(--d, 0ms) + var(--i, 0) * 220ms);
+}
+@keyframes segment {
+  from {
+    transform: scaleX(0);
+  }
+}
+.node {
+  animation: node 360ms var(--ease-rise) both;
+  animation-delay: calc(var(--d, 0ms) + var(--i, 0) * 220ms + 120ms);
+}
+@keyframes node {
+  from {
+    opacity: 0;
+    transform: scale(0.5);
+  }
+}
+.bar {
+  transform-origin: 0 50%;
+  animation: segment 900ms var(--ease-swift) both;
+  animation-delay: calc(var(--d, 0ms) + var(--i, 0) * 80ms);
+}
+
+/* Reduced motion: no movement anywhere. Entrances become a short fade, loops stop. */
+@media (prefers-reduced-motion: reduce) {
+  .deal,
+  .cascade,
+  .land,
+  .tick,
+  .node,
+  .cardLit,
+  .stream,
+  .fileLit,
+  .pinIn,
+  .outlined,
+  .chipIn {
+    animation: fade-only 200ms ease-out both;
+  }
+  .segment,
+  .bar,
+  .scanLine,
+  .frameScan::after,
+  .timelineLine,
+  .phaseActive,
+  .activeMission::before,
+  .scanRow::after,
+  .cursor {
+    animation: none;
+  }
+  .phaseFill {
+    transition: none;
+  }
+}
+@keyframes fade-only {
+  from {
+    opacity: 0;
+  }
+}

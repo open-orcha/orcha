@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { answerNoun, askPhrase, mdPlain, projectEvents } from "./events";
+import { answerNoun, askPhrase, matchesEventKind, mdPlain, parseEventKind, projectEvents, qaEvents } from "./events";
+import { normalizeRequest } from "../qa/requests/api";
 import { runtimeLabel } from "./runModel";
 import type { OrchaRequest, Task } from "../../types";
 
@@ -66,5 +67,26 @@ describe("escalated requests credit the right party (parity r2)", () => {
     const evs = projectEvents([], [r]);
     expect(evs.find((e) => e.kind === "answer")!.who).toBe("scout");
     expect(evs.find((e) => e.kind === "request")!.other).toBe("scout");
+  });
+});
+
+describe("QA events", () => {
+  const ask = normalizeRequest({ id: "r1", kind: "explore", platform: "ios", status: "failed", round: 2, focus: "Checkout", source_task_id: "t1", requested_by_agent_id: "a1", created_at: "2026-11-05T10:00:00Z", finished_at: "2026-11-05T10:30:00Z", result: { summary: "The pay button does **nothing**" } });
+  const whoIs = (id: string | null) => (id === "a1" ? "forge" : null);
+  const titleOf = (id: string) => (id === "t1" ? "Fix checkout" : null);
+
+  it("says who asked and what came back, in plain words, linking to the request", () => {
+    const [done, asked] = qaEvents([ask], whoIs, titleOf);
+    expect(asked).toMatchObject({ kind: "qa", who: "forge", qaVerb: "asked QA about", subject: "Fix checkout", href: "/qa?view=requests&request=r1", taskId: "t1", text: "explore on iOS: Checkout (round 2)" });
+    expect(done).toMatchObject({ kind: "qa", who: "QA", qaVerb: "failed", text: "The pay button does nothing" });
+  });
+
+  it("logs nothing for the end of a request still open, and filters under QA", () => {
+    const open = { ...ask, id: "r2", status: "running" as const, finished_at: null };
+    const events = qaEvents([open], whoIs, titleOf);
+    expect(events).toHaveLength(1);
+    expect(matchesEventKind(events[0], "qa")).toBe(true);
+    expect(matchesEventKind(events[0], "requests")).toBe(false);
+    expect(parseEventKind("qa")).toBe("qa");
   });
 });
