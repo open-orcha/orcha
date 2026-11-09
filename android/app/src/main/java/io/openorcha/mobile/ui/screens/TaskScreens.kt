@@ -85,9 +85,11 @@ import io.openorcha.mobile.data.TaskDto
 import io.openorcha.mobile.data.TaskMessageDto
 import io.openorcha.mobile.domain.MarkdownLite
 import io.openorcha.mobile.domain.ActivityCopy
+import io.openorcha.mobile.domain.CommentExpansion
 import io.openorcha.mobile.domain.MobileUx
 import io.openorcha.mobile.ui.OrchaUiState
 import io.openorcha.mobile.ui.components.Banner
+import io.openorcha.mobile.ui.components.ExpandableCommentText
 import io.openorcha.mobile.ui.components.BannerKind
 import io.openorcha.mobile.ui.components.LAvatar
 import io.openorcha.mobile.ui.components.LButton
@@ -632,10 +634,8 @@ private fun VerificationCard(
             (task.result ?: task.messageSummary?.last?.body)?.let(ActivityCopy::humanize)?.takeIf { it.isNotBlank() }?.let { result ->
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text("Result", style = ltype(LType.Micro), color = p.faint)
-                    Text(
-                        inlineMarkdown(result),
-                        style = ltype(LType.Body), color = p.text2, maxLines = 6, overflow = TextOverflow.Ellipsis,
-                    )
+                    var resultExpanded by rememberSaveable(task.id) { mutableStateOf(false) }
+                    ExpandableCommentText(inlineMarkdown(result), expanded = resultExpanded, onExpandedChange = { resultExpanded = it })
                 }
             }
             proof()
@@ -866,6 +866,8 @@ private fun activityEntries(task: TaskDto, messages: List<TaskMessageDto>): List
 private fun ActivityTimeline(task: TaskDto, messages: List<TaskMessageDto>, agents: List<AgentDto>, onOpenThread: () -> Unit) {
     val p = Orcha.palette
     val entries = remember(task, messages) { activityEntries(task, messages) }
+    // GH #378: which comments are open, by id, for as long as this task page lives (survives rotation).
+    var expandedIds by rememberSaveable(task.id) { mutableStateOf(emptyList<String>()) }
     Column {
         if (messages.isNotEmpty()) {
             Text(
@@ -890,7 +892,11 @@ private fun ActivityTimeline(task: TaskDto, messages: List<TaskMessageDto>, agen
                         Text(e.time ?: "", style = ltype(LType.Micro), color = p.faint)
                     }
                     if (e.isMessage) {
-                        Text(inlineMarkdown(e.text), style = ltype(LType.Body), color = p.text2, maxLines = 5, overflow = TextOverflow.Ellipsis)
+                        ExpandableCommentText(
+                            inlineMarkdown(e.text),
+                            expanded = e.id in expandedIds,
+                            onExpandedChange = { expandedIds = CommentExpansion.toggled(expandedIds.toSet(), e.id).toList() },
+                        )
                     }
                 }
             }
