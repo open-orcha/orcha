@@ -23,7 +23,7 @@ from __future__ import annotations
 import json
 import re
 import shlex
-from typing import Any, Iterable
+from typing import Any, Iterable, Optional
 
 # ------------------------------------------------------------------ commands from run output
 
@@ -900,25 +900,31 @@ def match_claims(items: list[str], claim_text: str) -> dict[int, str]:
     return out
 
 
+def _line_key(text: str) -> str:
+    return " ".join((text or "").split()).casefold()
+
+
 def assess_dod(items: list[str], *, tests: dict, changes: dict, changed_paths: list[str],
-               claim_text: str = "", verdikt: dict | None = None) -> list[dict]:
+               claim_text: str = "", qa_lines: Optional[dict] = None) -> list[dict]:
     """Each DoD item → {index, text, status: proven|not_proven|needs_human, basis, evidence,
-    related?, claim?, verdikt?}.
+    strong, related?, claim?}.
 
     Deterministic rules, strongest evidence first:
-      1. A Verdikt verdict for the item (it was sent as a criterion): pass → proven, fail →
-         not_proven, anything else → needs_human (with the verdict attached).
-      2. Test items ("tests pass", "add tests for …"): passing suites → proven; failing →
+      0. A QA verdict on the line (`qa_lines`, keyed by `_line_key`) is what someone saw on the
+         device: pass → proven, fail → not_proven, each with its note and `frame_ids`; blocked or
+         inconclusive → needs_human, with what QA said. A person still verifies the task.
+      1. Test items ("tests pass", "add tests for …"): passing suites → proven; failing →
          not_proven; no test command in the run output → not_proven (nothing to point at).
          "Add tests" also accepts changed test files.
-      3. Items naming files/paths: every named file among the changed files → proven; a named
+      2. Items naming files/paths: every named file among the changed files → proven; a named
          file missing → not_proven.
-      4. Migration / docs items: a changed migration / doc file → proven, else not_proven.
-      5. Anything else → needs_human (a person must look), with related changed files listed
+      3. Migration / docs items: a changed migration / doc file → proven, else not_proven.
+      4. Anything else → needs_human (a person must look), with related changed files listed
          as a hint when their names share keywords with the item.
+    `strong` marks proof of the work itself: a QA pass, or tests that ran and passed. A changed
+    file shows something was touched, not that it works: proven for display, and never strong.
     The agent's own words are attached as `claim` and never change the status."""
     out = []
-    verdicts = (verdikt or {}).get("by_item") or {}
     test_paths = [p for p in changed_paths if file_category(p) == "test"]
     mig_paths = [p for p in changed_paths if file_category(p) == "migration"]
     doc_paths = [p for p in changed_paths if file_category(p) == "doc"]
@@ -927,33 +933,28 @@ def assess_dod(items: list[str], *, tests: dict, changes: dict, changed_paths: l
     claims = match_claims(items, claim_text)
     for i, text in enumerate(items):
         rec: dict[str, Any] = {"index": i, "text": text, "status": "needs_human", "basis": "none", "evidence": None}
-        v = verdicts.get(i)
+        strong = False
         path_tokens = [a or b for a, b in _PATHLIKE.findall(text)]
         path_tokens = [t for t in path_tokens if ("/" in t or "." in t) and " " not in t.strip()]
-        if v is not None:
-            rec["verdikt"] = v
-            oc = v.get("outcome")
-            label = f"Verdikt run {v.get('run_short') or ''}".strip()
-            if oc == "pass":
-                rec.update(status="proven", basis="verdikt", evidence=f"{label}: pass")
-            elif oc in ("fail",):
-                det = v.get("actual") or v.get("reason") or ""
-                rec.update(status="not_proven", basis="verdikt",
-                           evidence=f"{label}: fail" + (f" — {det[:160]}" if det else ""))
-            elif oc == "warning":
-                rec.update(status="needs_human", basis="verdikt", evidence=f"{label}: warning (non-critical failure)")
-            else:
-                rec.update(status="needs_human", basis="verdikt", evidence=f"{label}: {oc or 'no verdict'}")
+        qa = (qa_lines or {}).get(_line_key(text))
+        if qa:
+            status = {"pass": "proven", "fail": "not_proven"}.get(qa["verdict"], "needs_human")
+            rec.update(status=status, basis="qa", evidence=f"QA {qa['verdict']}" + (f": {qa['note']}" if qa.get("note") else ""),
+                       frame_ids=qa.get("frame_ids") or [], qa_request_id=qa.get("request_id"),
+                       qa_session_id=qa.get("session_id"))
+            strong = True
         elif _TEST_ITEM.search(text) and (_TEST_PASS.search(text) or _TEST_WRITE.search(text)):
             wants_new = bool(_TEST_WRITE.search(text)) and not _TEST_PASS.search(text)
             if wants_new and test_paths:
                 rec.update(status="proven", basis="changes",
                            evidence="Test files changed: " + ", ".join(test_paths[:3]) +
                            (f" (+{len(test_paths) - 3} more)" if len(test_paths) > 3 else ""))
+                strong = tstatus in ("passed", "exit_ok")
                 if tstatus == "failed":
                     rec.update(status="not_proven", basis="tests", evidence=tline + " — the run's tests are failing")
             elif tstatus == "passed" or tstatus == "exit_ok":
                 rec.update(status="proven", basis="tests", evidence=tline)
+                strong = True
                 if wants_new and not test_paths:
                     rec.update(status="needs_human", evidence=tline + " — but no test file changed")
             elif tstatus == "failed":
@@ -986,6 +987,7 @@ def assess_dod(items: list[str], *, tests: dict, changes: dict, changed_paths: l
             if related:
                 rec["related"] = related[:4]
                 rec["evidence"] = "Related changes: " + ", ".join(related[:3])
+        rec["strong"] = strong and rec["status"] == "proven"
         if i in claims:
             rec["claim"] = claims[i]
         out.append(rec)
@@ -1001,7 +1003,7 @@ def dod_summary(items: list[dict]) -> dict:
     }
 
 
-def summary_line(dod: dict, tests: dict, flags: list[dict], verdikt: dict | None = None) -> str:
+def summary_line(dod: dict, tests: dict, flags: list[dict]) -> str:
     """"3/4 DoD items evidenced · 42 tests passed · 1 risk flag" — each part only when real."""
     parts = []
     if dod.get("total"):
@@ -1021,12 +1023,4 @@ def summary_line(dod: dict, tests: dict, flags: list[dict], verdikt: dict | None
         parts.append("tests ran (result unreadable)")
     if flags:
         parts.append(f"{len(flags)} risk flag{'s' if len(flags) != 1 else ''}")
-    if verdikt and verdikt.get("status"):
-        vs = verdikt["status"]
-        if vs == "completed" and verdikt.get("verdict"):
-            parts.append(f"Verdikt {verdikt['verdict']}")
-        elif vs in ("queued", "running"):
-            parts.append(f"Verdikt {vs}")
-        else:
-            parts.append(f"Verdikt {vs}")
     return " · ".join(parts)

@@ -1,15 +1,15 @@
 """Agent-worktree housekeeping inside the notifier daemon (portal side: agent_worktree_routes,
 migration 067; the classification and every git operation live in ``worktree_gc``).
 
-Worktrees live on the HOST, so — like Verdikt previews — the portal only records settings and
+Worktrees live on the HOST, so the portal only records settings and
 requests and this daemon does the git work and reports back. Each housekeeping pass
 (``service_worktrees``, never raises — run on the daemon's own housekeeping thread, never inline
 before the wake scan; GH #315, ``notifier_housekeeper``):
 
   1. every ~10 s claims pending requests from the portal
      (``POST /api/containers/{cid}/agent-worktrees/claim``) — the answer also carries the
-     project's settings (auto clean-up on/off, grace days) and the worktrees a running run or
-     preview uses — runs them (remove / save output / clean up / refresh) and reports each
+     project's settings (auto clean-up on/off, grace days) and the worktrees a running run
+     uses — runs them (remove / save output / clean up / refresh) and reports each
      result;
   2. when auto clean-up is on, sweeps every worktree under ``.orcha-worktrees`` — on the first
      pass after start (so worktrees that existed before an upgrade are handled too) and then
@@ -109,8 +109,8 @@ def _claimed_by() -> str:
     return f"{socket.gethostname()}:{os.getpid()}"
 
 
-def local_busy(live_workers=None, live_residents=None, previews=None, *, exclude=None) -> set[str]:
-    """Worktrees this daemon's own workers, residents and previews are using."""
+def local_busy(live_workers=None, live_residents=None, *, exclude=None) -> set[str]:
+    """Worktrees this daemon's own workers and residents are using."""
     busy: set[str] = set()
     for worker in (live_workers or {}).values():
         if worker is exclude:
@@ -120,10 +120,6 @@ def local_busy(live_workers=None, live_residents=None, previews=None, *, exclude
     for resident in (live_residents or {}).values():
         if resident.get("worktree"):
             busy.add(resident["worktree"])
-    for p in (getattr(previews, "active", None) or {}).values():
-        cwd = getattr(p, "cwd", None)
-        if cwd:
-            busy.add(cwd)
     return busy
 
 
@@ -519,7 +515,7 @@ def report_inventory(api_base, cid, project_cwd, state: GcState, busy: set[str],
 
 
 def service_worktrees(api_base: str, cid: str, state: GcState, project_cwd: Optional[str], *,
-                      live_workers=None, live_residents=None, previews=None, quiet: bool = True,
+                      live_workers=None, live_residents=None, quiet: bool = True,
                       dry_run: bool = False, post=_default_post, upload=None,
                       clock=time.monotonic, timer=None, busy=None) -> None:
     """The per-pass entry point (see the module docstring). Never raises.
@@ -546,7 +542,7 @@ def service_worktrees(api_base: str, cid: str, state: GcState, project_cwd: Opti
                 state.remote_busy = {p for p in (res.get("busy_worktrees") or []) if p}
                 actions = [a for a in (res.get("actions") or []) if isinstance(a, dict)]
         lap("claim")
-        own = local_busy(live_workers, live_residents, previews) if busy is None else set(busy)
+        own = local_busy(live_workers, live_residents) if busy is None else set(busy)
         busy = own | state.remote_busy
         for action in actions:
             try:

@@ -2,18 +2,20 @@
  * Proof-of-work evidence pack — mounted at the top of the verification gate
  * (TaskDetail GateSurface, verify branch) by the integrator:
  *
- *   <EvidencePack taskId={t.id} actorId={actor?.id ?? null} noActorReason={noHuman} bump={bump} />
+ *   <EvidencePack taskId={t.id} bump={bump} />
  *
- * One calm row: "Proof  ✓ 3/4 DoD items evidenced · 42 tests passed · ⚠ 1 risk flag · Verdikt pass  [Details]".
+ * One calm row: "Proof  ✓ 3/4 DoD items evidenced · 42 tests passed · ⚠ 1 risk flag  [Details]".
  * Details expand in place:
  *   Definition of done  each line → proven ✓ / not proven ✕ / needs a human ◌ with the
- *                       evidence line behind it; the agent's own words shown as
- *                       "Agent says: …" (a claim — it never changes the status)
+ *                       evidence line behind it and where its proof came from (Quality, tests,
+ *                       CI, review or "needs a person"); a changed file reads as weak proof, below
+ *                       a verdict or a passing test; a line QA checked shows that proof and its
+ *                       screenshot; the agent's own words shown as "Agent says: …" (a claim —
+ *                       it never changes the status)
  *   Tests               the suites the runs actually ran (latest run of each command),
  *                       counts from the runner's own summary, the command (mono)
  *   Changes             plain-English summary, risk-flag chips (files in the tooltip),
  *                       links to Live changes / the captured diff / Runs / PR
- *   Verdikt             latest run, verdicts, screenshots, report; Run / Retry / Cancel
  *
  * Truthful states: loading, unavailable (with the reason + retry), no runs, no tests.
  */
@@ -21,20 +23,23 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import { Icon } from "../../../components/ui";
 import { Button, Tooltip } from "../../../components/primitives";
+import { Filmstrip, FrameLightboxProvider, FrameShapeProvider } from "../../qa/Frames";
+import { platformWord } from "../../qa/qaWords";
+import { requestIdHref } from "../../qa/requests/links";
+import { requestKindWord, requestStatusWord } from "../../qa/requests/words";
 import { relTime, clockTime } from "../../../lib/format";
 import { EvidenceSummaryLine } from "./EvidenceSummaryLine";
-import { VerdiktPanel } from "./VerdiktPanel";
 import { evidenceCss } from "./evidenceCss";
 import { useEvidence } from "./useEvidence";
+import { useLoad } from "../../qa/parts";
+import { getTaskQa } from "../../qa/qaApi";
+import { lineProof, readFinishDecision, type FinishDecision } from "../../qa/runTask/finishing";
 import { useProjectMode } from "../../../lib/projectMode";
 import { useSnapshot } from "../../../state/SnapshotProvider";
-import type { DodItem, EvidencePack as Pack, RiskFlag, TestInvocation, VerdiktRun } from "./evidenceTypes";
+import type { DodItem, EvidencePack as Pack, EvidenceQa, RiskFlag, TestInvocation } from "./evidenceTypes";
 
 export interface EvidencePackProps {
   taskId: string;
-  /** acting human id for the Verdikt actions (null → disabled with the reason) */
-  actorId: string | null;
-  noActorReason?: string;
   /** re-fetch trigger — pass the snapshot bump */
   bump?: unknown;
   /** start expanded (full task view) */
@@ -49,9 +54,69 @@ const DOD_META: Record<DodItem["status"], { icon: string; cls: string; label: st
   needs_human: { icon: "eye", cls: "ev-mut", label: "Needs a human" },
 };
 
-function DodList({ items }: { items: DodItem[] }) {
+/** A line QA judged: the screenshot behind it and the way to the request. */
+function QaProof({ item, platform }: { item: DodItem; platform: string | null }) {
+  const frames = (item.frame_ids ?? []).map((id) => ({ id, caption: item.text }));
+  return (
+    <div className="ev-qa" data-qa-proof={item.qa_request_id ?? "qa"}>
+      <FrameShapeProvider shape={platform === "web" ? "wide" : "phone"}>
+        <Filmstrip label={`QA screenshots for: ${item.text}`} frames={frames} />
+      </FrameShapeProvider>
+      {item.qa_request_id ? <div className="ev-links"><Link to={requestIdHref(item.qa_request_id)}>Open the QA request</Link></div> : null}
+    </div>
+  );
+}
+
+/** The task's QA requests, one line each. */
+function QaRows({ rows }: { rows: EvidenceQa[] }) {
+  return (
+    <ul className="ev-list" aria-label="QA requests">
+      {rows.map((r) => (
+        <li className="ev-item" key={r.id}>
+          <span className={"ev-glyph " + (r.status === "passed" ? "ev-ok" : r.status === "failed" ? "ev-bad" : "ev-mut")}>
+            <Icon name={r.status === "passed" ? "check" : r.status === "failed" ? "x" : "dot"} cls="" />
+          </span>
+          <div>
+            <div className="ev-t"><Link to={requestIdHref(r.id)}>{requestKindWord(r.kind)}{r.platform ? ` on ${platformWord(r.platform)}` : ""}</Link> <span className="ev-m">{requestStatusWord(r.status)}{r.round > 1 ? ` · round ${r.round}` : ""}</span></div>
+            {r.summary ? <div className="ev-m">{r.summary}</div> : null}
+          </div>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/** Where a line's proof came from, and how much it weighs next to a verdict or a passing test. */
+function ProofTag({ item }: { item: DodItem }) {
+  const p = lineProof(item);
+  return (
+    <span className={"ev-proof is-" + p.strength} data-proof={p.source} data-strength={p.strength}>
+      {p.word}{p.strength === "weak" ? " · weak proof" : ""}
+    </span>
+  );
+}
+
+/** Under "finish by itself": what kept this task from finishing alone, in plain words. */
+function FinishWhy({ d }: { d: FinishDecision }) {
+  return (
+    <div className="ev-why" data-finish-why>
+      <p className="ev-why-h">This came to a person because not everything is proven.</p>
+      {d.lines.length ? (
+        <ul className="ev-why-list" aria-label="Lines not proven">
+          {d.lines.map((l) => (
+            <li key={l.index ?? l.text}><span className="ev-t">{l.text}</span><span className="ev-m">{l.reason}</span></li>
+          ))}
+        </ul>
+      ) : null}
+      {d.reasons.length ? <ul className="ev-why-list" aria-label="Other reasons">{d.reasons.map((r) => <li key={r}><span className="ev-m">{r}</span></li>)}</ul> : null}
+    </div>
+  );
+}
+
+function DodList({ items, qa }: { items: DodItem[]; qa: EvidenceQa[] }) {
   if (!items.length) return <div className="ev-m">No definition of done on this task.</div>;
   return (
+    <FrameLightboxProvider>
     <ul className="ev-list" aria-label="Definition of done checklist">
       {items.map((i) => {
         const m = DOD_META[i.status];
@@ -61,8 +126,9 @@ function DodList({ items }: { items: DodItem[] }) {
               <Icon name={m.icon} cls="" />
             </span>
             <div>
-              <div className="ev-t">{i.text}</div>
-              {i.evidence ? <div className="ev-m">{i.evidence}</div> : <div className="ev-m">{m.label} — no machine evidence</div>}
+              <div className="ev-t">{i.text} <ProofTag item={i} /></div>
+              {i.evidence ? <div className="ev-m">{i.evidence}</div> : <div className="ev-m">No machine evidence</div>}
+              {i.basis === "qa" ? <QaProof item={i} platform={qa.find((r) => r.id === i.qa_request_id)?.platform ?? null} /> : null}
               {i.claim ? (
                 <div className="ev-claim" title="The agent's own report — a claim, not evidence">
                   <b>Agent says:</b> “{i.claim}”
@@ -73,6 +139,7 @@ function DodList({ items }: { items: DodItem[] }) {
         );
       })}
     </ul>
+    </FrameLightboxProvider>
   );
 }
 
@@ -162,19 +229,22 @@ function Changes({ pack }: { pack: Pack }) {
   );
 }
 
-export function EvidenceDetails({ pack, actorId, noActorReason, onVerdikt, onRebuild }: {
+export function EvidenceDetails({ pack, onRebuild }: {
   pack: Pack;
-  actorId: string | null;
-  noActorReason?: string;
-  onVerdikt?: (run: VerdiktRun | null) => void;
   onRebuild?: () => void;
 }) {
   return (
     <div className="ev-body" data-testid="evidence-details">
       <section aria-label="Definition of done">
         <div className="ev-sec-h"><span>Definition of done</span></div>
-        <DodList items={pack.dod.items} />
+        <DodList items={pack.dod.items} qa={pack.qa ?? []} />
       </section>
+      {pack.qa?.length ? (
+        <section aria-label="QA">
+          <div className="ev-sec-h"><span>QA</span></div>
+          <QaRows rows={pack.qa} />
+        </section>
+      ) : null}
       <section aria-label="Tests">
         <div className="ev-sec-h"><span>Tests</span></div>
         <TestsList pack={pack} />
@@ -183,7 +253,6 @@ export function EvidenceDetails({ pack, actorId, noActorReason, onVerdikt, onReb
         <div className="ev-sec-h"><span>Changes</span></div>
         <Changes pack={pack} />
       </section>
-      <VerdiktPanel taskId={pack.task_id} latest={pack.verdikt} actorId={actorId} noActorReason={noActorReason} onChanged={onVerdikt} showCriteria={false} previewUrls={pack.preview_urls} />
       <div className="ev-foot">
         <span title={clockTime(pack.built_at)}>
           Built {relTime(pack.built_at)} from {pack.runs.length} run{pack.runs.length === 1 ? "" : "s"}
@@ -195,10 +264,12 @@ export function EvidenceDetails({ pack, actorId, noActorReason, onVerdikt, onReb
   );
 }
 
-export function EvidencePack({ taskId, actorId, noActorReason, bump, defaultOpen, asGateRow = true }: EvidencePackProps) {
-  const { pack, error, loading, reload, rebuild, setPack, unsupported } = useEvidence(taskId, bump);
+export function EvidencePack({ taskId, bump, defaultOpen, asGateRow = true }: EvidencePackProps) {
+  const { pack, error, loading, reload, rebuild, unsupported } = useEvidence(taskId, bump);
   const [open, setOpen] = useState(!!defaultOpen);
   const general = useProjectMode(useSnapshot().cid).mode === "general";
+  const qa = useLoad((s) => getTaskQa(taskId, s), [taskId]);
+  const finish = readFinishDecision(qa.data?.final_decision);
   if (unsupported && !pack) return null;
 
   let body;
@@ -229,18 +300,10 @@ export function EvidencePack({ taskId, actorId, noActorReason, bump, defaultOpen
             {open ? "Hide" : "Details"}
           </Button>
         </span>
+        {finish?.toPerson ? <FinishWhy d={finish} /> : null}
         {open ? (
           <div id={"ev-" + taskId}>
-            <EvidenceDetails
-              pack={pack}
-              actorId={actorId}
-              noActorReason={noActorReason}
-              onRebuild={() => void rebuild()}
-              onVerdikt={(run) => {
-                if (run) setPack({ ...pack, verdikt: run, summary: { ...pack.summary, verdikt: { status: run.status, verdict: run.verdict } } });
-                reload();
-              }}
-            />
+            <EvidenceDetails pack={pack} onRebuild={() => void rebuild()} />
           </div>
         ) : null}
       </>

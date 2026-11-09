@@ -52,7 +52,7 @@ class IntegratedWorkflowHooks(WorkflowHooks):
             "reason": None if allowed else "human_approval_required",
         }
 
-    def authorize_completion(self, cur, task, actor, reference):
+    def authorize_completion(self, cur, task, actor, reference, *, permission_source=None):
         verdict = self.completion_permission(cur, task, actor)
         if not verdict["allowed"]:
             conflict(
@@ -67,7 +67,7 @@ class IntegratedWorkflowHooks(WorkflowHooks):
             ApprovalPhase.COMPLETION,
             completion_submission(task),
             human_review_authorized=actor["kind"] == "human",
-            permission_source=(
+            permission_source=permission_source or (
                 "workflow_human_acceptance"
                 if actor["kind"] == "human"
                 else "workflow_task_autonomy"

@@ -1,13 +1,11 @@
 package io.openorcha.mobile.domain
 
-import io.openorcha.mobile.data.EvidenceAutofixSummary
 import io.openorcha.mobile.data.EvidenceSummaryDto
 import io.openorcha.mobile.data.EvidenceTestInvocation
 import io.openorcha.mobile.data.GoalChainDto
 import io.openorcha.mobile.data.GoalNodeDto
 import io.openorcha.mobile.data.ManagerReviewDto
 import io.openorcha.mobile.data.ReviewRoutingDto
-import io.openorcha.mobile.data.VerdiktRunDto
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -15,7 +13,7 @@ import java.util.Locale
 
 /**
  * Pure copy + logic for the task-detail parity features. Wording mirrors the web portal
- * (`EvidenceSummaryLine.tsx`, `EvidencePack.tsx`, `VerdiktPanel.tsx`, `lib/reviewRoute.ts`,
+ * (`EvidenceSummaryLine.tsx`, `EvidencePack.tsx`, `lib/reviewRoute.ts`,
  * `routines/schedule.ts`) so the three clients read the same.
  */
 object TaskInsightsUx {
@@ -28,34 +26,10 @@ object TaskInsightsUx {
 
     data class Part(val key: String, val text: String, val tone: Tone)
 
-    /** Web `autofixPart`: why the task is (back) here when the Verdikt auto-fix loop ran. */
-    fun autofixPart(a: EvidenceAutofixSummary?): Part? {
-        a ?: return null
-        if (a.status == "running") return Part("autofix", "Auto-fix: attempt ${a.currentAttempt} of ${a.maxAttempts}", Tone.Plain)
-        val n = a.attemptsMade
-        val text = when (a.stopKind) {
-            "pass" -> "Verdikt passed on attempt $n/${a.maxAttempts}"
-            "attempt_limit" -> "Auto-fix stopped: failed $n of ${a.maxAttempts} attempts"
-            "no_diff" -> "Auto-fix stopped: the rework changed no code"
-            "same_failure" -> "Auto-fix stopped: same failure twice"
-            "budget" -> "Auto-fix stopped: budget limit"
-            "agent_paused" -> "Auto-fix stopped: agent paused"
-            "stopped_by_human" -> "Auto-fix stopped by a person"
-            "turned_off" -> "Auto-fix turned off"
-            "no_assignee" -> "Auto-fix stopped: nobody assigned"
-            else -> {
-                val r = (a.stopReason ?: a.stopLabel ?: "stopped").split(" — ", " (").first()
-                "Auto-fix stopped: " + if (r.startsWith("Verdikt")) r else r.replaceFirstChar { it.lowercase() }
-            }
-        }
-        return Part("autofix", text, if (a.stopKind == "pass") Tone.Ok else Tone.Warn)
-    }
-
     /** Web `summaryParts`: each part appears only when it is real — no invented counts. */
     fun summaryParts(s: EvidenceSummaryDto?, short: Boolean = true): List<Part> {
         s ?: return emptyList()
         return buildList {
-            autofixPart(s.autofix)?.let(::add)
             s.dod?.takeIf { it.total > 0 }?.let { d ->
                 val tone = when {
                     d.notProven > 0 -> Tone.Bad
@@ -78,16 +52,6 @@ object TaskInsightsUx {
             if (s.riskFlags > 0) {
                 val n = s.riskFlags
                 add(Part("risk", if (short) "$n risk${plural(n)}" else "$n risk flag${plural(n)}", Tone.Warn))
-            }
-            s.verdikt?.let { v ->
-                when {
-                    v.status == "completed" && v.verdict != null -> add(
-                        Part("verdikt", "Verdikt ${v.verdict}", when (v.verdict) { "pass" -> Tone.Ok; "fail" -> Tone.Bad; else -> Tone.Warn }),
-                    )
-                    v.status == "queued" -> add(Part("verdikt", "Verdikt queued", Tone.Plain))
-                    v.status == "running" -> add(Part("verdikt", "Verdikt running", Tone.Plain))
-                    v.status.isNotBlank() -> add(Part("verdikt", "Verdikt ${v.status}", if (v.status == "cancelled") Tone.Muted else Tone.Warn))
-                }
             }
         }
     }
@@ -158,34 +122,6 @@ object TaskInsightsUx {
             else -> null
         }
     }
-
-    private val VERDIKT_STATUS = mapOf(
-        "queued" to "Queued in Verdikt",
-        "running" to "Verdikt is testing…",
-        "completed" to "Verdikt finished",
-        "failed" to "Verdikt run failed",
-        "unavailable" to "Verdikt unavailable",
-        "timeout" to "Verdikt timed out",
-        "cancelled" to "Verdikt run cancelled",
-    )
-
-    fun verdiktHeadline(run: VerdiktRunDto): String =
-        if (run.status == "completed" && run.verdict != null) "Verdict: ${run.verdict}"
-        else VERDIKT_STATUS[run.status] ?: "Verdikt ${run.status}"
-
-    fun verdiktTone(outcome: String?): Tone = when (outcome) {
-        "pass" -> Tone.Ok
-        "fail" -> Tone.Bad
-        "warning", "blocked" -> Tone.Warn
-        else -> Tone.Muted
-    }
-
-    fun verdiktOpen(run: VerdiktRunDto?): Boolean = run?.status == "queued" || run?.status == "running"
-
-    /** Absolute URL for a portal-relative link (report redirect, etc.); absolute links pass through. */
-    fun absoluteUrl(baseUrl: String, href: String): String =
-        if (href.startsWith("http://") || href.startsWith("https://")) href
-        else baseUrl.trimEnd('/') + "/" + href.trimStart('/')
 
     /* ---------- goal ancestry ---------- */
 

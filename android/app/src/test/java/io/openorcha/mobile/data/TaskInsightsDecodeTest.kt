@@ -3,8 +3,6 @@ package io.openorcha.mobile.data
 import kotlinx.serialization.json.Json
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFalse
-import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /** Decoding of the task-detail parity payloads (real shapes captured from a live portal). */
@@ -28,9 +26,8 @@ class TaskInsightsDecodeTest {
          "dod":{"items":[{"index":0,"text":"a","status":"not_proven","basis":"changes","evidence":"Not among the changed files"},
                          {"index":1,"text":"b","status":"needs_human","basis":"none","evidence":null,"claim":"I did b"}],
                 "total":2,"proven":0,"not_proven":1,"needs_human":1},
-         "verdikt":null,
          "summary":{"dod":{"total":2,"proven":0,"not_proven":1,"needs_human":1},"tests":{"status":"none","passed":0,"failed":0,"skipped":0,"errors":0,"suites":0},
-                    "risk_flags":1,"verdikt":null,"line":"0/2 DoD items evidenced · no tests ran · 1 risk flag","autofix":null}}
+                    "risk_flags":1,"line":"0/2 DoD items evidenced · no tests ran · 1 risk flag"}}
         """
         val pack = json.decodeFromString<EvidencePackDto>(raw)
         assertEquals("t1", pack.taskId)
@@ -40,7 +37,6 @@ class TaskInsightsDecodeTest {
         assertEquals("CI / infrastructure", pack.flags.single().label)
         assertEquals(1, pack.summary.riskFlags)
         assertEquals(2, pack.changes.files)
-        assertNull(pack.verdikt)
     }
 
     @Test
@@ -52,15 +48,6 @@ class TaskInsightsDecodeTest {
         val chain = json.decodeFromString<GoalChainDto>(raw)
         assertEquals(listOf("objective", "parent", "task"), chain.goalChain.map { it.kind })
         assertEquals("task_request", chain.goalChain[1].via)
-    }
-
-    @Test
-    fun verdiktRunsDecodeWithSettingsOnly() {
-        val raw = """{"task_id":"t1","settings":{"configured":false,"enabled":false,"base_url":null,"target_kind":"web","trigger_mode":"manual"},
-            "runs":[],"autofix":{"override":"inherit"}}"""
-        val r = json.decodeFromString<VerdiktRunsResponse>(raw)
-        assertFalse(r.settings!!.enabled)
-        assertTrue(r.runs.isEmpty())
     }
 
     @Test

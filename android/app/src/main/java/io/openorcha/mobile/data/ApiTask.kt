@@ -23,14 +23,6 @@ suspend fun OrchaApiClient.getGoalChain(baseUrl: String, taskId: String): GoalCh
     client.get("${baseUrl.endpoint()}/api/tasks/$taskId/goal-chain").body()
 }
 
-suspend fun OrchaApiClient.getVerdiktRuns(baseUrl: String, taskId: String): VerdiktRunsResponse = withTimeout(8_000) {
-    client.get("${baseUrl.endpoint()}/api/tasks/$taskId/verdikt/runs").body()
-}
-
-/** "Run in Verdikt": hands the task's definition of done to Verdikt (web exposes this to humans). */
-suspend fun OrchaApiClient.triggerVerdikt(baseUrl: String, taskId: String, actorId: String): VerdiktRunDto =
-    transport.post("${baseUrl.endpoint()}/api/tasks/$taskId/verdikt/runs", VerdiktTriggerBody(actorId))
-
 /** Reassign: the agent must be a live AI agent in the project; `reassign` releases the prior assignee. */
 suspend fun OrchaApiClient.reassignTask(baseUrl: String, taskId: String, actorId: String, agentId: String): GenericIdResponse =
     transport.post("${baseUrl.endpoint()}/api/tasks/$taskId/assign", AssignTaskBody(actorId, agentId, reassign = true))

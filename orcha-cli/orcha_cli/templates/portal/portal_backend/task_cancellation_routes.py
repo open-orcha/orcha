@@ -29,7 +29,15 @@ from portal_backend.task_completion_support import (
 
 @app.post("/api/tasks/{tid}/cancel", status_code=200)
 def cancel_task(tid: str, body: TaskCancel, request: Request):
-    """B7 (ISS-23) + #327: force-close a task. A human OR a dispatching AI orchestrator may cancel
+    """Force-close a task; `close_task` holds the rules."""
+    return close_task(tid, body, request)
+
+
+def close_task(tid: str, body: TaskCancel, request: Request, tell_owners: bool = True):
+    """`tell_owners=False`: the owner's work was already stopped, so a wake to say so would only
+    spend (a person's Stop on a run).
+
+    B7 (ISS-23) + #327: force-close a task. A human OR a dispatching AI orchestrator may cancel
     ANY non-root task. Cancelling a task owned by SOMEONE ELSE is "forced" — kind-agnostic now: the
     actor (human or AI) MUST give a reason, which is routed to each displaced owner via the B0
     decision primitive (+ a path-forward poke) so they learn why. An assignee cancelling its own
@@ -108,10 +116,6 @@ def cancel_task(tid: str, body: TaskCancel, request: Request):
             stop_reason=COALESCE(stop_reason,'task_cancelled'),suppress_wake=true
             WHERE job_id IN (SELECT job_id FROM managed_jobs WHERE task_id=%s)''', (tid,))
         cur.execute("DELETE FROM agent_self_wake WHERE task_id=%s", (tid,))
-        # Mig 068: cancelling ends a running Verdikt auto-fix loop
-        from portal_backend.verdikt_autofix import end_for_person as _end_autofix
-
-        _end_autofix(cur, t, body.actor_agent_id, "cancelled", actor_kind="human" if is_human else "ai")
         # Mig 057: a cancelled task needs no AI manager pre-review — close it.
         _supersede_pending_prereview(cur, t["container_id"], tid, reason="task_cancelled")
         # Review P2: clear the now-stale assignments so assignees don't stay 'working'.
@@ -146,7 +150,7 @@ def cancel_task(tid: str, body: TaskCancel, request: Request):
             _ack_events_handled(cur, aid, "task_ready", "task_id", tid)
             _ack_events_handled(cur, aid, "task_verified", "task_id", tid)
         # Route the reason to each OWNING assignee that isn't the actor.
-        if forced:
+        if forced and tell_owners:
             for owner in others:
                 _route_close_reason(
                     cur,
@@ -177,6 +181,9 @@ def cancel_task(tid: str, body: TaskCancel, request: Request):
             from portal_backend.workflow_service import WorkflowActor
             workflow_service._stop(workflow, t, WorkflowActor(body.actor_agent_id, True), 'task_cancel', reason)
             workflow_service.reconcile(str(t['workflow_id']))
+        from portal_backend.qa_handoff import close_for_tasks
+
+        close_for_tasks(cur, [tid], body.actor_agent_id if is_human else None)
         conn.commit()
     return {
         "task_id": tid,

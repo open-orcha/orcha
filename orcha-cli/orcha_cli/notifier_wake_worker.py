@@ -200,6 +200,15 @@ def _release_unlaunched(api_base, candidate, services, admission_id):
         )
 
 
+def worker_cap(api_base, task_id, cap, services):
+    """The worker's hard cap: a Quality run's task gets `QUALITY_CAP_SECS`."""
+    if not task_id:
+        return cap
+    qa = services._get_json(f"{api_base}/api/tasks/{task_id}/qa") or {}
+    quality = qa.get("is_run_task") or any(r.get("qa_task_id") == task_id for r in qa.get("requests") or [])
+    return max(cap, services.QUALITY_CAP_SECS) if quality else cap
+
+
 def spawn(
     api_base,
     candidate,
@@ -398,7 +407,7 @@ def spawn(
             worktree=worktree,
             branch=branch,
             task_worktree=task_worktree,
-            cap=cap,
+            cap=worker_cap(api_base, run_task_id, cap, services),
             event=event,
             run_task_id=run_task_id,
             token=token,

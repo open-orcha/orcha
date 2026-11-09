@@ -23,6 +23,10 @@ import { WorkflowLoopGroup, WorkflowTaskRow, WorkflowTaskRows } from "./Workflow
 import { WorkflowTaskInspector } from "./WorkflowTaskInspector";
 import { WorkflowRunAgain } from "./WorkflowRunAgain";
 import { WorkflowHide } from "./WorkflowHide";
+import { qaMark, useWorkflowQa } from "./WorkflowQaStep";
+import { qualityWord } from "./workflowQa";
+import { WorkflowQualityRounds } from "./WorkflowQualityRounds";
+import { graphReturns } from "./qualityRounds";
 import { TASK_ACTION_KEYS, taskActionLabel, taskReason, type TaskActionRequest } from "./WorkflowTaskActions";
 import type { WorkflowActionRequest } from "./WorkflowActions";
 import { useWorkflowOperation } from "./workflowOperations";
@@ -35,6 +39,12 @@ import "./workflows.css";
 
 type Availability = "checking" | "unsupported" | "ready" | "unavailable" | "forbidden";
 export { hasWorkflowRoutes } from "./workflowApi";
+
+/** The Quality workflow a saved step came from; its loop tells two of the same block apart. */
+function savedBlock(t: WorkflowTask) {
+  const block = t.block;
+  return block ? { id: t.repeat_group_id ?? block.key, name: qualityWord(block.name) } : undefined;
+}
 export function WorkflowsPage() {
   const context = useSnapshot();
   const authority = useActingAuthority();
@@ -86,6 +96,21 @@ function WorkflowScreen() {
   const [taskSearch, setTaskSearch] = useState("");
   const operation = useWorkflowOperation(scope, `workflow:${workflowId ?? ""}`);
   const unresolved = operation?.state === "sending" || operation?.state === "uncertain";
+  const qa = useWorkflowQa(cid, detail);
+  // Agents and QA move a running workflow while this page stays open: read it again, quietly, when its
+  // steps or requests change. Not a reload: nothing here says the data is stale, and an open dialog stays.
+  const liveKey = `${snap?.tasks?.filter((t) => t.workflow_id === workflowId).map((t) => `${t.id}:${t.status}`).join() ?? ""}|${qa.changed}`;
+  const seenLive = useRef(liveKey);
+  useEffect(() => {
+    if (seenLive.current === liveKey) return;
+    seenLive.current = liveKey;
+    if (!workflowId || !detail) return;
+    const controller = new AbortController();
+    void workflowRequest("WorkflowDetail", workflowPaths.detail(workflowId), { signal: controller.signal, actorId })
+      .then((current) => { if (current.id === workflowId && current.container_id === cid) setDetail(current); })
+      .catch(() => { /* the next change, or Refresh, reads it again */ });
+    return () => controller.abort();
+  }, [liveKey]);
   useEffect(() => {
     // A direct task link arrives before the asynchronous workflow read. Move
     // keyboard focus only once the named task actually exists on this page.
@@ -151,7 +176,7 @@ function WorkflowScreen() {
     return () => { active = false; clearTimeout(timer); controller.abort(); };
   }, [cid, workflowId, isNew, serverStatus, filter === "hidden", next, retry, actorId]);
   const writeReason = workflowWriteReason(detail?.capability ?? capability, verified);
-  const aiAgents = snap?.agents.filter((a) => a.kind === "ai" && a.status !== "terminated").map((a) => ({ id: a.id, alias: a.alias })) ?? [];
+  const aiAgents = snap?.agents.filter((a) => a.kind === "ai" && a.status !== "terminated").map((a) => ({ id: a.id, alias: a.alias, role: a.role })) ?? [];
   const humans = snap?.agents.filter((a) => a.kind === "human" && a.status !== "terminated").map((a) => ({ id: a.id, alias: a.alias })) ?? [];
   const rows = list?.workflows.filter((w) => matchesWorkflowFilter(w, filter) && (!owner || owner === w.owner_human_id) && `${w.title} ${w.goal}`.toLowerCase().includes(search.toLowerCase())) ?? [];
   const isList = !isNew && !workflowId;
@@ -223,6 +248,8 @@ function WorkflowScreen() {
       onSelect: () => { setSelectedId(task.id); setTaskRequest({ taskId: task.id, action: key, seq: ++requestSeq.current }); },
     })),
   ];
+  const qualityGroup = detail?.repeat_groups?.find((g) => g.member_tasks.some((id) => detail.tasks.find((t) => t.id === id)?.qa));
+  const qualityStory = <WorkflowQualityRounds rounds={qa.rounds} round={qualityGroup?.current_round ?? null} maxRounds={qualityGroup?.max_rounds ?? null} onOpen={(id) => { setSelectedId(id); setTaskRequest(null); }} />;
   const taskRows = (dependencies: boolean) => {
     const shown = detail!.tasks.filter((t) => !dependencies || !taskSearch || t.title.toLowerCase().includes(taskSearch.toLowerCase()));
     const row = (t: WorkflowDetail["tasks"][number]) => {
@@ -230,7 +257,7 @@ function WorkflowScreen() {
       const dependents = detail!.tasks.filter((other) => other.depends_on.includes(t.id)).map((o) => o.id);
       const group = t.repeat_group_id ? detail!.repeat_groups?.find((g) => g.id === t.repeat_group_id) : undefined;
       return <WorkflowTaskRow key={t.id} loop={group ? { round: t.round ?? group.current_round } : null} task={t} selected={selectedId === t.id} onSelect={() => { setSelectedId(t.id); setTaskRequest(null); }} actorName={actorName}
-        assignees={t.assignee_ids.map((id) => ({ id, alias: actorName(id), kind: snap?.agents.find((a) => a.id === id)?.kind ?? "ai" }))} menuItems={rowMenu(t)}
+        assignees={t.assignee_ids.map((id) => ({ id, alias: actorName(id), kind: snap?.agents.find((a) => a.id === id)?.kind ?? "ai" }))} menuItems={rowMenu(t)} qa={qaMark(t, qa.byTask[t.id], qa.rounds.at(-1)?.round)}
         subline={dependencies ? `Depends on: ${t.depends_on.length ? names(t.depends_on) : "none"} · Needed by: ${dependents.length ? names(dependents) : "none"}` : notSelectedLine(t)} />;
     };
     // The members of one repeat group are listed together where the first of them appears, in dependency
@@ -266,7 +293,7 @@ function WorkflowScreen() {
   };
   const inspector = detail && selectedTask && cid ? <WorkflowTaskInspector key={selectedTask.id} detail={detail} task={selectedTask} cid={cid} scope={scope} verified={verified} stale={stale}
     agents={aiAgents} actorName={actorName} onSaved={saved} onExpand={() => openTask(selectedTask.id)} request={taskRequest?.taskId === selectedTask.id && taskRequest.action !== "review" ? { action: taskRequest.action, seq: taskRequest.seq } : null}
-    reviewRequest={taskRequest?.taskId === selectedTask.id && taskRequest.action === "review" ? taskRequest.seq : null} onRequest={(action) => setTaskRequest({ taskId: selectedTask.id, action, seq: ++requestSeq.current })}
+    qa={qa.of(selectedTask)} reviewRequest={taskRequest?.taskId === selectedTask.id && taskRequest.action === "review" ? taskRequest.seq : null} onRequest={(action) => setTaskRequest({ taskId: selectedTask.id, action, seq: ++requestSeq.current })}
     onClose={() => { const row = document.getElementById(`workflow-task-${selectedTask.id}`); setSelectedId(null); setTaskRequest(null); row?.focus(); }} /> : null;
   return <Shell page="workflows" title="Workflows" flush><div className="wf-page wf-flush wf-detail">
     {!cid && <div className="wf-states"><EmptyState title="Choose a project to view Workflows" /></div>}
@@ -290,7 +317,7 @@ function WorkflowScreen() {
         {availability === "ready" && writeReason && <p className="wf-bar">{writeReason}</p>}
       </div>}
       {detail.hidden && <p role="status" className="wf-bar">This workflow is hidden. Its tasks, messages and evidence are kept. Restore it from the workflow menu; restoring never starts work.</p>}
-      {detail.status === "active" && !detail.launch_enabled && <p role="status" className="wf-bar">Draft — review the steps and workflow settings, then choose Review start when ready. Nothing runs until you choose Start.</p>}
+      {detail.status === "active" && !detail.launch_enabled && <p role="status" className="wf-bar">{detail.tasks.some((t) => t.preparation_state === "prepared") ? "Draft: choose Review start when the steps are ready. Nothing runs until you choose Start." : "Draft: open each step and choose Prepare task, then Review start. Nothing runs until you choose Start."}</p>}
       {detail.status === "active" && !detail.launch_enabled && !!detail.copy_notes?.length && <ul className="wf-notice" aria-label="Copied draft notes">{detail.copy_notes.map((note, i) => <li key={i}>{note}</li>)}</ul>}
       <WorkflowOwnerBar detail={detail} viewer={scope.identity} ownerName={actorName(detail.owner_human_id)} onDecide={setDecideId} />
       {decideTask && <WorkflowLoopDecision key={`${decideTask.id}:${decideTask.awaiting_loop_decision}`} detail={detail} task={decideTask} scope={scope} stale={stale} agents={aiAgents} onSaved={saved} onClose={() => setDecideId(null)} />}
@@ -309,12 +336,13 @@ function WorkflowScreen() {
       </div>
       <div className="wf-body">
         <div className="wf-main">
-          {tab === "tasks" && <SplitPane storageKey="orcha:v2:workflowInspector" list={<div className="wf-list">{detail.tasks.length === 0
+          {tab === "tasks" && <SplitPane storageKey="orcha:v2:workflowInspector" list={<div className="wf-list">{qualityStory}{detail.tasks.length === 0
             ? <EmptyState title="No tasks yet" body="Add new tasks or add existing tasks from the workflow menu." /> : taskRows(false)}
             {detail.progress.withdrawn > 0 && <p className="wf-muted wf-foot">{detail.progress.withdrawn} {detail.progress.withdrawn === 1 ? "task" : "tasks"} withdrawn from scope. Withdrawn tasks do not count as accepted.</p>}</div>} inspector={inspector} />}
           {tab === "dependencies" && <SplitPane storageKey="orcha:v2:workflowInspector" list={<div className="wf-list">
+            {qualityStory}
             {flexible && <div className="wf-route-summary wf-tab-pad"><WorkflowRoutePanel detail={detail} heading="Outcome routes" /></div>}
-            {graphMode && <WorkflowGraph tasks={detail.tasks.filter((t) => !taskSearch || t.title.toLowerCase().includes(taskSearch.toLowerCase())).map((t) => ({ id: t.id, title: t.title, status: t.status, label: t.display_state.label, assignee: t.assignee_ids.map(actorName).join(", "), dependsOn: t.depends_on }))}
+            {graphMode && <WorkflowGraph tasks={detail.tasks.filter((t) => !taskSearch || t.title.toLowerCase().includes(taskSearch.toLowerCase())).map((t) => ({ id: t.id, title: t.title, status: t.status, label: t.display_state.label, assignee: t.assignee_ids.map(actorName).join(", "), dependsOn: t.depends_on, qa: qaMark(t, qa.byTask[t.id], qa.rounds.at(-1)?.round), block: savedBlock(t), returns: graphReturns(t, detail.tasks, qa.rounds) }))}
               selected={selectedId} onSelect={(id) => { setSelectedId(id || null); setTaskRequest(null); }}
               disabledReason={stale ? "Refresh before making changes." : unresolved ? "Wait for the current save to finish." : actionReason(detail, "add_tasks", verified)}
               onAdd={() => { setAddSeed({ after: null, seq: ++requestSeq.current }); setMenuDialog("add_tasks"); }}

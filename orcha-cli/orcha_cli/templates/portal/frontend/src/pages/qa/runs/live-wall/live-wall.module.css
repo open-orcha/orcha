@@ -1,0 +1,190 @@
+/* The live wall's stage and motion. The stage follows the app's theme (light: a soft grey room
+   with subtle device frames and dark text; dark: a dark room where the screens are the light);
+   the device screens keep their own content. Captions, chips and placeholders read the stage's
+   `--wall-*` tokens. A tile rises in when its run starts and settles out after its result has
+   shown; frames crossfade (BufferedImage). Every element's resting style is its final state.
+   Under `prefers-reduced-motion: reduce` nothing moves, loops or fades. */
+
+.stage {
+  --wall-fg: rgba(17, 19, 24, 0.88);
+  --wall-fg-2: rgba(17, 19, 24, 0.6);
+  --wall-fg-3: rgba(17, 19, 24, 0.5);
+  --wall-fg-4: rgba(17, 19, 24, 0.32);
+  --wall-line: rgba(17, 19, 24, 0.12);
+  --wall-chip-on: rgba(17, 19, 24, 0.09);
+  --wall-chip-hover: rgba(17, 19, 24, 0.05);
+  --wall-tag: rgba(17, 19, 24, 0.06);
+  --wall-waiting: #e4e7ec;
+  --wall-accent: #4f6bed;
+  --wall-cloud-bg: rgba(79, 107, 237, 0.12);
+  --wall-cloud-fg: #3550c8;
+  --wall-frame: rgba(17, 19, 24, 0.1);
+  --wall-frame-hover: rgba(17, 19, 24, 0.24);
+  --wall-shadow: rgba(30, 36, 50, 0.18);
+  --wall-ghost-border: rgba(17, 19, 24, 0.12);
+  --wall-ghost-bg: linear-gradient(180deg, rgba(255, 255, 255, 0.85), rgba(255, 255, 255, 0.45));
+  --wall-ghost-light: color-mix(in srgb, var(--color-fg) 14%, transparent);
+  background:
+    radial-gradient(120% 90% at 50% 0%, color-mix(in srgb, var(--color-fg) 6%, transparent), transparent 60%),
+    #eef0f3;
+  color: var(--wall-fg);
+  color-scheme: light;
+}
+
+:global([data-theme="dark"]) .stage {
+  --wall-fg: rgba(255, 255, 255, 0.9);
+  --wall-fg-2: rgba(255, 255, 255, 0.6);
+  --wall-fg-3: rgba(255, 255, 255, 0.45);
+  --wall-fg-4: rgba(255, 255, 255, 0.38);
+  --wall-line: rgba(255, 255, 255, 0.12);
+  --wall-chip-on: rgba(255, 255, 255, 0.14);
+  --wall-chip-hover: rgba(255, 255, 255, 0.08);
+  --wall-tag: rgba(255, 255, 255, 0.06);
+  --wall-waiting: #121318;
+  --wall-accent: #7f9bff;
+  --wall-cloud-bg: rgba(127, 155, 255, 0.15);
+  --wall-cloud-fg: #aab9ff;
+  --wall-frame: rgba(255, 255, 255, 0.07);
+  --wall-frame-hover: rgba(255, 255, 255, 0.22);
+  --wall-shadow: rgba(0, 0, 0, 0.9);
+  --wall-ghost-border: rgba(255, 255, 255, 0.12);
+  --wall-ghost-bg: linear-gradient(180deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.015));
+  --wall-ghost-light: color-mix(in srgb, var(--color-fg) 14%, transparent);
+  background:
+    radial-gradient(120% 90% at 50% 0%, color-mix(in srgb, var(--color-fg) 7%, transparent), transparent 60%),
+    radial-gradient(90% 70% at 50% 110%, rgba(0, 0, 0, 0.55), transparent 70%),
+    #0a0b0e;
+  color-scheme: dark;
+}
+
+.screen {
+  background: #000;
+  box-shadow:
+    0 0 0 1px var(--wall-frame),
+    0 18px 48px -18px var(--wall-shadow),
+    0 2px 10px color-mix(in srgb, var(--wall-shadow) 55%, transparent);
+  transition:
+    filter 600ms ease,
+    opacity 600ms ease,
+    box-shadow 200ms ease;
+}
+
+.tile:hover .screen,
+.tile:has(:focus-visible) .screen {
+  box-shadow:
+    0 0 0 1px var(--wall-frame-hover),
+    0 22px 56px -18px var(--wall-shadow),
+    0 2px 10px color-mix(in srgb, var(--wall-shadow) 55%, transparent);
+}
+
+[data-wall-focus-mode] > div:first-child .tile .screen,
+.tile[data-wall-focused]:has(:focus-visible) .screen {
+  box-shadow:
+    0 0 0 2px color-mix(in srgb, var(--wall-accent) 60%, transparent),
+    0 22px 56px -18px var(--wall-shadow);
+}
+
+.ended .screen {
+  filter: saturate(0.55) brightness(0.62);
+}
+
+@keyframes wall-in {
+  from {
+    opacity: 0;
+    transform: scale(0.97) translateY(6px);
+  }
+}
+@keyframes wall-out {
+  to {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+}
+@keyframes badge-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.96);
+  }
+}
+@keyframes breathe {
+  50% {
+    opacity: 0.35;
+  }
+}
+@keyframes sweep {
+  from {
+    transform: translateX(-120%);
+  }
+  to {
+    transform: translateX(220%);
+  }
+}
+@keyframes ghost-scan {
+  0%,
+  100% {
+    opacity: 0.28;
+  }
+  12%,
+  30% {
+    opacity: 0.9;
+  }
+  42% {
+    opacity: 0.28;
+  }
+}
+
+.enter {
+  animation: wall-in 520ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+.leaving {
+  animation: wall-out 320ms ease-in forwards;
+  pointer-events: none;
+}
+.badge {
+  animation: badge-in 360ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+.breathe {
+  animation: breathe 2.4s ease-in-out infinite;
+}
+.sweep {
+  animation: sweep 2.2s ease-in-out infinite;
+}
+
+/* The empty state: three ghost devices, a light passing through them one after another. */
+.ghost {
+  border: 1px solid var(--wall-ghost-border);
+  background: var(--wall-ghost-bg);
+  overflow: hidden;
+  position: relative;
+}
+.ghost::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  width: 45%;
+  background: linear-gradient(90deg, transparent, var(--wall-ghost-light), transparent);
+  animation: sweep 3.6s ease-in-out infinite;
+  animation-delay: var(--ghost-delay, 0s);
+}
+.ghostDot {
+  animation: ghost-scan 3.6s ease-in-out infinite;
+  animation-delay: var(--ghost-delay, 0s);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .enter,
+  .leaving,
+  .badge,
+  .breathe,
+  .sweep,
+  .ghostDot,
+  .ghost::after {
+    animation: none;
+  }
+  .leaving {
+    opacity: 0;
+  }
+  .screen {
+    transition: none;
+  }
+}

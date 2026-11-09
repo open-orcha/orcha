@@ -27,7 +27,7 @@ afterEach(() => {
 })
 
 describe('Settings › Storage', () => {
-  it('a scan that never answers stops spinning, says so, and Scan again retries (Verdikt: scans never finish)', async () => {
+  it('a scan that never answers stops spinning, says so, and Scan again retries (QA: scans never finish)', async () => {
     vi.useFakeTimers()
     api.storageScan.mockReturnValueOnce(new Promise(() => {})).mockResolvedValueOnce(REPORT)
     render(<StorageSettings />)

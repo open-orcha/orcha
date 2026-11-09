@@ -1,0 +1,401 @@
+/* The atlas header (atlas-hero.tsx): a quiet stage with the atlas's name, its number, how it
+   counts, what each platform holds, and one bar of every screen. The colours are the board's
+   palette (atlas.module.css `.palette`), so light and dark follow the theme. Every element rests
+   in its final state; the keyframes only say where it comes from, so reduced motion shows the
+   finished header. Transform and opacity only. */
+
+.hero {
+  position: relative;
+  padding: 22px 16px 18px;
+  border-bottom: 1px solid var(--color-border);
+  background:
+    radial-gradient(70% 140% at 0% 0%, color-mix(in srgb, var(--color-fg) 7%, transparent), transparent 60%),
+    radial-gradient(50% 120% at 100% 0%, color-mix(in srgb, var(--color-fg) 5%, transparent), transparent 60%),
+    var(--color-bg);
+  overflow: hidden;
+}
+@media (min-width: 768px) {
+  .hero {
+    padding: 26px var(--v2-panel-px, 24px) 20px;
+  }
+}
+/* A faint storyboard grid behind it, fading out to the right. */
+.hero::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(to right, color-mix(in srgb, var(--color-fg) 5%, transparent) 1px, transparent 1px),
+    linear-gradient(to bottom, color-mix(in srgb, var(--color-fg) 5%, transparent) 1px, transparent 1px);
+  background-size: 28px 28px;
+  mask-image: linear-gradient(100deg, color-mix(in srgb, var(--atlas-shade) 55%, transparent), transparent 55%);
+  opacity: 0.6;
+}
+.hero {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  gap: 18px 32px;
+}
+.hero > * {
+  position: relative;
+}
+.main {
+  flex: 1 1 520px;
+  min-width: 0;
+}
+.side {
+  display: flex;
+  flex: 0 1 auto;
+  flex-direction: column;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+}
+@media (max-width: 1180px) {
+  .side {
+    flex: 1 1 100%;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .side .kpis {
+    order: -1;
+    justify-content: flex-start;
+  }
+}
+.eyebrow {
+  margin-bottom: 4px;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-muted);
+  animation: heroRise 420ms var(--ease-rise) both;
+}
+.eyebrowName {
+  letter-spacing: 0.02em;
+  text-transform: none;
+  font-weight: 500;
+}
+.total {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 34px;
+  line-height: 40px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  color: var(--color-fg);
+  animation: heroRise 460ms var(--ease-rise) 40ms both;
+}
+.totalWord {
+  font-size: 18px;
+  font-weight: 560;
+  letter-spacing: -0.005em;
+  color: var(--color-fg-2);
+}
+.counted {
+  font-size: 13px;
+  color: var(--color-muted);
+  animation: heroRise 460ms var(--ease-rise) 90ms both;
+}
+.countedTip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border-radius: 6px;
+  cursor: help;
+  text-decoration: underline dotted color-mix(in srgb, var(--color-muted) 60%, transparent);
+  text-underline-offset: 4px;
+  transition: color 160ms ease;
+}
+.countedTip:hover {
+  color: var(--color-fg-2);
+}
+.countedTip:focus-visible {
+  outline: 2px solid var(--color-ring);
+  outline-offset: 2px;
+}
+
+.platforms {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 12px;
+}
+.platform {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 10px 0 9px;
+  border-radius: 999px;
+  border: 1px solid var(--color-border);
+  background: color-mix(in srgb, var(--color-panel) 80%, transparent);
+  font-size: 12px;
+  color: var(--color-fg-2);
+  box-shadow: 0 1px 0 color-mix(in srgb, var(--color-fg) 3%, transparent);
+  animation: heroRise 420ms var(--ease-rise) both;
+  animation-delay: calc(140ms + var(--i, 0) * 60ms);
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  /* Its animation makes a stacking context: the export menu opens over the figures below. */
+  position: relative;
+  z-index: 3;
+  animation: heroFade 420ms ease-out 120ms both;
+}
+
+/* ---------- one bar of every screen, its legend, and two figures ---------- */
+
+/* Which kinds of device and appearances the atlas has looks on, in one quiet line. */
+.coverage {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  max-width: 760px;
+  margin-top: 8px;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--color-fg-2);
+  animation: heroRise 420ms var(--ease-rise) both;
+  animation-delay: 320ms;
+}
+.coverage svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--color-muted);
+}
+.summary {
+  max-width: 760px;
+  margin-top: 16px;
+}
+.bar {
+  display: flex;
+  gap: 2px;
+  height: 10px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--color-muted) 14%, transparent);
+  transform-origin: left center;
+  animation: barGrow 900ms var(--ease-swift) 160ms both;
+}
+.seg {
+  flex-basis: 0;
+  min-width: 4px;
+  height: 100%;
+  background: currentColor;
+  opacity: 0.9;
+  transition: opacity 160ms ease;
+}
+.seg:first-child {
+  border-radius: 999px 0 0 999px;
+}
+.seg:last-child {
+  border-radius: 0 999px 999px 0;
+}
+.seg:only-child {
+  border-radius: 999px;
+}
+.bar:hover .seg {
+  opacity: 0.55;
+}
+.bar .seg:hover {
+  opacity: 1;
+}
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 18px;
+  margin-top: 10px;
+}
+
+.count {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  font-size: 13px;
+  color: var(--color-fg-2);
+  border-radius: 6px;
+}
+.countTip {
+  cursor: help;
+  transition: color 160ms ease;
+}
+.countTip:hover {
+  color: var(--color-fg);
+}
+.countTip:focus-visible {
+  outline: 2px solid var(--color-ring);
+  outline-offset: 2px;
+}
+.countNum {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-fg);
+}
+.countBig {
+  font-size: 20px;
+  line-height: 24px;
+  letter-spacing: -0.01em;
+}
+.countLabel {
+  color: inherit;
+}
+.dot {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: 999px;
+  background: currentColor;
+  box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 16%, transparent);
+}
+
+.kpis {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
+}
+.kpi {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  padding: 10px 16px 10px 12px;
+  border-radius: 14px;
+  border: 1px solid var(--color-border);
+  background: color-mix(in srgb, var(--color-panel) 86%, transparent);
+  box-shadow:
+    0 1px 0 color-mix(in srgb, var(--color-fg) 3%, transparent),
+    0 10px 24px -20px color-mix(in srgb, var(--atlas-shade) 35%, transparent);
+  animation: heroRise 460ms var(--ease-rise) 200ms both;
+}
+.kpi + .kpi {
+  animation-delay: 260ms;
+}
+.kpiSub {
+  margin-top: 1px;
+  font-size: 11.5px;
+  color: var(--color-muted);
+  white-space: nowrap;
+}
+.ring {
+  width: 40px;
+  height: 40px;
+  flex: none;
+  transform: rotate(-90deg);
+}
+.ringTrack {
+  fill: none;
+  stroke: color-mix(in srgb, var(--color-muted) 18%, transparent);
+  stroke-width: 5;
+}
+.ringFill {
+  fill: none;
+  stroke: var(--atlas-flow);
+  stroke-width: 5;
+  stroke-linecap: round;
+  stroke-dashoffset: var(--ring-off);
+  animation: ringDraw 1100ms var(--ease-swift) 260ms both;
+}
+.changedMark {
+  position: relative;
+  width: 40px;
+  height: 40px;
+  flex: none;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--atlas-changed) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--atlas-changed) 30%, transparent);
+}
+/* Two cards, the newer one over the older: what changed, drawn small. */
+.changedMark::before,
+.changedMark::after {
+  content: "";
+  position: absolute;
+  width: 14px;
+  height: 18px;
+  border-radius: 4px;
+  border: 1.5px solid var(--atlas-changed);
+}
+.changedMark::before {
+  left: 9px;
+  top: 9px;
+  opacity: 0.45;
+}
+.changedMark::after {
+  left: 16px;
+  top: 13px;
+  background: color-mix(in srgb, var(--atlas-changed) 22%, var(--color-panel));
+  animation: heroRise 520ms var(--ease-rise) 420ms both;
+}
+
+.toneSame {
+  color: var(--atlas-same);
+}
+.toneDiffers {
+  color: var(--atlas-minor);
+}
+.toneMissing {
+  color: var(--atlas-missing);
+}
+.toneUnchecked {
+  color: color-mix(in srgb, var(--atlas-unchecked) 70%, transparent);
+}
+.toneSeen {
+  color: var(--atlas-flow);
+}
+.toneUnseen {
+  color: color-mix(in srgb, var(--atlas-unchecked) 55%, transparent);
+}
+
+@keyframes heroRise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+@keyframes heroFade {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes barGrow {
+  from {
+    transform: scaleX(0);
+  }
+}
+@keyframes ringDraw {
+  from {
+    stroke-dashoffset: var(--ring-from);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .eyebrow,
+  .total,
+  .counted,
+  .platform,
+  .coverage,
+  .actions,
+  .bar,
+  .kpi,
+  .ringFill,
+  .changedMark::after {
+    animation: none;
+  }
+  .seg,
+  .countTip,
+  .countedTip {
+    transition: none;
+  }
+}

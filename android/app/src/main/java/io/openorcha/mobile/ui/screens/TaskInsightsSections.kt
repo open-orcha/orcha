@@ -2,8 +2,8 @@ package io.openorcha.mobile.ui.screens
 
 /**
  * Task-detail parity sections (web PR #270): goal ancestry breadcrumb, the proof-of-work
- * evidence pack inside the verification card, the Verdikt result, and the AI manager's
- * pre-review note. All read-only except "Run in Verdikt", which the web exposes to humans.
+ * evidence pack inside the verification card, and the AI manager's pre-review note.
+ * All read-only.
  */
 
 import android.content.Intent
@@ -42,8 +42,6 @@ import androidx.compose.ui.unit.dp
 import io.openorcha.mobile.data.EvidencePackDto
 import io.openorcha.mobile.data.GoalChainDto
 import io.openorcha.mobile.data.TaskDto
-import io.openorcha.mobile.data.VerdiktRunDto
-import io.openorcha.mobile.data.VerdiktSettingsDto
 import io.openorcha.mobile.domain.MobileUx
 import io.openorcha.mobile.domain.TaskInsightsUx
 import io.openorcha.mobile.domain.TaskInsightsUx.Tone
@@ -159,10 +157,7 @@ internal fun ManagerReviewNote(task: TaskDto, reviewerName: String?) {
 @Composable
 internal fun EvidenceProofBlock(
     insights: TaskInsightsState,
-    baseUrl: String?,
-    canRunVerdikt: Boolean,
     onRetry: () -> Unit,
-    onRunVerdikt: () -> Unit,
 ) {
     val p = Orcha.palette
     val pack = insights.evidence
@@ -204,7 +199,7 @@ internal fun EvidenceProofBlock(
                     )
                 }
                 if (open) {
-                    EvidenceDetails(pack, insights.verdikt?.settings, baseUrl, canRunVerdikt, insights.busy, onRunVerdikt)
+                    EvidenceDetails(pack)
                 }
             }
         }
@@ -218,14 +213,7 @@ private fun EvidenceHeading(text: String) {
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun EvidenceDetails(
-    pack: EvidencePackDto,
-    settings: VerdiktSettingsDto?,
-    baseUrl: String?,
-    canRunVerdikt: Boolean,
-    busy: Boolean,
-    onRunVerdikt: () -> Unit,
-) {
+private fun EvidenceDetails(pack: EvidencePackDto) {
     val p = Orcha.palette
     val context = LocalContext.current
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -316,8 +304,6 @@ private fun EvidenceDetails(
             }
         }
 
-        VerdiktSection(pack.verdikt, settings, pack.taskId, baseUrl, canRunVerdikt, busy, onRunVerdikt)
-
         val n = pack.runs.size
         Text(
             buildString {
@@ -331,77 +317,3 @@ private fun EvidenceDetails(
     }
 }
 
-/* ---------- Verdikt ---------- */
-
-@Composable
-internal fun VerdiktSection(
-    run: VerdiktRunDto?,
-    settings: VerdiktSettingsDto?,
-    taskId: String,
-    baseUrl: String?,
-    canRun: Boolean,
-    busy: Boolean,
-    onRun: () -> Unit,
-) {
-    val p = Orcha.palette
-    val context = LocalContext.current
-    val enabled = settings?.enabled == true && settings.configured
-    // Nothing to say: never ran, and the project hasn't set Verdikt up (web shows a "Set up" link to settings — not on mobile).
-    if (run == null && !enabled) {
-        EvidenceHeading("Verdikt")
-        Text("Verdikt isn't set up for this project.", style = ltype(LType.Meta), color = p.faint)
-        return
-    }
-    EvidenceHeading("Verdikt")
-    if (run == null) {
-        Text("Not run for this task yet.", style = ltype(LType.Meta), color = p.faint)
-    } else {
-        val tone = if (run.status == "completed") TaskInsightsUx.verdiktTone(run.verdict) else Tone.Plain
-        Row(horizontalArrangement = Arrangement.spacedBy(LSpace.s), verticalAlignment = Alignment.CenterVertically, modifier = Modifier.semantics(mergeDescendants = true) {}) {
-            if (run.status == "completed") ToneGlyph(tone, "")
-            Text(TaskInsightsUx.verdiktHeadline(run), style = ltype(LType.BodyEmph), color = if (run.status == "completed") toneColor(tone) else p.text)
-            Text(
-                listOfNotNull(if (run.trigger == "auto") "auto" else "manual", MobileUx.agoLabel(run.finishedAt ?: run.createdAt)).joinToString(" · "),
-                style = ltype(LType.Meta), color = p.faint,
-            )
-        }
-        if (run.previousRound) {
-            Text("From before the last rejection — it doesn't count for the rework. Run it again to check the new work.", style = ltype(LType.Meta), color = p.faint)
-        }
-        run.error?.takeIf { it.isNotBlank() }?.let { Text(it, style = ltype(LType.Meta), color = p.danger) }
-        run.reason?.takeIf { it.isNotBlank() && run.status == "completed" }?.let { Text(it, style = ltype(LType.Meta), color = p.text2) }
-        run.criteria.forEach { c ->
-            val ct = TaskInsightsUx.verdiktTone(c.outcome)
-            Row(horizontalArrangement = Arrangement.spacedBy(LSpace.s), modifier = Modifier.semantics(mergeDescendants = true) { stateDescription = c.outcome ?: "no verdict" }) {
-                Box(Modifier.padding(top = 3.dp)) { ToneGlyph(ct, "") }
-                Column {
-                    Text(c.text, style = ltype(LType.Body), color = p.text)
-                    if (c.outcome == "fail" || c.outcome == "warning") {
-                        val detail = listOfNotNull(c.expected?.let { "Expected $it" }, c.actual?.let { "Actual $it" }).joinToString(" · ")
-                        if (detail.isNotBlank()) Text(detail, style = ltype(LType.Meta), color = p.text2)
-                    }
-                }
-            }
-        }
-        if (run.reportUrl != null && baseUrl != null) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                modifier = Modifier
-                    .clickable(role = Role.Button) { openExternal(context, TaskInsightsUx.absoluteUrl(baseUrl, run.reportUrl)) }
-                    .heightIn(min = 48.dp),
-            ) {
-                Icon(OrchaIcons.OpenInNew, null, tint = p.accent, modifier = Modifier.size(14.dp))
-                Text("Open Verdikt report", style = ltype(LType.Meta), color = p.accent)
-            }
-        }
-    }
-    if (enabled && !TaskInsightsUx.verdiktOpen(run)) {
-        val title = when {
-            run == null -> "Run in Verdikt"
-            run.status == "completed" -> "Run again"
-            else -> "Retry"
-        }
-        LButton(title, onRun, icon = if (run == null) OrchaIcons.PlayArrow else OrchaIcons.Refresh, kind = LButtonKind.Secondary, size = LSize.Small, enabled = canRun && !busy)
-    }
-}

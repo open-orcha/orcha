@@ -13,7 +13,7 @@ and writes it into the child env dict handed to Popen:
     as environment auth — `codex doctor`: "auth is provided by environment" — and env auth wins
     over a stored ChatGPT login); CODEX_ACCESS_TOKEN is dropped for the same reason.
 
-Never touches the daemon's own os.environ, so nothing else the daemon spawns (previews, git,
+Never touches the daemon's own os.environ, so nothing else the daemon spawns (git,
 hooks) sees the key, and nothing here logs, prints or returns it. When a runtime has no opted-in
 key, or the scan never mentioned agent keys (older portal), the env is left exactly as it was:
 subscription first, nothing injected.

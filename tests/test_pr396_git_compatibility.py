@@ -158,17 +158,6 @@ def test_legacy_job_lock_defers_startup_without_waiting(repository):
     assert lifecycle.checkout_available(repository, repository / "next")
 
 
-def test_preview_cleanup_respects_dangling_retention_marker(repository):
-    from orcha_cli.notifier_preview import _remove_worktree
-
-    wt = repository.parent / "preview-kept"
-    query.add_locked(repository, wt, "HEAD", "Orcha preview", run=query.gc.git)
-    (wt / ".orcha-keep").symlink_to("missing")
-    _remove_worktree(repository, str(wt))
-    assert wt.is_dir()
-    assert next(row for row in query.registrations(repository) if row["path"] == str(wt))["locked"]
-
-
 def test_cli_interruption_is_discoverable_after_reopen_and_recovery(repository, monkeypatch):
     wt = repository.parent / "recoverable"
     git(repository, "worktree", "add", "-q", "--detach", str(wt))

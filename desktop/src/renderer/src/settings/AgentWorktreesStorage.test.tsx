@@ -54,7 +54,7 @@ afterEach(() => {
 })
 
 describe('Settings › Storage › Agent worktrees', () => {
-  it('a worktree scan that never answers stops spinning, says so, and Scan retries (Verdikt: scans never finish)', async () => {
+  it('a worktree scan that never answers stops spinning, says so, and Scan retries (QA: scans never finish)', async () => {
     vi.useFakeTimers()
     api.storageWorktrees.mockReturnValueOnce(new Promise(() => {})).mockResolvedValueOnce(PROJECTS)
     render(<StorageSettings />)
@@ -190,7 +190,7 @@ describe('Settings › Storage › Agent worktrees', () => {
   })
 })
 
-describe('Settings › Storage › Agent worktrees, project by project (Verdikt: opaque 25 s scan)', () => {
+describe('Settings › Storage › Agent worktrees, project by project (QA: opaque 25 s scan)', () => {
   const G = '/Users/me/garden'
   const GARDEN: ProjectWorktrees = {
     project: 'orcha-garden', projectShort: 'garden', folder: G, reclaimable_bytes: 0,

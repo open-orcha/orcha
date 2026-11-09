@@ -333,6 +333,7 @@ describe("assignee link", () => {
 describe("result envelope", () => {
   it("unwrapDoneResult strips {result, by_agent_id} and keeps any other object", () => {
     expect(unwrapDoneResult({ result: "x", by_agent_id: "a" })).toBe("x");
+    expect(unwrapDoneResult({ result: "x", by_agent_id: "a", qa_run: { session_id: "s" } })).toBe("x");
     expect(unwrapDoneResult({ result: { summary: "s" } })).toEqual({ summary: "s" });
     expect(unwrapDoneResult({ summary: "s", result: "x" })).toEqual({ summary: "s", result: "x" });
     expect(unwrapDoneResult("plain")).toBe("plain");
@@ -355,13 +356,14 @@ describe("activity markers and a rejected attempt", () => {
   it("parses the backend markers", () => {
     expect(parseThreadMarker("[DECISION · plan_approval = APPROVED by kedar]")).toEqual({ kind: "decision", subject: "plan_approval", approved: true, actor: "kedar", reason: "" });
     expect(parseThreadMarker("[DECISION · plan_approval = REJECTED by kedar] — too broad")).toMatchObject({ approved: false, reason: "too broad" });
+    // a run's own messages read as history: first line only, no links or ids, no talk of who verified
+    expect(parseThreadMarker("[Run result] All passed.\n- [major] x\n9 screens · 12 min\nRun: /qa?view=sessions&session=abc")).toEqual({ kind: "run_ended", stopped: false, summary: "All passed." });
+    expect(parseThreadMarker("[Run stopped] The agent left. This task stays open.")).toMatchObject({ kind: "run_ended", stopped: true });
+    expect(parseThreadMarker("[Needs a person] Quality did not finish this task:\n- A line")).toEqual({ kind: "came_to_person" });
+    expect(parseThreadMarker("[Finished by itself] Every line is proven. kedar let work finish by itself in this project.")).toEqual({ kind: "finished_alone", by: "kedar" });
+    expect(parseThreadMarker("[Finished by Quality] Every line is proven. kedar let Quality decide in this project.")).toEqual({ kind: "finished_alone", by: "kedar" });
     expect(parseThreadMarker("[verification rejected] Tests fail")).toEqual({ kind: "verify_rejected", feedback: "Tests fail" });
     expect(parseThreadMarker("hello")).toBeNull();
-    // mig 068: the Verdikt auto-fix loop's system lines
-    expect(parseThreadMarker("[Verdikt auto-fix] Verdikt failed this task on attempt 2 of 3. Embodent sent it back…\n\nFailed criteria:\n1. The error text is red\n   Actual: black\n   Screenshot: /api/x.png\n\nReport: /x"))
-      .toEqual({ kind: "autofix_rework", attempt: 2, max: 3, detail: "1. The error text is red\n   Actual: black" });
-    expect(parseThreadMarker("[Verdikt auto-fix] Stopped: Verdikt passed on attempt 3 of 3 — ready for your review"))
-      .toEqual({ kind: "autofix_stopped", reason: "Verdikt passed on attempt 3 of 3 — ready for your review" });
     expect(latestRejection([
       { id: "1", is_human: false, from: "system", body: "[verification rejected] old", at: "2026-08-02T00:00:00Z", attachments: [] },
       { id: "2", is_human: false, from: "system", body: "[verification rejected] new", at: "2026-08-03T00:00:00Z", attachments: [] },

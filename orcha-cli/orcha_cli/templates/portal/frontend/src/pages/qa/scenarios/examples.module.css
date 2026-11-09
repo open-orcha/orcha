@@ -1,0 +1,50 @@
+/*
+ * Examples table motion (#191). Resting styles are the final state; keyframes only say where
+ * things come from, so reduced motion shows everything settled.
+ */
+
+/* The teaching empty state: a ghost table whose rows fan out into runs, one after another. */
+@keyframes rowIn {
+  from {
+    opacity: 0;
+    transform: translateX(-6px);
+  }
+}
+@keyframes runOut {
+  0%,
+  35% {
+    opacity: 0;
+    transform: translateX(-8px) scale(0.6);
+  }
+  60% {
+    opacity: 1;
+    transform: none;
+  }
+}
+.ghostRow {
+  animation: rowIn 420ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  animation-delay: var(--d, 0ms);
+}
+.ghostRun {
+  animation: runOut 1400ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  animation-delay: var(--d, 0ms);
+}
+
+/* A row's verdict lands. */
+@keyframes land {
+  from {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+}
+.land {
+  animation: land 260ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ghostRow,
+  .ghostRun,
+  .land {
+    animation: none;
+  }
+}

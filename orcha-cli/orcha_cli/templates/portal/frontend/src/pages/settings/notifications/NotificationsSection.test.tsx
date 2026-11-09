@@ -36,18 +36,18 @@ const CATS = [
   ["approvals", "Approvals & verifications"], ["requests", "Requests & questions to me"],
   ["escalations", "Escalations & blockers"], ["budget", "Budget alerts"],
   ["tasks", "Task assignment & status changes"], ["messages", "Agent messages & mentions"],
-  ["routines", "Routine runs"], ["verdikt", "Verdikt / evidence results"],
+  ["routines", "Routine runs"],
   ["settings", "Membership & settings changes"],
 ];
 const BUILTIN: Rules = {
   approvals: rule("all", ...ALL), requests: rule("all", ...ALL), escalations: rule("all", ...ALL),
   budget: rule("all", ...ALL), tasks: rule("mine", "in_app", "desktop"), messages: rule("mine", "in_app", "desktop"),
-  routines: rule("all", "in_app"), verdikt: rule("all", "in_app", "desktop"), settings: rule("all", "in_app"),
+  routines: rule("all", "in_app"), settings: rule("all", "in_app"),
 };
 const NEEDS_ME: Rules = {
   approvals: rule("mine", ...ALL), requests: rule("mine", ...ALL), escalations: rule("mine", ...ALL),
   budget: rule("mine", ...ALL), tasks: rule("mine", "in_app"), messages: rule("mine", "in_app"),
-  routines: rule("off", "in_app"), verdikt: rule("off", "in_app"), settings: rule("off", "in_app"),
+  routines: rule("off", "in_app"), settings: rule("off", "in_app"),
 };
 const CATALOG: Catalog = {
   categories: CATS.map(([key, label]) => ({ key, label, description: label + " description" })),
@@ -284,15 +284,15 @@ describe("Settings › Notifications", () => {
     expect((puts()[1].body!.rules as Rules).budget.scope).toBe("all");
     expect((puts()[1].body!.rules as Rules).tasks.scope).toBe("off");
     // defaults mode shows the per-project override count
-    expect(document.getElementById("nfOverrideSum")).toHaveTextContent("Orcha overrides 9");
+    expect(document.getElementById("nfOverrideSum")).toHaveTextContent("Orcha overrides 8");
   });
 
   it("an override can be reset to the default (per category and all at once)", async () => {
-    srv.project.rules = { tasks: { scope: "off" }, verdikt: { scope: "off" } };
+    srv.project.rules = { tasks: { scope: "off" }, routines: { scope: "off" } };
     renderSettings();
     await ready();
     fireEvent.click(within(row("tasks")).getByRole("button", { name: "Use your default for Task assignment & status changes" }));
-    await waitFor(() => expect(puts()[0]?.body?.rules).toEqual({ verdikt: { scope: "off" } }));
+    await waitFor(() => expect(puts()[0]?.body?.rules).toEqual({ routines: { scope: "off" } }));
     fireEvent.click(await screen.findByRole("button", { name: "Use defaults" }));
     await waitFor(() => expect(puts()[1]?.body?.rules).toEqual({}));
     await waitFor(() => expect(document.getElementById("nfOverrideSum")).toBeNull());

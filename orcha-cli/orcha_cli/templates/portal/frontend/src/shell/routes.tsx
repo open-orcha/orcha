@@ -80,6 +80,12 @@ export interface RouteSpec {
 /** Paths rendered without chrome (they were chrome-less before V2 too). */
 export const STANDALONE_PATHS = ["/auth/device"];
 
+/** Quality carries the map canvases (@xyflow/react): loaded on first visit, not in the main bundle. */
+function QaRoute() {
+  const Page = lazyQaPage;
+  return <Page />;
+}
+
 const OPEN_ROUTES: RouteSpec[] = [
   { path: "/", element: HomePage },
   { path: "/agents", element: AgentsPage },
@@ -90,6 +96,7 @@ const OPEN_ROUTES: RouteSpec[] = [
   { path: "/workflows/:workflowId", element: WorkflowsPage },
   { path: "/tasks", element: TasksPage },
   { path: "/requests", element: RequestsPage },
+  { path: "/qa", element: QaRoute },
   { path: "/settings", element: SettingsPage },
   { path: "/onboarding", element: OnboardingPage },
 ];
@@ -106,6 +113,7 @@ function lazyPage<K extends string>(load: (() => Promise<Record<K, ComponentType
   };
 }
 
+const lazyQaPage = lazyPage(() => import("../pages/qa/QaPage"), "QaPage") as ComponentType;
 const NeedsPage = lazyPage(loadNeedsPage, "NeedsPage");
 const ActivityPage = lazyPage(loadActivityPage, "ActivityPage");
 

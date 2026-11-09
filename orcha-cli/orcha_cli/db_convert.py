@@ -205,7 +205,11 @@ def _pg_fk_edges(pg) -> list[tuple[str, str]]:
 
 def fk_order(tables: list[str], edges: list[tuple[str, str]]) -> list[str]:
     """Tables ordered so every referenced table comes before its referrers (Kahn's
-    algorithm, ties broken by name so the order is stable). Self-references are ignored."""
+    algorithm, ties broken by name so the order is stable). Self-references are ignored.
+    Tables that reference each other in a loop (a Quality session works a request, a
+    request can come from a finding, a finding belongs to a session) have no such order: the
+    loop is broken at its first table by name. That is safe because the load runs with
+    foreign keys off and ``PRAGMA foreign_key_check`` verifies every reference after it."""
     parents = {t: set() for t in tables}
     for child, parent in edges:
         if child in parents and parent in parents and child != parent:
@@ -214,7 +218,7 @@ def fk_order(tables: list[str], edges: list[tuple[str, str]]) -> list[str]:
     while len(ordered) < len(tables):
         ready = sorted(t for t in tables if t not in done and parents[t] <= done)
         if not ready:
-            raise ConvertError(f"foreign-key cycle among: {sorted(set(tables) - done)}")
+            ready = [min(t for t in tables if t not in done)]
         ordered.extend(ready)
         done.update(ready)
     return ordered

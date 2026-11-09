@@ -1,0 +1,1091 @@
+/* The QA map, atlas, scenario and session screens: their design tokens, resting element styles and
+   shared motion. Everything here applies under `.qa-port` (the root each of those views renders).
+   The tokens below are names over Orcha's --v2-* tokens, so light and dark follow the portal's
+   theme, and no colour is decided here. */
+.qa-port {
+  --color-side: var(--v2-sidebar);
+  --color-window: var(--v2-window);
+  --color-bg: var(--v2-panel);
+  --color-panel: var(--v2-surface);
+  --color-panel-2: var(--v2-band);
+  --color-raised: var(--v2-raised);
+  --color-panel-border: var(--v2-panel-border);
+  --color-fg: var(--v2-text);
+  --color-fg-2: var(--v2-text-2);
+  --color-muted: var(--v2-text-3);
+  --color-border: var(--v2-border);
+  --color-border-strong: var(--v2-border-strong);
+  --color-hover: var(--v2-hover);
+  --color-selected: var(--v2-selected);
+  --color-control: var(--v2-surface);
+  --color-accent: var(--v2-accent);
+  --color-accent-fg: var(--v2-text-on-accent);
+  --color-accent-soft: var(--v2-accent-soft);
+  --color-ring: var(--v2-focus-color);
+  --color-primary: var(--v2-primary-bg);
+  --color-primary-hover: var(--v2-primary-bg-hover);
+  --color-primary-fg: var(--v2-primary-text);
+  --color-chart-1: var(--v2-label-6);
+  --color-chart-2: var(--v2-label-8);
+  --color-chart-3: var(--v2-label-3);
+  --color-chart-4: var(--v2-label-7);
+  --color-chart-5: var(--v2-label-2);
+  --color-series-1: var(--v2-accent);
+  --color-series-2: var(--v2-label-8);
+  --color-series-3: var(--v2-label-3);
+  --color-series-4: var(--v2-text-3);
+  --color-sev-blocker: var(--v2-danger);
+  --color-sev-major: var(--v2-label-4);
+  --color-sev-minor: var(--v2-warn);
+  --color-sev-cosmetic: var(--v2-text-3);
+  --color-sev-info: var(--v2-text-2);
+  --color-danger: var(--v2-danger);
+  --color-success: var(--v2-ok);
+  --color-warning: var(--v2-warn);
+  --color-info: var(--v2-info);
+  --color-progress: var(--v2-status-progress);
+  --color-neutral: var(--v2-neutral);
+  --color-edge: color-mix(in srgb, var(--v2-text-3) 55%, transparent);
+  --color-edge-active: var(--v2-accent);
+  --color-white: var(--v2-primary-text);
+  --color-black: var(--v2-window);
+
+  --radius-xs: 3px;
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+  --radius-panel: 10px;
+
+  --shadow-sm: var(--v2-shadow-seg);
+  --shadow-md: var(--v2-shadow-palette);
+  --shadow-panel: var(--v2-shadow-seg);
+
+  --chip-font: inherit;
+  --chip-transform: none;
+  --chip-tracking: normal;
+
+  --font-sans: var(--v2-font-sans);
+  --font-mono: var(--v2-font-mono);
+
+  --text-2xs: 10px;
+  --text-2xs--line-height: 14px;
+  --text-xs: 11px;
+  --text-xs--line-height: 16px;
+  --text-sm: 12px;
+  --text-sm--line-height: 18px;
+  --text-base: 13px;
+  --text-base--line-height: 20px;
+  --text-lg: 15px;
+  --text-lg--line-height: 22px;
+  --text-xl: 18px;
+  --text-xl--line-height: 26px;
+  --text-2xl: 22px;
+  --text-2xl--line-height: 28px;
+  --tracking-tight: -0.006em;
+
+  --ease-rise: cubic-bezier(0.2, 0.7, 0.2, 1);
+  --ease-swift: cubic-bezier(0.3, 0.6, 0.2, 1);
+  --dur-rise: 420ms;
+  --stagger: 45ms;
+
+  color: var(--color-fg);
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+  line-height: var(--text-base--line-height);
+  font-feature-settings: var(--v2-font-features);
+}
+
+/* The view's root (a popover portaled to the page carries `.qa-port` alone). */
+.qa-port-root {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+}
+
+/* Resting elements: no specificity, so anything with a class of its own wins. */
+:where(.qa-port) :where(h1, h2, h3, h4, h5, h6, p, ul, ol, dl, dd, figure, blockquote, pre, fieldset) { margin: 0; padding: 0; }
+:where(.qa-port) :where(h1, h2, h3, h4, h5, h6) { font-size: inherit; font-weight: inherit; letter-spacing: inherit; }
+:where(.qa-port) :where(ul, ol) { list-style: none; }
+:where(.qa-port) :where(button) { padding: 0; border: 0; background: transparent; color: inherit; font: inherit; letter-spacing: inherit; cursor: pointer; }
+:where(.qa-port) :where(input:not([type="checkbox"], [type="radio"]), textarea) { font: inherit; color: inherit; border: 0 solid var(--color-border); background: transparent; }
+:where(.qa-port) :where(input[type="checkbox"], input[type="radio"]) { font: inherit; color: inherit; }
+:where(.qa-port) :where(svg, img, video, canvas) { display: block; }
+:where(.qa-port) :where(img, video) { max-width: 100%; height: auto; }
+:where(.qa-port) a:where(:not([class*="v2-"])) { color: inherit; text-decoration: none; }
+:where(.qa-port) :where(code, kbd, samp, pre) { font-family: var(--font-mono); }
+:where(.qa-port) :where(hr) { height: 0; border: 0; border-top: 1px solid var(--color-border); }
+:where(.qa-port) :where(dialog) { padding: 0; border: 0; color: inherit; }
+:where(.qa-port) :where(dialog)::backdrop { background: var(--v2-scrim-strong); }
+:where(.qa-port) :where(input, textarea)::placeholder { color: var(--color-muted); }
+:where(.qa-port) :where(button, a, input, textarea, [tabindex]):focus-visible { outline: none; box-shadow: var(--v2-focus-ring); }
+
+/* Orcha's buttons inside these views take the icons the screens pass as children. */
+.qa-port .v2-btn-label { display: inline-flex; align-items: center; gap: 4px; }
+.qa-port .v2-btn svg:not(.v2-ico) { width: 14px; height: 14px; flex: none; }
+.qa-port .v2-btn-sm svg:not(.v2-ico) { width: 13px; height: 13px; }
+
+.tabular { font-variant-numeric: tabular-nums; }
+
+@keyframes qa-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes qa-slide-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.animate-fade-in {
+  animation: qa-fade-in 120ms ease-out;
+}
+
+.animate-slide-up {
+  animation: qa-slide-up 160ms ease-out;
+}
+
+/* A side sheet (Dialog placement="side") arrives from the right edge. */
+@keyframes qa-sheet-in {
+  from {
+    opacity: 0.4;
+    transform: translateX(48px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.animate-sheet-in {
+  animation: qa-sheet-in 260ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-sheet-in {
+    animation: none;
+  }
+}
+
+/* Evidence lightbox (components/ui/lightbox.tsx): a plain fade, not the fade+scale used
+   for boxed dialogs — this one covers the full viewport, so a scale-in reads as a zoom
+   rather than an arrival. */
+@keyframes qa-lightbox-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.animate-lightbox-in {
+  animation: qa-lightbox-in 140ms ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .animate-fade-in,
+  .animate-slide-up,
+  .animate-lightbox-in {
+    animation: none;
+  }
+}
+
+/* Generation preview: shimmer placeholders, a sweeping progress bar, a blinking caret,
+   a slow ping ring on the phase icon, and a one-time accent glow when a draft arrives. */
+@keyframes qa-shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+.animate-shimmer {
+  background: linear-gradient(
+    90deg,
+    var(--color-hover) 25%,
+    color-mix(in oklab, var(--color-accent) 18%, var(--color-hover)) 50%,
+    var(--color-hover) 75%
+  );
+  background-size: 200% 100%;
+  animation: qa-shimmer 1.6s linear infinite;
+}
+@keyframes qa-sweep {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(300%);
+  }
+}
+.animate-sweep {
+  animation: qa-sweep 1.8s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+@keyframes qa-caret {
+  0%,
+  49% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0;
+  }
+}
+.animate-caret {
+  animation: qa-caret 1s steps(1) infinite;
+}
+@keyframes qa-ping-slow {
+  0% {
+    transform: scale(1);
+    opacity: 0.8;
+  }
+  100% {
+    transform: scale(1.9);
+    opacity: 0;
+  }
+}
+.animate-ping-slow {
+  animation: qa-ping-slow 1.6s cubic-bezier(0, 0, 0.2, 1) infinite;
+}
+@keyframes qa-arrive {
+  0% {
+    opacity: 0;
+    transform: translateY(10px);
+    box-shadow: 0 0 0 0
+      color-mix(in oklab, var(--color-accent) 45%, transparent);
+  }
+  40% {
+    opacity: 1;
+    transform: none;
+    box-shadow: 0 0 0 6px
+      color-mix(in oklab, var(--color-accent) 18%, transparent);
+  }
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+.animate-arrive {
+  animation: qa-arrive 900ms ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .animate-shimmer,
+  .animate-sweep,
+  .animate-caret,
+  .animate-ping-slow,
+  .animate-arrive {
+    animation: none;
+  }
+}
+
+/* Discussion thread: the three dots while a triage turn drives a device. A spinner at this
+   size reads as "loading a list"; this is a several-minute device run, so it breathes. */
+@keyframes qa-thinking {
+  0%,
+  80%,
+  100% {
+    opacity: 0.25;
+    transform: translateY(0);
+  }
+  40% {
+    opacity: 1;
+    transform: translateY(-2px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  [style*="qa-thinking"] {
+    animation: none !important;
+    opacity: 0.6;
+  }
+}
+
+/* Draft review deck: slide the current card in from the direction navigated. */
+@keyframes qa-deck-slide-left {
+  from {
+    opacity: 0;
+    transform: translateX(-16px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes qa-deck-slide-right {
+  from {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.animate-deck-slide-left {
+  animation: qa-deck-slide-left 150ms ease-out;
+}
+.animate-deck-slide-right {
+  animation: qa-deck-slide-right 150ms ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .animate-deck-slide-left,
+  .animate-deck-slide-right {
+    animation: none;
+  }
+}
+
+/* Scenario canvas (@xyflow/react) — direction A styling (spec §3). */
+.scenario-graph {
+  background: var(--color-bg);
+}
+.scenario-graph .react-flow__background {
+  --xy-background-color: var(--color-bg);
+}
+.scenario-graph .react-flow__background-pattern {
+  fill: var(--color-border);
+  color: var(--color-border);
+  opacity: 0.9;
+}
+[data-theme="dark"] .scenario-graph .react-flow__background-pattern {
+  /* The plain border colour is too close to the dark background to read as
+     a dotted grid — lift it with a muted tint instead. */
+  fill: color-mix(in srgb, var(--color-muted) 40%, var(--color-border));
+  color: color-mix(in srgb, var(--color-muted) 40%, var(--color-border));
+  opacity: 0.6;
+}
+
+/* Edges: muted + translucent by default (never the near-invisible border
+   colour), accent + thicker + drawn above siblings on hover/selection. */
+.scenario-graph .react-flow__edge-path {
+  stroke: var(--color-edge);
+  stroke-width: 1.5px;
+  transition: stroke 120ms ease, stroke-width 120ms ease;
+}
+.scenario-graph .react-flow__edge {
+  cursor: pointer;
+}
+.scenario-graph .react-flow__edge:hover,
+.scenario-graph .react-flow__edge.selected {
+  z-index: 1000;
+}
+.scenario-graph .react-flow__edge.selected .react-flow__edge-path,
+.scenario-graph .react-flow__edge:hover .react-flow__edge-path {
+  stroke: var(--color-edge-active);
+  stroke-width: 2px;
+}
+/* Edge into a node that is failing/failed: danger tint, even when idle. */
+.scenario-graph .react-flow__edge.scenario-edge-danger .react-flow__edge-path {
+  stroke: color-mix(in srgb, var(--color-danger) 45%, transparent);
+}
+.scenario-graph .react-flow__edge.scenario-edge-danger:hover .react-flow__edge-path,
+.scenario-graph .react-flow__edge.scenario-edge-danger.selected .react-flow__edge-path {
+  stroke: var(--color-danger);
+}
+/* Run graph only: edge into the currently-running scenario animates. */
+.scenario-graph .react-flow__edge.scenario-edge-running .react-flow__edge-path {
+  stroke: var(--color-edge-active);
+}
+/* Run graph only: edge from an already-passed scenario, low-opacity success. */
+.scenario-graph .react-flow__edge.scenario-edge-passed .react-flow__edge-path {
+  stroke: color-mix(in srgb, var(--color-success) 45%, transparent);
+}
+.scenario-graph .react-flow__edge marker path {
+  fill: inherit;
+  stroke: none;
+}
+.scenario-graph .react-flow__arrowhead {
+  fill: var(--color-edge);
+}
+
+.scenario-graph .react-flow__handle {
+  width: 6px;
+  height: 6px;
+  border: none;
+  background: var(--color-muted);
+}
+.scenario-graph .react-flow__attribution {
+  display: none;
+}
+
+/* Controls + our own control-corner buttons (Fit view, Auto-arrange) share
+   one chip-row look. */
+.scenario-graph-controls.react-flow__controls {
+  box-shadow: none;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+.scenario-graph-controls .react-flow__controls-button {
+  background: var(--color-panel);
+  border: none;
+  border-bottom: 1px solid var(--color-border);
+  color: var(--color-fg);
+  width: 24px;
+  height: 24px;
+}
+.scenario-graph-controls .react-flow__controls-button:hover {
+  background: var(--color-hover);
+}
+.scenario-graph-controls .react-flow__controls-button svg {
+  fill: currentColor;
+  max-width: 12px;
+  max-height: 12px;
+}
+
+/* MiniMap: match panel chrome instead of xyflow's default white card. */
+.scenario-graph-minimap.react-flow__minimap {
+  background: var(--color-panel);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+.scenario-graph-minimap .react-flow__minimap-mask {
+  fill: color-mix(in srgb, var(--color-fg) 6%, transparent);
+  stroke: var(--color-border);
+}
+.scenario-graph-minimap .react-flow__minimap-node {
+  stroke: var(--color-panel);
+  stroke-width: 1px;
+}
+
+/* Legend chip row (categories + outcome colours), pinned in a canvas corner. */
+.scenario-graph-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  max-width: min(70vw, 480px);
+  padding: 6px 9px;
+  background: color-mix(in srgb, var(--color-panel) 92%, transparent);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  font-size: var(--text-xs);
+  color: var(--color-muted);
+  backdrop-filter: blur(4px);
+}
+.scenario-graph-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+.scenario-graph-legend-swatch {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  flex: none;
+}
+.scenario-graph-legend-sep {
+  width: 1px;
+  height: 12px;
+  background: var(--color-border);
+  flex: none;
+}
+
+/* Auto-arrange control-corner button. */
+.scenario-graph-arrange.react-flow__panel {
+  margin: 0;
+}
+
+/* Node hover elevation. */
+.scenario-graph .react-flow__node {
+  transition: transform 120ms ease;
+}
+.scenario-graph .react-flow__node:hover {
+  z-index: 10;
+}
+
+/* ---------- Exploration map (components/exploration) ---------- */
+
+/* The map follows the app theme (Linear: calm surfaces, no gradients or glow); screenshots
+   are the content, the canvas is the panel tone with a quiet dot grid. */
+.xmap {
+  color: var(--color-fg);
+  background: var(--color-bg);
+}
+.xmap .react-flow__background {
+  --xy-background-pattern-color: color-mix(in srgb, var(--color-muted) 35%, transparent);
+}
+.xmap .react-flow__minimap {
+  --xy-minimap-background-color: var(--color-panel);
+}
+.xmap-vignette {
+  display: none;
+}
+.xmap-flow .react-flow__renderer {
+  z-index: 0;
+}
+
+/* Screens rise out of the depth of field in the order the agent found them. */
+@keyframes xmap-node-in {
+  0% {
+    opacity: 0;
+    transform: translateY(26px) scale(0.86);
+    filter: blur(10px);
+  }
+  60% {
+    opacity: 1;
+    filter: blur(0);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    filter: blur(0);
+  }
+}
+.xmap-node {
+  animation: xmap-node-in 900ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  transition: opacity 500ms ease, filter 500ms ease;
+}
+.xmap-node-dim {
+  opacity: 0.22;
+  filter: grayscale(0.9) blur(0.5px);
+}
+.xmap-node-active {
+  z-index: 5;
+}
+.xmap-flow .react-flow__node:has(.xmap-node-active) {
+  z-index: 20 !important;
+}
+
+/* The screen the camera is on: one accent ring that breathes (no glow). */
+@keyframes xmap-halo {
+  0%,
+  100% {
+    opacity: 0.45;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+.xmap-halo {
+  position: absolute;
+  inset: -5px;
+  border-radius: 12px;
+  box-shadow: 0 0 0 2px var(--color-accent);
+  animation: xmap-halo 2.4s ease-in-out infinite;
+  pointer-events: none;
+}
+
+/* Edges draw themselves after the screen they lead to appears. */
+@keyframes xmap-draw {
+  from {
+    stroke-dashoffset: 1200;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+.xmap-edge-tree .react-flow__edge-path {
+  stroke: var(--color-edge);
+  stroke-width: 1.6;
+  stroke-dasharray: 1200;
+  animation: xmap-draw 1100ms cubic-bezier(0.65, 0, 0.35, 1) both;
+  animation-delay: inherit;
+  transition: stroke 400ms ease, stroke-width 400ms ease, opacity 400ms ease;
+}
+.xmap-edge-return .react-flow__edge-path {
+  stroke: color-mix(in srgb, var(--color-muted) 45%, transparent);
+  stroke-width: 1.1;
+  stroke-dasharray: 5 6;
+}
+.xmap-edge-active .react-flow__edge-path {
+  stroke: var(--color-accent) !important;
+  stroke-width: 2.5 !important;
+}
+.xmap-edge-dim {
+  opacity: 0.15;
+}
+.xmap-edge-label {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 10px;
+  fill: var(--color-muted);
+}
+.xmap-flow .react-flow__edge-textbg {
+  fill: var(--color-panel);
+}
+
+@keyframes xmap-rise {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 14px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+.xmap-caption {
+  animation: xmap-rise 450ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+@keyframes xmap-title-in {
+  from {
+    opacity: 0;
+    letter-spacing: 0.4em;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.xmap-title {
+  animation: xmap-title-in 1200ms ease-out both;
+}
+
+@keyframes xmap-slide-in {
+  from {
+    opacity: 0;
+    transform: translateX(32px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+}
+.xmap-inspector {
+  animation: xmap-slide-in 500ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+@keyframes xmap-img-in {
+  from {
+    opacity: 0;
+    transform: scale(1.03);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+.xmap-inspector-img {
+  animation: xmap-img-in 400ms ease-out both;
+}
+
+/* Diving into a screenshot: it grows out of the canvas. */
+@keyframes xmap-dive-bg {
+  from {
+    opacity: 0;
+    backdrop-filter: blur(0);
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes xmap-dive-img {
+  from {
+    opacity: 0;
+    transform: scale(0.72) translateY(30px);
+    filter: blur(12px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+    filter: blur(0);
+  }
+}
+.xmap-dive {
+  animation: xmap-dive-bg 350ms ease-out both;
+}
+.xmap-dive-img {
+  animation: xmap-dive-img 650ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .xmap-node,
+  .xmap-edge-tree .react-flow__edge-path,
+  .xmap-caption,
+  .xmap-title,
+  .xmap-inspector,
+  .xmap-inspector-img,
+  .xmap-dive,
+  .xmap-dive-img,
+  .xmap-halo {
+    animation: none !important;
+  }
+  .xmap-edge-tree .react-flow__edge-path {
+    stroke-dasharray: none;
+  }
+}
+
+/* Drafting stage (projects/drafting-stage.tsx): the screens or files the agent reads glide
+   through focus while it drafts; the focused screenshot breathes; drafted titles land. */
+@keyframes qa-kenburns {
+  from {
+    transform: scale(1) translateY(0);
+  }
+  to {
+    transform: scale(1.08) translateY(-3%);
+  }
+}
+.qa-kenburns {
+  animation: qa-kenburns 7s ease-in-out infinite alternate;
+}
+@keyframes qa-tile-in {
+  from {
+    opacity: 0;
+    transform: translateX(28px) scale(0.92);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.qa-tile-in {
+  animation: qa-tile-in 600ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+@keyframes qa-chip-land {
+  0% {
+    opacity: 0;
+    transform: translateY(18px) scale(0.92);
+  }
+  60% {
+    opacity: 1;
+    transform: translateY(-3px) scale(1.02);
+  }
+  100% {
+    transform: none;
+  }
+}
+.qa-chip-land {
+  animation: qa-chip-land 520ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.qa-stage-tile {
+  transition:
+    transform 700ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    opacity 700ms ease,
+    filter 700ms ease;
+  will-change: transform, opacity;
+}
+@media (prefers-reduced-motion: reduce) {
+  .qa-kenburns,
+  .qa-tile-in,
+  .qa-chip-land {
+    animation: none;
+  }
+  .qa-stage-tile {
+    transition: none;
+  }
+}
+
+/* ---------- Cinematic motion (shared) ----------
+   The app-wide counterpart of components/guide/motion.module.css, with the same curve and
+   timings: every element's resting style IS its final state and the keyframes only say where
+   it comes from, so under `prefers-reduced-motion: reduce` (bottom of this block) everything
+   simply appears, finished. Transform and opacity only. */
+
+@keyframes v-rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+@keyframes v-fade {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes v-pop {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.97);
+  }
+}
+
+/* One element rising into place; `--i` staggers it among its siblings, `--d` adds a delay. */
+.v-rise {
+  animation: v-rise var(--dur-rise) var(--ease-rise) both;
+  animation-delay: calc(var(--i, 0) * var(--stagger) + var(--d, 0ms));
+}
+.v-fade {
+  animation: v-fade 360ms ease-out both;
+  animation-delay: calc(var(--i, 0) * var(--stagger) + var(--d, 0ms));
+}
+.v-pop {
+  animation: v-pop 320ms var(--ease-rise) both;
+  animation-delay: calc(var(--i, 0) * var(--stagger) + var(--d, 0ms));
+}
+
+/* A container whose direct children rise in one after another (grids of cards, stat rows,
+   lists rendered by server components that cannot pass an index). */
+.v-stagger > * {
+  animation: v-rise var(--dur-rise) var(--ease-rise) both;
+  animation-delay: calc(var(--d, 0ms) + 11 * var(--stagger));
+}
+.v-stagger > :nth-child(1) { animation-delay: calc(var(--d, 0ms) + 0 * var(--stagger)); }
+.v-stagger > :nth-child(2) { animation-delay: calc(var(--d, 0ms) + 1 * var(--stagger)); }
+.v-stagger > :nth-child(3) { animation-delay: calc(var(--d, 0ms) + 2 * var(--stagger)); }
+.v-stagger > :nth-child(4) { animation-delay: calc(var(--d, 0ms) + 3 * var(--stagger)); }
+.v-stagger > :nth-child(5) { animation-delay: calc(var(--d, 0ms) + 4 * var(--stagger)); }
+.v-stagger > :nth-child(6) { animation-delay: calc(var(--d, 0ms) + 5 * var(--stagger)); }
+.v-stagger > :nth-child(7) { animation-delay: calc(var(--d, 0ms) + 6 * var(--stagger)); }
+.v-stagger > :nth-child(8) { animation-delay: calc(var(--d, 0ms) + 7 * var(--stagger)); }
+.v-stagger > :nth-child(9) { animation-delay: calc(var(--d, 0ms) + 8 * var(--stagger)); }
+.v-stagger > :nth-child(10) { animation-delay: calc(var(--d, 0ms) + 9 * var(--stagger)); }
+.v-stagger > :nth-child(11) { animation-delay: calc(var(--d, 0ms) + 10 * var(--stagger)); }
+
+/* Page entrance ((app)/template.tsx): the page body rises in on every navigation while the
+   chrome (the page header and the project tab bar) stays put, so moving between pages reads
+   as one window changing its content rather than the whole frame blinking. */
+.v-page {
+  display: flex;
+  min-height: 0;
+  min-width: 0;
+  flex: 1 1 0%;
+  flex-direction: column;
+}
+.v-page > :not(header, nav, dialog, [data-no-entrance]) {
+  animation: v-rise var(--dur-rise) var(--ease-rise) both;
+  animation-delay: 40ms;
+}
+
+/* A tab panel swapping in (project tabs, run tabs): a short fade and 6px rise. */
+@keyframes v-panel {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+.v-panel {
+  animation: v-panel 320ms var(--ease-rise) both;
+}
+
+/* Hover lift for cards that open something: 1px up, the hairline strengthens. */
+.v-lift {
+  transition:
+    transform 180ms var(--ease-rise),
+    border-color 180ms ease,
+    background-color 180ms ease;
+}
+.v-lift:hover {
+  transform: translateY(-1px);
+  border-color: var(--color-border-strong);
+}
+.v-lift:active {
+  transform: translateY(0);
+}
+
+/* Skeleton: a quiet block with a light band sweeping across it (transform only). */
+.v-skeleton {
+  position: relative;
+  overflow: hidden;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--color-fg) 6%, transparent);
+}
+.v-skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--color-fg) 7%, transparent) 50%, transparent);
+  animation: v-sweep 1.6s var(--ease-swift) infinite;
+  animation-delay: var(--d, 0ms);
+}
+@keyframes v-sweep {
+  to {
+    transform: translateX(100%);
+  }
+}
+
+/* Live indicator: a solid dot with a ring breathing out of it. Size it with classes. */
+.v-live {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+  border-radius: 999px;
+  background: currentColor;
+}
+.v-live::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: currentColor;
+  animation: v-live-ring 1.8s cubic-bezier(0, 0, 0.2, 1) infinite;
+}
+@keyframes v-live-ring {
+  0% {
+    transform: scale(1);
+    opacity: 0.55;
+  }
+  80%,
+  100% {
+    transform: scale(2.6);
+    opacity: 0;
+  }
+}
+
+/* Empty-state illustration: the glyph floats, rings ripple out behind it. */
+@keyframes v-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-3px);
+  }
+}
+.v-float {
+  animation: v-float 4.2s ease-in-out infinite;
+}
+@keyframes v-ripple {
+  0% {
+    transform: scale(0.7);
+    opacity: 0;
+  }
+  30% {
+    opacity: 0.9;
+  }
+  100% {
+    transform: scale(1.6);
+    opacity: 0;
+  }
+}
+.v-ripple {
+  animation: v-ripple 3.6s cubic-bezier(0.2, 0.6, 0.3, 1) infinite;
+  animation-delay: var(--d, 0ms);
+}
+
+/* Charts: the plot is revealed left to right by a panel-toned curtain sliding off it (inside
+   its own clipping box, so tooltips are never clipped), and bars grow up from the baseline in
+   day order. */
+.v-chart {
+  position: relative;
+}
+.v-chart-clip {
+  pointer-events: none;
+  position: absolute;
+  inset: 0 0 0 var(--curtain-left, 48px);
+  overflow: hidden;
+}
+.v-chart-curtain {
+  position: absolute;
+  inset: 0 -32px 0 -32px;
+  background: linear-gradient(90deg, transparent, var(--curtain-bg, var(--color-panel)) 32px);
+  transform: translateX(100%);
+  animation: v-curtain 1100ms var(--ease-swift) both;
+  animation-delay: var(--d, 120ms);
+}
+@keyframes v-curtain {
+  from {
+    transform: translateX(0);
+  }
+}
+.v-bars rect {
+  transform-box: fill-box;
+  transform-origin: 50% 100%;
+  animation: v-grow-y 700ms var(--ease-swift) both;
+  animation-delay: calc(120ms + var(--i, 0) * 40ms);
+}
+@keyframes v-grow-y {
+  from {
+    transform: scaleY(0);
+  }
+}
+/* A plain element bar (sparklines) growing up from its baseline; `--i` staggers it. */
+.v-grow-y {
+  transform-origin: 50% 100%;
+  animation: v-grow-y 600ms var(--ease-swift) both;
+  animation-delay: calc(var(--d, 0ms) + var(--i, 0) * 28ms);
+}
+/* …and a horizontal one growing from its left edge (meters, ranked bars). */
+@keyframes v-grow-x {
+  from {
+    transform: scaleX(0);
+  }
+}
+.v-grow-x {
+  transform-origin: 0 50%;
+  animation: v-grow-x 800ms var(--ease-swift) both;
+  animation-delay: calc(var(--d, 0ms) + var(--i, 0) * 60ms);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .v-rise,
+  .v-fade,
+  .v-pop,
+  .v-stagger > *,
+  .v-page > :not(header, nav, dialog, [data-no-entrance]),
+  .v-panel,
+  .v-float,
+  .v-grow-y,
+  .v-grow-x,
+  .v-bars rect {
+    animation: none;
+  }
+  .v-lift,
+  .v-lift:hover {
+    transition: none;
+    transform: none;
+  }
+  .v-skeleton::after,
+  .v-live::before,
+  .v-ripple,
+  .v-chart-curtain {
+    animation: none;
+    display: none;
+  }
+}
+
+
+/* ---------- Screen atlas motion (components/atlas/zoom.ts) ----------
+   A card's frames fly into its screen's panel and back, the panel slides in and out, grows to the
+   full window and back, all with the Web Animations API on transform and opacity. The flying
+   copies live in an inert, click-through popover above the dialog: they never run their own CSS
+   animations again (a section rising in a copy would blink) and never take a click. */
+[data-atlas-flight],
+[data-atlas-flight] * {
+  pointer-events: none !important;
+}
+[data-atlas-flight] *,
+[data-atlas-flight] *::before,
+[data-atlas-flight] *::after {
+  animation: none !important;
+  transition: none !important;
+  /* A blur behind a moving copy (a frame's glass chip) flickers in WebKit (#431). */
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+/* The page dims as the panel slides in. */
+dialog[data-atlas-motion="in"]::backdrop {
+  animation: atlas-dim-in 320ms var(--ease-rise) both;
+}
+@keyframes atlas-dim-in {
+  from {
+    opacity: 0;
+  }
+}
+/* Narrowing back to the side: the surface it leaves carries the edge, not the panel. */
+dialog[data-atlas-motion="shrink"] {
+  border-left-color: transparent;
+  box-shadow: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  dialog[data-atlas-motion="in"]::backdrop {
+    animation-duration: 160ms;
+  }
+}
+
+/* An icon-only button carries its icon in the label span the primitive narrows to nothing. */
+.qa-port .v2-btn-icononly .v2-btn-label {
+  flex: 0 0 auto;
+  width: auto;
+  overflow: visible;
+}
+
+/* An icon-only kit Button: Orcha's label clips what it holds, and with no padding it has no width. */
+.qa-port .v2-btn-icononly > .v2-btn-label { min-width: min-content; overflow: visible; }
+
+/* A device is black in either theme: the hardware does not follow the portal. */
+.qa-port [data-device-frame],
+.qa-port [data-frame-player] {
+  --color-black: #000;
+}

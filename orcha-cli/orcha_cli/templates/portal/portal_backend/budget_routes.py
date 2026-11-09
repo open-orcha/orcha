@@ -743,7 +743,7 @@ def get_container_budgets(cid: str, request: Request):
     state='none' (their usage is still reported). Member-readable; project-isolated."""
     if not valid_uuid(cid):
         raise HTTPException(400, "container_id is not a valid UUID")
-    with db_cursor() as (_, cur):
+    with db_cursor(readonly=True) as (_, cur):
         require_container(cur, cid)
         require_member_read(cur, request, cid)
         st = _public(budget_statuses(cur, cid))

@@ -1,0 +1,354 @@
+/*
+ * Exploration v2 motion: the home's teaching scene and live cards, the composer's
+ * recipe previews and mission card, the compare bars. Same contract as the guide kit: each
+ * element's resting style is its final state and the keyframes only say where it comes from or
+ * loop around it, so under reduced motion (bottom) everything stands finished and still, and
+ * what is left is a fade.
+ */
+
+/* ---------- home: the four phases light up in turn (teaching empty state) ---------- */
+
+@keyframes phase-glow {
+  0%,
+  100% {
+    border-color: var(--color-border);
+    background: var(--color-panel);
+  }
+  8%,
+  22% {
+    border-color: var(--color-primary);
+    background: color-mix(in srgb, var(--color-primary) 9%, var(--color-panel));
+  }
+  30% {
+    border-color: var(--color-border);
+    background: var(--color-panel);
+  }
+}
+.phase {
+  animation: phase-glow 8s ease-in-out infinite;
+  animation-delay: var(--d, 0ms);
+}
+
+/* Each phase's bar fills in its quarter of the loop and stays until the loop restarts. */
+@keyframes phase-tick-0 {
+  0%,
+  0% {
+    transform: scaleX(0);
+  }
+  15%,
+  96% {
+    transform: scaleX(1);
+  }
+  100% {
+    transform: scaleX(0);
+  }
+}
+.phaseBar0 {
+  transform-origin: left center;
+  animation: phase-tick-0 8s var(--ease-swift) infinite;
+}
+@keyframes phase-tick-1 {
+  0%,
+  25% {
+    transform: scaleX(0);
+  }
+  40%,
+  96% {
+    transform: scaleX(1);
+  }
+  100% {
+    transform: scaleX(0);
+  }
+}
+.phaseBar1 {
+  transform-origin: left center;
+  animation: phase-tick-1 8s var(--ease-swift) infinite;
+}
+@keyframes phase-tick-2 {
+  0%,
+  50% {
+    transform: scaleX(0);
+  }
+  65%,
+  96% {
+    transform: scaleX(1);
+  }
+  100% {
+    transform: scaleX(0);
+  }
+}
+.phaseBar2 {
+  transform-origin: left center;
+  animation: phase-tick-2 8s var(--ease-swift) infinite;
+}
+@keyframes phase-tick-3 {
+  0%,
+  75% {
+    transform: scaleX(0);
+  }
+  90%,
+  96% {
+    transform: scaleX(1);
+  }
+  100% {
+    transform: scaleX(0);
+  }
+}
+.phaseBar3 {
+  transform-origin: left center;
+  animation: phase-tick-3 8s var(--ease-swift) infinite;
+}
+
+@keyframes doc-in {
+  0%,
+  4% {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  12%,
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+.doc {
+  animation: doc-in 8s var(--ease-rise) infinite;
+  animation-delay: var(--d, 0ms);
+}
+
+/* ---------- live cards: the current phase segment breathes ---------- */
+
+@keyframes seg-live {
+  0%,
+  100% {
+    opacity: 0.45;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+.segLive {
+  animation: seg-live 1.6s ease-in-out infinite;
+}
+
+/* ---------- composer: recipe previews (play on hover, focus and when picked) ---------- */
+
+.preview {
+  position: relative;
+  height: 56px;
+  overflow: hidden;
+  border-radius: 6px;
+  background: var(--color-panel-2);
+}
+
+/* Quick look: screens flipping past. */
+@keyframes flip {
+  0%,
+  20% {
+    transform: perspective(200px) rotateY(0deg);
+    opacity: 1;
+  }
+  30% {
+    transform: perspective(200px) rotateY(-90deg);
+    opacity: 0;
+  }
+  31%,
+  100% {
+    transform: perspective(200px) rotateY(0deg);
+    opacity: 0;
+  }
+}
+.flip {
+  animation: flip 3.2s ease-in-out infinite paused;
+  animation-delay: var(--d, 0ms);
+}
+
+/* Deep dive: zoom into one card. */
+@keyframes zoom {
+  0%,
+  15% {
+    transform: scale(1);
+  }
+  55%,
+  80% {
+    transform: scale(2.1);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+.zoom {
+  transform-origin: 62% 50%;
+  animation: zoom 3.2s var(--ease-swift) infinite paused;
+}
+
+/* User journeys: a path drawing between screens. */
+@keyframes path-draw {
+  0% {
+    stroke-dashoffset: 120;
+  }
+  60%,
+  85% {
+    stroke-dashoffset: 0;
+  }
+  100% {
+    stroke-dashoffset: 0;
+    opacity: 0;
+  }
+}
+.path {
+  stroke-dasharray: 120;
+  stroke-dashoffset: 0;
+  animation: path-draw 3.2s var(--ease-swift) infinite paused;
+}
+
+/* Full tour: a map filling, tile by tile. */
+@keyframes fill {
+  0%,
+  10% {
+    background: transparent;
+  }
+  30%,
+  85% {
+    background: color-mix(in srgb, var(--color-primary) 55%, transparent);
+  }
+  100% {
+    background: transparent;
+  }
+}
+.tile {
+  animation: fill 3.2s ease-in-out infinite paused;
+  animation-delay: var(--d, 0ms);
+}
+
+/* Map the app: screens come out of the fog, breadth first, as the crawl reaches them. */
+@keyframes fog-lift {
+  0%,
+  8% {
+    opacity: 1;
+  }
+  22%,
+  86% {
+    opacity: 0;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+.fogLift {
+  opacity: 0;
+  animation: fog-lift 3.2s ease-in-out infinite paused;
+  animation-delay: var(--d, 0ms);
+}
+
+/* Custom: a clock hand going round. */
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.hand {
+  transform-origin: 50% 100%;
+  animation: spin 3.2s linear infinite paused;
+}
+
+.recipe:hover .flip,
+.recipe:hover .zoom,
+.recipe:hover .path,
+.recipe:hover .tile,
+.recipe:hover .fogLift,
+.recipe:hover .hand,
+.recipe:focus-visible .flip,
+.recipe:focus-visible .zoom,
+.recipe:focus-visible .path,
+.recipe:focus-visible .tile,
+.recipe:focus-visible .fogLift,
+.recipe:focus-visible .hand,
+.recipe[aria-checked="true"] .flip,
+.recipe[aria-checked="true"] .zoom,
+.recipe[aria-checked="true"] .path,
+.recipe[aria-checked="true"] .tile,
+.recipe[aria-checked="true"] .fogLift,
+.recipe[aria-checked="true"] .hand {
+  animation-play-state: running;
+}
+
+/* ---------- composer: the mission card assembles as choices land ---------- */
+
+@keyframes slot-land {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.98);
+  }
+}
+.slot {
+  animation: slot-land 360ms var(--ease-rise) both;
+}
+
+@keyframes caret {
+  50% {
+    opacity: 0;
+  }
+}
+.caret {
+  display: inline-block;
+  width: 1px;
+  height: 1em;
+  margin-left: 1px;
+  vertical-align: -0.15em;
+  background: currentColor;
+  animation: caret 1s steps(1) infinite;
+}
+
+/* ---------- compare: bars grow from A's value to B's ---------- */
+
+.bar {
+  transition: width 900ms var(--ease-swift);
+}
+
+@keyframes column-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+.columnItem {
+  animation: column-in 380ms var(--ease-rise) both;
+  animation-delay: calc(var(--i, 0) * 40ms + var(--d, 0ms));
+}
+
+@keyframes fade {
+  from {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .phase,
+  .phaseBar0,
+  .phaseBar1,
+  .phaseBar2,
+  .phaseBar3,
+  .doc,
+  .segLive,
+  .flip,
+  .zoom,
+  .path,
+  .tile,
+  .fogLift,
+  .hand,
+  .caret {
+    animation: none !important;
+  }
+  .flip {
+    opacity: 1;
+  }
+  .slot,
+  .columnItem {
+    animation-name: fade !important;
+    transform: none !important;
+  }
+  .bar {
+    transition: none;
+  }
+}

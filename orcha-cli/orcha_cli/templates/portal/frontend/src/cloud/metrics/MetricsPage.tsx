@@ -51,6 +51,7 @@ import { useSnapshot } from "../../state/SnapshotProvider";
 import { useModelName } from "../../lib/models";
 import { BudgetBars } from "./BudgetBars";
 import { PerformanceSection } from "./performance/PerformanceSection";
+import { QualityMetrics, type QualityShare } from "../../pages/qa/runTask/QualityMetrics";
 import { isAccessDenied } from "./performance/performanceModel";
 import "./metrics.css";
 
@@ -94,6 +95,8 @@ export interface MxPayload {
   totals: MxTotals;
   daily: MxDay[];
   per_agent: MxAgent[];
+  /** Quality's share of the window. Its cost is already in the totals. */
+  qa?: QualityShare | null;
 }
 
 /* ---- spend drilldown payload shape (agent_spend_routes) ------------------ */
@@ -1211,6 +1214,7 @@ export function MetricsPage() {
         </div>
         {/* monthly budgets: spend vs budget per agent + the optional project cap (UTC month) */}
         {cid ? <PerformanceSection cid={cid} defaultRange={days === 30 ? "30d" : "7d"} /> : null}
+        {denied ? null : <QualityMetrics qa={payload?.qa} days={payload?.days ?? days} />}
         {cid ? <BudgetBars cid={cid} /> : null}
         {/* the project-wide suggestions (every agent, task and window rule) — the
             drilldown shows only its agent's, and links back here for the rest */}

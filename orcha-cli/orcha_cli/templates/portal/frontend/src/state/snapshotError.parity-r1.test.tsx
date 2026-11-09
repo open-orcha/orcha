@@ -101,10 +101,13 @@ describe("SnapshotProvider keeps the failure's status + detail", () => {
     await waitFor(() => expect(screen.getByTestId("kind")).toHaveTextContent("not_found"));
     expect(screen.getByTestId("reason")).toHaveTextContent(NOT_FOUND_REASON);
   });
-  it("unreachable project (503): errorKind server, offline reason", async () => {
+  it("unreachable project (503): errorKind server, and offline once it repeats, not on one lost read", async () => {
     stubSnapshot(503, "unreachable");
-    render(<SnapshotProvider pollMs={60_000}><Probe /></SnapshotProvider>);
+    const once = render(<SnapshotProvider pollMs={60_000}><Probe /></SnapshotProvider>);
     await waitFor(() => expect(screen.getByTestId("kind")).toHaveTextContent("server"));
-    expect(screen.getByTestId("reason")).toHaveTextContent(OFFLINE_REASON);
+    expect(screen.getByTestId("reason")).not.toHaveTextContent(OFFLINE_REASON);
+    once.unmount();
+    render(<SnapshotProvider pollMs={15}><Probe /></SnapshotProvider>);
+    await waitFor(() => expect(screen.getByTestId("reason")).toHaveTextContent(OFFLINE_REASON));
   });
 });

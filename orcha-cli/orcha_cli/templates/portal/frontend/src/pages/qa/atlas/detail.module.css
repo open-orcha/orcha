@@ -1,0 +1,688 @@
+/* A screen's details (screen-detail.tsx): a lit stage for its frames, then each part rising in
+   turn after the frames have flown in from the card (zoom.ts). The frames themselves never fade:
+   the zoom moves them, and a fade on top of it would show them half there. Transform, opacity and
+   stroke-dashoffset only; reduced motion rests everything finished. */
+
+.stage {
+  position: relative;
+  overflow: hidden;
+  padding: 26px 16px 18px;
+  border-radius: 18px;
+  border: 1px solid var(--color-border);
+  background:
+    radial-gradient(60% 70% at 50% 38%, color-mix(in srgb, var(--color-fg) 10%, transparent), transparent 70%),
+    linear-gradient(180deg, color-mix(in srgb, var(--color-panel-2) 70%, var(--color-bg)), var(--color-bg));
+}
+:global([data-theme="dark"]) .stage {
+  background:
+    radial-gradient(60% 70% at 50% 38%, color-mix(in srgb, var(--color-fg) 14%, transparent), transparent 70%),
+    linear-gradient(180deg, var(--color-window), var(--color-bg));
+  border-color: color-mix(in srgb, var(--atlas-sheen) 7%, transparent);
+}
+/* The floor the devices stand on: a soft line of light under them. */
+.stage::after {
+  content: "";
+  position: absolute;
+  left: 10%;
+  right: 10%;
+  bottom: 54px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--color-fg) 14%, transparent), transparent);
+  pointer-events: none;
+}
+.stageFrames {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 18px 28px;
+}
+/* As wide as its frame: a long caption wraps under it rather than pushing the next frame down. */
+.figure {
+  display: flex;
+  width: min-content;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+.frameButton {
+  border-radius: 20px;
+  transition: transform 220ms var(--ease-rise);
+}
+.frameButton:not(:disabled):hover {
+  transform: translateY(-3px);
+}
+.frameButton:focus-visible {
+  outline: 2px solid var(--color-ring);
+  outline-offset: 4px;
+}
+.frameButton:disabled {
+  cursor: default;
+}
+/* Room for three lines under every frame, so the frames stand on one floor whatever their words. */
+.caption {
+  display: flex;
+  min-width: 120px;
+  min-height: 50px;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  text-align: center;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--color-muted);
+  animation: rise 420ms var(--ease-rise) both;
+  animation-delay: calc(220ms + var(--i, 0) * 60ms);
+}
+
+.section {
+  border-top: 1px solid var(--color-border);
+  padding-top: 16px;
+  animation: rise 460ms var(--ease-rise) both;
+  animation-delay: calc(240ms + var(--i, 0) * 80ms);
+}
+.sectionTitle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 10px;
+  font-size: 13.5px;
+  font-weight: 620;
+  color: var(--color-fg);
+}
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+/* ---------- how the platforms compare ---------- */
+
+.pair {
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--color-border);
+  background: var(--color-panel);
+}
+.pairHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+.pairSide {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 13px;
+  font-weight: 560;
+  color: var(--color-fg);
+}
+.pairScore {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--color-fg-2);
+}
+.pairDash {
+  width: 42px;
+  height: 1.5px;
+  border-radius: 999px;
+  background: repeating-linear-gradient(90deg, var(--color-muted) 0 4px, transparent 4px 8px);
+  opacity: 0.6;
+}
+.pairBadge {
+  margin-left: auto;
+  font-size: 11.5px;
+  font-weight: 600;
+}
+/* A frame of another device than its column's, centred in the column's room. */
+.slot {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Which looks a pair compares, and why a pair is not compared. */
+.pairWords {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--color-muted);
+}
+.pairWhy {
+  margin-top: 8px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--color-fg-2);
+  background: color-mix(in srgb, var(--color-muted) 7%, transparent);
+  border: 1px dashed color-mix(in srgb, var(--color-muted) 35%, transparent);
+}
+.ring {
+  width: 30px;
+  height: 30px;
+  transform: rotate(-90deg);
+}
+.ringTrack {
+  fill: none;
+  stroke: color-mix(in srgb, var(--color-muted) 20%, transparent);
+  stroke-width: 5;
+}
+.ringFill {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 5;
+  stroke-linecap: round;
+  stroke-dashoffset: var(--ring-off);
+  animation: ringDraw 1000ms var(--ease-swift) 360ms both;
+}
+@keyframes ringDraw {
+  from {
+    stroke-dashoffset: var(--ring-from);
+  }
+}
+.reasons {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--color-fg-2);
+}
+.reasons li {
+  position: relative;
+  padding-left: 16px;
+}
+.reasons li::before {
+  content: "";
+  position: absolute;
+  left: 2px;
+  top: 0.62em;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--atlas-minor) 70%, transparent);
+}
+/* The words a reason quotes: what differs, marked. */
+.quote {
+  padding: 0 4px;
+  border-radius: 4px;
+  color: var(--color-fg);
+  font-weight: 560;
+  background: color-mix(in srgb, var(--atlas-minor) 16%, transparent);
+  box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--atlas-minor) 45%, transparent);
+}
+
+/* ---------- what changed ---------- */
+
+.changeTag {
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 560;
+  background: color-mix(in srgb, currentColor 11%, transparent);
+}
+.whatList {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 8px;
+  padding-left: 18px;
+  list-style: disc;
+  font-size: 13.5px;
+  color: var(--color-fg-2);
+}
+
+/* ---------- the states, as a filmstrip ---------- */
+
+.film {
+  position: relative;
+  overflow-x: auto;
+  border-radius: 12px;
+  scrollbar-width: thin;
+}
+.filmStrip {
+  position: relative;
+  display: flex;
+  width: max-content;
+  min-width: 100%;
+  gap: 10px;
+  padding: 18px 12px;
+  border-radius: 12px;
+  background: var(--color-panel-2);
+}
+/* The sprocket holes along both edges of the film. */
+.filmStrip::before,
+.filmStrip::after {
+  content: "";
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  height: 6px;
+  background: repeating-linear-gradient(90deg, var(--color-border-strong) 0 7px, transparent 7px 15px);
+  border-radius: 2px;
+  opacity: 0.8;
+}
+.filmStrip::before {
+  top: 6px;
+}
+.filmStrip::after {
+  bottom: 6px;
+}
+.cell {
+  display: flex;
+  flex: none;
+  min-width: 104px;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 6px 6px 7px;
+  border-radius: 8px;
+  text-align: center;
+  color: var(--color-fg);
+  background: color-mix(in srgb, var(--color-fg) 4%, transparent);
+  transition:
+    background-color 160ms ease,
+    transform 200ms var(--ease-rise);
+  animation: cellIn 480ms var(--ease-rise) both;
+  animation-delay: calc(360ms + var(--i, 0) * 70ms);
+}
+.cell:not(:disabled):hover {
+  background: color-mix(in srgb, var(--color-fg) 9%, transparent);
+  transform: translateY(-2px);
+}
+.cell:focus-visible {
+  outline: 2px solid var(--color-ring);
+  outline-offset: 2px;
+}
+/* Each state at its own device's shape and a phone's height: an iPhone tall and narrow, an iPad
+   or a browser wider. A look with no recorded size takes an iPhone's (1206 x 2622). */
+.cellPic {
+  display: flex;
+  height: 190px;
+  width: auto;
+  aspect-ratio: 1206 / 2622;
+  max-width: 300px;
+  overflow: hidden;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  background: var(--color-window);
+  box-shadow: 0 0 0 1px var(--color-border);
+}
+.cellPic img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.cellEmpty {
+  font-size: 10.5px;
+  color: var(--color-muted);
+}
+.cellLabel {
+  margin-top: 3px;
+  font-size: 12px;
+  font-weight: 600;
+}
+.cellSub {
+  font-size: 11px;
+  color: var(--color-muted);
+}
+@keyframes cellIn {
+  from {
+    opacity: 0;
+    transform: translateX(14px);
+  }
+}
+
+/* ---------- how people get here ---------- */
+
+.flow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
+}
+.flowSide {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+.flowWord {
+  padding: 0 8px 2px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--color-muted);
+}
+.move {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0;
+  padding: 5px 8px;
+  border-radius: 8px;
+  text-align: left;
+  font-size: 13px;
+  transition: background-color 160ms ease;
+}
+.move:hover {
+  background: var(--color-hover);
+}
+.move:focus-visible {
+  outline: 2px solid var(--color-ring);
+}
+.flowHere {
+  display: flex;
+  align-items: center;
+  align-self: center;
+}
+.flowLine {
+  width: 18px;
+  height: 1.5px;
+  background: var(--atlas-flow);
+  opacity: 0.6;
+}
+.flowNode {
+  max-width: 150px;
+  padding: 5px 10px;
+  overflow: hidden;
+  border-radius: 999px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-fg);
+  border: 1px solid color-mix(in srgb, var(--atlas-flow) 45%, var(--color-border));
+  background: color-mix(in srgb, var(--atlas-flow) 9%, var(--color-panel));
+}
+@media (max-width: 640px) {
+  .flow {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .flowHere {
+    display: none;
+  }
+}
+
+/* ---------- the before and after slider's highlights (before-after.tsx) ---------- */
+
+/* "Highlight what changed": each region whose pixels differ, ringed, blooming in turn. */
+.diffBox {
+  position: absolute;
+  z-index: 2;
+  pointer-events: none;
+  border-radius: 6px;
+  border: 2px solid var(--atlas-minor);
+  background: color-mix(in srgb, var(--atlas-minor) 14%, transparent);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--color-bg) 70%, transparent),
+    0 0 18px color-mix(in srgb, var(--atlas-minor) 55%, transparent);
+  animation: diffIn 520ms var(--ease-rise) both;
+  animation-delay: calc(var(--i, 0) * 90ms);
+}
+@keyframes diffIn {
+  0% {
+    opacity: 0;
+    transform: scale(1.25);
+  }
+  60% {
+    opacity: 1;
+    transform: scale(0.98);
+  }
+}
+.diffToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid var(--color-border);
+  font-size: 12px;
+  font-weight: 540;
+  color: var(--color-fg-2);
+  transition:
+    background-color 160ms ease,
+    border-color 160ms ease;
+}
+.diffToggle:hover {
+  color: var(--color-fg);
+  background: var(--color-hover);
+}
+.diffToggle[aria-pressed="true"] {
+  color: var(--color-fg);
+  border-color: color-mix(in srgb, var(--atlas-minor) 55%, var(--color-border));
+  background: color-mix(in srgb, var(--atlas-minor) 10%, transparent);
+}
+.diffToggle:focus-visible {
+  outline: 2px solid var(--color-ring);
+  outline-offset: 2px;
+}
+
+/* ---------- seen on: platforms across, each kind of device in light and dark down ---------- */
+
+.seenWrap {
+  overflow-x: auto;
+  margin: 0 -4px;
+  padding: 0 4px 2px;
+}
+.seen {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 6px;
+  table-layout: fixed;
+}
+.seen thead th {
+  padding: 0 2px 2px;
+  font-size: 12px;
+  font-weight: 600;
+  text-align: left;
+  color: var(--color-fg);
+}
+.seenHeadCol {
+  width: 108px;
+}
+.seen .seenCorner {
+  height: auto;
+  padding: 0;
+  border: 0;
+  background: none;
+  animation: none;
+}
+.seen tbody th {
+  padding-right: 4px;
+  text-align: left;
+  vertical-align: middle;
+}
+.seenRowHead {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 560;
+  color: var(--color-fg-2);
+  white-space: nowrap;
+}
+.seen td {
+  height: 132px;
+  padding: 6px;
+  border-radius: 10px;
+  vertical-align: top;
+  background: var(--color-panel);
+  border: 1px solid var(--color-border);
+  animation: rise 420ms var(--ease-rise) both;
+  animation-delay: calc(300ms + var(--i, 0) * 50ms);
+}
+.seen td[data-empty] {
+  vertical-align: middle;
+  background: color-mix(in srgb, var(--color-muted) 3%, transparent);
+  border: 1px dashed color-mix(in srgb, var(--color-muted) 30%, transparent);
+}
+.seen td[data-blank] {
+  background: none;
+  border: 1px solid transparent;
+}
+.seenEmpty {
+  display: block;
+  padding: 0 4px;
+  font-size: 11.5px;
+  line-height: 1.35;
+  text-align: center;
+  color: var(--color-muted);
+}
+/* A phone's height, so each look shows whole at its own device's shape (an iPhone tall and
+   narrow, an iPad or a browser wider), never a short crop. */
+.seenShot {
+  display: flex;
+  width: 100%;
+  height: 176px;
+  padding: 6px 0;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--color-muted) 8%, var(--color-bg));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-fg) 8%, transparent);
+  transition: transform 160ms var(--ease-swift, ease), box-shadow 160ms ease;
+}
+.seenShot img {
+  height: 100%;
+  width: auto;
+  max-width: 100%;
+  border-radius: 4px;
+  object-fit: contain;
+}
+.seenShot:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 0 0 1px var(--color-border-strong), 0 8px 18px -12px color-mix(in srgb, var(--atlas-shade) 50%, transparent);
+}
+.seenShot:focus-visible {
+  outline: 2px solid var(--color-ring);
+  outline-offset: 2px;
+}
+.seenDevice {
+  display: block;
+  margin-top: 5px;
+  overflow: hidden;
+  font-size: 11.5px;
+  font-weight: 560;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--color-fg);
+}
+.seenWhen {
+  display: block;
+  font-size: 11px;
+  color: var(--color-muted);
+}
+
+/* Another screen while open: the panel crossfades to it (zoom.ts), so nothing rises in again. */
+.switched .section,
+.switched .caption,
+.switched .cell,
+.switched .seen td {
+  animation: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .diffBox,
+  .seen td,
+  .caption,
+  .section,
+  .ringFill,
+  .cell {
+    animation: none;
+  }
+  .frameButton,
+  .cell,
+  .seenShot,
+  .move {
+    transition: none;
+  }
+}
+
+
+/* ---------- full window (Expand) ----------
+   The frames take the room: on a wide window the stage stays in view on the left while what
+   compares them, the states and the flow scroll beside it; on a narrow one they follow below. */
+.full {
+  gap: 24px;
+}
+@media (min-width: 1200px) {
+  .full {
+    display: grid;
+    grid-template-columns: minmax(0, 1.55fr) minmax(320px, 1fr);
+    align-items: start;
+  }
+  .full > .stageFull {
+    position: sticky;
+    top: 0;
+    grid-column: 1;
+    grid-row: 1;
+  }
+  .full > .fullSide {
+    grid-column: 2;
+    grid-row: 1;
+  }
+}
+.stageFull {
+  padding: 40px 28px 26px;
+  min-height: min(72dvh, 760px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.stageFull::after {
+  bottom: 70px;
+}
+.fullSide {
+  min-width: 0;
+}
+
+/* Seen, but its capture was blank (an app in secure mode, a screen not drawn yet): where the
+   picture would be, the same box quietly says why. */
+.seenBlank {
+  display: flex;
+  width: 100%;
+  height: 176px;
+  padding: 10px 8px;
+  flex-direction: column;
+  gap: 7px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  font-size: 11.5px;
+  line-height: 1.35;
+  text-align: center;
+  text-wrap: balance;
+  color: var(--color-muted);
+  background: color-mix(in srgb, var(--color-muted) 5%, var(--color-bg));
+  border: 1.5px dotted color-mix(in srgb, var(--color-muted) 35%, transparent);
+}
+/* A filmstrip cell with no picture of its state: on the strip's own dark ground, in both themes. */
+.cellBlank {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: center;
+  padding: 0 10px;
+  font-size: 10.5px;
+  line-height: 1.3;
+  text-align: center;
+  color: var(--color-muted);
+}
+/* Where a wipe or a before and after would be: why there is no picture to slide across. */
+.blankNote {
+  display: flex;
+  gap: 7px;
+  align-items: flex-start;
+}

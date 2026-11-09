@@ -15,10 +15,15 @@ export function formatServerTime(value: string): string {
 
 /** The first blocker that says more than the state label ("Waiting for Review" twice is skipped, a
  * second blocker behind it still shows), without its trailing period: sub-lines carry none (#362 x03). */
+/** What actually holds a step up. "Not waiting" is the scheduler's own note on a step that has its
+ * turn or finished it, so it says nothing to a person. */
+const OWN_TURN = new Set(["task_not_waiting", "reservation_live"]);
+export const heldBy = (task: Pick<WorkflowTask, "blockers" | "status">) => ["completed", "cancelled"].includes(task.status) ? [] : task.blockers.filter((b) => !OWN_TURN.has(b.code));
+
 function blockerUnlessRepeated(task: WorkflowTask): string | undefined {
   const bare = (text: string) => text.trim().replace(/\.$/, "");
   const label = bare(task.display_state.label).toLowerCase();
-  const blocker = task.blockers.find((b) => b.message && bare(b.message).toLowerCase() !== label);
+  const blocker = heldBy(task).find((b) => b.message && bare(b.message).toLowerCase() !== label);
   return blocker ? bare(blocker.message) : undefined;
 }
 
@@ -34,6 +39,8 @@ export interface WorkflowTaskRowProps {
   actorName: (id: string) => string;
   /** Row ⋯ menu: the task's enabled `available_actions` (empty = no menu button). */
   menuItems: (MenuItemSpec | "separator")[];
+  /** A QA step's mark: its live status in words. */
+  qa?: { word: string; tone: "ok" | "danger" | "warn" | "neutral" };
   /** Dependencies list: "Depends on · Needed by" replaces the state sub-line. */
   subline?: ReactNode;
   /** Round of the repeat group the step belongs to (semantics version 2); the group header row
@@ -41,7 +48,7 @@ export interface WorkflowTaskRowProps {
   loop?: { round: number } | null;
 }
 
-export const WorkflowTaskRow = forwardRef<HTMLElement, WorkflowTaskRowProps>(function WorkflowTaskRow({ task, selected, onSelect, assignees, actorName, menuItems, subline, loop }, ref) {
+export const WorkflowTaskRow = forwardRef<HTMLElement, WorkflowTaskRowProps>(function WorkflowTaskRow({ task, selected, onSelect, assignees, actorName, menuItems, subline, loop, qa }, ref) {
   const menuRef = useRef<HTMLButtonElement | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const withdrawn = !!task.withdrawn_at;
@@ -54,6 +61,7 @@ export const WorkflowTaskRow = forwardRef<HTMLElement, WorkflowTaskRowProps>(fun
     <span className="wf-st"><StatusIcon status={task.status} label={task.display_state.label} /></span>
     <span className="wf-title"><span>{task.title}</span><span className="wf-sub">{sub}</span></span>
     <span className="wf-chips">
+      {qa ? <Chip dot={qa.tone} title="A Quality or Triage step">{qa.word}</Chip> : null}
       <Chip title={task.autonomy === "on" ? "Task autonomy ON: the agent approves its own plan and finished work" : "Task autonomy OFF: plan and finished work need approval"}>{task.autonomy === "on" ? "Autonomy ON" : "Autonomy OFF"}</Chip>
       {task.awaiting_loop_decision ? <Chip dot="warn" title={task.display_state.label}>Decision needed</Chip> : null}
       {warning ? <Chip dot="warn" title={warning}>Warning</Chip> : null}

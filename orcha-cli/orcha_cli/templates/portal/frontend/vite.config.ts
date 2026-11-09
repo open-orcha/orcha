@@ -14,7 +14,7 @@ export const PAGE_ROUTES = [
   "/", "/tasks", "/agents", "/requests", "/settings", "/onboarding",
   "/projects", "/code", "/metrics", "/github", "/members", "/auth/device",
   "/workflows", "/workflows/new", "/workflows/:workflowId",
-  "/needs", "/activity", "/org", "/routines",
+  "/needs", "/activity", "/org", "/routines", "/qa",
 ];
 const pageRoutesPlugin = () => ({
   name: "orcha-page-routes",

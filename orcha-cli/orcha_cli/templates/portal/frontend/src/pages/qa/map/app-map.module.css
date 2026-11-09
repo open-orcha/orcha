@@ -1,0 +1,1147 @@
+/* Project › Map (docs/app-map.md). The canvas reuses the exploration map's ground (`.xmap` in
+   globals.css) and the coverage palette (`--cov-*`, coverage.module.css `.palette`), so regions
+   read in the same colours as Scenarios › Coverage. Same motion contract as the guide kit: an
+   element's resting style is its final state, keyframes only say where it comes from, and
+   reduced motion (bottom of this file) shows everything finished and still. */
+
+/* ---------- the canvas's line colours ---------- */
+
+/* Navigation lines: neutral and quiet at rest; the lines of what is in focus in the brand indigo
+   (the chart token, tuned per theme and the same under every accent palette, so a yellow or grey
+   accent never turns the map's focus into a highlighter). */
+.canvas {
+  --map-line: color-mix(in oklab, var(--color-muted) 42%, transparent);
+  --map-line-head: color-mix(in oklab, var(--color-muted) 60%, transparent);
+  --map-line-active: var(--color-chart-1);
+}
+:global(:root[data-theme="light"]) .canvas {
+  --map-line: color-mix(in oklab, var(--color-muted) 50%, transparent);
+  --map-line-head: color-mix(in oklab, var(--color-muted) 75%, transparent);
+}
+
+/* ---------- regions ---------- */
+
+.region {
+  --c: var(--cov-untested);
+  position: relative;
+  width: 100%;
+  height: 100%;
+  border-radius: 22px;
+  border: 1.5px dashed color-mix(in oklab, var(--c) 45%, transparent);
+  background: color-mix(in oklab, var(--c) 7%, transparent);
+  transition:
+    opacity 400ms ease,
+    border-color 300ms ease,
+    background-color 300ms ease;
+  cursor: pointer;
+}
+/* Closer in, what no run has reached shows as a faint grain over the region, as much as is left
+   to reach (`--fog`, 0 to 1), never as a blur behind the cards. */
+.region:not([data-lod="far"]) {
+  background-image: radial-gradient(color-mix(in oklab, var(--cov-fog) calc(var(--fog, 0) * 26%), transparent) 0.9px, transparent 1.3px);
+  background-size: 9px 9px;
+}
+.region[data-coverage="strong"] {
+  --c: var(--cov-strong);
+}
+.region[data-coverage="covered"] {
+  --c: var(--cov-covered);
+}
+.region[data-coverage="thin"] {
+  --c: var(--cov-thin);
+}
+.region[data-coverage="failing"] {
+  --c: var(--cov-failing);
+}
+.region:hover,
+.region[data-selected="true"] {
+  border-style: solid;
+  border-color: color-mix(in oklab, var(--c) 80%, transparent);
+}
+/* Light ground: the fog is pale and the tints are light, so every border is firmer to hold its
+   shape over them (an untested grey region, a declared card, a pill). */
+:global(:root[data-theme="light"]) .region {
+  border-color: color-mix(in oklab, var(--c) 62%, transparent);
+}
+:global(:root[data-theme="light"]) .region:not([data-lod="far"]) {
+  background: color-mix(in oklab, var(--c) 9%, transparent);
+}
+:global(:root[data-theme="light"]) .region:hover,
+:global(:root[data-theme="light"]) .region[data-selected="true"] {
+  border-color: color-mix(in oklab, var(--c) 85%, transparent);
+}
+/* Zoomed out the tint is stronger, still see-through: the fog lies under the regions so their
+   names stay readable over it. */
+.region[data-lod="far"] {
+  background: color-mix(in oklab, var(--c) 18%, transparent);
+  border-style: solid;
+  border-width: 3px;
+}
+:global([data-theme="dark"]) .region[data-lod="far"] {
+  background: color-mix(in oklab, var(--c) 14%, transparent);
+}
+/* Light ground: a firmer border, so a pale region (untested grey) holds its shape over the
+   light fog. */
+:global(:root[data-theme="light"]) .region[data-lod="far"] {
+  border-color: color-mix(in oklab, var(--c) 62%, transparent);
+}
+/* A summary card ("Other areas", "Other screens") reads as a stack, not as a territory. */
+.region[data-kind="areas"],
+.region[data-kind="other"] {
+  border-style: dotted;
+}
+/* Zoomed out, the size comes from `farTitle` (inline `font-size`); everything here is in ems of
+   it, so the title, the meta line and the bar scale together and never spill. */
+.regionFar {
+  display: flex;
+  height: 100%;
+  flex-direction: column;
+  justify-content: center;
+  gap: 0.25em;
+  padding: 0 40px;
+}
+.regionFarLabel {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  font-family: var(--font-sans);
+  font-size: 1em;
+  line-height: 1.08;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  color: var(--color-fg);
+}
+.regionFarMeta {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 0.45em;
+  line-height: 1.3;
+  color: var(--color-fg-2);
+  font-variant-numeric: tabular-nums;
+}
+.regionFar .regionBar {
+  height: 0.18em;
+}
+.regionHead {
+  padding: 14px 24px 0;
+}
+/* The region's coverage, as a pill on its name's line. */
+.coveragePill {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  height: 22px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in oklab, var(--c) 40%, transparent);
+  background: color-mix(in oklab, var(--c) 10%, var(--color-panel));
+  padding: 0 9px;
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+  color: var(--color-fg-2);
+}
+.regionToggle {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  border-radius: 8px;
+  border: 1px solid var(--color-border);
+  background: var(--color-raised);
+  padding: 0 10px;
+  font-size: 13px;
+  color: var(--color-fg-2);
+  box-shadow: var(--shadow-sm);
+  transition:
+    color 150ms ease,
+    border-color 150ms ease;
+}
+.regionToggle:hover {
+  color: var(--color-fg);
+  border-color: var(--color-border-strong);
+}
+.regionBar {
+  height: 14px;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--c) 18%, transparent);
+  overflow: hidden;
+}
+.headBar {
+  flex: none;
+  width: 96px;
+  height: 6px;
+}
+.regionBar > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--c);
+}
+
+/* ---------- screen cards ---------- */
+
+@keyframes card-in {
+  from {
+    opacity: 0;
+    transform: translateY(14px) scale(0.94);
+  }
+}
+.card {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  animation: card-in 600ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation-delay: var(--d, 0ms);
+  transition:
+    opacity 400ms ease,
+    filter 400ms ease;
+}
+.cardBox {
+  display: flex;
+  height: 100%;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: 12px;
+  border: 1px solid var(--color-border);
+  background: var(--color-panel);
+  box-shadow: var(--shadow-sm);
+  transition:
+    transform 150ms ease,
+    border-color 150ms ease;
+}
+:global(:root[data-theme="light"]) .cardBox {
+  border-color: color-mix(in oklab, var(--color-border-strong) 80%, var(--color-fg) 20%);
+}
+.card:hover .cardBox {
+  transform: translateY(-2px);
+  border-color: var(--color-border-strong);
+}
+/* A screen no run has reached: a compact ghost, a dashed outline on a see-through panel, so the
+   frames of what was seen stay the thing to look at. */
+.card[data-ghost="true"] .cardBox {
+  border-style: dashed;
+  border-color: color-mix(in oklab, var(--color-fg) 24%, transparent);
+  background: color-mix(in oklab, var(--color-panel) 62%, transparent);
+  box-shadow: none;
+}
+:global(:root[data-theme="light"]) .card[data-ghost="true"] .cardBox {
+  border-color: color-mix(in oklab, var(--color-fg) 30%, transparent);
+  background: color-mix(in oklab, var(--color-panel) 80%, transparent);
+}
+.card[data-state="blocked"] .cardBox {
+  border-color: color-mix(in oklab, var(--color-warning) 50%, transparent);
+  background: color-mix(in oklab, var(--color-warning) 5%, var(--color-panel));
+}
+.card[data-ghost="true"]:hover .cardBox {
+  border-color: color-mix(in oklab, var(--color-fg) 40%, transparent);
+}
+/* A frame, cropped under the device's status bar (the image moves up by the bar's share of its
+   own height). */
+.frame {
+  position: relative;
+  display: flex;
+  flex: none;
+  overflow: hidden;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-panel-2);
+}
+.frameImg {
+  position: absolute;
+  inset: 0 0 auto 0;
+  display: block;
+  width: 100%;
+  height: auto;
+  min-height: 100%;
+  object-fit: cover;
+  object-position: top;
+}
+/* "Covered by 7" / "Not covered" in a card's footer, beside its sources. */
+.coverChip {
+  min-width: 0;
+  height: 18px;
+  border-radius: 999px;
+  border: 1px solid var(--color-border);
+  padding: 0 7px;
+  font-size: 10.5px;
+  line-height: 16px;
+}
+.coverChip[data-map-cover="0"] {
+  color: var(--color-fg-2);
+}
+.coverChip:not([data-map-cover="0"]) {
+  border-color: color-mix(in oklab, var(--cov-strong) 40%, transparent);
+  background: color-mix(in oklab, var(--cov-strong) 9%, transparent);
+}
+.sourceOn {
+  color: var(--color-fg);
+}
+.sourceOff {
+  color: var(--color-fg);
+  opacity: 0.22;
+}
+.card[data-selected="true"] .cardBox {
+  border-style: solid;
+  border-color: var(--map-line-active);
+  box-shadow: 0 0 0 2px color-mix(in oklab, var(--map-line-active) 30%, transparent);
+}
+.card[data-flow-step] .cardBox {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 2px color-mix(in oklab, var(--color-primary) 35%, transparent);
+}
+.dim {
+  opacity: 0.18;
+  filter: grayscale(0.9);
+}
+
+/* A region's port to another: a badge on its bottom border, the theme's surface, quiet until a
+   line of it is in focus. */
+.port {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  align-items: center;
+  gap: 5px;
+  border-radius: 999px;
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-raised);
+  padding: 0 9px;
+  font-size: 11px;
+  line-height: 1;
+  white-space: nowrap;
+  color: var(--color-fg-2);
+  box-shadow: var(--shadow-sm);
+  cursor: pointer;
+  transition:
+    color 150ms ease,
+    border-color 150ms ease,
+    opacity 300ms ease;
+}
+.port:hover,
+.port[data-active="true"] {
+  color: var(--color-fg);
+  border-color: var(--map-line-active);
+  box-shadow: 0 0 0 2px color-mix(in oklab, var(--map-line-active) 22%, transparent);
+}
+.port[data-active="true"] svg {
+  color: var(--map-line-active);
+}
+
+.flowBadge {
+  position: absolute;
+  top: -10px;
+  left: -10px;
+  z-index: 2;
+  display: inline-flex;
+  width: 24px;
+  height: 24px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: var(--color-primary);
+  color: var(--color-primary-fg);
+  font-size: 12px;
+  font-weight: 650;
+  box-shadow: 0 0 0 3px var(--color-bg);
+  animation: pop 420ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  animation-delay: var(--d, 0ms);
+}
+
+/* ---------- data-flow pills, endpoint groups, bands ---------- */
+
+.pill {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  align-items: center;
+  gap: 8px;
+  border-radius: 10px;
+  border: 1px solid var(--color-border);
+  background: var(--color-panel);
+  padding: 0 10px;
+  box-shadow: var(--shadow-sm);
+  cursor: pointer;
+  animation: card-in 500ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation-delay: var(--d, 0ms);
+  transition:
+    opacity 400ms ease,
+    filter 400ms ease,
+    border-color 150ms ease;
+}
+:global(:root[data-theme="light"]) .pill {
+  border-color: var(--color-border-strong);
+}
+.pill:hover {
+  border-color: var(--color-border-strong);
+}
+.pill[data-state="declared"] {
+  border-style: dashed;
+}
+.pill[data-selected="true"] {
+  border-color: var(--map-line-active);
+  box-shadow: 0 0 0 2px color-mix(in oklab, var(--map-line-active) 35%, transparent);
+}
+.method {
+  flex: none;
+  border-radius: 4px;
+  padding: 1px 4px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 650;
+  background: color-mix(in oklab, var(--color-chart-1) 14%, transparent);
+  color: var(--color-chart-1);
+}
+.method[data-method="POST"],
+.method[data-method="PUT"],
+.method[data-method="PATCH"] {
+  background: color-mix(in oklab, var(--color-chart-3) 14%, transparent);
+  color: var(--color-chart-3);
+}
+.method[data-method="DELETE"] {
+  background: color-mix(in oklab, var(--color-danger) 14%, transparent);
+  color: var(--color-danger);
+}
+.pill[data-active="true"] {
+  border-color: var(--map-line-active);
+}
+/* A folded group: a box of its counts, a little stronger than a pill so it reads as many. */
+.groupBox {
+  align-items: stretch;
+  padding: 10px 12px;
+  border-color: var(--color-border-strong);
+  box-shadow:
+    var(--shadow-sm),
+    3px 3px 0 -1px var(--color-panel),
+    3px 3px 0 0 var(--color-border);
+}
+.prefix {
+  width: 100%;
+  height: 100%;
+  border-radius: 14px;
+  border: 1px dashed var(--color-border-strong);
+  background: color-mix(in oklab, var(--color-panel-2) 60%, transparent);
+}
+.band {
+  width: 100%;
+  height: 100%;
+  border-radius: 18px;
+  background: color-mix(in oklab, var(--color-panel-2) 45%, transparent);
+  border: 1px solid var(--color-border);
+}
+:global(:root[data-theme="light"]) .band {
+  border-color: var(--color-border-strong);
+}
+.band[data-quiet="true"] {
+  border-style: dashed;
+  background: transparent;
+}
+/* Opaque, over the edges that pass under it. */
+.note {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  border: 1px solid var(--color-border);
+  background: var(--color-raised);
+  padding: 0 16px;
+  font-size: 13px;
+  color: var(--color-fg-2);
+  box-shadow: var(--shadow-sm);
+  white-space: nowrap;
+}
+
+/* ---------- edges ---------- */
+
+.edge {
+  transition: opacity 250ms ease;
+}
+.edgeHit {
+  fill: none;
+  stroke: transparent;
+  pointer-events: stroke;
+}
+.edgePath {
+  fill: none;
+  stroke: var(--map-line, var(--color-edge));
+  stroke-linejoin: round;
+  transition:
+    opacity 400ms ease,
+    stroke 300ms ease;
+}
+/* The direction of travel: a dash that runs from source to target. */
+@keyframes travel {
+  from {
+    stroke-dashoffset: 26;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+.edgeRun {
+  fill: none;
+  stroke: color-mix(in oklab, var(--map-line-active) 55%, transparent);
+  stroke-dasharray: 3 23;
+  stroke-linecap: round;
+  animation: travel 1.1s linear infinite;
+  pointer-events: none;
+}
+/* Zoomed out, the dash is drawn at the canvas's scale so it still reads as moving. */
+@keyframes travel-far {
+  from {
+    stroke-dashoffset: 150;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+.edge[data-tone="link"] .edgeRun {
+  stroke-dasharray: 22 128;
+  animation: travel-far 1.6s linear infinite;
+}
+/* Known from the code, never taken by a run or a test. */
+.edge[data-dashed="true"] .edgePath {
+  stroke-dasharray: 5 4;
+}
+/* Region links are context, not content: faint, under the regions, and lit only for the region
+   in focus. */
+.edge[data-tone="link"] .edgePath {
+  stroke: color-mix(in oklab, var(--color-muted) 38%, transparent);
+  stroke-linecap: round;
+}
+.edge[data-tone="link"][data-active="true"] .edgePath {
+  stroke: color-mix(in oklab, var(--map-line-active) 70%, transparent);
+}
+.edge[data-tone="calls"] .edgePath {
+  stroke: color-mix(in oklab, var(--color-chart-1) 55%, transparent);
+}
+.edge[data-tone="writes"] .edgePath {
+  stroke: color-mix(in oklab, var(--color-chart-3) 60%, transparent);
+}
+.edge[data-tone="reads"] .edgePath {
+  stroke: color-mix(in oklab, var(--color-chart-2) 60%, transparent);
+}
+.edge[data-active="true"] .edgePath {
+  stroke: var(--map-line-active);
+}
+.edge[data-tone="nav"][data-active="true"] .edgePath,
+.edge[data-tone="cross"][data-active="true"] .edgePath {
+  stroke: var(--map-line-active);
+}
+.edge[data-dim="true"] {
+  opacity: 0.12;
+}
+.edge[data-tone="nav"][data-dim="true"] {
+  opacity: 0.22;
+}
+.edge[data-tone="link"][data-dim="true"] {
+  opacity: 0.35;
+}
+.particle {
+  fill: var(--map-line-active);
+}
+.edge[data-tone="calls"] .particle {
+  fill: var(--color-chart-1);
+}
+.edge[data-tone="writes"] .particle {
+  fill: var(--color-chart-3);
+}
+.edge[data-tone="reads"] .particle {
+  fill: var(--color-chart-2);
+}
+.edgeLabelGroup {
+  pointer-events: none;
+}
+.edgeLabelBox {
+  fill: var(--color-raised);
+  stroke: var(--color-border-strong);
+  stroke-width: 1px;
+}
+.edgeLabelGroup[data-active="true"] .edgeLabelBox {
+  stroke: color-mix(in oklab, var(--map-line-active) 55%, var(--color-border-strong));
+}
+.edgeLabel {
+  font-family: var(--font-sans);
+  font-weight: 500;
+  fill: var(--color-fg);
+}
+
+/* A test's flow lights up step by step over the screens. */
+@keyframes draw {
+  from {
+    stroke-dashoffset: var(--len, 1600);
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+.flowPath {
+  fill: none;
+  stroke: var(--color-primary);
+  stroke-linecap: round;
+  stroke-dasharray: var(--len, 1600);
+  animation: draw 700ms cubic-bezier(0.65, 0, 0.35, 1) both;
+  animation-delay: var(--d, 0ms);
+}
+.flowGlow {
+  fill: none;
+  stroke: color-mix(in oklab, var(--color-primary) 22%, transparent);
+  stroke-linecap: round;
+}
+
+/* ---------- side panel ---------- */
+
+@keyframes slide {
+  from {
+    opacity: 0;
+    transform: translateX(24px);
+  }
+}
+.panel {
+  animation: slide 260ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+@media (max-width: 767px) {
+  @keyframes slide {
+    from {
+      opacity: 0;
+      transform: translateY(24px);
+    }
+  }
+}
+
+/* A panel section's body folds to its header: the grid row animates from its content's height to
+   none, so no height is measured. */
+.fold {
+  display: grid;
+  grid-template-rows: 1fr;
+  transition: grid-template-rows 220ms cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+.fold[data-open="false"] {
+  grid-template-rows: 0fr;
+}
+/* The collapsed panel: a rail at the right edge reading its title top to bottom. */
+@media (min-width: 768px) {
+  .railTitle {
+    writing-mode: vertical-rl;
+  }
+}
+
+/* ---------- scenes: the teaching empty state and the building view ---------- */
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+.rise {
+  animation: rise 420ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  animation-delay: var(--d, 0ms);
+}
+
+@keyframes pop {
+  0% {
+    opacity: 0;
+    transform: scale(0.8);
+  }
+  60% {
+    transform: scale(1.04);
+  }
+}
+
+.sketch {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+.sketchRegion {
+  fill: color-mix(in oklab, var(--cov-covered) 6%, transparent);
+  stroke: color-mix(in oklab, var(--cov-covered) 45%, transparent);
+  stroke-width: 1.5;
+  stroke-dasharray: 5 4;
+}
+.sketchScreen {
+  fill: var(--color-panel);
+  stroke: var(--color-border-strong);
+  stroke-width: 1.2;
+}
+.sketchLink {
+  fill: none;
+  stroke: var(--color-edge);
+  stroke-width: 1.6;
+}
+.sketchFlow {
+  fill: none;
+  stroke: var(--color-primary);
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.sketchFrame {
+  fill: color-mix(in oklab, var(--cov-strong) 22%, var(--color-panel));
+  stroke: color-mix(in oklab, var(--cov-strong) 70%, transparent);
+  stroke-width: 1.2;
+}
+.sketchFrameBar {
+  fill: color-mix(in oklab, var(--cov-strong) 55%, transparent);
+}
+.sketchLabel {
+  fill: var(--color-muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+/* Teaching loop, 9 s: code draws the skeleton (0–30%), tests light a flow (30–60%), live frames
+   pop into the screens (60–90%), then it rests and starts again. The resting style (every
+   keyframe's end) is the finished map. */
+@keyframes teach-code {
+  0% {
+    opacity: 0;
+    stroke-dashoffset: 400;
+  }
+  4% {
+    opacity: 1;
+  }
+  22%,
+  100% {
+    stroke-dashoffset: 0;
+  }
+}
+@keyframes teach-tests {
+  0%,
+  32% {
+    stroke-dashoffset: 400;
+    opacity: 0;
+  }
+  34% {
+    opacity: 1;
+  }
+  55%,
+  92% {
+    stroke-dashoffset: 0;
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+@keyframes teach-live {
+  0%,
+  60% {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+  66%,
+  92% {
+    opacity: 1;
+    transform: none;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+.teach .sketchRegion,
+.teach .sketchScreen,
+.teach .sketchLink {
+  stroke-dasharray: 400;
+  animation: teach-code 9s cubic-bezier(0.3, 0.6, 0.2, 1) infinite both;
+  animation-delay: var(--d, 0ms);
+}
+.teach .sketchRegion {
+  stroke-dasharray: 5 4;
+  animation-name: teach-region;
+}
+@keyframes teach-region {
+  0% {
+    opacity: 0;
+  }
+  8%,
+  100% {
+    opacity: 1;
+  }
+}
+.teach .sketchFlow {
+  stroke-dasharray: 400;
+  animation: teach-tests 9s cubic-bezier(0.65, 0, 0.35, 1) infinite both;
+}
+.teach .sketchFrameGroup {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: teach-live 9s cubic-bezier(0.2, 0.7, 0.2, 1) infinite both;
+  animation-delay: var(--d, 0ms);
+}
+/* The source in the legend that is speaking lights up with its beat. */
+@keyframes source-code {
+  0%,
+  30% {
+    opacity: 1;
+  }
+  34%,
+  100% {
+    opacity: 0.5;
+  }
+}
+@keyframes source-tests {
+  0%,
+  30% {
+    opacity: 0.5;
+  }
+  34%,
+  60% {
+    opacity: 1;
+  }
+  64%,
+  100% {
+    opacity: 0.5;
+  }
+}
+@keyframes source-live {
+  0%,
+  60% {
+    opacity: 0.5;
+  }
+  64%,
+  96% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0.5;
+  }
+}
+.source {
+  transition: opacity 300ms ease;
+}
+.teach .source[data-source="code"] {
+  animation: source-code 9s ease-in-out infinite;
+}
+.teach .source[data-source="tests"] {
+  animation: source-tests 9s ease-in-out infinite;
+}
+.teach .source[data-source="live"] {
+  animation: source-live 9s ease-in-out infinite;
+}
+
+/* Building: each source's layer appears when its step starts and stays. Before that it is a
+   faint placeholder, so the picture never jumps. */
+.build .sketchScreen,
+.build .sketchLink {
+  stroke-dasharray: 400;
+  stroke-dashoffset: 400;
+  transition: stroke-dashoffset 1400ms cubic-bezier(0.3, 0.6, 0.2, 1);
+  transition-delay: var(--d, 0ms);
+}
+.build .sketchRegion {
+  opacity: 0.35;
+  transition: opacity 600ms ease;
+}
+.build[data-stage="code"] .sketchRegion,
+.build[data-stage="tests"] .sketchRegion,
+.build[data-stage="live"] .sketchRegion,
+.build[data-stage="done"] .sketchRegion {
+  opacity: 1;
+}
+.build[data-stage="code"] .sketchScreen,
+.build[data-stage="code"] .sketchLink,
+.build[data-stage="tests"] .sketchScreen,
+.build[data-stage="tests"] .sketchLink,
+.build[data-stage="live"] .sketchScreen,
+.build[data-stage="live"] .sketchLink,
+.build[data-stage="done"] .sketchScreen,
+.build[data-stage="done"] .sketchLink {
+  stroke-dashoffset: 0;
+}
+.build .sketchFlow {
+  stroke-dasharray: 400;
+  stroke-dashoffset: 400;
+  transition: stroke-dashoffset 1600ms cubic-bezier(0.65, 0, 0.35, 1);
+}
+.build[data-stage="tests"] .sketchFlow,
+.build[data-stage="live"] .sketchFlow,
+.build[data-stage="done"] .sketchFlow {
+  stroke-dashoffset: 0;
+}
+.build .sketchFrameGroup {
+  opacity: 0;
+  transform: scale(0.6);
+  transform-box: fill-box;
+  transform-origin: center;
+  transition:
+    opacity 420ms ease,
+    transform 520ms cubic-bezier(0.2, 0.7, 0.2, 1);
+  transition-delay: var(--d, 0ms);
+}
+.build[data-stage="live"] .sketchFrameGroup,
+.build[data-stage="done"] .sketchFrameGroup {
+  opacity: 1;
+  transform: none;
+}
+/* The scan line that reads while a build runs. */
+@keyframes scan {
+  from {
+    transform: translateY(0);
+  }
+  to {
+    transform: translateY(var(--h, 220px));
+  }
+}
+.scan {
+  fill: color-mix(in oklab, var(--color-primary) 10%, transparent);
+  animation: scan 2.6s ease-in-out infinite alternate;
+}
+
+/* The building card over a map that is being rebuilt. */
+.overlay {
+  animation: rise 320ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .card,
+  .pill,
+  .flowBadge,
+  .flowPath,
+  .edgeRun,
+  .panel,
+  .rise,
+  .overlay,
+  .scan,
+  .teach .sketchRegion,
+  .teach .sketchScreen,
+  .teach .sketchLink,
+  .teach .sketchFlow,
+  .teach .sketchFrameGroup,
+  .teach .source {
+    animation: none !important;
+  }
+  .fold {
+    transition: none;
+  }
+  .edgeRun,
+  .scan {
+    display: none;
+  }
+  .flowPath,
+  .teach .sketchScreen,
+  .teach .sketchLink,
+  .teach .sketchFlow {
+    stroke-dashoffset: 0;
+  }
+  .build .sketchScreen,
+  .build .sketchLink,
+  .build .sketchFlow,
+  .build .sketchFrameGroup {
+    transition: none;
+  }
+}
+
+/* ---------- Map the app: a screen the crawl just reached ---------- */
+
+/* Out of the fog: the card starts blurred and pale, sharpens into its frame, and a ring pulses
+   once around it. Reduced motion: the card just shows as it is. */
+@keyframes reveal-fog {
+  from {
+    opacity: 0.35;
+    filter: blur(6px) grayscale(0.8);
+    transform: scale(0.96);
+  }
+}
+@keyframes reveal-ring {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in oklab, var(--cov-strong) 55%, transparent);
+  }
+  100% {
+    box-shadow: 0 0 0 18px color-mix(in oklab, var(--cov-strong) 0%, transparent);
+  }
+}
+.revealed {
+  animation: reveal-fog 900ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.revealed .cardBox {
+  border-color: var(--cov-strong);
+  animation: reveal-ring 1200ms ease-out 250ms 2;
+}
+@keyframes live-dot {
+  50% {
+    opacity: 0.35;
+  }
+}
+.liveDot {
+  animation: live-dot 1.4s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .revealed,
+  .revealed .cardBox,
+  .liveDot {
+    animation: none !important;
+  }
+}
+
+/* ---------- Map the app: the planned crawl's queue ---------- */
+
+/* The next targets: the ghost card keeps its see-through panel, its dashed outline turns the
+   active indigo, quietly. */
+/* (`.canvas` and the state attribute outrank the ghost's own light-theme outline.) */
+.canvas .card[data-crawl-role="next"][data-state] .cardBox {
+  border-style: dashed;
+  border-color: color-mix(in oklab, var(--map-line-active) 62%, transparent);
+}
+.canvas .card[data-crawl-role="next"][data-state]:hover .cardBox {
+  border-color: var(--map-line-active);
+}
+/* The target the crawl is on: a solid indigo outline that breathes, under a ring that runs down
+   with its budget. */
+@keyframes crawl-breathe {
+  50% {
+    box-shadow: 0 0 0 6px color-mix(in oklab, var(--map-line-active) 0%, transparent);
+  }
+}
+.canvas .card.crawlCurrent[data-state] .cardBox {
+  border-style: solid;
+  border-color: var(--map-line-active);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--map-line-active) 22%, transparent);
+  animation: crawl-breathe 2.4s ease-in-out infinite;
+}
+.crawlRing {
+  position: absolute;
+  z-index: 1;
+  overflow: visible;
+  pointer-events: none;
+}
+.crawlRingTrack,
+.crawlRingLeft {
+  fill: none;
+  stroke-width: 2;
+}
+.crawlRingTrack {
+  stroke: color-mix(in oklab, var(--map-line-active) 16%, transparent);
+}
+.crawlRingLeft {
+  stroke: var(--map-line-active);
+  stroke-linecap: round;
+  transition:
+    stroke-dashoffset 1s linear,
+    stroke 400ms ease;
+}
+.crawlRing[data-warning] .crawlRingLeft {
+  stroke: var(--color-warning);
+}
+.crawlNow {
+  position: absolute;
+  z-index: 2;
+  top: -21px;
+  left: 8px;
+  border-radius: 999px;
+  padding: 0 7px;
+  background: color-mix(in oklab, var(--map-line-active) 14%, var(--color-panel));
+  color: var(--color-fg);
+  font-size: 10.5px;
+  font-weight: 500;
+  line-height: 16px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.crawlNow[data-warning] {
+  background: color-mix(in oklab, var(--color-warning) 18%, var(--color-panel));
+}
+@media (prefers-reduced-motion: reduce) {
+  .canvas .card.crawlCurrent[data-state] .cardBox {
+    animation: none !important;
+  }
+  .crawlRingLeft {
+    transition: none;
+  }
+}
+
+/* The speed overlay (map-speed.tsx): each timed screen's newest time in its heat colour,
+   with a ring round a slow one. The word is in the badge's title and screen-reader text. */
+/* A region's speed from afar: its timed screens, worst first. */
+.regionHeat,
+.regionHeatFar {
+  --h: var(--color-success);
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--h);
+}
+.regionHeat {
+  height: 22px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in oklab, var(--h) 40%, transparent);
+  background: color-mix(in oklab, var(--h) 10%, var(--color-panel));
+  padding: 0 9px;
+  font-size: 12px;
+  line-height: 1;
+}
+.regionHeatFar {
+  gap: 0.3em;
+  font-size: 0.45em;
+  line-height: 1.3;
+}
+.regionHeat[data-heat="slow"],
+.regionHeatFar[data-heat="slow"] {
+  --h: var(--color-danger);
+}
+.regionHeat[data-heat="warm"],
+.regionHeatFar[data-heat="warm"] {
+  --h: var(--color-warning);
+}
+.regionHeatDot {
+  width: 0.6em;
+  height: 0.6em;
+  border-radius: 999px;
+  background: var(--h);
+}
+.regionHeat .regionHeatDot {
+  width: 8px;
+  height: 8px;
+}
+
+.heatBadge {
+  position: absolute;
+  top: -9px;
+  right: 8px;
+  z-index: 3;
+  border-radius: 999px;
+  border: 1px solid var(--color-border);
+  background: var(--color-raised);
+  padding: 0 7px;
+  font-size: 11px;
+  line-height: 17px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  box-shadow: var(--shadow-sm);
+}
+.heatBadge[data-heat="slow"] {
+  color: var(--color-danger);
+  border-color: color-mix(in oklab, var(--color-danger) 45%, var(--color-border));
+}
+.heatBadge[data-heat="warm"] {
+  color: var(--color-warning);
+  border-color: color-mix(in oklab, var(--color-warning) 45%, var(--color-border));
+}
+.heatBadge[data-heat="ok"] {
+  color: var(--color-success);
+}
+.card[data-heat="slow"] .cardBox {
+  box-shadow:
+    0 0 0 2px color-mix(in oklab, var(--color-danger) 70%, transparent),
+    var(--shadow-md);
+}
+.card[data-heat="warm"] .cardBox {
+  box-shadow:
+    0 0 0 2px color-mix(in oklab, var(--color-warning) 60%, transparent),
+    var(--shadow-md);
+}

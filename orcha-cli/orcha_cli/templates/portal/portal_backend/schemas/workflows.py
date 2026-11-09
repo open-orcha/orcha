@@ -118,6 +118,30 @@ class RepeatGroup(Input):
     stall_rule: Literal["findings_and_artifact", "off"] = "findings_and_artifact"
 
 
+class QaStepSpec(Input):
+    """Makes a step a QA step (version 2): activating it files a QA request, and the rolled-up
+    result reports the step's outcome. Outcomes default to `pass` and `fail` (`triage`: `fix`,
+    `clear` and `needs_person`), the assignee to the project's QA agent. A person accepts the
+    step, unless the project's `final_decision` is `quality` and every rule of it holds."""
+
+    kind: Literal["map", "explore", "draft", "check", "triage"]
+    platform: Literal["ios", "android", "web"] | None = None
+    #: The device it runs on: a simulator, emulator or phone by name, a web viewport. Empty: the
+    #: agent picks.
+    device: str | None = Field(default=None, max_length=200)
+    scenario_ids: list[str] = Field(default_factory=list, max_length=50)
+    tags: list[Annotated[str, Field(max_length=60)]] = Field(default_factory=list, max_length=20)
+    focus: str | None = Field(default=None, max_length=2000)
+    minutes: int | None = Field(default=None, ge=1, le=480)
+
+
+class QaStepBlock(Input):
+    """The Quality block a step came from, for its label. The step stays a normal step."""
+
+    key: Key
+    name: Name
+
+
 class NewTask(Input):
     client_key: Key
     title: Name
@@ -128,6 +152,8 @@ class NewTask(Input):
     depends_on: list[str] = Field(default_factory=list, max_length=3)
     outcomes: list[StepOutcome] = Field(default_factory=list, max_length=8)
     routes: list[StepRoute] = Field(default_factory=list, max_length=8)
+    qa: QaStepSpec | None = None
+    block: QaStepBlock | None = None
 
 
 class NewObjective(Input):
@@ -287,6 +313,7 @@ class FlowStep(Input):
     task_id: str
     outcomes: list[StepOutcome] = Field(default_factory=list, max_length=8)
     routes: list[StepRoute] = Field(default_factory=list, max_length=8)
+    qa: QaStepSpec | None = None
     expected_work_revision: int | None = Field(default=None, ge=1)
 
 
@@ -423,6 +450,8 @@ class WorkflowTask(BaseModel):
     # Semantics version 2 only; empty or null on version-1 workflows.
     outcomes: list[StepOutcome] = Field(default_factory=list)
     routes: list[StepRoute] = Field(default_factory=list)
+    qa: QaStepSpec | None = None
+    block: QaStepBlock | None = None
     route_state: Literal["not_selected"] | None = None
     awaiting_loop_decision: (
         Literal["limit_reached", "stalled", "missing_outcome", "ask_owner"] | None

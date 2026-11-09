@@ -33,6 +33,18 @@ Task autonomy does not authorize publishing, deploying, destructive actions, or 
 request. Those actions still require the task's explicit instructions and repository rules; when
 unspecified, stop for a person.
 
+## Handing work to QA
+
+When your change touches what a user sees or does, hand it to QA before you finish: `/orcha-qa-request`
+(or `orcha qa request`), with what to test and what to prove. It needs no device. The project's QA
+agent gets a linked task, and the result comes back on your thread. Skip it for changes nobody can see.
+
+A QA result is evidence, not a verification: a pass never completes a task, and a person still
+verifies it. A failure sent back to you carries QA's findings: fix them and finish again, and QA runs
+again by itself. A workflow with a QA step does this on its own, so do not hand its steps off as well.
+
+When a task says a person started a QA run, that click is the approval of your plan: go straight on.
+
 ## PR human-attribution (agent-opened PRs)
 
 An Orcha agent opens PRs authenticated as the GitHub App, so the PR **author** shows the bot — but

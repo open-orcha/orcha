@@ -3,7 +3,6 @@ package io.openorcha.mobile.domain
 import io.openorcha.mobile.data.EvidenceSummaryDod
 import io.openorcha.mobile.data.EvidenceSummaryDto
 import io.openorcha.mobile.data.EvidenceSummaryTests
-import io.openorcha.mobile.data.EvidenceSummaryVerdikt
 import io.openorcha.mobile.data.EvidenceTestCounts
 import io.openorcha.mobile.data.EvidenceTestInvocation
 import io.openorcha.mobile.data.GoalChainDto
@@ -35,14 +34,13 @@ class TaskInsightsUxTest {
     }
 
     @Test
-    fun summaryTestsAndVerdikt() {
+    fun summaryTestsPassing() {
         val s = EvidenceSummaryDto(
             dod = EvidenceSummaryDod(total = 2, proven = 2),
             tests = EvidenceSummaryTests(status = "passed", passed = 42),
-            verdikt = EvidenceSummaryVerdikt("completed", "pass"),
         )
         val parts = TaskInsightsUx.summaryParts(s)
-        assertEquals(listOf("2/2 DoD", "42 tests passed", "Verdikt pass"), parts.map { it.text })
+        assertEquals(listOf("2/2 DoD", "42 tests passed"), parts.map { it.text })
         assertTrue(parts.all { it.tone == Tone.Ok })
         val failing = EvidenceSummaryDto(tests = EvidenceSummaryTests(status = "failed", passed = 3, failed = 1))
         assertEquals("1 test failing", TaskInsightsUx.summaryParts(failing).single().text)
@@ -83,11 +81,5 @@ class TaskInsightsUxTest {
         val withParent = bare.copy(goalChain = listOf(bare.goalChain[0], GoalNodeDto("parent", "p", "Parent"), bare.goalChain[1]))
         assertTrue(TaskInsightsUx.hasAncestry(withParent))
         assertEquals(listOf("proj", "Parent"), TaskInsightsUx.goalCrumbs(withParent).map(TaskInsightsUx::goalCrumbLabel))
-    }
-
-    @Test
-    fun absoluteUrl() {
-        assertEquals("http://h:8001/api/x", TaskInsightsUx.absoluteUrl("http://h:8001/", "/api/x"))
-        assertEquals("https://v/r", TaskInsightsUx.absoluteUrl("http://h", "https://v/r"))
     }
 }

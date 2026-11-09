@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Button } from "../../components/primitives/Button";
+import { Icon } from "../../components/ui";
 import { Segmented } from "../../components/primitives";
 import { WorkflowGraph } from "./WorkflowGraph";
 import { WorkflowTaskDraftFields } from "./WorkflowTaskDraftFields";
@@ -11,9 +12,16 @@ import { WorkflowDraftSave } from "./WorkflowDraftSave";
 import { useWorkflowOperation } from "./workflowOperations";
 import type { WorkflowDetail } from "./workflowContract.generated";
 import { WorkflowImportChoices, type ImportChoice } from "./WorkflowImport";
+import { WorkflowBlockPicker } from "./WorkflowBlockPicker";
+import { blocksIn, insertBlock, removeBlock } from "./workflowBlocks";
+import { WorkflowQaStepDialog, WorkflowStepRoutes, WorkflowTriageStepDialog } from "./WorkflowQaStep";
+import { QUALITY_IN_WORKFLOWS, addQaStep, addTriageStep, draftReturns, editQaStep, editTriageStep, removeStep, stepKindWord, triageableSteps, type QaStepInput, type TriageStepInput } from "./workflowQa";
+import { useLoad } from "../qa/parts";
+import { listWorkflowBlocks, type QaWorkflowBlock } from "../qa/requests/api";
+import { qaAgentOf } from "../qa/requests/model";
 import "./workflows.css";
 
-interface Props { scope: DraftScope; saveUnavailableReason: string | null; agents?: { id: string; alias: string }[]; initialTaskId?: string; ownerName?: string; onSaved?: (detail: WorkflowDetail) => void;
+interface Props { scope: DraftScope; saveUnavailableReason: string | null; agents?: { id: string; alias: string; role?: string | null }[]; initialTaskId?: string; ownerName?: string; onSaved?: (detail: WorkflowDetail) => void;
   /** The server's `flexible_workflows` capability: outcomes, next-step rules and feedback loops. */
   flexible?: boolean }
 export function WorkflowDraftEditor(props: Props) {
@@ -27,6 +35,9 @@ function ScopedDraftEditor({ scope, saveUnavailableReason, agents = [], initialT
   const [selected, setSelected] = useState<string | null>(null);
   const [importOpen, setImportOpen] = useState(!!initialTaskId);
   const [discarding, setDiscarding] = useState(false);
+  const [qaStep, setQaStep] = useState<{ editing: string | null } | null>(null);
+  const [triageStep, setTriageStep] = useState<{ editing: string | null } | null>(null);
+  const [picking, setPicking] = useState(false);
   const change = (next: WorkflowDraft) => { keepDraft(scope, next); setDraft(next); };
   const update = (task: DraftTask, patch: Partial<DraftTask>) => change({ ...draft, tasks: draft.tasks.map((t) => t.key === task.key ? { ...t, ...patch } : t) });
   const operation = useWorkflowOperation(scope, "create");
@@ -38,6 +49,25 @@ function ScopedDraftEditor({ scope, saveUnavailableReason, agents = [], initialT
       change({ ...draft, existingTaskIds: [...new Set([...(draft.existingTaskIds ?? []), initialTaskId])] });
     }
   }, [initialTaskId, frozen]);
+
+  const saveQaStep = (input: QaStepInput) => {
+    const next = qaStep?.editing ? editQaStep(draft, qaStep.editing, input) : addQaStep(draft, input);
+    change(next.draft); setSelected(next.key); setQaStep(null);
+  };
+  const blocks = useLoad(flexible ? (s) => listWorkflowBlocks(scope.project, s) : null, [scope.project, flexible]);
+  const saveTriageStep = (input: TriageStepInput) => {
+    const next = triageStep?.editing ? editTriageStep(draft, triageStep.editing, input) : addTriageStep(draft, input);
+    change(next.draft); setSelected(next.key); setTriageStep(null);
+  };
+  const addBlock = (block: QaWorkflowBlock, after: string | null) => {
+    const quality = qaAgentOf(agents, null);
+    const others = agents.filter((a) => a.id !== quality?.id);
+    const next = insertBlock(draft, block, { after, assignees: { quality: quality?.id, build: others.length === 1 ? others[0].id : undefined } });
+    change(next.draft); setSelected(null); setPicking(false);
+  };
+  const addBlockButton = QUALITY_IN_WORKFLOWS && !!blocks.data?.length && <Button icon="plus" disabled={draft.tasks.length >= 200} onClick={() => setPicking(true)}>Add a Quality workflow</Button>;
+  const blockNames = new Map(blocksIn(draft).map((b, i) => [b.id, { ...b, first: i }]));
+  const cardTasks = draft.tasks.filter((t) => !graph || t.key === selected);
 
   return <div className="wf-draft wf-create">
     <h1>Create workflow</h1><p className="wf-create-steps">Goal · Tasks · Review and save</p>
@@ -61,20 +91,33 @@ function ScopedDraftEditor({ scope, saveUnavailableReason, agents = [], initialT
     </section>
     <section aria-labelledby="wf-tasks-heading">
       <h2 id="wf-tasks-heading">Tasks and dependencies</h2>
-      {draft.tasks.length === 0 && <p>No tasks yet. Add a summary to begin planning.</p>}
+      {draft.tasks.length === 0 && <p>No tasks yet. Add a summary to begin planning, or start from a Quality workflow.</p>}
       <Segmented label="Task editor view" value={graph ? "graph" : "cards"} onChange={(k) => setGraph(k === "graph")} items={[{ key: "cards", label: "Cards" }, { key: "graph", label: "Graph" }]} />
       {graph && selected && <Button className="wf-back-graph" onClick={() => setSelected(null)}>Back to graph</Button>}
-      <div className={graph && selected ? "wf-draft-graph has-selection" : "wf-draft-graph"}>{graph && <WorkflowGraph tasks={draft.tasks.map((t) => ({ id: t.key, title: draftTaskName(t, draft.tasks), status: "pending", label: "Draft", assignee: agents.find((a) => a.id === t.assignee)?.alias ?? "Unassigned", dependsOn: t.dependsOn, draft: true }))} selected={selected} onSelect={setSelected}
+      <div className={graph && selected ? "wf-draft-graph has-selection" : "wf-draft-graph"}>{graph && <WorkflowGraph tasks={draft.tasks.map((t) => ({ id: t.key, title: draftTaskName(t, draft.tasks), status: "pending", label: "Draft", assignee: agents.find((a) => a.id === t.assignee)?.alias ?? "Unassigned", dependsOn: t.dependsOn, draft: true, ...(t.block ? { block: t.block } : {}), ...(t.qa ? { qa: { word: stepKindWord(t.qa), tone: "neutral" as const, kind: t.qa.kind === "triage" ? "triage" as const : "quality" as const } } : {}), returns: draftReturns(t, draft.tasks) }))} selected={selected} onSelect={setSelected}
         onAdd={() => { const task = newDraftTask(); change({ ...draft, tasks: [...draft.tasks, task] }); setSelected(task.key); }}
         onAfter={(id) => { const task = { ...newDraftTask(), dependsOn: [id] }; change({ ...draft, tasks: [...draft.tasks, task] }); setSelected(task.key); }} disabledReason={draft.tasks.length >= 200 ? "The draft already has 200 tasks." : null} />}</div>
-      {draft.tasks.filter((t) => !graph || t.key === selected).map((task) => <WorkflowTaskDraftFields key={task.key} task={task} tasks={draft.tasks} agents={agents} flexible={flexible} ownerName={ownerName}
+      {cardTasks.map((task, i) => <div key={task.key} className={task.block ? "wf-block-step" : undefined} data-block-step={task.block?.id}>
+        {task.block && cardTasks[i - 1]?.block?.id !== task.block.id && <div className="wf-block-h" data-block-head={task.block.name}>
+          <Icon name="shield" cls="v2-ico" /><b>{task.block.name}</b><span className="wf-muted">Quality workflow · {blockNames.get(task.block.id)?.steps ?? 1} steps</span>
+          <Button size="sm" variant="ghost" className="wf-push" onClick={() => { change(removeBlock(draft, task.block!.id)); setSelected(null); }}>Remove {task.block.name}</Button>
+        </div>}
+        <WorkflowTaskDraftFields task={task} tasks={draft.tasks} agents={agents} flexible={flexible} ownerName={ownerName}
         reviewLoop={draft.repeatGroups?.find((g) => g.review === task.key)?.name.trim() || (draft.repeatGroups?.some((g) => g.review === task.key) ? "this loop" : undefined)}
         loopMembers={draft.repeatGroups?.find((g) => g.review === task.key)?.members}
         existing={(draft.existingTaskIds ?? []).map((id) => ({ id, title: existingTasks.find((t) => t.id === id)?.title ?? "Selected existing task" }))}
-        onChange={(patch) => update(task, patch)} removeLabel={`Remove task ${draft.tasks.indexOf(task) + 1}`}
-        onRemove={() => { change({ ...draft, tasks: draft.tasks.filter((t) => t.key !== task.key).map((t) => ({ ...t, outcomes: t.outcomes?.map((o) => o.destinationTask === task.key ? { ...o, destination: "next", destinationTask: undefined } : o) })),
-          repeatGroups: draft.repeatGroups?.map((g) => ({ ...g, members: g.members.filter((k) => k !== task.key), ...(g.review === task.key ? { review: "", exitOutcome: "" } : {}) })) }); setSelected(null); }} />)}
-      <Button icon="plus" disabled={draft.tasks.length >= 200} onClick={() => { const task = newDraftTask(); change({ ...draft, tasks: [...draft.tasks, task] }); setSelected(task.key); }}>Add task summary</Button>
+        onChange={(patch) => update(task, patch)} onEditQa={() => (task.qa?.kind === "triage" ? setTriageStep({ editing: task.key }) : setQaStep({ editing: task.key }))} removeLabel={`Remove task ${draft.tasks.indexOf(task) + 1}`}
+        routes={task.qa && flexible && !!task.outcomes?.length ? <WorkflowStepRoutes draft={draft} taskKey={task.key} ownerName={ownerName} onChange={change} /> : undefined}
+        onRemove={() => { change(removeStep(draft, task.key)); setSelected(null); }} /></div>)}
+      <div className="wf-actions-row">
+        <Button icon="plus" disabled={draft.tasks.length >= 200} onClick={() => { const task = newDraftTask(); change({ ...draft, tasks: [...draft.tasks, task] }); setSelected(task.key); }}>Add task summary</Button>
+        {addBlockButton}
+        {QUALITY_IN_WORKFLOWS && <Button icon="plus" disabled={draft.tasks.length >= 200} onClick={() => setQaStep({ editing: null })}>Add Quality step</Button>}
+        {QUALITY_IN_WORKFLOWS && triageableSteps(draft).length > 0 && <Button icon="plus" disabled={draft.tasks.length >= 200} onClick={() => setTriageStep({ editing: null })}>Add triage step</Button>}
+      </div>
+      {picking && <WorkflowBlockPicker cid={scope.project} blocks={blocks.data ?? []} draft={draft} initialAfter={selected} onPick={addBlock} onClose={() => setPicking(false)} />}
+      {qaStep && <WorkflowQaStepDialog cid={scope.project} draft={draft} agents={agents} flexible={flexible} ownerName={ownerName} editing={qaStep.editing} onSave={saveQaStep} onClose={() => setQaStep(null)} />}
+      {triageStep && <WorkflowTriageStepDialog cid={scope.project} draft={draft} agents={agents} flexible={flexible} ownerName={ownerName} editing={triageStep.editing} onSave={saveTriageStep} onClose={() => setTriageStep(null)} />}
     </section>
     {flexible && <WorkflowLoopFields groups={draft.repeatGroups ?? []} tasks={draft.tasks} ownerName={ownerName} onChange={(repeatGroups) => change({ ...draft, repeatGroups })} />}
     <Button onClick={() => setImportOpen(true)}>Add existing tasks…</Button>

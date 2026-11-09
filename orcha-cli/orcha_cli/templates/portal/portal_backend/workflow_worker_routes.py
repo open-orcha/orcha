@@ -104,6 +104,15 @@ def abort_worker_launch(aid: str, rid: str, request: Request):
 
 @app.post("/api/agents/{aid}/runs/{rid}/confirm-stopped")
 def confirm_worker_stopped(aid: str, rid: str, body: WorkflowStopObserved, request: Request):
+    result, tid = _confirm_worker_stopped(aid, rid, body, request)
+    # The evidence is saved now, so a step can have its final decision. After the commit, never raising.
+    from portal_backend import qa_run_tasks
+
+    qa_run_tasks.consider(tid, stopped=True)
+    return result
+
+
+def _confirm_worker_stopped(aid: str, rid: str, body: WorkflowStopObserved, request: Request):
     require_capability()
     with db_cursor() as (_, cur):
         _lane(cur, request, aid)
@@ -156,7 +165,7 @@ def confirm_worker_stopped(aid: str, rid: str, body: WorkflowStopObserved, reque
             result = {**result, "task_status": "completed", "workflow": detail}
         else:
             svc.reconcile(str(w["id"]))
-        return result
+        return result, str(task["id"])
 
 
 @app.post("/api/agents/{aid}/runs/{rid}/continue-reserve", status_code=201)

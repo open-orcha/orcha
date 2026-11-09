@@ -1,0 +1,421 @@
+/* "Let us map your app" (onboarding). The canvas reads its colours from the custom properties
+   below (draw.ts `readPalette`), so light and dark come from Orcha's --v2-* tokens: teal for your
+   tests, the accent for Embodent, amber for what nothing covers. An element's resting style is its
+   final state, keyframes only say where it comes from, and reduced motion (bottom of this file)
+   shows everything finished and still. */
+
+.stage {
+  --onb-ground: var(--v2-canvas);
+  --onb-grid: color-mix(in oklab, var(--v2-text) 6%, transparent);
+  --onb-label: var(--v2-text);
+  --onb-label-dim: var(--v2-text-3);
+  --onb-area: color-mix(in oklab, var(--v2-text) 2%, transparent);
+  --onb-area-line: color-mix(in oklab, var(--v2-text) 9%, transparent);
+  --onb-tile: var(--v2-surface);
+  --onb-skeleton: var(--v2-border);
+  --onb-line: color-mix(in oklab, var(--v2-text-3) 50%, transparent);
+  --onb-line-active: var(--v2-accent);
+  --onb-yours: var(--v2-hue-routines);
+  --onb-qa: var(--v2-accent);
+  --onb-none: var(--v2-warn);
+  --onb-flight: var(--v2-accent);
+  --onb-pass: var(--v2-ok);
+  --onb-fail: var(--v2-danger);
+  --onb-warn: var(--v2-warn);
+  --onb-ring: var(--v2-focus-color);
+  position: relative;
+  overflow: hidden;
+  border-radius: var(--v2-radius-panel);
+  border: 1px solid var(--v2-border);
+  background:
+    radial-gradient(var(--onb-grid) 0.8px, transparent 1.2px) 0 0 / 14px 14px,
+    radial-gradient(120% 90% at 0% 0%, color-mix(in oklab, var(--v2-text) 5%, transparent), transparent 55%),
+    var(--onb-ground);
+  outline: none;
+}
+.stage:focus-visible {
+  box-shadow: var(--v2-focus-ring);
+}
+.canvas {
+  display: block;
+  width: 100%;
+}
+
+/* The column heads over the canvas (the repository, the screens, the endpoints). */
+.colHead {
+  position: absolute;
+  top: 12px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--onb-label-dim);
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+/* ---------- the swatches every coverage colour is named by ---------- */
+
+.swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  flex: none;
+  border-radius: 3px;
+  background: color-mix(in oklab, var(--c) 32%, var(--v2-surface));
+  border: 1.5px solid var(--c);
+}
+.swatch[data-dashed="true"] {
+  border-style: dashed;
+  background: var(--v2-surface);
+}
+.tones {
+  --c-yours: var(--v2-hue-routines);
+  --c-qa: var(--v2-accent);
+  --c-none: var(--v2-warn);
+}
+.yours {
+  --c: var(--c-yours);
+}
+.qa {
+  --c: var(--c-qa);
+}
+.none {
+  --c: var(--c-none);
+}
+.code {
+  --c: var(--v2-text-3);
+}
+
+/* ---------- framework badges: they sweep in, one after another ---------- */
+
+.badge {
+  animation: badge-in 620ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation-delay: var(--d, 0ms);
+}
+@keyframes badge-in {
+  from {
+    opacity: 0;
+    transform: translateX(-18px) scale(0.96);
+    filter: blur(2px);
+  }
+}
+.badge[data-dim="true"] {
+  opacity: 0.45;
+}
+
+/* ---------- the tooltip over a screen ---------- */
+
+.tip {
+  position: absolute;
+  z-index: 5;
+  width: 300px;
+  max-width: calc(100% - 24px);
+  pointer-events: none;
+  border-radius: var(--v2-radius-card);
+  border: 1px solid var(--v2-border);
+  background: var(--v2-raised);
+  box-shadow: var(--v2-shadow-pop);
+  padding: 10px 12px;
+  animation: tip-in 140ms ease-out both;
+}
+@keyframes tip-in {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+}
+.evidence {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  overflow: hidden;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* ---------- the beat line under the map: what is happening now ---------- */
+
+.beat {
+  animation: beat-in 420ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+@keyframes beat-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+.shimmer {
+  position: relative;
+  overflow: hidden;
+}
+.shimmer::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, color-mix(in oklab, var(--v2-text) 22%, transparent), transparent);
+  transform: translateX(-100%);
+  animation: shimmer 1.6s ease-in-out infinite;
+}
+@keyframes shimmer {
+  to {
+    transform: translateX(100%);
+  }
+}
+
+/* Cards that land: a section of the We found sheet, a result card. */
+.rise {
+  animation: rise 520ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation-delay: var(--d, 0ms);
+}
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+/* The result card's mark: a calm ring that settles. */
+.verdictMark {
+  animation: mark 700ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+@keyframes mark {
+  from {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+  60% {
+    opacity: 1;
+  }
+}
+.halo {
+  animation: halo 1.4s ease-out 1 both;
+}
+@keyframes halo {
+  from {
+    box-shadow: 0 0 0 0 color-mix(in oklab, var(--c, var(--v2-ok)) 40%, transparent);
+  }
+  to {
+    box-shadow: 0 0 0 18px transparent;
+  }
+}
+
+/* ---------- teaching scenes (empty and waiting states) ---------- */
+
+.scene {
+  --s-line: color-mix(in oklab, var(--v2-text-3) 45%, transparent);
+  --s-ink: var(--v2-text-2);
+  --s-flight: var(--v2-accent);
+  --s-yours: var(--v2-hue-routines);
+  --s-qa: var(--v2-accent);
+  --s-none: var(--v2-warn);
+  --s-tile: var(--v2-surface);
+  width: 100%;
+  max-width: 340px;
+  height: auto;
+  overflow: visible;
+}
+.sceneFile {
+  fill: var(--s-line);
+  animation: scene-file 4.8s ease-in-out infinite;
+  animation-delay: var(--d, 0ms);
+}
+@keyframes scene-file {
+  0%,
+  8% {
+    fill: var(--s-line);
+  }
+  14%,
+  30% {
+    fill: var(--s-flight);
+  }
+  44%,
+  100% {
+    fill: var(--s-line);
+  }
+}
+.sceneCurve {
+  fill: none;
+  stroke: var(--s-flight);
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-dasharray: 14 240;
+  stroke-dashoffset: 254;
+  animation: scene-fly 4.8s cubic-bezier(0.45, 0, 0.2, 1) infinite;
+  animation-delay: var(--d, 0ms);
+  opacity: 0.9;
+}
+@keyframes scene-fly {
+  0%,
+  10% {
+    stroke-dashoffset: 254;
+    opacity: 0;
+  }
+  12% {
+    opacity: 0.9;
+  }
+  34% {
+    stroke-dashoffset: 14;
+    opacity: 0.9;
+  }
+  38%,
+  100% {
+    stroke-dashoffset: 14;
+    opacity: 0;
+  }
+}
+.sceneScreen {
+  fill: var(--s-tile);
+  stroke: var(--s-line);
+  stroke-width: 1.2;
+  stroke-dasharray: 4 3;
+  animation: scene-screen 4.8s ease-out infinite;
+  animation-delay: var(--d, 0ms);
+}
+@keyframes scene-screen {
+  0%,
+  30% {
+    stroke: var(--s-line);
+    stroke-dasharray: 4 3;
+  }
+  36%,
+  62% {
+    stroke: var(--s-flight);
+    stroke-dasharray: 4 3;
+  }
+  70%,
+  92% {
+    stroke: var(--s-yours);
+    stroke-dasharray: none;
+    stroke-width: 1.8;
+  }
+  100% {
+    stroke: var(--s-line);
+    stroke-dasharray: 4 3;
+  }
+}
+.sceneTile {
+  fill: var(--s-tile);
+  stroke: var(--s-line);
+  stroke-width: 1.2;
+  animation: scene-tile 5.4s ease-in-out infinite;
+  animation-delay: var(--d, 0ms);
+}
+.sceneTile[data-tone="yours"] {
+  --t: var(--s-yours);
+}
+.sceneTile[data-tone="qa"] {
+  --t: var(--s-qa);
+}
+.sceneTile[data-tone="none"] {
+  --t: var(--s-none);
+}
+@keyframes scene-tile {
+  0%,
+  12% {
+    fill: var(--s-tile);
+    stroke: var(--s-line);
+  }
+  24%,
+  86% {
+    fill: color-mix(in oklab, var(--t) 26%, var(--s-tile));
+    stroke: var(--t);
+  }
+  100% {
+    fill: var(--s-tile);
+    stroke: var(--s-line);
+  }
+}
+.sceneMove {
+  animation: scene-move 4.4s cubic-bezier(0.45, 0, 0.2, 1) infinite;
+}
+@keyframes scene-move {
+  0%,
+  14% {
+    transform: translateX(0);
+    opacity: 1;
+  }
+  46%,
+  70% {
+    transform: translateX(118px);
+    opacity: 1;
+  }
+  84%,
+  100% {
+    transform: translateX(118px);
+    opacity: 0;
+  }
+}
+.sceneCheck {
+  fill: none;
+  stroke: var(--s-yours);
+  stroke-width: 2.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 30;
+  stroke-dashoffset: 30;
+  animation: scene-check 4.4s ease-out infinite;
+}
+@keyframes scene-check {
+  0%,
+  52% {
+    stroke-dashoffset: 30;
+  }
+  64%,
+  90% {
+    stroke-dashoffset: 0;
+  }
+  100% {
+    stroke-dashoffset: 0;
+    opacity: 0;
+  }
+}
+.sceneInk {
+  fill: var(--s-ink);
+  font: 600 9px var(--v2-font-sans);
+}
+.sceneDim {
+  fill: var(--v2-text-3);
+  font: 500 8.5px var(--v2-font-sans);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .badge,
+  .tip,
+  .beat,
+  .rise,
+  .verdictMark,
+  .halo {
+    animation: none;
+  }
+  .shimmer::after {
+    display: none;
+  }
+  .sceneFile,
+  .sceneScreen,
+  .sceneTile,
+  .sceneMove,
+  .sceneCheck {
+    animation: none;
+  }
+  .sceneCurve {
+    animation: none;
+    stroke-dasharray: none;
+    opacity: 0.5;
+  }
+  .sceneScreen {
+    stroke: var(--s-yours);
+    stroke-dasharray: none;
+  }
+  .sceneTile {
+    fill: color-mix(in oklab, var(--t) 26%, var(--s-tile));
+    stroke: var(--t);
+  }
+  .sceneMove {
+    transform: translateX(118px);
+  }
+  .sceneCheck {
+    stroke-dashoffset: 0;
+  }
+}
