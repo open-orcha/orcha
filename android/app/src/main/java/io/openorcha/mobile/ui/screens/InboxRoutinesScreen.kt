@@ -69,6 +69,7 @@ import io.openorcha.mobile.ui.components.LSpace
 import io.openorcha.mobile.ui.components.LTag
 import io.openorcha.mobile.ui.components.LType
 import io.openorcha.mobile.ui.components.ltype
+import io.openorcha.mobile.ui.components.ExpandableText
 import io.openorcha.mobile.ui.icons.OrchaIcons
 import io.openorcha.mobile.ui.theme.Orcha
 import kotlinx.coroutines.launch
@@ -380,9 +381,9 @@ private fun RoutineCard(
                                     run.taskTitle ?: RoutineCopy.trigger(run),
                                     style = ltype(LType.Body), color = p.text, maxLines = 1,
                                 )
-                                Text(
+                                ExpandableText(
                                     listOfNotNull(RoutineCopy.trigger(run), MobileUx.agoLabel(run.createdAt), run.detailText).joinToString(" · "),
-                                    style = ltype(LType.Micro), color = p.muted, maxLines = 2,
+                                    style = ltype(LType.Micro), color = p.muted, collapsedLines = 2,
                                 )
                             }
                             LTag(

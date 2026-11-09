@@ -435,15 +435,24 @@ private fun CsvTable(text: String, path: String) {
         Text("Empty table.", style = ltype(LType.Meta), color = p.faint, modifier = Modifier.padding(LSpace.m)); return
     }
     val cols = minOf(rows.maxOf { it.size }, MAX_TABLE_COLS)
+    // GH #378: tapping a row shows its cut-off cells in full (tap again to fold it back).
+    var openRows by remember(text, path) { mutableStateOf(emptySet<Int>()) }
     Column(Modifier.horizontalScroll(rememberScrollState()).padding(vertical = 4.dp)) {
         rows.take(MAX_TABLE_ROWS + 1).forEachIndexed { ri, r ->
-            Row(Modifier.background(if (ri == 0) p.surface else p.surface2)) {
+            val open = ri in openRows
+            Row(
+                Modifier
+                    .background(if (ri == 0) p.surface else p.surface2)
+                    .clickable(onClickLabel = if (open) "Fold row" else "Show full row") {
+                        openRows = if (open) openRows - ri else openRows + ri
+                    },
+            ) {
                 for (c in 0 until cols) {
                     Text(
                         r.getOrNull(c).orEmpty(),
                         style = ltype(if (ri == 0) LType.BodyEmph else LType.Meta),
                         color = if (ri == 0) p.text else p.text2,
-                        maxLines = 1,
+                        maxLines = if (open) Int.MAX_VALUE else 1,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.widthIn(min = 64.dp, max = 220.dp).padding(horizontal = 10.dp, vertical = 6.dp),
                     )

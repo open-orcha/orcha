@@ -115,4 +115,28 @@ class RunFeedTest {
         assertEquals("narrate", rows[0].type)
         assertEquals("tool", rows[1].type)
     }
+
+    // GH #378: text cut at a character limit keeps the whole of it in the tap-to-expand detail.
+    @Test
+    fun longPlainLogLineKeepsTheWholeLineInDetail() {
+        val line = "x".repeat(300)
+        val row = RunFeed.classifyLine(line).single()
+        assertEquals(240, row.text.length)
+        assertTrue(row.text.endsWith("…"))
+        assertEquals(line, row.detail)
+    }
+
+    @Test
+    fun shortPlainLogLineHasNoDetail() {
+        assertEquals(null, RunFeed.classifyLine("short line").single().detail)
+    }
+
+    @Test
+    fun longRunResultKeepsTheWholeResultInDetail() {
+        val result = "r".repeat(250)
+        val row = RunFeed.classifyLine("""{"type":"result","result":"$result"}""").single()
+        assertEquals("run-complete", row.label)
+        assertTrue(row.text.endsWith("…"))
+        assertEquals("\"$result\"", row.detail)
+    }
 }

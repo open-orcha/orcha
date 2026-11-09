@@ -55,6 +55,7 @@ import io.openorcha.mobile.ui.components.LSize
 import io.openorcha.mobile.ui.components.LSpace
 import io.openorcha.mobile.ui.components.LType
 import io.openorcha.mobile.ui.components.ltype
+import io.openorcha.mobile.ui.components.ExpandableText
 import io.openorcha.mobile.ui.icons.OrchaIcons
 import io.openorcha.mobile.ui.theme.Orcha
 
@@ -113,11 +114,31 @@ internal fun GoalChainBreadcrumb(chain: GoalChainDto?, onOpenTask: (String) -> U
                         .semantics { contentDescription = "Parent task: $label" },
                 )
             } else {
-                Text(
-                    label,
-                    style = ltype(LType.Meta), color = p.faint, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.align(Alignment.CenterVertically).semantics { contentDescription = "Objective: $label" },
-                )
+                val full = TaskInsightsUx.goalCrumbFull(node)
+                if (full != null) {
+                    // GH #378: a cut-off objective opens in full on tap (the row wraps to fit it).
+                    var open by rememberSaveable(full) { mutableStateOf(false) }
+                    Text(
+                        if (open) full else label,
+                        style = ltype(LType.Meta), color = p.faint,
+                        maxLines = if (open) Int.MAX_VALUE else 1, overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier
+                            .align(Alignment.CenterVertically)
+                            .clickable(role = Role.Button, onClickLabel = if (open) "Shorten objective" else "Show full objective") { open = !open }
+                            .heightIn(min = 48.dp)
+                            .padding(vertical = 14.dp)
+                            .semantics {
+                                contentDescription = "Objective: $full"
+                                stateDescription = if (open) "Expanded" else "Collapsed"
+                            },
+                    )
+                } else {
+                    Text(
+                        label,
+                        style = ltype(LType.Meta), color = p.faint, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.align(Alignment.CenterVertically).semantics { contentDescription = "Objective: $label" },
+                    )
+                }
             }
         }
     }
@@ -266,7 +287,7 @@ private fun EvidenceDetails(
                 Box(Modifier.padding(top = 3.dp)) { ToneGlyph(tone, "") }
                 Column {
                     Text("${inv.framework} · $text", style = ltype(LType.Body), color = toneColor(tone).takeIf { tone != Tone.Plain } ?: p.text)
-                    Text(inv.command, style = ltype(LType.Mono), color = p.faint, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    ExpandableText(inv.command, style = ltype(LType.Mono), color = p.faint, collapsedLines = 2)
                 }
             }
         }
@@ -298,7 +319,7 @@ private fun EvidenceDetails(
             pack.flags.forEach { f ->
                 if (f.files.isNotEmpty()) {
                     val more = (f.count - f.files.size).takeIf { it > 0 }?.let { " +$it more" } ?: ""
-                    Text("${f.label}: ${f.files.joinToString(", ")}$more", style = ltype(LType.Micro), color = p.faint, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                    ExpandableText("${f.label}: ${f.files.joinToString(", ")}$more", style = ltype(LType.Micro), color = p.faint, collapsedLines = 3)
                 }
             }
         }

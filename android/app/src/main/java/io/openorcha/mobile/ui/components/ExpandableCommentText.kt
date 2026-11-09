@@ -19,6 +19,7 @@ import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -113,3 +114,33 @@ fun ExpandableCommentText(
         }
     }
 }
+
+/**
+ * Any capped display text that people need to read in full (GH #378: "everywhere", not only comments):
+ * the same measured Show more / Show less as [ExpandableCommentText], with its own open/closed state.
+ * The state is saveable, so it survives rotation and, inside a keyed lazy list, scrolling the row away.
+ * Short text that fits never gets a control, so screens look the same until something is cut off.
+ */
+@Composable
+fun ExpandableText(
+    text: AnnotatedString,
+    modifier: Modifier = Modifier,
+    style: TextStyle = ltype(LType.Body),
+    color: Color = Orcha.palette.text2,
+    collapsedLines: Int = CommentExpansion.COLLAPSED_LINES,
+    reveal: CommentReveal? = null,
+) {
+    var expanded by rememberSaveable(text.text) { mutableStateOf(false) }
+    ExpandableCommentText(text, expanded, { expanded = it }, modifier, style, color, collapsedLines, reveal)
+}
+
+/** Plain-string form of [ExpandableText]. */
+@Composable
+fun ExpandableText(
+    text: String,
+    modifier: Modifier = Modifier,
+    style: TextStyle = ltype(LType.Body),
+    color: Color = Orcha.palette.text2,
+    collapsedLines: Int = CommentExpansion.COLLAPSED_LINES,
+    reveal: CommentReveal? = null,
+) = ExpandableText(AnnotatedString(text), modifier, style, color, collapsedLines, reveal)

@@ -113,6 +113,7 @@ import io.openorcha.mobile.ui.components.lPrimaryFill
 import io.openorcha.mobile.ui.components.lPrimaryText
 import io.openorcha.mobile.ui.components.ltype
 import io.openorcha.mobile.ui.components.priorityLabel
+import io.openorcha.mobile.ui.components.ExpandableText
 import io.openorcha.mobile.ui.icons.OrchaIcons
 import io.openorcha.mobile.ui.theme.Orcha
 
@@ -669,10 +670,10 @@ private fun PlanWaitingCard(task: TaskDto, onReview: () -> Unit) {
                 Text("Plan waiting for approval", style = ltype(LType.Headline), color = p.text, modifier = Modifier.weight(1f).semantics { heading() })
                 task.planMessage?.authorAlias?.let { LAvatar(it, isAI = true, size = 20.dp) }
             }
-            Text(
+            ExpandableText(
                 // Preview: drop markdown heading markers ("## Plan") so the card reads as prose.
                 inlineMarkdown(task.planMessage?.body.orEmpty().lines().joinToString("\n") { it.trimStart().trimStart('#').trimStart() }),
-                style = ltype(LType.Body), color = p.text2, maxLines = 4, overflow = TextOverflow.Ellipsis,
+                style = ltype(LType.Body), color = p.text2, collapsedLines = 4,
             )
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                 LButton("Review plan", onReview, kind = LButtonKind.Primary, size = LSize.Small)

@@ -90,4 +90,15 @@ class TaskInsightsUxTest {
         assertEquals("http://h:8001/api/x", TaskInsightsUx.absoluteUrl("http://h:8001/", "/api/x"))
         assertEquals("https://v/r", TaskInsightsUx.absoluteUrl("http://h", "https://v/r"))
     }
+
+    // GH #378: a cut-off objective crumb can open in full; one that fits has nothing to open.
+    @Test
+    fun goalCrumbFullOnlyWhenTheObjectiveWasCut() {
+        val long = "Ship the mobile apps with every long text readable in full, everywhere it appears"
+        val cut = GoalNodeDto("objective", "r", "proj", text = long)
+        assertEquals(long, TaskInsightsUx.goalCrumbFull(cut))
+        assertTrue(TaskInsightsUx.goalCrumbLabel(cut).endsWith("…"))
+        assertEquals(null, TaskInsightsUx.goalCrumbFull(GoalNodeDto("objective", "r", "proj", text = "Short goal")))
+        assertEquals(null, TaskInsightsUx.goalCrumbFull(GoalNodeDto("parent", "p", long)))
+    }
 }

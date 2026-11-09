@@ -226,13 +226,12 @@ private struct HomeHeader: View {
     @ViewBuilder
     private var objective: some View {
         let text = (snapshot.container.description ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        if canEditObjective {
+        if canEditObjective && text.isEmpty {
             Button(action: onEditObjective) {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Text(text.isEmpty ? "Add an objective…" : text)
+                    Text("Add an objective…")
                         .ltype(.body)
-                        .foregroundStyle(text.isEmpty ? p.muted : p.text2)
-                        .lineLimit(3)
+                        .foregroundStyle(p.muted)
                         .multilineTextAlignment(.leading)
                     Image(systemName: "pencil")
                         .font(.system(size: 12, weight: .medium))
@@ -243,12 +242,27 @@ private struct HomeHeader: View {
                 .contentShape(.rect)
             }
             .buttonStyle(.plain)
-            .accessibilityLabel(text.isEmpty ? "Add an objective" : "Edit objective: \(text)")
+            .accessibilityLabel("Add an objective")
         } else if !text.isEmpty {
-            Text(text)
-                .ltype(.body)
-                .foregroundStyle(p.text2)
-                .lineLimit(3)
+            // GH #378: a long objective opens in place with Show more; the pencil stays its own button.
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                ExpandableText(collapsedLines: 3) {
+                    Text(text)
+                        .ltype(.body)
+                        .foregroundStyle(p.text2)
+                }
+                if canEditObjective {
+                    Button(action: onEditObjective) {
+                        Image(systemName: "pencil")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(p.faint)
+                            .frame(minWidth: 44, minHeight: 44)
+                            .contentShape(.rect)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Edit objective")
+                }
+            }
         }
     }
 
@@ -434,10 +448,11 @@ private struct UpdateRow: View {
                         .ltype(.meta)
                         .foregroundStyle(p.muted)
                 }
-                Text(ActivityCopy.preview(message.body))
-                    .ltype(.meta)
-                    .foregroundStyle(p.muted)
-                    .lineLimit(2)
+                ExpandableText(collapsedLines: 2) {
+                    Text(ActivityCopy.preview(message.body))
+                        .ltype(.meta)
+                        .foregroundStyle(p.muted)
+                }
             }
         }
         .padding(.horizontal, LSpace.m)

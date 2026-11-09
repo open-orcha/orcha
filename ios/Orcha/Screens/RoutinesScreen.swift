@@ -408,7 +408,7 @@ struct RoutineDetailScreen: View {
                                 .ltype(.meta)
                                 .foregroundStyle(p.text2)
                             if let title = run.taskTitle, !title.isEmpty {
-                                Text(title).ltype(.meta).foregroundStyle(p.muted).lineLimit(2)
+                                ExpandableText(collapsedLines: 2) { Text(title).ltype(.meta).foregroundStyle(p.muted) }
                             }
                             if let detail = run.detail, !detail.isEmpty, run.outcome != "created" {
                                 Text(detail).ltype(.micro).foregroundStyle(p.muted)

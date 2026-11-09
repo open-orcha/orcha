@@ -173,9 +173,10 @@ private fun PullHeader(pull: GitHubPullDetail) {
         }
         // base ← head, mirroring GitHub's own "into base from head" framing.
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text(pull.base, style = branchStyle, color = p.text2, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            // GH #378: long branch names wrap instead of being cut; this is the only place they're shown.
+            Text(pull.base, style = branchStyle, color = p.text2, modifier = Modifier.weight(1f, fill = false))
             Icon(OrchaIcons.ArrowBack, contentDescription = null, tint = p.muted, modifier = Modifier.size(14.dp))
-            Text(pull.head, style = branchStyle, color = p.accent, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(pull.head, style = branchStyle, color = p.accent, modifier = Modifier.weight(1f, fill = false))
         }
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             pull.authorLogin?.let { author ->

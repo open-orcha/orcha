@@ -411,10 +411,11 @@ private struct PlanWaitingCard: View {
                         LAvatar(name: author, isAI: true, size: 20)
                     }
                 }
-                Text(task.planMessage?.body ?? "")
-                    .ltype(.body)
-                    .foregroundStyle(p.text2)
-                    .lineLimit(4)
+                ExpandableText(collapsedLines: 4) {
+                    Text(task.planMessage?.body ?? "")
+                        .ltype(.body)
+                        .foregroundStyle(p.text2)
+                }
                 HStack {
                     Spacer()
                     LButton("Review plan", kind: .primary, size: .small, action: onReview)
@@ -779,10 +780,12 @@ struct RunRowCard: View {
                         .ltype(.meta)
                         .foregroundStyle(run.status == "running" ? p.warn : p.text2)
                 }
-                Text(run.taskTitle ?? run.wakeEvent.map(ActivityCopy.humanize) ?? "Worker run")
-                    .ltype(.meta)
-                    .foregroundStyle(p.faint)
-                    .lineLimit(1)
+                // GH #378: the task title or wake event isn't shown in full on the run page, so it opens here.
+                ExpandableText(collapsedLines: 1) {
+                    Text(run.taskTitle ?? run.wakeEvent.map(ActivityCopy.humanize) ?? "Worker run")
+                        .ltype(.meta)
+                        .foregroundStyle(p.faint)
+                }
             }
             Spacer(minLength: LSpace.s)
             if let alias = run.agentAlias {

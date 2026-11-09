@@ -284,10 +284,12 @@ struct LRow<Leading: View, Trailing: View>: View {
                     .foregroundStyle(p.text)
                     .lineLimit(2)
                 if let subtitle, !subtitle.isEmpty {
-                    Text(subtitle)
-                        .ltype(.meta)
-                        .foregroundStyle(p.muted)
-                        .lineLimit(1)
+                    // GH #378: a cut-off subtitle (often a message preview) opens in place.
+                    ExpandableText(collapsedLines: 1) {
+                        Text(subtitle)
+                            .ltype(.meta)
+                            .foregroundStyle(p.muted)
+                    }
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)

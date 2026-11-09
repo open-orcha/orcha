@@ -10,6 +10,8 @@ struct TaskGoalChainBar: View {
     let taskId: String
 
     @State private var crumbs: [GoalCrumb] = []
+    /// GH #378: tapping a cut-off objective shows it in full (the bar scrolls sideways to read it).
+    @State private var objectiveOpen = false
 
     var body: some View {
         // A stack, not a Group: an empty Group renders nothing, so `.task` would never
@@ -42,19 +44,21 @@ struct TaskGoalChainBar: View {
     private func crumbView(_ crumb: GoalCrumb) -> some View {
         switch crumb {
         case .objective(let text, let project):
-            HStack(spacing: 4) {
-                Image(systemName: "flag")
-                    .font(.caption2)
-                    .accessibilityHidden(true)
-                if let text {
-                    Text(Self.clip(text, 60))
-                } else {
-                    Text(project.isEmpty ? "No objective set" : "\(project) · No objective set")
+            if let text, Self.clip(text, 60) != text {
+                Button { objectiveOpen.toggle() } label: {
+                    objectiveLabel(objectiveOpen ? text : Self.clip(text, 60), color: p.text2)
+                        .frame(minHeight: 44)
+                        .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Project objective: \(text)")
+                .accessibilityValue(objectiveOpen ? "Expanded" : "Collapsed")
+                .accessibilityHint(objectiveOpen ? "Shortens the objective" : "Shows the full objective")
+            } else {
+                objectiveLabel(text ?? (project.isEmpty ? "No objective set" : "\(project) · No objective set"),
+                               color: text == nil ? p.faint : p.text2)
+                    .accessibilityLabel(text.map { "Project objective: \($0)" } ?? "No objective set")
             }
-            .foregroundStyle(text == nil ? p.faint : p.text2)
-            .lineLimit(1)
-            .accessibilityLabel(text.map { "Project objective: \($0)" } ?? "No objective set")
         case .gap(let label, let hint):
             Text(label)
                 .foregroundStyle(p.faint)
@@ -76,6 +80,17 @@ struct TaskGoalChainBar: View {
             Text("This task")
                 .foregroundStyle(p.faint)
         }
+    }
+
+    private func objectiveLabel(_ shown: String, color: Color) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: "flag")
+                .font(.caption2)
+                .accessibilityHidden(true)
+            Text(shown)
+        }
+        .foregroundStyle(color)
+        .lineLimit(1)
     }
 
     private static func clip(_ text: String, _ max: Int) -> String {

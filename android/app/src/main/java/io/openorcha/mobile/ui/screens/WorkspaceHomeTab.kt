@@ -56,6 +56,7 @@ import io.openorcha.mobile.ui.components.LStatusGlyph
 import io.openorcha.mobile.ui.components.LTag
 import io.openorcha.mobile.ui.components.LType
 import io.openorcha.mobile.ui.components.ltype
+import io.openorcha.mobile.ui.components.ExpandableText
 import io.openorcha.mobile.ui.icons.OrchaIcons
 import io.openorcha.mobile.ui.theme.Orcha
 
@@ -202,7 +203,7 @@ private fun HomeHeader(
             modifier = Modifier.semantics { heading() },
         )
         snapshot.container.description?.takeIf { it.isNotBlank() }?.let {
-            Text(it, style = ltype(LType.Body), color = p.text2, maxLines = 3, overflow = TextOverflow.Ellipsis)
+            ExpandableText(it, style = ltype(LType.Body), color = p.text2, collapsedLines = 3)
         }
         Text(homeTally(snapshot.tasks), style = ltype(LType.Meta), color = p.muted)
         Row(
@@ -380,7 +381,7 @@ private fun UpdateRow(task: TaskDto, msg: TaskMessageDto, onClick: () -> Unit) {
                 )
                 Text(MobileUx.agoLabel(msg.createdAt) ?: "", style = ltype(LType.Meta), color = p.muted, maxLines = 1)
             }
-            Text(ActivityCopy.preview(msg.body), style = ltype(LType.Meta), color = p.muted, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            ExpandableText(ActivityCopy.preview(msg.body), style = ltype(LType.Meta), color = p.muted, collapsedLines = 2)
         }
     }
 }

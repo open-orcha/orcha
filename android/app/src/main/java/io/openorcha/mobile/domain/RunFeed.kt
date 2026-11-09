@@ -38,7 +38,7 @@ object RunFeed {
 
     fun classifyLine(line: String): List<RunFeedRow> {
         val obj = runCatching { json.parseToJsonElement(line) as? JsonObject }.getOrNull()
-            ?: return if (line.isBlank()) emptyList() else listOf(RunFeedRow("narrate", "log", trunc(line, 240)))
+            ?: return if (line.isBlank()) emptyList() else listOf(RunFeedRow("narrate", "log", trunc(line, 240), cutRest(line, 240)))
         val out = mutableListOf<RunFeedRow>()
         val t = obj.str("type")
         val st = obj.str("subtype")
@@ -72,7 +72,7 @@ object RunFeed {
                             r,
                         )
                     }
-                    "text" -> out += RunFeedRow("boot", "injected prompt", trunc(c.str("text") ?: "", 200))
+                    "text" -> (c.str("text") ?: "").let { out += RunFeedRow("boot", "injected prompt", trunc(it, 200), cutRest(it, 200)) }
                 }
             }
             t == "system" -> when {
@@ -83,7 +83,9 @@ object RunFeed {
                 else -> out += RunFeedRow("boot", "lifecycle", "system " + (st ?: ""))
             }
             t == "result" ->
-                out += RunFeedRow("done", "run-complete", trunc((obj["result"] ?: obj["subtype"])?.toString() ?: "\"done\"", 200))
+                ((obj["result"] ?: obj["subtype"])?.toString() ?: "\"done\"").let {
+                    out += RunFeedRow("done", "run-complete", trunc(it, 200), cutRest(it, 200))
+                }
             else -> {
                 val codex = classifyCodex(obj)
                 if (codex.isNotEmpty()) out += codex else out += RunFeedRow("narrate", t ?: "event", "")
@@ -220,4 +222,7 @@ object RunFeed {
         (this[key] as? JsonPrimitive)?.takeIf { it.isString }?.content
 
     private fun trunc(s: String, n: Int): String = if (s.length <= n) s else s.take(n - 1) + "…"
+
+    /** GH #378: when [trunc] cut the text, the whole of it goes in the row's tap-to-expand detail. */
+    private fun cutRest(s: String, n: Int): String? = s.takeIf { it.length > n }
 }

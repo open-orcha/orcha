@@ -42,3 +42,14 @@ Unchanged: the full thread screen, GitHub issue comments and chat bubbles (never
   so recycled rows never inherit it.
 - Screen readers: the comment (author, time, text) is one element; the control is its own button,
   labelled "Show more" / "Show less", with state "Collapsed" / "Expanded".
+
+## Round 2: every cut-off text (Kedar's review, 2026-11-09)
+
+The same control now covers any readable text the apps used to cut off with "…", not just comments. It keeps each
+place's original line count (often 1 to 4) and appears only when something is actually cut off.
+
+- Previews and other content text (Home objective and updates, plan card, agent role, run rows, test commands,
+  reasons, errors, config values, routine and spend titles) use `ExpandableText`, which owns its own open state.
+- Where a Show more control would not fit, the text opens another way: the goal-chain objective opens on tap, branch
+  names wrap, an opened file shows its whole path, and run-log rows keep the whole text behind their tap-to-expand.
+- Layout labels (names, tabs, pills, buttons) and list titles whose row opens a page with the full text stay one line.

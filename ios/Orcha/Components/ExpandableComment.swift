@@ -102,6 +102,28 @@ extension ExpandableComment where Header == EmptyView {
     }
 }
 
+/// Any capped display text people need to read in full (GH #378: "everywhere", not only comments).
+/// The same measured Show more / Show less as `ExpandableComment`, owning its own open/closed state.
+/// Text that fits never gets a control, so a screen looks the same until something is cut off.
+/// `header` (optional) reads with the text as one VoiceOver element, as in `ExpandableComment`.
+struct ExpandableText<Header: View, Content: View>: View {
+    var collapsedLines: Int = CommentExpansion.collapsedLines
+    @ViewBuilder let header: () -> Header
+    @ViewBuilder let content: () -> Content
+    @State private var expanded = false
+
+    var body: some View {
+        ExpandableComment(expanded: expanded, onToggle: { expanded.toggle() },
+                          collapsedLines: collapsedLines, header: header, content: content)
+    }
+}
+
+extension ExpandableText where Header == EmptyView {
+    init(collapsedLines: Int = CommentExpansion.collapsedLines, @ViewBuilder content: @escaping () -> Content) {
+        self.init(collapsedLines: collapsedLines, header: { EmptyView() }, content: content)
+    }
+}
+
 private final class TopEdge {
     var minY: CGFloat = 0
 }

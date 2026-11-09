@@ -103,4 +103,27 @@ import Testing
         #expect(rows[0].type == "narrate")
         #expect(rows[1].type == "tool")
     }
+
+    // GH #378: text cut at a character limit keeps the whole of it in the tap-to-expand detail.
+    @Test func longPlainLogLineKeepsTheWholeLineInDetail() {
+        let line = String(repeating: "x", count: 300)
+        let rows = RunFeed.classifyLine(line)
+        #expect(rows.count == 1)
+        #expect(rows[0].text.count == 240)
+        #expect(rows[0].text.hasSuffix("…"))
+        #expect(rows[0].detail == line)
+    }
+
+    @Test func shortPlainLogLineHasNoDetail() {
+        #expect(RunFeed.classifyLine("short line").first?.detail == nil)
+    }
+
+    @Test func longRunResultKeepsTheWholeResultInDetail() {
+        let result = String(repeating: "r", count: 250)
+        let rows = RunFeed.classifyLine(#"{"type":"result","result":"\#(result)"}"#)
+        #expect(rows.count == 1)
+        #expect(rows[0].label == "run-complete")
+        #expect(rows[0].text.hasSuffix("…"))
+        #expect(rows[0].detail?.contains(result) == true)
+    }
 }

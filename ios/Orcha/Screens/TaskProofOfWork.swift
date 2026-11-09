@@ -71,7 +71,7 @@ struct TaskProofOfWork: View {
             }
         } else if let loadError {
             HStack(spacing: LSpace.s) {
-                Text(loadError).ltype(.meta).foregroundStyle(p.faint).lineLimit(2)
+                ExpandableText(collapsedLines: 2) { Text(loadError).ltype(.meta).foregroundStyle(p.faint) }
                 Button("Retry") { Task { await load() } }
                     .buttonStyle(.plain)
                     .ltype(.meta)
@@ -244,20 +244,20 @@ private struct TestsList: View {
         } else {
             ForEach(Array(tests.latest.enumerated()), id: \.offset) { _, inv in
                 let result = EvidenceUx.invocationText(inv)
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 6) {
-                        Text(inv.framework ?? "Tests").ltype(.bodyEmph).foregroundStyle(p.text)
-                        Text(result.text).ltype(.meta).foregroundStyle(p.evidenceColor(result.tone))
-                    }
-                    if let command = inv.command {
+                let heading = HStack(spacing: 6) {
+                    Text(inv.framework ?? "Tests").ltype(.bodyEmph).foregroundStyle(p.text)
+                    Text(result.text).ltype(.meta).foregroundStyle(p.evidenceColor(result.tone))
+                }
+                if let command = inv.command {
+                    // GH #378: a long test command opens in place; heading and command read as one element.
+                    ExpandableText(collapsedLines: 2) { heading } content: {
                         Text(command)
                             .ltype(.mono)
                             .foregroundStyle(p.text2)
-                            .lineLimit(2)
-                            .truncationMode(.middle)
                     }
+                } else {
+                    heading.accessibilityElement(children: .combine)
                 }
-                .accessibilityElement(children: .combine)
             }
             if tests.earlier > 0 {
                 let n = tests.earlier

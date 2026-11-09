@@ -156,8 +156,10 @@ struct AgentDetailScreen: View {
                 }
                 VStack(alignment: .leading, spacing: 2) {
                     Text(agent.alias).ltype(.title).foregroundStyle(p.text)
-                    Text(humanSubtitle(agent))
-                        .ltype(.meta).foregroundStyle(p.muted).lineLimit(1)
+                    // GH #378: the role is free text and this is the only place it's shown in full.
+                    ExpandableText(collapsedLines: 2) {
+                        Text(humanSubtitle(agent)).ltype(.meta).foregroundStyle(p.muted)
+                    }
                 }
                 Spacer(minLength: LSpace.xs)
                 AgentStatusCapsule(status: status)
@@ -408,7 +410,9 @@ struct AgentDetailScreen: View {
             OrchaCard {
                 KVRow(key: "Incoming open", value: "\(extras.inboxCount ?? 0)")
                 if let preview = extras.inboxPreview {
-                    Text("“\(preview)”").font(p.uiFont(13)).foregroundStyle(p.muted).lineLimit(1)
+                    ExpandableText(collapsedLines: 1) {
+                        Text("“\(preview)”").font(p.uiFont(13)).foregroundStyle(p.muted)
+                    }
                 }
                 KVRow(key: "Outgoing open / answered", value: "\(extras.outboxOpen ?? 0) / \(extras.outboxAnswered ?? 0)")
             }

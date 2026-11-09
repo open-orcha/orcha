@@ -198,6 +198,13 @@ object TaskInsightsUx {
         else -> clip(node.title, 60)
     }
 
+    /** GH #378: the objective in full when its crumb label is cut (null when nothing was cut). */
+    fun goalCrumbFull(node: GoalNodeDto): String? {
+        if (node.kind != "objective") return null
+        val full = node.text?.takeIf { it.isNotBlank() }?.replace(Regex("\\s+"), " ")?.trim() ?: return null
+        return full.takeIf { it != goalCrumbLabel(node) }
+    }
+
     /** Worth showing only when there's more than the bare project name above the task. */
     fun hasAncestry(chain: GoalChainDto?): Boolean =
         goalCrumbs(chain).any { it.kind == "parent" || !it.text.isNullOrBlank() }

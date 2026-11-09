@@ -57,19 +57,23 @@ struct TaskVerdiktSection: View {
     @ViewBuilder
     private var statusLine: some View {
         if let run = latest {
-            VStack(alignment: .leading, spacing: 2) {
+            let ago = MobileUx.agoLabel(run.finishedAt ?? run.createdAt)
+            let summary = VStack(alignment: .leading, spacing: 2) {
                 Text(EvidenceUx.verdiktStatusText(run))
                     .ltype(.bodyEmph)
                     .foregroundStyle(p.evidenceColor(EvidenceUx.verdiktTone(status: run.status, verdict: run.verdict)))
-                let ago = MobileUx.agoLabel(run.finishedAt ?? run.createdAt)
                 Text([run.trigger == "auto" ? "auto" : "manual", ago].compactMap { $0 }.joined(separator: " · "))
                     .ltype(.meta)
                     .foregroundStyle(p.faint)
-                if let why = run.error ?? run.reason, !why.isEmpty, run.status != "completed" {
-                    Text(why).ltype(.meta).foregroundStyle(p.text2).lineLimit(3)
-                }
             }
-            .accessibilityElement(children: .combine)
+            if let why = run.error ?? run.reason, !why.isEmpty, run.status != "completed" {
+                // GH #378: a long reason opens in place; the summary reads with it as one VoiceOver element.
+                ExpandableText(collapsedLines: 3) { summary } content: {
+                    Text(why).ltype(.meta).foregroundStyle(p.text2)
+                }
+            } else {
+                summary.accessibilityElement(children: .combine)
+            }
         } else {
             Text(settingsFailed ? "Verdikt settings could not be loaded." : (settings == nil ? "Loading…" : "Not run for this task yet."))
                 .ltype(.meta)
