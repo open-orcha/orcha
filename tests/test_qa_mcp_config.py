@@ -190,7 +190,11 @@ def test_qa_cli_imports_nothing_heavy():
 
     code = ("import sys; import orcha_cli.__main__ as m; m.build_parser(); "
             "bad=[k for k in ('mcp','PIL','idb','uiautomator2','adbutils') if k in sys.modules]; print(bad)")
-    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True).stdout.strip()
+    # The child gets this process's import path: CI imports orcha_cli from the checkout, not an install.
+    import os
+
+    env = {**os.environ, "PYTHONPATH": os.pathsep.join(p for p in sys.path if p)}
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True, env=env).stdout.strip()
     assert out == "[]"
 
 

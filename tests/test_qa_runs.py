@@ -90,10 +90,11 @@ async def test_the_live_wall_lists_what_runs_with_its_latest_frame_step(client, 
     sid = await _session(client, container["id"], people["bot"], kind="explore")
     await client.post(f"/api/qa/sessions/{sid}/steps", json={"actor_agent_id": people["bot"], "steps": [
         {"seq": 1, "kind": "tap", "args": {}, "result": "ok"}]})
-    tiles = (await client.get(f"/api/containers/{container["id"]}/qa/live?platform=web")).json()["tiles"]
+    cid = container["id"]
+    tiles = (await client.get(f"/api/containers/{cid}/qa/live?platform=web")).json()["tiles"]
     assert [t["session"]["id"] for t in tiles] == [sid]
     assert tiles[0]["steps_count"] == 1 and tiles[0]["last_step"]["kind"] == "tap"
-    assert (await client.get(f"/api/containers/{container["id"]}/qa/live?platform=ios")).json()["tiles"] == []
+    assert (await client.get(f"/api/containers/{container['id']}/qa/live?platform=ios")).json()["tiles"] == []
 
 
 async def test_perf_reads_the_timed_steps_against_the_screens_earlier_sessions(client, container, people):
