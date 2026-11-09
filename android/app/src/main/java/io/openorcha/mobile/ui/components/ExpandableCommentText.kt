@@ -15,6 +15,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -22,6 +23,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
@@ -38,12 +40,29 @@ import io.openorcha.mobile.ui.theme.Orcha
 const val COMMENT_TEXT_TAG = "comment-text"
 const val COMMENT_TOGGLE_TAG = "comment-toggle"
 
+private val TOP_EDGE = Rect(0f, 0f, 1f, 1f)
+
+/** Where Show less scrolls back to. Put [commentRevealTarget] on the whole comment (author line included). */
+@Stable
+class CommentReveal internal constructor() {
+    @OptIn(ExperimentalFoundationApi::class)
+    internal val requester = BringIntoViewRequester()
+}
+
+@Composable
+fun rememberCommentReveal(): CommentReveal = remember { CommentReveal() }
+
+@OptIn(ExperimentalFoundationApi::class)
+fun Modifier.commentRevealTarget(reveal: CommentReveal): Modifier = bringIntoViewRequester(reveal.requester)
+
 /**
  * GH #378: renders [text] (already formatted: links, code, task links) collapsed to [collapsedLines] lines.
  * The Show more control appears only when the laid-out text really overflows (never a character
  * count), and expansion state is owned by the caller per comment id ([expanded] / [onExpandedChange]),
- * so recycled rows never inherit it. Collapsing scrolls the comment back into view when its top has
- * scrolled away, so you keep your place in the thread.
+ * so recycled rows never inherit it. Collapsing scrolls the comment's top edge back into view when it
+ * has scrolled away (and does nothing when it is still on screen), so you keep your place in the thread.
+ * Pass [reveal] when it is attached to the whole comment (author line included) so that line comes back
+ * too; otherwise the text's own top edge is used.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -55,13 +74,17 @@ fun ExpandableCommentText(
     style: TextStyle = ltype(LType.Body),
     color: Color = Orcha.palette.text2,
     collapsedLines: Int = CommentExpansion.COLLAPSED_LINES,
+    reveal: CommentReveal? = null,
 ) {
     val p = Orcha.palette
     var overflowed by remember(text, collapsedLines) { mutableStateOf(false) }
     var collapseRequests by remember { mutableStateOf(0) }
-    val bringIntoView = remember { BringIntoViewRequester() }
-    LaunchedEffect(collapseRequests) { if (collapseRequests > 0) bringIntoView.bringIntoView() }
-    Column(modifier.bringIntoViewRequester(bringIntoView).animateContentSize()) {
+    val ownReveal = rememberCommentReveal()
+    val target = (reveal ?: ownReveal).requester
+    // Only the top edge: the whole (still shrinking) comment is often taller than the screen, and asking
+    // for all of it scrolls nowhere or lines up its bottom instead of bringing the author line back.
+    LaunchedEffect(collapseRequests) { if (collapseRequests > 0) target.bringIntoView(TOP_EDGE) }
+    Column(modifier.commentRevealTarget(ownReveal).animateContentSize()) {
         Text(
             text,
             style = style.copy(color = color),

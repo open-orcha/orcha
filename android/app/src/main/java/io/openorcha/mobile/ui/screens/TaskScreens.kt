@@ -90,6 +90,8 @@ import io.openorcha.mobile.domain.MobileUx
 import io.openorcha.mobile.ui.OrchaUiState
 import io.openorcha.mobile.ui.components.Banner
 import io.openorcha.mobile.ui.components.ExpandableCommentText
+import io.openorcha.mobile.ui.components.commentRevealTarget
+import io.openorcha.mobile.ui.components.rememberCommentReveal
 import io.openorcha.mobile.ui.components.BannerKind
 import io.openorcha.mobile.ui.components.LAvatar
 import io.openorcha.mobile.ui.components.LButton
@@ -632,10 +634,11 @@ private fun VerificationCard(
                 Text("Awaiting your verification", style = ltype(LType.Headline), color = p.text, modifier = Modifier.semantics { heading() })
             }
             (task.result ?: task.messageSummary?.last?.body)?.let(ActivityCopy::humanize)?.takeIf { it.isNotBlank() }?.let { result ->
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                val reveal = rememberCommentReveal()
+                Column(Modifier.commentRevealTarget(reveal), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text("Result", style = ltype(LType.Micro), color = p.faint)
                     var resultExpanded by rememberSaveable(task.id) { mutableStateOf(false) }
-                    ExpandableCommentText(inlineMarkdown(result), expanded = resultExpanded, onExpandedChange = { resultExpanded = it })
+                    ExpandableCommentText(inlineMarkdown(result), expanded = resultExpanded, onExpandedChange = { resultExpanded = it }, reveal = reveal)
                 }
             }
             proof()
@@ -877,8 +880,9 @@ private fun ActivityTimeline(task: TaskDto, messages: List<TaskMessageDto>, agen
             )
         }
         entries.forEach { e ->
+            val reveal = rememberCommentReveal()
             Row(
-                Modifier.fillMaxWidth().padding(vertical = LSpace.s).semantics(mergeDescendants = true) {},
+                Modifier.fillMaxWidth().commentRevealTarget(reveal).padding(vertical = LSpace.s).semantics(mergeDescendants = true) {},
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 Box(Modifier.size(20.dp), contentAlignment = Alignment.Center) {
@@ -896,6 +900,7 @@ private fun ActivityTimeline(task: TaskDto, messages: List<TaskMessageDto>, agen
                             inlineMarkdown(e.text),
                             expanded = e.id in expandedIds,
                             onExpandedChange = { expandedIds = CommentExpansion.toggled(expandedIds.toSet(), e.id).toList() },
+                            reveal = reveal,
                         )
                     }
                 }

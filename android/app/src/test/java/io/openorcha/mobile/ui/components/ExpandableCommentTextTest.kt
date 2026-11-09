@@ -1,6 +1,13 @@
 package io.openorcha.mobile.ui.components
 
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.ScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Text
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -9,12 +16,17 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsNotDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import io.openorcha.mobile.domain.CommentExpansion
 import io.openorcha.mobile.ui.theme.OrchaTheme
@@ -33,6 +45,8 @@ import org.robolectric.annotation.GraphicsMode
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class ExpandableCommentTextTest {
     @get:Rule val rule = createComposeRule()
+
+    private val AUTHOR_TAG = "comment-author"
 
     private val short = "Pushed the fix. Tests are green on both platforms."
     private val long = List(8) { "I traced the stall to the notifier scan loop and moved the inventory to a background pass." }.joinToString(" ")
@@ -81,6 +95,45 @@ class ExpandableCommentTextTest {
         rule.onNodeWithTag(COMMENT_TEXT_TAG).assert(
             SemanticsMatcher("whole comment") { n -> n.config[SemanticsProperties.Text].joinToString("") { it.text } == huge },
         )
+    }
+
+    /** An Activity-style row (author line + comment) in a scrolling page [viewport] tall, with [above] of page before it and plenty after. */
+    private fun showInPage(text: String, viewport: Dp, above: Dp = 0.dp, startScroll: Int = 0): ScrollState {
+        var expanded by mutableStateOf(true)
+        lateinit var scroll: ScrollState
+        rule.setContent {
+            OrchaTheme {
+                scroll = rememberScrollState(startScroll)
+                Column(Modifier.height(viewport).width(320.dp).verticalScroll(scroll)) {
+                    Spacer(Modifier.height(above))
+                    val reveal = rememberCommentReveal()
+                    Column(Modifier.commentRevealTarget(reveal)) {
+                        Text("Kedar · 2m", Modifier.testTag(AUTHOR_TAG))
+                        ExpandableCommentText(AnnotatedString(text), expanded, { expanded = it }, reveal = reveal)
+                    }
+                    Spacer(Modifier.height(2000.dp))
+                }
+            }
+        }
+        return scroll
+    }
+
+    @Test fun collapsingBringsTheAuthorLineBackWhenItScrolledAway() {
+        showInPage(huge, viewport = 240.dp)
+        rule.onNodeWithText("Show less").performScrollTo()
+        rule.onNodeWithTag(AUTHOR_TAG).assertIsNotDisplayed()
+        rule.onNodeWithText("Show less").performClick()
+        rule.waitForIdle()
+        rule.onNodeWithTag(AUTHOR_TAG).assertIsDisplayed()
+        rule.onNodeWithText("Show more").assertIsDisplayed()
+    }
+
+    @Test fun collapsingDoesNotScrollWhenTheAuthorLineIsStillOnScreen() {
+        val scroll = showInPage(long, viewport = 800.dp, above = 100.dp, startScroll = 50)
+        rule.onNodeWithTag(AUTHOR_TAG).assertIsDisplayed()
+        rule.onNodeWithText("Show less").performClick()
+        rule.waitForIdle()
+        assertEquals(50, scroll.value)
     }
 
     @Test fun unbrokenStringOverflowsWithoutWidening() {
