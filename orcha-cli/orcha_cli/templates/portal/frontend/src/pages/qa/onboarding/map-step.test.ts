@@ -47,12 +47,12 @@ function renderStep(map: OnboardingMap, extra: Partial<Parameters<typeof MapStep
 }
 
 describe("the live pass waits for a click (#454)", () => {
-  it("shows its cost, never starts by itself, and starts on Run", async () => {
+  it("shows no money, never starts by itself, and starts on Run", async () => {
     vi.useFakeTimers();
     const onAct = renderStep(offered(), { building: { local: true } });
     const offer = document.querySelector("[data-onboarding-live='offer']") as HTMLElement;
     expect(offer.textContent).toContain("Next: a high-level map on any booted simulator");
-    expect(document.querySelector("[data-onboarding-live-cost]")?.textContent).toBe("· about $3.95");
+    expect(offer.textContent).not.toMatch(/\$|API prices|charged/);
     expect(offer.textContent).toContain("Embodent does not build your code: it opens the build already installed on");
     expect(offer.textContent).toContain("It starts when you click Run.");
     expect(offer.textContent).not.toMatch(/Starts in/);

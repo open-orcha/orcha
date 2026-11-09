@@ -8,7 +8,7 @@ import { LiveDeviceView } from "../runs/live/LiveDeviceView";
 import type { TargetKind } from "./types";
 import { cn } from "./ui";
 import type { Plan } from "./choreo";
-import { costWords, duration, priceWords, type Billing, type FirstRunOptions, type FirstTest, type MapAction, type OnboardingMap, type ScreenFirstRun } from "./contract";
+import { duration, type Billing, type FirstRunOptions, type FirstTest, type MapAction, type OnboardingMap, type ScreenFirstRun } from "./contract";
 import { fallbackFirstTest, smokeSuite } from "./coverage";
 import { resultWords, type ResultNext, type ResultTone } from "./first-run-result";
 import { MapStage } from "./map-stage";
@@ -124,7 +124,7 @@ export function FirstTestCard({
           <dt className="sr-only">Estimate</dt>
           <Clock className="size-3.5 text-muted" aria-hidden />
           <dd>
-            about {duration(pick.estimate_seconds)} · {priceWords(map.billing, "run", pick.estimate_usd)}
+            about {duration(pick.estimate_seconds)}
           </dd>
         </div>
       </dl>
@@ -145,7 +145,7 @@ export function FirstTestCard({
             disabled={busy === "first_run"}
             data-onboarding-run-smoke
           >
-            <ListChecks aria-hidden /> Run the {smoke.count} riskiest scenarios · about {duration(smoke.estimate_seconds)}, {priceWords(map.billing, "run", smoke.estimate_usd)}
+            <ListChecks aria-hidden /> Run the {smoke.count} riskiest scenarios · about {duration(smoke.estimate_seconds)}
           </Button>
         ) : null}
         {options.length > 1 ? (
@@ -206,7 +206,6 @@ export function ResultCard({
   run,
   screen,
   smoke,
-  billing,
   busy,
   onSuite,
   onOpenMap,
@@ -273,7 +272,7 @@ export function ResultCard({
       case "suite":
         return (
           <Button key={n} variant={variant} size="lg" onClick={onSuite} loading={busy === "first_run"} data-onboarding-next-suite>
-            <ListChecks aria-hidden /> Run the suite ({smoke.count}) · {costWords(billing, "run", smoke.estimate_usd)}
+            <ListChecks aria-hidden /> Run the suite ({smoke.count}) · about {duration(smoke.estimate_seconds)}
           </Button>
         );
       default:

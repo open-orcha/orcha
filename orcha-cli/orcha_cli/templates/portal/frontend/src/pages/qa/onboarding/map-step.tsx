@@ -5,7 +5,7 @@ import { PLATFORM_NAMES } from "./ui";
 import type { TargetKind } from "./types";
 import { cn } from "./ui";
 import type { Plan } from "./choreo";
-import { costTitle, costWords, frameworkName, subscriptionWords, usd, type MapAction, type OnboardingMap, type PhaseInfo, type RunLiveOptions } from "./contract";
+import { frameworkName, type MapAction, type OnboardingMap, type PhaseInfo, type RunLiveOptions } from "./contract";
 import { coveringFrameworks } from "./coverage";
 import { mapBeat, type MapBeat } from "./flow";
 import { WithCode } from "./ui";
@@ -44,7 +44,6 @@ export function PhaseTrack({ map }: { map: OnboardingMap }) {
     <ol className="flex flex-wrap items-center gap-x-1 gap-y-1 text-xs" aria-label="Map progress">
       {items.map((it, i) => {
         const info = map.phases[it.key];
-        const cost = it.key === "live" ? (info.cost_usd ?? (info.state === "pending" ? info.estimate_usd : undefined)) : info.cost_usd;
         return (
           <li key={it.key} className="flex items-center gap-1" data-phase={it.key} data-phase-state={info.state}>
             {i > 0 ? <span className="mx-1 h-px w-4 bg-border-strong" aria-hidden /> : null}
@@ -52,16 +51,6 @@ export function PhaseTrack({ map }: { map: OnboardingMap }) {
               <PhaseGlyph state={info.state} />
               <span>{it.label}</span>
               <span className="sr-only">: {STATE_WORD[info.state]}</span>
-              {cost !== undefined && cost > 0 ? (
-                it.key === "live" && map.billing.run ? (
-                  // On a subscription the figure is API prices, never a charge.
-                  <span className="tabular-nums text-muted" title={costTitle(map.billing, "run", cost)} data-phase-cost="api-price">
-                    {costWords(map.billing, "run", cost)}
-                  </span>
-                ) : (
-                  <span className="tabular-nums text-muted">{info.cost_usd !== undefined ? usd(cost) : `about ${usd(cost)}`}</span>
-                )
-              ) : null}
             </span>
           </li>
         );
@@ -170,7 +159,6 @@ function LiveCard({
 }) {
   const info = map.phases.live;
   const kind = liveBannerKind(map, beat);
-  const estimate = info.estimate_usd;
   const run = map.live_run;
   // Another phone (or the web) the pass can map on instead, when this one stopped.
   const here = livePlatformOf(map);
@@ -197,7 +185,6 @@ function LiveCard({
           {blockedWhy && info.request_id ? <Link href={blockedRequestHref(info.request_id)} className="text-xs text-fg-2 underline underline-offset-2 hover:text-fg" data-onboarding-live-request>Open the request</Link> : null}
           <p className="text-xs text-muted" hidden={!!blockedWhy}>
             {noAgent ? "The pass starts when one is added above. " : prep ? `${prep.detail} ` : run?.depth === "deeper" ? "The riskiest screens first, then every screen not seen yet. " : "Quick map: the entry screen and each main area, once. "}
-            {map.billing.run ? `${subscriptionWords(map.billing, "run", info.cost_usd)}.` : info.cost_usd !== undefined ? `${usd(info.cost_usd)} so far` : estimate !== undefined ? `About ${usd(estimate)} in all.` : null}
           </p>
           <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-border" aria-hidden>
             <div className="h-full rounded-full bg-primary transition-[width] duration-500 motion-reduce:transition-none" style={{ width: `${livePercent(map)}%` }} />
@@ -253,7 +240,7 @@ function LiveCard({
       <div className={cn(styles.beat, "flex flex-wrap items-center gap-3 rounded-lg border border-border bg-panel px-3 py-2.5")} data-onboarding-live="skipped">
         <p className="min-w-0 flex-1 text-xs text-muted">No live pass yet: the map shows what the code and your tests say. A high-level map adds a real screenshot of each main area.</p>
         <Button onClick={() => onRun({ depth: "overview" })} loading={busy === "run_live"} data-onboarding-live-run>
-          Run the high-level map{estimate !== undefined || map.billing.run ? ` · ${costWords(map.billing, "run", estimate)}` : ""}
+          Run the high-level map
         </Button>
       </div>
     );
@@ -264,11 +251,6 @@ function LiveCard({
         <div className="min-w-0 flex-1">
           <p className="text-sm font-medium text-fg">
             Next: a high-level map on {device}
-            {estimate !== undefined || map.billing.run ? (
-              <span className="ml-1.5 font-normal text-fg-2" data-onboarding-live-cost title={costTitle(map.billing, "run", estimate)}>
-                · {costWords(map.billing, "run", estimate)}
-              </span>
-            ) : null}
           </p>
           <p className="text-xs text-muted">
             {liveBuildWords(map.live_build, device)}, and visits its entry screen and each main area once, so the map shows what they really look like. It starts
@@ -405,7 +387,6 @@ export function MapStep({
             <Button variant="primary" onClick={() => onAct("run_live", { depth: retryDepth(map.live_run) })} loading={busy === "run_live"} data-onboarding-live-run>
               {live.state === "failed" ? <RotateCcw aria-hidden /> : null}
               {live.state === "failed" ? "Retry the live pass" : "Run the live pass"}
-              {live.estimate_usd !== undefined || map.billing.run ? ` · ${costWords(map.billing, "run", live.estimate_usd)}` : ""}
             </Button>
           ) : null
         }

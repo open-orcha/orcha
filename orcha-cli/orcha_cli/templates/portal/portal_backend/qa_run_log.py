@@ -2,7 +2,7 @@
 it waits. It stores nothing: every line is read from where it already lives.
 
   the task                who created it, how it ended
-  worker_runs             picked up, finished, stopped and why, what it cost
+  worker_runs             picked up, finished, stopped and why
   the worker's log        what the agent says and does, tailed from `worker_runs.log_path`
   managed_jobs            `orcha job` commands: the app build, with its status
   qa_sessions             the line for a device, the session, how it ended
@@ -621,8 +621,6 @@ def kill_words(reason: Any) -> str:
     return (isinstance(cause, str) and plain(cause.replace("_", " "), 120)) or "it was stopped before it finished"
 
 
-def _cost(value: Any) -> Optional[str]:
-    return f"${float(value):.2f}" if value else None
 
 
 def _run_lines(r: dict[str, Any]) -> list[Optional[dict[str, Any]]]:
@@ -630,8 +628,7 @@ def _run_lines(r: dict[str, Any]) -> list[Optional[dict[str, Any]]]:
     out = [_entry(f"run:{rid}:start", r["started_at"], "info", "run", f"{who} picked it up")]
     if r["ended_at"] is None and r["status"] == "running":
         return out
-    cost = _cost(r.get("total_cost_usd"))
-    spent = f" · {cost}" if cost else ""
+    spent = ""  # the run page never shows money
     status = r["status"]
     if status == "killed":
         out.append(_entry(f"run:{rid}:end", r["ended_at"], "warn", "run", f"{who} was stopped: {kill_words(r.get('kill_reason'))}{spent}"))

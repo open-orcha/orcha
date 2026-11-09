@@ -5,7 +5,7 @@ import { Button } from "./ui";
 import { useWithReturn } from "./ui";
 import { cn } from "./ui";
 import type { Plan } from "./choreo";
-import { costWords, frameworkName, settled, subscriptionWords, usd, type BringInOptions, type MapAction, type OnboardingMap } from "./contract";
+import { frameworkName, settled, type BringInOptions, type MapAction, type OnboardingMap } from "./contract";
 import { areaOf, bringInCount } from "./coverage";
 import { MapStage } from "./map-stage";
 import { TeachingState } from "./scenes";
@@ -170,7 +170,7 @@ export function BringInStep({
             <p className="text-sm font-semibold text-fg">{gapIds.length === 1 ? "Draft a scenario for the untested flow" : `Draft scenarios for the ${gapIds.length} untested flows`}</p>
             <p className="text-xs text-muted">
               Embodent reads the code behind each gap and writes a scenario for you to review.{" "}
-              {map.billing.draft ? `${subscriptionWords(map.billing, "draft", map.bring_in.draft.estimate_usd)}.` : map.bring_in.draft.estimate_usd > 0 ? `About ${usd(map.bring_in.draft.estimate_usd)}.` : "It runs as a task for your agent."}
+              It runs as a task for your agent.
             </p>
           </div>
           <Button
@@ -182,7 +182,7 @@ export function BringInStep({
             }}
             data-onboarding-draft-gaps
           >
-            Draft for {gapIds.length} {gapIds.length === 1 ? "gap" : "gaps"}{map.billing.draft || map.bring_in.draft.estimate_usd > 0 ? ` · ${costWords(map.billing, "draft", map.bring_in.draft.estimate_usd)}` : ""}
+            Draft for {gapIds.length} {gapIds.length === 1 ? "gap" : "gaps"}
           </Button>
         </section>
       ) : null}
@@ -190,7 +190,7 @@ export function BringInStep({
       {importing ? (
         <p className={cn(styles.beat, "flex items-center gap-2 text-sm text-fg")} role="status" data-onboarding-bring-state="importing">
           <CheckCircle2 className="size-4 text-success" aria-hidden />
-          {count} {count === 1 ? "test" : "tests"} coming in. Free; nothing runs.
+          {count} {count === 1 ? "test" : "tests"} coming in. Nothing runs.
         </p>
       ) : running || done ? (
         <p className={cn(styles.beat, "flex items-center gap-2 text-sm text-fg")} role="status" data-onboarding-bring-state={phase.state}>
@@ -198,7 +198,6 @@ export function BringInStep({
           {done
             ? `${phase.note?.replace(/\.+$/, "") ?? `${imported} ${imported === 1 ? "test" : "tests"} brought in, ${gapDrafts} drafted for the gaps`}. They wait on their screens for review.`
             : `Drafting for the gaps${imported ? ` · ${imported} ${imported === 1 ? "test" : "tests"} in` : ""}${gapDrafts ? ` · ${gapDrafts} drafted` : ""}`}
-          {phase.cost_usd && !map.billing.draft ? <span className="text-xs text-muted">{usd(phase.cost_usd)}</span> : null}
         </p>
       ) : null}
 

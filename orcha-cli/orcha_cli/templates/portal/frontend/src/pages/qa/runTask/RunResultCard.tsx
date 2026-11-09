@@ -7,7 +7,6 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { Avatar, ButtonLink, Chip, Skeleton } from "../../../components/primitives";
 import { Icon } from "../../../components/ui";
-import { fmtCost } from "../../../cloud/metrics/performance/performanceModel";
 import { relTime } from "../../../lib/format";
 import { useRequestsChanged } from "../../../state/qaRequestBus";
 import { useSnapshot } from "../../../state/SnapshotProvider";
@@ -190,7 +189,6 @@ export function RunResultCard({ task }: { task: Task }) {
     m.build ? <Fact key="build" k="Build">{m.build}</Fact> : null,
     m.screens != null ? <Fact key="screens" k="Screens reached">{m.screens}</Fact> : null,
     m.minutes != null && !going ? <Fact key="time" k="Took">{m.minutes < 1 ? "Under a minute" : minutesWord(m.minutes)}</Fact> : null,
-    m.cost != null ? <Fact key="cost" k="Cost">{fmtCost(m.cost)}</Fact> : null,
   ].filter(Boolean) : [];
   return (
     <section className="rr" aria-label="Run result" data-run-result={phase}>

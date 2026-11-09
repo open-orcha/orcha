@@ -1,8 +1,7 @@
 /**
- * Metrics: Quality's share of the window, as the project's metrics report it. Its cost is already in
+ * Metrics: Quality's share of the window, as the project's metrics report it. It is already in
  * the totals above, so this says "of which". A window with no runs shows nothing.
  */
-import { fmtCost } from "../../../cloud/metrics/performance/performanceModel";
 import { minutesWord, plural } from "../qaWords";
 import "../qa.css";
 import "./runTask.css";
@@ -20,9 +19,8 @@ export function QualityMetrics({ qa, days }: { qa: QualityShare | null | undefin
         <div className="rr-fact"><dt>Runs</dt><dd>{qa.runs}</dd></div>
         {qa.stopped ? <div className="rr-fact"><dt>Did not finish</dt><dd>{qa.stopped}</dd></div> : null}
         {qa.seconds ? <div className="rr-fact"><dt>Time per run</dt><dd>{perRun < 1 ? "Under a minute" : minutesWord(perRun)}</dd></div> : null}
-        {qa.cost_usd ? <div className="rr-fact"><dt>Cost per run</dt><dd>{fmtCost(qa.cost_usd / qa.runs)}</dd></div> : null}
       </dl>
-      <p className="qa-muted">{plural(qa.runs, "run")} in the last {days} days. Their cost is part of the totals above.</p>
+      <p className="qa-muted">{plural(qa.runs, "run")} in the last {days} days.</p>
     </section>
   );
 }

@@ -7,7 +7,6 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import { getJSON } from "../../../api/client";
 import { Button, ButtonLink } from "../../../components/primitives";
-import { fmtCost } from "../../../cloud/metrics/performance/performanceModel";
 import { relTime } from "../../../lib/format";
 import { QaStatus, useLoad } from "../parts";
 import { viewportWord, type Platform } from "../qaApi";
@@ -49,7 +48,7 @@ export function readAgentRuns(raw: unknown): { runs: AgentQualityRun[]; cost: nu
 
 function Row({ r }: { r: AgentQualityRun }) {
   const took = r.minutes != null ? (r.minutes < 1 ? "Under a minute" : minutesWord(r.minutes)) : null;
-  const facts = [r.outcome.word, sessionKindWord(r.kind as never), r.device, took, r.cost != null ? fmtCost(r.cost) : null, relTime(r.startedAt)].filter(Boolean).join(" · ");
+  const facts = [r.outcome.word, sessionKindWord(r.kind as never), r.device, took, relTime(r.startedAt)].filter(Boolean).join(" · ");
   return (
     <li className="aq-row" data-quality-run={r.outcome.word}>
       <div className="aq-t">
@@ -67,12 +66,11 @@ export function AgentQualityRuns({ agentId, alias }: { agentId: string; alias: s
   const res = useLoad(async (s) => readAgentRuns(await getJSON<unknown>(`/api/agents/${encodeURIComponent(agentId)}/qa-runs`, s)), [agentId]);
   const rows = res.data?.runs ?? [];
   if (!rows.length) return null;
-  const cost = res.data?.cost ?? null;
   return (
     <section className="td-block aq" aria-label={`Quality runs by ${alias}`} data-agent-quality-runs>
       <div className="qa-taskqa-h">
         <div className="td-block-k">Quality runs</div>
-        <span className="qa-muted">{plural(rows.length, "run")}{cost != null ? ` · ${fmtCost(cost)}` : ""}</span>
+        <span className="qa-muted">{plural(rows.length, "run")}</span>
       </div>
       <ul className="qa-plain aq-rows">{(all ? rows : rows.slice(0, SHOWN)).map((r) => <Row key={r.id} r={r} />)}</ul>
       {rows.length > SHOWN ? <Button size="sm" variant="ghost" onClick={() => setAll((a) => !a)}>{all ? "Show fewer" : `Show all ${rows.length}`}</Button> : null}

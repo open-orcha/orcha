@@ -220,7 +220,6 @@ export function RunOptions({ cid, auth, kind, params, patch }: {
           {offPhone ? <p className="qa-muted qa-gate" data-run-conditions-off-phone>{offPhone}</p> : null}
           {err ? <p className="qa-error" role="alert">{err}</p> : null}
           <div className="qa-run-foot">
-            {drafting ? <span className="qa-muted" data-run-estimate>{choice === "new" ? "Usually about $6 to $9" : "Usually about $4 to $6"}</span> : null}
             <Button variant="primary" busy={busy} disabled={!canStart} onClick={() => void start()} data-run-start>Start</Button>
           </div>
         </>

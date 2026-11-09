@@ -160,18 +160,15 @@ describe("what the pass costs", () => {
     expect(parseOnboardingMap({ project_id: "p" })!.billing).toEqual({ run: null, draft: null });
   });
 
-  it("the progress track shows the live pass at API prices on a subscription", async () => {
+  it("the progress track never shows money, on a key or a subscription", async () => {
     const { PhaseTrack } = await import("./map-step");
     const at = fixtureAt(fixture("small"), { phase: "tests" });
-    const priced = { ...at, phases: { ...at.phases, live: { ...at.phases.live, state: "pending" as const, estimate_usd: 0.61 } } };
+    const priced = { ...at, phases: { ...at.phases, live: { ...at.phases.live, state: "pending" as const, estimate_usd: 0.61, cost_usd: 0.4 } } };
     render(h(PhaseTrack, { map: priced }));
-    expect(document.querySelector('[data-phase="live"]')!.textContent).toContain("about $0.61");
+    expect(document.querySelector('[aria-label="Map progress"]')!.textContent).not.toMatch(/\$|API prices|charged/);
     cleanup();
     render(h(PhaseTrack, { map: { ...priced, billing: { run: "Claude Code", draft: null } } }));
-    const live = document.querySelector('[data-phase="live"]')!.textContent!;
-    expect(live).toContain("≈$0.61 at API prices");
-    expect(live).not.toContain("not metered");
-    expect(document.querySelector('[data-phase="live"] [data-phase-cost]')?.getAttribute("title")).toMatch(/^Not charged: /);
+    expect(document.querySelector('[aria-label="Map progress"]')!.textContent).not.toMatch(/\$|API prices|charged/);
   });
 });
 

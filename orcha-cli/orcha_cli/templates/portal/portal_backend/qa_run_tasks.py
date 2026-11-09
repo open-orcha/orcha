@@ -245,7 +245,7 @@ def _thread_body(out: dict) -> str:
         lines += [f"- [{f['severity']}] {f['title']}" for f in out["findings"][:10]]
     facts = [f"{out['screens_reached']} screens" if out["screens_reached"] else None,
              f"{round(out['duration_seconds'] / 60, 1)} min" if out.get("duration_seconds") is not None else None,
-             f"${out['cost_usd']}" if out.get("cost_usd") else None, (out.get("device") or {}).get("name"), out.get("build"), who]
+             (out.get("device") or {}).get("name"), out.get("build"), who]
     said = [str(x) for x in facts if x]
     if said:
         lines.append(" · ".join(said))
