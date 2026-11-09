@@ -18,9 +18,10 @@ jobs:
   pytest:
     # GitHub-hosted runner: free + unlimited minutes for public repos.
     # timeout-minutes is still a hard stop so a hung/killed session can't idle out
-    # the 6h default.
+    # the 6h default. 75, not 45: main alone runs ~41 min here, and the Quality tests add
+    # a few hundred more.
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 75
 
     # Postgres as a service container (Linux-only, which is fine here). The test
     # suite (tests/conftest.py) reads these URLs, creates a dedicated orcha_test

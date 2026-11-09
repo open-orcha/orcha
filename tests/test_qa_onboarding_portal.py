@@ -191,7 +191,7 @@ async def test_live_follows_a_normal_task_to_needs_verification(flow, people, re
     assert "/orcha-qa-map" in task["description"] and task["status"] == "in_progress"
     assert str(task["created_by_agent_id"]) == flow.human
     assignees = db.execute("SELECT agent_id FROM agent_tasks WHERE task_id=%s", (tid,))
-    assert [a["agent_id"] for a in assignees] == [people["bot"]]
+    assert [str(a["agent_id"]) for a in assignees] == [people["bot"]]
     # a second click follows the same task
     again = await flow.act("run_live")
     assert again["phases"]["live"]["task_id"] == tid

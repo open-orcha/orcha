@@ -270,19 +270,27 @@ def ensure_pack(cur, task: dict, *, reason: str = "read", force: bool = False) -
         if basis == row["basis"]:
             return dict(row["pack"]), False
     pack = build_pack(cur, task)
-    _save_pack(cur, task, pack, reason)
-    return pack, True
+    return _save_pack(cur, task, pack, reason, force=force), True
 
 
-def _save_pack(cur, task: dict, pack: dict, reason: str) -> None:
+def _save_pack(cur, task: dict, pack: dict, reason: str, *, force: bool = False) -> dict:
+    """Store the pack and return the one now stored. Two builds of the same basis can race (the
+    build when a task enters needs_verification and the first read of it): the first one stored
+    stays, so every read of that basis sees one pack and one built_at. `force` always replaces."""
+    keep = "" if force else " WHERE task_evidence_packs.basis <> EXCLUDED.basis"
     cur.execute(
         """INSERT INTO task_evidence_packs (task_id, container_id, basis, pack, built_reason, built_at)
            VALUES (%s, %s, %s, %s, %s, now())
            ON CONFLICT (task_id) DO UPDATE
              SET basis=EXCLUDED.basis, pack=EXCLUDED.pack, built_reason=EXCLUDED.built_reason,
-                 built_at=now()""",
+                 built_at=now()""" + keep,
         (str(task["id"]), str(task["container_id"]), pack["basis"], json.dumps(pack, default=str), reason),
     )
+    if force:
+        return pack
+    cur.execute("SELECT pack FROM task_evidence_packs WHERE task_id=%s", (str(task["id"]),))
+    row = cur.fetchone()
+    return dict(row["pack"]) if row else pack
 
 
 def fresh_pack(task: dict, *, reason: str = "read", force: bool = False) -> tuple[dict, bool]:
@@ -298,7 +306,7 @@ def fresh_pack(task: dict, *, reason: str = "read", force: bool = False) -> tupl
             return dict(row["pack"]), False
         pack = build_pack(cur, task)
     with db_cursor() as (conn, cur):
-        _save_pack(cur, task, pack, reason)
+        pack = _save_pack(cur, task, pack, reason, force=force)
         conn.commit()
     return pack, True
 
