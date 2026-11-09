@@ -426,6 +426,7 @@ private struct ActiveTaskRow: View {
 private struct UpdateRow: View {
     @Environment(AppModel.self) private var model
     @Environment(\.palette) private var p
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let task: TaskDto
     let message: TaskMessageDto
 
@@ -516,11 +517,12 @@ private struct UpdateRow: View {
         loading = true
         loadFailed = false
         Task {
-            let complete = await model.completeLatestComment(task.id, summary: message.body)
+            let complete = await model.completeLatestComment(task.id, summary: message)
             loading = false
             if let complete {
                 completeBody = complete
-                withAnimation(.easeInOut(duration: 0.2)) { expanded = true }
+                // The button's own transaction ended before the reply arrived, so honour Reduce Motion here.
+                withAnimation(CommentExpansion.toggleAnimation(reduceMotion: reduceMotion)) { expanded = true }
             } else {
                 loadFailed = true
             }

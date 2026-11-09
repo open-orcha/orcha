@@ -1,5 +1,6 @@
 package io.openorcha.mobile.domain
 
+import io.openorcha.mobile.data.TaskMessageDto
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -24,12 +25,39 @@ class CommentExpansionTest {
         assertFalse(CommentExpansion.summaryMayBeCut("😀".repeat(70)))
     }
 
+    private val full = "I traced the stall to the notifier scan loop and moved the inventory to a background pass. ".repeat(8)
+
+    private fun comment(
+        body: String,
+        by: String = "Original author",
+        at: String = "2026-11-09T12:00:00.673000+00:00",
+        human: Boolean = false,
+    ) = TaskMessageDto(messageId = "m", authorAlias = by, isHuman = human, body = body, createdAt = at)
+
     @Test fun completeBodyIsTheNewestMessageOnlyWhenItContinuesTheSummary() {
-        val full = "I traced the stall to the notifier scan loop and moved the inventory to a background pass. ".repeat(8)
-        val summary = full.take(140)
-        assertEquals(full, CommentExpansion.completeBody(summary, full))
-        assertEquals(null, CommentExpansion.completeBody(summary, "A newer comment"))
+        val summary = comment(full.take(140))
+        assertEquals(full, CommentExpansion.completeBody(summary, comment(full)))
+        assertEquals(null, CommentExpansion.completeBody(summary, comment("A newer comment")))
         assertEquals(null, CommentExpansion.completeBody(summary, null))
+    }
+
+    /** Review round 6: a newer comment that opens with the same 140 characters must not expand under the
+     *  old author and time. */
+    @Test fun newerCommentWithTheSamePrefixIsNotTheSummarysComment() {
+        val summary = comment(full.take(140))
+        val newer = summary.body + " NEWER COMMENT END"
+        assertEquals(null, CommentExpansion.completeBody(summary, comment(newer, at = "2026-11-09T12:01:00Z")))
+        assertEquals(null, CommentExpansion.completeBody(summary, comment(newer, by = "Someone else")))
+        assertEquals(null, CommentExpansion.completeBody(summary, comment(newer, human = true)))
+        assertEquals(null, CommentExpansion.completeBody(comment(summary.body, at = ""), comment(newer, at = "")))
+    }
+
+    /** The same time written two ways (Postgres trims the fraction's zeros, the thread keeps six digits). */
+    @Test fun sameCommentMatchesTheSameInstantInEitherFormat() {
+        val summary = comment(full.take(140), at = "2026-11-09T12:00:00.673+00:00")
+        assertEquals(full, CommentExpansion.completeBody(summary, comment(full, at = "2026-11-09T12:00:00.673000+00:00")))
+        assertTrue(CommentExpansion.isSameComment(comment("x", at = "2026-11-09T12:00:00Z"), comment("x", at = "2026-11-09T12:00:00.000000+00:00")))
+        assertTrue(CommentExpansion.isSameComment(comment("x", at = "2026-11-09T12:00:00"), comment("x", at = "2026-11-09T12:00:00+00:00")))
     }
 
     @Test fun toggleIsPerCommentId() {

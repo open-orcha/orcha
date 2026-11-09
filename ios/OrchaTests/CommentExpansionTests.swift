@@ -34,16 +34,50 @@ enum CommentFixtures {
         #expect(CommentExpansion.summaryMayBeCut(String(repeating: "🇮🇳", count: 70)))
     }
 
+    private static let at = "2026-11-09T12:00:00.673000+00:00"
+
+    private func comment(_ body: String, by author: String = "Original author", at time: String = at,
+                         human: Bool = false) -> TaskMessageDto {
+        TaskMessageDto(body: body, messageId: "m", authorAlias: author, isHuman: human, createdAt: time)
+    }
+
     @Test func completeBodyIsTheNewestMessageOnlyWhenItContinuesTheSummary() {
         let full = CommentFixtures.long
-        let summary = String(full.prefix(140))
-        #expect(CommentExpansion.completeBody(summary: summary, newest: full) == full)
-        #expect(CommentExpansion.completeBody(summary: summary, newest: "A newer comment") == nil)
+        let summary = comment(String(full.prefix(140)))
+        #expect(CommentExpansion.completeBody(summary: summary, newest: comment(full)) == full)
+        #expect(CommentExpansion.completeBody(summary: summary, newest: comment("A newer comment")) == nil)
         #expect(CommentExpansion.completeBody(summary: summary, newest: nil) == nil)
         // A cut through a flag (one character on screen, two scalars) still matches its full comment.
         let flags = String(repeating: "🇮🇳", count: 80)
         let cutFlags = String(String.UnicodeScalarView(flags.unicodeScalars.prefix(141)))
-        #expect(CommentExpansion.completeBody(summary: cutFlags, newest: flags) == flags)
+        #expect(CommentExpansion.completeBody(summary: comment(cutFlags), newest: comment(flags)) == flags)
+    }
+
+    /// Review round 6: a newer comment that opens with the same 140 characters must not expand under the
+    /// old author and time.
+    @Test func newerCommentWithTheSamePrefixIsNotTheSummarysComment() {
+        let summary = comment(String(CommentFixtures.long.prefix(140)))
+        let newer = summary.body + " NEWER COMMENT END"
+        #expect(CommentExpansion.completeBody(summary: summary, newest: comment(newer, at: "2026-11-09T12:01:00Z")) == nil)
+        #expect(CommentExpansion.completeBody(summary: summary, newest: comment(newer, by: "Someone else")) == nil)
+        #expect(CommentExpansion.completeBody(summary: summary, newest: comment(newer, human: true)) == nil)
+        #expect(CommentExpansion.completeBody(summary: comment(summary.body, at: ""), newest: comment(newer, at: "")) == nil)
+    }
+
+    /// The same time written two ways (Postgres trims the fraction's zeros, the thread keeps six digits).
+    @Test func sameCommentMatchesTheSameInstantInEitherFormat() {
+        let summary = comment(String(CommentFixtures.long.prefix(140)), at: "2026-11-09T12:00:00.673+00:00")
+        let full = comment(CommentFixtures.long, at: "2026-11-09T12:00:00.673000+00:00")
+        #expect(CommentExpansion.completeBody(summary: summary, newest: full) == CommentFixtures.long)
+        #expect(CommentExpansion.isSameComment(comment("x", at: "2026-11-09T12:00:00Z"),
+                                               comment("x", at: "2026-11-09T12:00:00.000000+00:00")))
+    }
+
+    /// Review round 6: the Home row expands after its fetch, outside the button's transaction, so it must
+    /// ask for no animation under Reduce Motion itself.
+    @Test func toggleAnimationIsOffUnderReduceMotion() {
+        #expect(CommentExpansion.toggleAnimation(reduceMotion: true) == nil)
+        #expect(CommentExpansion.toggleAnimation(reduceMotion: false) != nil)
     }
 
     @Test func toggleIsPerCommentId() {

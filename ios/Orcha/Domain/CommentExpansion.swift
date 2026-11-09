@@ -60,9 +60,22 @@ enum CommentExpansion {
 
     /// The complete comment for a cut summary: the task's newest message, when it is the one the summary
     /// was cut from. A newer message (the summary is stale) or none gives nil, so nothing wrong is shown.
-    static func completeBody(summary: String, newest: String?) -> String? {
-        guard let newest, newest.unicodeScalars.starts(with: summary.unicodeScalars) else { return nil }
-        return newest
+    /// A newer comment can open with the same 140 characters, so the text alone is not enough: the author
+    /// and posting time must match too, or its ending would appear under the old author and time.
+    static func completeBody(summary: TaskMessageDto, newest: TaskMessageDto?) -> String? {
+        guard let newest, isSameComment(summary, newest),
+              newest.body.unicodeScalars.starts(with: summary.body.unicodeScalars) else { return nil }
+        return newest.body
+    }
+
+    /// Same author, same kind of author and same posting time. The summary carries no message id; times are
+    /// compared as instants because the task list and the thread may format the same time differently
+    /// (Postgres drops trailing zeros from the fraction).
+    static func isSameComment(_ a: TaskMessageDto, _ b: TaskMessageDto) -> Bool {
+        guard a.authorAlias == b.authorAlias, a.isHuman == b.isHuman else { return false }
+        if let at = a.createdAt, !at.isEmpty, at == b.createdAt { return true }
+        guard let t1 = MobileUx.parseInstant(a.createdAt), let t2 = MobileUx.parseInstant(b.createdAt) else { return false }
+        return abs(t1.timeIntervalSince(t2)) < 0.001
     }
 
     /// What VoiceOver reads as the control's value.

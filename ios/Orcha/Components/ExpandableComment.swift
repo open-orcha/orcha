@@ -62,7 +62,7 @@ struct ExpandableComment<Header: View, Content: View>: View {
                         marker.revealTop(animated: !reduceMotion)
                     }
                     let reveal = CommentExpansion.revealsOnCollapse(expanded: expanded, topY: top.minY)
-                    withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.2)) {
+                    withAnimation(CommentExpansion.toggleAnimation(reduceMotion: reduceMotion)) {
                         onToggle()
                         if reveal { onCollapsedOffscreen?() }
                     }
@@ -220,5 +220,12 @@ private struct CommentHeightsKey: PreferenceKey {
     static func reduce(value: inout Heights, nextValue: () -> Heights) {
         let next = nextValue()
         if next.full > 0 || next.capped > 0 { value = next }
+    }
+}
+
+extension CommentExpansion {
+    /// Show more / Show less animate briefly, and not at all under Reduce Motion.
+    static func toggleAnimation(reduceMotion: Bool) -> Animation? {
+        reduceMotion ? nil : .easeInOut(duration: 0.2)
     }
 }

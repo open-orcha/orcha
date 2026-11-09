@@ -90,7 +90,7 @@ internal fun HomeTab(
     ownerDecisions: List<io.openorcha.mobile.data.WorkflowDetailDto> = emptyList(),
     onOpenWorkflow: (String) -> Unit = {},
     /** GH #378: a task's newest comment in full (Home's Updates only carry its first 140 characters); null on failure. */
-    loadNewestComment: suspend (taskId: String) -> String? = { null },
+    loadNewestComment: suspend (taskId: String) -> TaskMessageDto? = { null },
 ) {
     val snapshot = state.snapshot ?: return
     val decisions = ownerDecisions.mapNotNull { w -> io.openorcha.mobile.domain.WorkflowLogic.ownerBar(w)?.let { w to it } }
@@ -371,7 +371,7 @@ private fun ActiveTaskRow(task: TaskDto, onClick: () -> Unit) {
  * comment, so Show more fetches the complete comment before expanding (GH #378 QA round 1).
  */
 @Composable
-private fun UpdateRow(task: TaskDto, msg: TaskMessageDto, loadNewestComment: suspend (String) -> String?, onClick: () -> Unit) {
+private fun UpdateRow(task: TaskDto, msg: TaskMessageDto, loadNewestComment: suspend (String) -> TaskMessageDto?, onClick: () -> Unit) {
     val p = Orcha.palette
     val actor = msg.authorAlias ?: if (msg.isHuman) "you" else "system"
     val scope = rememberCoroutineScope()
@@ -419,7 +419,7 @@ private fun UpdateRow(task: TaskDto, msg: TaskMessageDto, loadNewestComment: sus
                         loading = true
                         loadFailed = false
                         scope.launch {
-                            val full = CommentExpansion.completeBody(msg.body, runCatching { loadNewestComment(task.id) }.getOrNull())
+                            val full = CommentExpansion.completeBody(msg, runCatching { loadNewestComment(task.id) }.getOrNull())
                             loading = false
                             if (full != null) { complete = full; expanded = true } else loadFailed = true
                         }

@@ -672,11 +672,11 @@ final class AppModel {
 
     /// GH #378: Home's Updates carry only the first 140 characters of a task's latest comment, so its
     /// Show more fetches the newest message and expands to that complete text. Nil when it can't load or
-    /// a newer comment has replaced the one on screen.
-    func completeLatestComment(_ taskId: String, summary: String) async -> String? {
+    /// a newer comment (a different author or time) has replaced the one on screen.
+    func completeLatestComment(_ taskId: String, summary: TaskMessageDto) async -> String? {
         guard let sel = selectedContainer,
               let page = try? await api.taskMessages(sel.baseUrl, taskId, limit: 1) else { return nil }
-        return CommentExpansion.completeBody(summary: summary, newest: page.messages.last?.body)
+        return CommentExpansion.completeBody(summary: summary, newest: page.messages.last)
     }
 
     /// Issue 4: "Load earlier" — fetch the next older keyset page and PREPEND it (messages come

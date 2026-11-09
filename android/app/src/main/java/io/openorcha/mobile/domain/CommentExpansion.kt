@@ -1,5 +1,10 @@
 package io.openorcha.mobile.domain
 
+import io.openorcha.mobile.data.TaskMessageDto
+import java.time.Duration
+import java.time.Instant
+import java.time.OffsetDateTime
+
 /** GH #378: the Show more / Show less rules every long mobile comment follows (iOS `CommentExpansion`). */
 object CommentExpansion {
     /** Collapsed comments show this many lines everywhere (Activity, verification Result). */
@@ -36,7 +41,26 @@ object CommentExpansion {
     fun summaryMayBeCut(body: String): Boolean = body.codePointCount(0, body.length) >= SUMMARY_CUT_CHARS
 
     /** The complete comment for a cut summary: the task's newest message, when it is the one the summary
-     *  was cut from. A newer message (the summary is stale) or none gives null, so nothing wrong is shown. */
-    fun completeBody(summary: String, newest: String?): String? =
-        newest?.takeIf { it.startsWith(summary) }
+     *  was cut from. A newer message (the summary is stale) or none gives null, so nothing wrong is shown.
+     *  A newer comment can open with the same 140 characters, so the text alone is not enough: the author
+     *  and posting time must match too, or its ending would appear under the old author and time. */
+    fun completeBody(summary: TaskMessageDto, newest: TaskMessageDto?): String? =
+        newest?.takeIf { isSameComment(summary, it) && it.body.startsWith(summary.body) }?.body
+
+    /** Same author, same kind of author and same posting time. The summary carries no message id; times are
+     *  compared as instants because the task list and the thread may format the same time differently
+     *  (Postgres drops trailing zeros from the fraction). */
+    fun isSameComment(a: TaskMessageDto, b: TaskMessageDto): Boolean {
+        if (a.authorAlias != b.authorAlias || a.isHuman != b.isHuman) return false
+        if (!a.createdAt.isNullOrBlank() && a.createdAt == b.createdAt) return true
+        val t1 = instant(a.createdAt) ?: return false
+        val t2 = instant(b.createdAt) ?: return false
+        return Duration.between(t1, t2).abs() < Duration.ofMillis(1)
+    }
+
+    private fun instant(iso: String?): Instant? {
+        if (iso.isNullOrBlank()) return null
+        return runCatching { OffsetDateTime.parse(iso).toInstant() }.getOrNull()
+            ?: runCatching { Instant.parse(iso + "Z") }.getOrNull()
+    }
 }
