@@ -5,6 +5,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.unit.dp
@@ -47,13 +48,25 @@ class ExpandableTextTest {
         var opened = 0
         rule.setContent {
             OrchaTheme {
-                LRow(title = "Incoming open", subtitle = "“$long”", onClick = { opened++ }, modifier = Modifier.width(320.dp))
+                LRow(title = "Incoming open", subtitle = "“$long”", onClick = { opened++ }, modifier = Modifier.width(320.dp), expandSubtitle = true)
             }
         }
         rule.onNodeWithText("Show more").performClick()
         rule.waitForIdle()
         rule.onNodeWithText("Show less")
         assertEquals(0, opened)
+    }
+
+    /** QA round 1: a tappable row's label subtitle (a project's "13 agents · 3 open tasks · repo") gets no
+     *  Show more, so a tap anywhere on the row opens it. */
+    @Test fun tappableRowLabelSubtitleHasNoShowMore() {
+        var opened = 0
+        rule.setContent {
+            OrchaTheme { LRow(title = "openorcha", subtitle = long, onClick = { opened++ }, modifier = Modifier.width(320.dp)) }
+        }
+        rule.onAllNodesWithText("Show more").assertCountEquals(0)
+        rule.onNodeWithText("openorcha").performClick()
+        assertEquals(1, opened)
     }
 
     @Test fun rowWithoutATapTargetLetsItsTitleOpenToo() {

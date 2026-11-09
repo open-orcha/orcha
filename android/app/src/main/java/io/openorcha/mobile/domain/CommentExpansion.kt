@@ -19,4 +19,24 @@ object CommentExpansion {
 
     /** What TalkBack says a double-tap will do. */
     fun actionLabel(expanded: Boolean): String = if (expanded) "Collapse comment" else "Expand comment"
+
+    /** Label while Show more is fetching the complete comment. */
+    const val LOADING_LABEL = "Loading…"
+
+    /** Shown under a Home update whose complete comment could not be fetched. */
+    const val LOAD_FAILED_NOTE = "Couldn't load the full comment. Tap the update to read it."
+
+    /** The task list (Home's Updates) carries only the first 140 characters of a task's latest comment
+     *  (`task_list_query.py`, `LEFT(m.body, 140)`). */
+    const val SUMMARY_CUT_CHARS = 140
+
+    /** True when a summary body may be that shortened copy, so Show more must fetch the complete comment
+     *  first (GH #378: never present a shortened copy as the whole comment). Counted in code points, as
+     *  the server counts characters. */
+    fun summaryMayBeCut(body: String): Boolean = body.codePointCount(0, body.length) >= SUMMARY_CUT_CHARS
+
+    /** The complete comment for a cut summary: the task's newest message, when it is the one the summary
+     *  was cut from. A newer message (the summary is stale) or none gives null, so nothing wrong is shown. */
+    fun completeBody(summary: String, newest: String?): String? =
+        newest?.takeIf { it.startsWith(summary) }
 }

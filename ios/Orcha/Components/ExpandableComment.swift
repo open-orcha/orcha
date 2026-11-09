@@ -16,6 +16,13 @@ struct ExpandableComment<Header: View, Content: View>: View {
     let onToggle: () -> Void
     var collapsedLines: Int = CommentExpansion.collapsedLines
     var onCollapsedOffscreen: (() -> Void)? = nil
+    /// The text shown is a known shortened copy (Home's 140-character summary), so Show more appears even
+    /// when it fits; the caller fetches the complete comment in `onToggle` before expanding.
+    var knownCut: Bool = false
+    /// Show more is fetching the complete comment: the control reads "Loading…" and ignores taps.
+    var loading: Bool = false
+    /// Lines the control up under indented text (Home's update rows indent past the avatar).
+    var controlLeading: CGFloat = 0
     @ViewBuilder let header: () -> Header
     @ViewBuilder let content: () -> Content
 
@@ -47,7 +54,7 @@ struct ExpandableComment<Header: View, Content: View>: View {
                     }
             }
             .accessibilityElement(children: .combine)
-            if CommentExpansion.showsControl(overflowed: overflowed, expanded: expanded) {
+            if CommentExpansion.showsControl(overflowed: overflowed || knownCut, expanded: expanded) {
                 Button {
                     if expanded, onCollapsedOffscreen == nil {
                         // Scroll first, then collapse below the reader's eye: the comment's top does not
@@ -61,18 +68,24 @@ struct ExpandableComment<Header: View, Content: View>: View {
                     }
                 } label: {
                     HStack(spacing: 4) {
-                        Text(CommentExpansion.controlLabel(expanded: expanded))
-                        Image(systemName: expanded ? "chevron.up" : "chevron.down")
-                            .font(.system(size: 11, weight: .semibold))
-                            .accessibilityHidden(true)
+                        Text(loading ? CommentExpansion.loadingLabel : CommentExpansion.controlLabel(expanded: expanded))
+                        if loading {
+                            ProgressView().controlSize(.mini)
+                        } else {
+                            Image(systemName: expanded ? "chevron.up" : "chevron.down")
+                                .font(.system(size: 11, weight: .semibold))
+                                .accessibilityHidden(true)
+                        }
                     }
                     .ltype(.meta)
                     .foregroundStyle(p.accent)
+                    .padding(.leading, controlLeading)
                     .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
                     .contentShape(.rect)
                 }
                 .buttonStyle(CommentToggleStyle())
-                .accessibilityLabel(CommentExpansion.controlLabel(expanded: expanded))
+                .disabled(loading)
+                .accessibilityLabel(loading ? CommentExpansion.loadingLabel : CommentExpansion.controlLabel(expanded: expanded))
                 .accessibilityValue(CommentExpansion.stateDescription(expanded: expanded))
                 .accessibilityIdentifier("comment-toggle")
             }

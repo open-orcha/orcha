@@ -76,6 +76,11 @@ fun ExpandableCommentText(
     color: Color = Orcha.palette.text2,
     collapsedLines: Int = CommentExpansion.COLLAPSED_LINES,
     reveal: CommentReveal? = null,
+    /** The text is a known shortened copy (Home's 140-character summary): Show more appears even when it
+     *  fits, and the caller fetches the complete comment before expanding. */
+    knownCut: Boolean = false,
+    /** Show more is fetching the complete comment: the control reads "Loading…" and ignores taps. */
+    loading: Boolean = false,
 ) {
     val p = Orcha.palette
     var overflowed by remember(text, collapsedLines) { mutableStateOf(false) }
@@ -94,12 +99,12 @@ fun ExpandableCommentText(
             onTextLayout = { if (!expanded) overflowed = it.hasVisualOverflow },
             modifier = Modifier.fillMaxWidth().testTag(COMMENT_TEXT_TAG),
         )
-        if (CommentExpansion.showsControl(overflowed, expanded)) {
+        if (CommentExpansion.showsControl(overflowed || knownCut, expanded)) {
             Row(
                 Modifier
                     .fillMaxWidth()
                     .heightIn(min = 48.dp)
-                    .clickable(role = Role.Button, onClickLabel = CommentExpansion.actionLabel(expanded)) {
+                    .clickable(enabled = !loading, role = Role.Button, onClickLabel = CommentExpansion.actionLabel(expanded)) {
                         if (expanded) collapseRequests++
                         onExpandedChange(!expanded)
                     }
@@ -108,8 +113,14 @@ fun ExpandableCommentText(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                Text(CommentExpansion.controlLabel(expanded), style = ltype(LType.Meta), color = p.accent)
-                Icon(OrchaIcons.ExpandMore, null, tint = p.accent, modifier = Modifier.size(16.dp).rotate(if (expanded) 180f else 0f))
+                Text(
+                    if (loading) CommentExpansion.LOADING_LABEL else CommentExpansion.controlLabel(expanded),
+                    style = ltype(LType.Meta),
+                    color = p.accent,
+                )
+                if (!loading) {
+                    Icon(OrchaIcons.ExpandMore, null, tint = p.accent, modifier = Modifier.size(16.dp).rotate(if (expanded) 180f else 0f))
+                }
             }
         }
     }

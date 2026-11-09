@@ -43,6 +43,28 @@ enum CommentExpansion {
 
     static func controlLabel(expanded: Bool) -> String { expanded ? "Show less" : "Show more" }
 
+    /// Label while Show more is fetching the complete comment.
+    static let loadingLabel = "Loading…"
+
+    /// Shown under a Home update whose complete comment could not be fetched.
+    static let loadFailedNote = "Couldn't load the full comment. Tap the update to read it."
+
+    /// The task list (Home's Updates) carries only the first 140 characters of a task's latest comment
+    /// (`task_list_query.py`, `LEFT(m.body, 140)`).
+    static let summaryCutChars = 140
+
+    /// True when a summary body may be that shortened copy, so Show more must fetch the complete comment
+    /// first (GH #378: never present a shortened copy as the whole comment). Counted in Unicode scalars,
+    /// as the server counts characters.
+    static func summaryMayBeCut(_ body: String) -> Bool { body.unicodeScalars.count >= summaryCutChars }
+
+    /// The complete comment for a cut summary: the task's newest message, when it is the one the summary
+    /// was cut from. A newer message (the summary is stale) or none gives nil, so nothing wrong is shown.
+    static func completeBody(summary: String, newest: String?) -> String? {
+        guard let newest, newest.unicodeScalars.starts(with: summary.unicodeScalars) else { return nil }
+        return newest
+    }
+
     /// What VoiceOver reads as the control's value.
     static func stateDescription(expanded: Bool) -> String { expanded ? "Expanded" : "Collapsed" }
 }

@@ -13,6 +13,25 @@ class CommentExpansionTest {
         assertTrue(CommentExpansion.showsControl(overflowed = false, expanded = true))
     }
 
+    /** QA round 1: Home's summary is the server's first 140 characters, so Show more must fetch the rest. */
+    @Test fun homeSummaryAtTheServerCutIsTreatedAsCut() {
+        val long = "I traced the stall to the notifier scan loop and moved the inventory to a background pass. ".repeat(8)
+        assertFalse(CommentExpansion.summaryMayBeCut("Pushed the fix. Tests are green."))
+        assertTrue(CommentExpansion.summaryMayBeCut(long.take(140)))
+        assertFalse(CommentExpansion.summaryMayBeCut(long.take(139)))
+        // The server counts characters (code points): 140 emoji are 280 UTF-16 units but 140 characters.
+        assertTrue(CommentExpansion.summaryMayBeCut("😀".repeat(140)))
+        assertFalse(CommentExpansion.summaryMayBeCut("😀".repeat(70)))
+    }
+
+    @Test fun completeBodyIsTheNewestMessageOnlyWhenItContinuesTheSummary() {
+        val full = "I traced the stall to the notifier scan loop and moved the inventory to a background pass. ".repeat(8)
+        val summary = full.take(140)
+        assertEquals(full, CommentExpansion.completeBody(summary, full))
+        assertEquals(null, CommentExpansion.completeBody(summary, "A newer comment"))
+        assertEquals(null, CommentExpansion.completeBody(summary, null))
+    }
+
     @Test fun toggleIsPerCommentId() {
         var open = emptySet<String>()
         open = CommentExpansion.toggled(open, "a")

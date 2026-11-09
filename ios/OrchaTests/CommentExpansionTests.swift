@@ -25,6 +25,27 @@ enum CommentFixtures {
         #expect(CommentExpansion.showsControl(overflowed: false, expanded: true))
     }
 
+    /// QA round 1: Home's summary is the server's first 140 characters, so Show more must fetch the rest.
+    @Test func homeSummaryAtTheServerCutIsTreatedAsCut() {
+        #expect(!CommentExpansion.summaryMayBeCut(CommentFixtures.short))
+        #expect(CommentExpansion.summaryMayBeCut(String(CommentFixtures.long.prefix(140))))
+        #expect(!CommentExpansion.summaryMayBeCut(String(CommentFixtures.long.prefix(139))))
+        // The server counts characters (Unicode scalars): 70 two-scalar flags are 140 of them.
+        #expect(CommentExpansion.summaryMayBeCut(String(repeating: "🇮🇳", count: 70)))
+    }
+
+    @Test func completeBodyIsTheNewestMessageOnlyWhenItContinuesTheSummary() {
+        let full = CommentFixtures.long
+        let summary = String(full.prefix(140))
+        #expect(CommentExpansion.completeBody(summary: summary, newest: full) == full)
+        #expect(CommentExpansion.completeBody(summary: summary, newest: "A newer comment") == nil)
+        #expect(CommentExpansion.completeBody(summary: summary, newest: nil) == nil)
+        // A cut through a flag (one character on screen, two scalars) still matches its full comment.
+        let flags = String(repeating: "🇮🇳", count: 80)
+        let cutFlags = String(String.UnicodeScalarView(flags.unicodeScalars.prefix(141)))
+        #expect(CommentExpansion.completeBody(summary: cutFlags, newest: flags) == flags)
+    }
+
     @Test func toggleIsPerCommentId() {
         var open: Set<String> = []
         open = CommentExpansion.toggled(open, "a")

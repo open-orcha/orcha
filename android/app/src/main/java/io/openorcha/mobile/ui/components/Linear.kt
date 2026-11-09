@@ -179,6 +179,8 @@ fun LRow(
     onClick: (() -> Unit)? = null,
     leading: (@Composable () -> Unit)? = null,
     trailing: (@Composable () -> Unit)? = null,
+    /** The subtitle quotes a message (not a short label), so it gets Show more even in a tappable row. */
+    expandSubtitle: Boolean = false,
 ) {
     val p = Orcha.palette
     val interaction = remember { MutableInteractionSource() }
@@ -209,7 +211,13 @@ fun LRow(
                 ExpandableText(title, style = ltype(LType.BodyEmph), color = p.text, collapsedLines = 2)
             }
             if (hasSub) {
-                ExpandableText(subtitle!!, style = ltype(LType.Meta), color = p.muted, collapsedLines = 1)
+                // A tappable row's subtitle is usually a short label and the row opens the full item, so it gets
+                // no Show more (GH #378 QA round 1); a quoted message ([expandSubtitle]) still does.
+                if (onClick != null && !expandSubtitle) {
+                    Text(subtitle!!, style = ltype(LType.Meta), color = p.muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                } else {
+                    ExpandableText(subtitle!!, style = ltype(LType.Meta), color = p.muted, collapsedLines = 1)
+                }
             }
         }
         if (trailing != null) {

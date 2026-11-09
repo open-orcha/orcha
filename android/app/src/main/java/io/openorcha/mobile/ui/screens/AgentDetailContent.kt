@@ -298,6 +298,7 @@ internal fun LazyListScope.AgentDetailContent(
                         title = "Incoming open",
                         subtitle = state.agentExtras.inboxPreview?.let { "“$it”" },
                         onClick = onOpenRequests,
+                        expandSubtitle = true,
                         trailing = { Text("${state.agentExtras.inboxCount ?: 0}", style = ltype(LType.BodyEmph), color = p.text) },
                     )
                     LDivider(inset = LSpace.m)

@@ -193,6 +193,7 @@ fun WorkspaceScreen(
                             workflows?.openWorkflow(id)
                             onTab(WorkspaceTab.Workflows)
                         },
+                        loadNewestComment = { tid -> workflows?.taskMessages(tid)?.lastOrNull()?.body },
                     )
                     WorkspaceTab.Workflows -> WorkflowsTab(
                         onChooseActingHuman = onSettings,

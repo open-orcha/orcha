@@ -22,16 +22,20 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.setValue
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import io.openorcha.mobile.data.AgentDto
@@ -40,6 +44,7 @@ import io.openorcha.mobile.data.RequestDto
 import io.openorcha.mobile.data.TaskDto
 import io.openorcha.mobile.data.TaskMessageDto
 import io.openorcha.mobile.domain.ActivityCopy
+import io.openorcha.mobile.domain.CommentExpansion
 import io.openorcha.mobile.domain.MobileUx
 import io.openorcha.mobile.domain.OrchaSelectors
 import io.openorcha.mobile.domain.RequestsView
@@ -47,6 +52,8 @@ import io.openorcha.mobile.ui.OrchaUiState
 import io.openorcha.mobile.ui.WorkspaceTab
 import io.openorcha.mobile.ui.components.Banner
 import io.openorcha.mobile.ui.components.BannerKind
+import io.openorcha.mobile.ui.components.ExpandableCommentText
+import io.openorcha.mobile.ui.components.ExpandableText
 import io.openorcha.mobile.ui.components.LAvatar
 import io.openorcha.mobile.ui.components.LPriorityGlyph
 import io.openorcha.mobile.ui.components.LRow
@@ -56,9 +63,9 @@ import io.openorcha.mobile.ui.components.LStatusGlyph
 import io.openorcha.mobile.ui.components.LTag
 import io.openorcha.mobile.ui.components.LType
 import io.openorcha.mobile.ui.components.ltype
-import io.openorcha.mobile.ui.components.ExpandableText
 import io.openorcha.mobile.ui.icons.OrchaIcons
 import io.openorcha.mobile.ui.theme.Orcha
+import kotlinx.coroutines.launch
 
 /* Home tab, Linear-style (iOS HomeTabView parity): a calm project header (name,
    objective, one-line task tally, agent stack, repo chip), then "Needs you",
@@ -82,6 +89,8 @@ internal fun HomeTab(
     /** W17: workflows waiting on an owner decision (limit reached, stalled, missing outcome, ask owner). */
     ownerDecisions: List<io.openorcha.mobile.data.WorkflowDetailDto> = emptyList(),
     onOpenWorkflow: (String) -> Unit = {},
+    /** GH #378: a task's newest comment in full (Home's Updates only carry its first 140 characters); null on failure. */
+    loadNewestComment: suspend (taskId: String) -> String? = { null },
 ) {
     val snapshot = state.snapshot ?: return
     val decisions = ownerDecisions.mapNotNull { w -> io.openorcha.mobile.domain.WorkflowLogic.ownerBar(w)?.let { w to it } }
@@ -160,7 +169,10 @@ internal fun HomeTab(
         if (activity.isNotEmpty()) {
             item(key = "home-updates") {
                 LSection("Updates", count = activity.size) {
-                    Column { activity.forEach { (task, msg) -> UpdateRow(task, msg) { onOpenTask(task.id) } } }
+                    Column { activity.forEach { (task, msg) ->
+                        // A newer comment on the task starts a fresh row (collapsed, nothing fetched).
+                        key(task.id, msg.createdAt) { UpdateRow(task, msg, loadNewestComment) { onOpenTask(task.id) } }
+                    } }
                 }
             }
         }
@@ -353,10 +365,22 @@ private fun ActiveTaskRow(task: TaskDto, onClick: () -> Unit) {
     )
 }
 
+/**
+ * Updates feed row: avatar, actor + action, time and a 2-line preview of the task's latest comment; the row
+ * opens the task and Show more is its own button. The task list sends only the first 140 characters of that
+ * comment, so Show more fetches the complete comment before expanding (GH #378 QA round 1).
+ */
 @Composable
-private fun UpdateRow(task: TaskDto, msg: TaskMessageDto, onClick: () -> Unit) {
+private fun UpdateRow(task: TaskDto, msg: TaskMessageDto, loadNewestComment: suspend (String) -> String?, onClick: () -> Unit) {
     val p = Orcha.palette
     val actor = msg.authorAlias ?: if (msg.isHuman) "you" else "system"
+    val scope = rememberCoroutineScope()
+    var expanded by rememberSaveable { mutableStateOf(false) }
+    var complete by rememberSaveable { mutableStateOf<String?>(null) }
+    var loading by remember { mutableStateOf(false) }
+    var loadFailed by remember { mutableStateOf(false) }
+    val shown = complete ?: msg.body
+    val cut = complete == null && CommentExpansion.summaryMayBeCut(msg.body)
     Row(
         Modifier
             .fillMaxWidth()
@@ -370,7 +394,7 @@ private fun UpdateRow(task: TaskDto, msg: TaskMessageDto, onClick: () -> Unit) {
         LAvatar(actor, isAI = !msg.isHuman, size = 24.dp)
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(LSpace.xs)) {
-                Text(actor, style = ltype(LType.BodyEmph), color = p.text, maxLines = 1)
+                Text(actor, style = ltype(LType.BodyEmph), color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(
                     "on ${task.title}",
                     style = ltype(LType.Body),
@@ -381,7 +405,33 @@ private fun UpdateRow(task: TaskDto, msg: TaskMessageDto, onClick: () -> Unit) {
                 )
                 Text(MobileUx.agoLabel(msg.createdAt) ?: "", style = ltype(LType.Meta), color = p.muted, maxLines = 1)
             }
-            ExpandableText(ActivityCopy.preview(msg.body), style = ltype(LType.Meta), color = p.muted, collapsedLines = 2)
+            // The toggle is its own clickable, so TalkBack reads it as a separate button and its tap never opens the task.
+            ExpandableCommentText(
+                text = AnnotatedString(
+                    if (expanded) ActivityCopy.humanize(shown)
+                    else ActivityCopy.preview(shown) + if (cut) "…" else "",
+                ),
+                expanded = expanded,
+                onExpandedChange = { open ->
+                    if (!open || !cut) {
+                        expanded = open
+                    } else if (!loading) {
+                        loading = true
+                        loadFailed = false
+                        scope.launch {
+                            val full = CommentExpansion.completeBody(msg.body, runCatching { loadNewestComment(task.id) }.getOrNull())
+                            loading = false
+                            if (full != null) { complete = full; expanded = true } else loadFailed = true
+                        }
+                    }
+                },
+                style = ltype(LType.Meta),
+                color = p.muted,
+                collapsedLines = 2,
+                knownCut = cut,
+                loading = loading,
+            )
+            if (loadFailed) Text(CommentExpansion.LOAD_FAILED_NOTE, style = ltype(LType.Meta), color = p.danger)
         }
     }
 }
