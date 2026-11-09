@@ -22,6 +22,12 @@ missing.
   renderer process dies; the next click opens a fresh one (GH #347).
 
 ### Added
+- Claude Fable 5.2 (`claude-fable-5-2`) is in the model catalog. The per-agent
+  model picker offers it next to Fable 5.1, the desktop Stats & Usage cost
+  estimate prices it ($8 input / $40 output / $0.20 cache read per million
+  tokens), and the built-in LLM utility client sends it the `tool_choice: auto`
+  request shape because it rejects a forced `tool_choice`. Opus 5.5 stays the
+  default model and Fable 5.1 stays selectable. Desktop version: 2.2.2.
 - Completed workflows now offer **Run again**, which creates a separate editable draft in the same project. Review its setup and explicitly choose Start; the original workflow and its history are kept (first slice of GH #364).
 - Desktop: a local memory log at
   `~/Library/Application Support/Orcha/logs/memory.jsonl`. A minute after

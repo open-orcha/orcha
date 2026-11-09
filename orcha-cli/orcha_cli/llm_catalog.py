@@ -21,7 +21,12 @@ MODEL_GROK_4_20_NONREASONING = "grok-4.20-0309-non-reasoning"
 # 400. The provider translates a forced choice into {"type": "auto"} plus a
 # system-prompt instruction for these; older models keep the forced shape.
 FORCED_TOOL_CHOICE_UNSUPPORTED: frozenset[str] = frozenset(
-    {"claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5"}
+    {
+        "claude-fable-5-2",
+        "claude-fable-5-1",
+        "claude-opus-5-5",
+        "claude-sonnet-5-5",
+    }
 )
 
 

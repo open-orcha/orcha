@@ -5,6 +5,7 @@ import Testing
 struct ModelProviderTests {
     @Test("Claude model ids and runtime map to Claude", arguments: [
         "claude", "claude-opus-4-1", "opus", "Sonnet 4.5", "claude-haiku-4-5", "fable", "anthropic", " CLAUDE ",
+        "claude-fable-5-1", "claude-fable-5-2",
     ])
     func claude(_ input: String) {
         #expect(ModelProvider.for(input) == .claude)

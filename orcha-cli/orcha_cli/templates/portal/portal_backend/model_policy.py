@@ -8,6 +8,12 @@ _ULTRA_EFFORTS = [*_MAX_EFFORTS, "ultra"]
 
 AVAILABLE_MODELS = [
     {
+        "id": "claude-fable-5-2",
+        "name": "Fable 5.2",
+        "runtime": "claude",
+        "reasoning_efforts": _MAX_EFFORTS,
+    },
+    {
         "id": "claude-fable-5-1",
         "name": "Fable 5.1",
         "runtime": "claude",
