@@ -133,7 +133,7 @@ struct VerifySheet: View {
                                     LinkedMessageText(text: claimed, tasks: model.snapshot?.tasks ?? [], onTapTask: { linkedTaskId = $0 })
                                         .ltype(.body)
                                         .foregroundStyle(p.text2)
-                                        .lineLimit(12)
+                                        // GH #378: the Verify sheet shows the whole result, like Android.
                                         .frame(maxWidth: .infinity, alignment: .leading)
                                 }
                             }

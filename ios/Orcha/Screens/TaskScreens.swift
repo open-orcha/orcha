@@ -41,23 +41,28 @@ struct TaskDetailScreen: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: LSpace.xl) {
-                if let task {
-                    detail(task)
-                } else {
-                    LEmptyState(
-                        icon: "questionmark.circle",
-                        title: "Task not found",
-                        message: "Pull to refresh the workspace."
-                    )
+            ScrollViewReader { proxy in
+                VStack(alignment: .leading, spacing: LSpace.xl) {
+                    if let task {
+                        detail(task)
+                    } else {
+                        LEmptyState(
+                            icon: "questionmark.circle",
+                            title: "Task not found",
+                            message: "Pull to refresh the workspace."
+                        )
+                    }
+                    if let error = model.error {
+                        Banner(kind: .danger, text: error)
+                    }
                 }
-                if let error = model.error {
-                    Banner(kind: .danger, text: error)
-                }
+                .padding(.horizontal, LSpace.l)
+                .padding(.vertical, LSpace.m)
+                // GH #378: Show less on a comment read past its top scrolls back to that comment.
+                .environment(\.revealComment, RevealCommentAction { proxy.scrollTo($0, anchor: .top) })
             }
-            .padding(.horizontal, LSpace.l)
-            .padding(.vertical, LSpace.m)
         }
+        .coordinateSpace(.named(CommentExpansion.scrollSpace))
         .background(p.bg)
         .scrollDismissesKeyboard(.interactively)
         .safeAreaInset(edge: .bottom) {
@@ -320,6 +325,7 @@ private struct VerificationCard: View {
     let onReview: () -> Void
     let onReject: () -> Void
     let onAccept: () -> Void
+    @State private var resultExpanded = false
 
     var body: some View {
         LCard(padding: LSpace.l) {
@@ -335,10 +341,11 @@ private struct VerificationCard: View {
                 if let result = task.result ?? task.messageSummary?.last.map({ ActivityCopy.humanize($0.body) }) {
                     VStack(alignment: .leading, spacing: 4) {
                         caption("Result")
-                        Text(ChatMarkdown.inline(result))
-                            .ltype(.body)
-                            .foregroundStyle(p.text2)
-                            .lineLimit(6)
+                        ExpandableComment(expanded: resultExpanded, onToggle: { resultExpanded.toggle() }) {
+                            Text(ChatMarkdown.inline(result))
+                                .ltype(.body)
+                                .foregroundStyle(p.text2)
+                        }
                     }
                 }
                 TaskProofOfWork(taskId: task.id, reloadKey: task.status)
@@ -578,6 +585,9 @@ private struct ActivityTimeline: View {
     let messages: [TaskMessageDto]
     let agents: [AgentDto]
     let taskId: String
+    @Environment(\.revealComment) private var revealComment
+    /// GH #378: open comments by id, for as long as this task page lives.
+    @State private var expandedIds: Set<String> = []
 
     fileprivate struct Entry: Identifiable {
         let id: String
@@ -650,25 +660,37 @@ private struct ActivityTimeline: View {
                 }
             }
             .frame(width: 20, height: 20)
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
-                    if let actor = entry.actor {
-                        Text(actor).ltype(.bodyEmph).foregroundStyle(p.text)
-                    } else {
-                        Text(entry.text).ltype(.meta).foregroundStyle(p.text2)
-                    }
-                    Spacer(minLength: 0)
-                    Text(entry.time ?? "").ltype(.micro).foregroundStyle(p.faint)
-                }
-                if entry.isMessage {
-                    Text(entry.text)
+            if entry.isMessage {
+                // GH #378: long comments collapse with Show more / Show less instead of a fixed cut.
+                ExpandableComment(expanded: expandedIds.contains(entry.id),
+                                  onToggle: { expandedIds = CommentExpansion.toggled(expandedIds, entry.id) },
+                                  onCollapsedOffscreen: { revealComment?(CommentExpansion.rowAnchor(entry.id)) }) {
+                    header(entry)
+                } content: {
+                    Text(ChatMarkdown.inline(entry.text))
                         .ltype(.body)
                         .foregroundStyle(p.text2)
-                        .lineLimit(5)
                 }
+            } else {
+                header(entry)
             }
         }
         .padding(.vertical, LSpace.s)
+        .id(CommentExpansion.rowAnchor(entry.id))
+        // VoiceOver reads author, time and comment as one element, then Show more as its own button.
+        .accessibilityElement(children: .contain)
+    }
+
+    private func header(_ entry: Entry) -> some View {
+        HStack(spacing: 6) {
+            if let actor = entry.actor {
+                Text(actor).ltype(.bodyEmph).foregroundStyle(p.text)
+            } else {
+                Text(entry.text).ltype(.meta).foregroundStyle(p.text2)
+            }
+            Spacer(minLength: 0)
+            Text(entry.time ?? "").ltype(.micro).foregroundStyle(p.faint)
+        }
         .accessibilityElement(children: .combine)
     }
 }
