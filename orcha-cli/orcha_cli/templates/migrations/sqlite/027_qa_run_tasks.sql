@@ -20,7 +20,7 @@ CREATE TABLE qa_runs (
 CREATE INDEX qa_runs_container ON qa_runs (container_id, created_at);
 
 CREATE TABLE qa_final_decisions (
-    id UUID PRIMARY KEY NOT NULL,
+    id UUID PRIMARY KEY NOT NULL DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))),2) || '-' || substr('89ab', abs(random()) % 4 + 1, 1) || substr(lower(hex(randomblob(2))),2) || '-' || lower(hex(randomblob(6)))),
     container_id UUID NOT NULL REFERENCES containers(id) ON DELETE CASCADE,
     task_id UUID NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
     subject TEXT NOT NULL,

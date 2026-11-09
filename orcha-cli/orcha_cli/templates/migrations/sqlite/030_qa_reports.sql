@@ -2,7 +2,7 @@
 -- for this project: a person re-runs it here, or reads it as reported.
 
 CREATE TABLE qa_reports (
-    id UUID PRIMARY KEY,
+    id UUID PRIMARY KEY NOT NULL DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))),2) || '-' || substr('89ab', abs(random()) % 4 + 1, 1) || substr(lower(hex(randomblob(2))),2) || '-' || lower(hex(randomblob(6)))),
     container_id UUID NOT NULL REFERENCES containers(id) ON DELETE CASCADE,
     title TEXT NOT NULL,
     file_name TEXT,
