@@ -419,6 +419,64 @@ private struct ActiveTaskRow: View {
     }
 }
 
+/// Updates header: name, "on <task>" and time on one line while the task title gets at least
+/// `taskTitleMinWidth`; otherwise (large text, long name) the title moves to its own line instead of
+/// shrinking to a sliver (GH #378 QA round 2). The name stays on one line.
+struct UpdateHeader: View {
+    @Environment(\.palette) private var p
+    let actor: String
+    let taskTitle: String
+    let ago: String
+
+    /// The narrowest "on <task>" worth showing beside the name: "on" and the start of a word. Scales with Dynamic Type.
+    @ScaledMetric(relativeTo: .body) private var taskTitleMinWidth: CGFloat = 64
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .firstTextBaseline, spacing: LSpace.xs) {
+                // The name stays whole; the task title shortens first (QA: names split mid-word).
+                name
+                title
+                    .frame(minWidth: taskTitleMinWidth, idealWidth: taskTitleMinWidth,
+                           maxWidth: .infinity, alignment: .leading)
+                time
+                    .padding(.leading, LSpace.s - LSpace.xs)
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(alignment: .firstTextBaseline, spacing: LSpace.xs) {
+                    name
+                    Spacer(minLength: LSpace.s)
+                    time
+                }
+                title
+            }
+        }
+    }
+
+    private var name: some View {
+        Text(actor)
+            .ltype(.bodyEmph)
+            .foregroundStyle(p.text)
+            .lineLimit(1)
+            .layoutPriority(1)
+    }
+
+    private var title: some View {
+        Text("on \(taskTitle)")
+            .ltype(.body)
+            .foregroundStyle(p.text2)
+            .lineLimit(1)
+    }
+
+    private var time: some View {
+        Text(ago)
+            .ltype(.meta)
+            .foregroundStyle(p.muted)
+            .lineLimit(1)
+            .fixedSize()
+    }
+}
+
 /// Updates feed row: avatar, actor + action, muted time, and a 2-line preview of the task's latest comment.
 /// The row opens the task; Show more sits below it as its own button (and its own VoiceOver element).
 /// The task list sends only the first 140 characters of that comment, so Show more fetches the complete
@@ -456,7 +514,8 @@ private struct UpdateRow: View {
                     HStack(alignment: .top, spacing: LSpace.m) {
                         LAvatar(name: actor, isAI: !message.isHuman, size: Self.avatarSize)
                         VStack(alignment: .leading, spacing: 2) {
-                            header
+                            UpdateHeader(actor: actor, taskTitle: task.title,
+                                         ago: MobileUx.agoLabel(message.createdAt) ?? "")
                             Text(expanded ? ActivityCopy.humanize(shownBody) : preview)
                                 .ltype(.meta)
                                 .foregroundStyle(p.muted)
@@ -485,27 +544,6 @@ private struct UpdateRow: View {
     private var preview: String {
         let text = ActivityCopy.preview(shownBody)
         return cut ? text + "…" : text
-    }
-
-    private var header: some View {
-        HStack(alignment: .firstTextBaseline, spacing: LSpace.xs) {
-            // The name stays whole; the task title shortens first (QA: names split mid-word).
-            Text(actor)
-                .ltype(.bodyEmph)
-                .foregroundStyle(p.text)
-                .lineLimit(1)
-                .layoutPriority(1)
-            Text("on \(task.title)")
-                .ltype(.body)
-                .foregroundStyle(p.text2)
-                .lineLimit(1)
-            Spacer(minLength: LSpace.s)
-            Text(MobileUx.agoLabel(message.createdAt) ?? "")
-                .ltype(.meta)
-                .foregroundStyle(p.muted)
-                .lineLimit(1)
-                .fixedSize()
-        }
     }
 
     private func toggle() {

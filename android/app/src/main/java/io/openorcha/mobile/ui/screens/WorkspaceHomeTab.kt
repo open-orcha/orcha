@@ -31,13 +31,18 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.constrainHeight
+import androidx.compose.ui.unit.constrainWidth
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import io.openorcha.mobile.data.AgentDto
 import io.openorcha.mobile.data.ContainerSnapshot
 import io.openorcha.mobile.data.RequestDto
@@ -393,18 +398,7 @@ private fun UpdateRow(task: TaskDto, msg: TaskMessageDto, loadNewestComment: sus
     ) {
         LAvatar(actor, isAI = !msg.isHuman, size = 24.dp)
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(LSpace.xs)) {
-                Text(actor, style = ltype(LType.BodyEmph), color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(
-                    "on ${task.title}",
-                    style = ltype(LType.Body),
-                    color = p.text2,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f),
-                )
-                Text(MobileUx.agoLabel(msg.createdAt) ?: "", style = ltype(LType.Meta), color = p.muted, maxLines = 1)
-            }
+            UpdateHeader(actor, task.title, MobileUx.agoLabel(msg.createdAt) ?: "")
             // The toggle is its own clickable, so TalkBack reads it as a separate button and its tap never opens the task.
             ExpandableCommentText(
                 text = AnnotatedString(
@@ -432,6 +426,55 @@ private fun UpdateRow(task: TaskDto, msg: TaskMessageDto, loadNewestComment: sus
                 loading = loading,
             )
             if (loadFailed) Text(CommentExpansion.LOAD_FAILED_NOTE, style = ltype(LType.Meta), color = p.danger)
+        }
+    }
+}
+
+/** The narrowest "on <task>" worth showing beside the name: "on" and the start of a word. In sp, so it grows with the font. */
+internal val UPDATE_TASK_TITLE_MIN = 64.sp
+
+/**
+ * Updates header: name, "on <task>" and time on one line while the task title keeps at least
+ * [UPDATE_TASK_TITLE_MIN]; otherwise (large text, long name) the title moves to its own line instead of
+ * shrinking to a sliver (GH #378 QA round 2). The time is measured first, so a long name never pushes it out,
+ * and the name stays on one line.
+ */
+@Composable
+internal fun UpdateHeader(actor: String, taskTitle: String, ago: String) {
+    val p = Orcha.palette
+    Layout(
+        content = {
+            Text(actor, style = ltype(LType.BodyEmph), color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text("on $taskTitle", style = ltype(LType.Body), color = p.text2, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(ago, style = ltype(LType.Meta), color = p.muted, maxLines = 1)
+        },
+    ) { measurables, constraints ->
+        val (nameM, titleM, timeM) = measurables
+        val gap = LSpace.xs.roundToPx()
+        val bounded = constraints.hasBoundedWidth
+        val maxW = constraints.maxWidth
+        val time = timeM.measure(Constraints(maxWidth = maxW))
+        val name = nameM.measure(Constraints(maxWidth = if (bounded) (maxW - gap - time.width).coerceAtLeast(0) else maxW))
+        val titleRoom = if (bounded) maxW - name.width - time.width - 2 * gap else Constraints.Infinity
+        if (titleRoom >= UPDATE_TASK_TITLE_MIN.roundToPx()) {
+            val title = titleM.measure(Constraints(maxWidth = titleRoom))
+            val w = constraints.constrainWidth(if (bounded) maxW else name.width + title.width + time.width + 2 * gap)
+            val h = constraints.constrainHeight(maxOf(name.height, title.height, time.height))
+            layout(w, h) {
+                name.placeRelative(0, (h - name.height) / 2)
+                title.placeRelative(name.width + gap, (h - title.height) / 2)
+                time.placeRelative(w - time.width, (h - time.height) / 2)
+            }
+        } else {
+            val title = titleM.measure(Constraints(maxWidth = maxW))
+            val line = maxOf(name.height, time.height)
+            val below = line + 2.dp.roundToPx()
+            val h = constraints.constrainHeight(below + title.height)
+            layout(maxW, h) {
+                name.placeRelative(0, (line - name.height) / 2)
+                time.placeRelative(maxW - time.width, (line - time.height) / 2)
+                title.placeRelative(0, below)
+            }
         }
     }
 }

@@ -169,3 +169,37 @@ enum CommentFixtures {
         #expect(overflows(medium, size: .accessibility5))
     }
 }
+
+/// GH #378 QA round 2: at large text the Home update header squeezed "on <task>" to a cut-off sliver after the
+/// shortened name. The title now keeps a readable width beside the name or moves to its own line.
+@MainActor
+@Suite struct UpdateHeaderLayoutTests {
+    private let actor = "CodeCleanupAgent"
+    private let title = "Mobile: make long comments expandable instead of permanently ellipsized"
+    /// About the header's width on a 390-point iPhone (row padding and the avatar removed).
+    private let width: CGFloat = 330
+
+    private func height<V: View>(_ view: V, size: DynamicTypeSize) -> CGFloat {
+        let host = UIHostingController(rootView: view.frame(width: width).environment(\.dynamicTypeSize, size))
+        return host.sizeThatFits(in: CGSize(width: width, height: CGFloat.greatestFiniteMagnitude)).height
+    }
+
+    private func headerHeight(_ size: DynamicTypeSize) -> CGFloat {
+        height(UpdateHeader(actor: actor, taskTitle: title, ago: "3h"), size: size)
+    }
+
+    /// One line of the name in the header's font, at that text size.
+    private func lineHeight(_ size: DynamicTypeSize) -> CGFloat {
+        height(Text(actor).ltype(.bodyEmph).lineLimit(1), size: size)
+    }
+
+    @Test func normalTextKeepsTheHeaderOnOneLine() {
+        #expect(headerHeight(.large) < lineHeight(.large) * 1.5)
+    }
+
+    @Test func largeTextMovesTheTitleToItsOwnLine() {
+        for size in [DynamicTypeSize.accessibility3, .accessibility5] {
+            #expect(headerHeight(size) > lineHeight(size) * 1.5, "title on its own line at \(size)")
+        }
+    }
+}
