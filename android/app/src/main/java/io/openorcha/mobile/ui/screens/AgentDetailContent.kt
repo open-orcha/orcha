@@ -58,6 +58,7 @@ import io.openorcha.mobile.ui.components.LStatusGlyph
 import io.openorcha.mobile.ui.components.LTag
 import io.openorcha.mobile.ui.components.LType
 import io.openorcha.mobile.ui.components.ltype
+import io.openorcha.mobile.ui.components.ExpandableText
 import io.openorcha.mobile.ui.icons.OrchaIcons
 import io.openorcha.mobile.ui.theme.OrchaPalette
 
@@ -108,9 +109,10 @@ internal fun LazyListScope.AgentDetailContent(
                         agent.alias, style = ltype(LType.Title), color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.semantics { heading() },
                     )
-                    Text(
+                    // GH #378: the role is free text and this is the only place it's shown in full.
+                    ExpandableText(
                         agent.role ?: if (agent.kind == "human") "Human authority" else "agent",
-                        style = ltype(LType.Meta), color = p.muted, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        style = ltype(LType.Meta), color = p.muted, collapsedLines = 2,
                     )
                 }
                 if (agent.kind == "ai") AgentStatusCapsule(status)
@@ -296,6 +298,7 @@ internal fun LazyListScope.AgentDetailContent(
                         title = "Incoming open",
                         subtitle = state.agentExtras.inboxPreview?.let { "“$it”" },
                         onClick = onOpenRequests,
+                        expandSubtitle = true,
                         trailing = { Text("${state.agentExtras.inboxCount ?: 0}", style = ltype(LType.BodyEmph), color = p.text) },
                     )
                     LDivider(inset = LSpace.m)

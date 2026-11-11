@@ -133,16 +133,18 @@ struct AgentWorktreesScreen: View {
     }
 
     private func row(_ item: WorktreeItemDto) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
+        // GH #378: a cut-off meta line (agent, task title, size) opens in place; the name and state
+        // read with it as one VoiceOver element.
+        ExpandableText(collapsedLines: 2) {
             HStack {
                 Text(item.name).ltype(.bodyEmph).foregroundStyle(p.text).lineLimit(1)
                 Spacer(minLength: LSpace.s)
                 LTag(ProjectLimitsUx.worktreeState(item.state), tint: tint(item.state))
             }
-            Text(subtitle(item)).ltype(.micro).foregroundStyle(p.muted).lineLimit(2)
+        } content: {
+            Text(subtitle(item)).ltype(.micro).foregroundStyle(p.muted)
         }
         .padding(LSpace.m)
-        .accessibilityElement(children: .combine)
     }
 
     private func subtitle(_ item: WorktreeItemDto) -> String {

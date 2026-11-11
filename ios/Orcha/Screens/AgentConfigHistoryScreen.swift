@@ -172,16 +172,23 @@ private struct ConfigRevisionCard: View {
         let before = AgentConfigHistoryUx.value(field, change.before)
         let after = AgentConfigHistoryUx.value(field, change.after)
         let long = field == "system_prompt"
-        return VStack(alignment: .leading, spacing: 2) {
-            Text(AgentConfigHistoryUx.fieldLabel(field)).ltype(.micro).foregroundStyle(p.muted)
+        return Group {
             if long {
-                Text(after).ltype(.meta).foregroundStyle(p.text2).lineLimit(4)
+                // GH #378: the new prompt opens in place; label and text read as one VoiceOver element.
+                ExpandableText(collapsedLines: 4) {
+                    Text(AgentConfigHistoryUx.fieldLabel(field)).ltype(.micro).foregroundStyle(p.muted)
+                } content: {
+                    Text(after).ltype(.meta).foregroundStyle(p.text2)
+                }
             } else {
-                Text("\(before) → \(after)").ltype(.meta).foregroundStyle(p.text)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(AgentConfigHistoryUx.fieldLabel(field)).ltype(.micro).foregroundStyle(p.muted)
+                    Text("\(before) → \(after)").ltype(.meta).foregroundStyle(p.text)
+                }
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("\(AgentConfigHistoryUx.fieldLabel(field)): \(before) to \(after)")
             }
         }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(long ? "\(AgentConfigHistoryUx.fieldLabel(field)) changed" : "\(AgentConfigHistoryUx.fieldLabel(field)): \(before) to \(after)")
     }
 
     @ViewBuilder

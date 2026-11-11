@@ -99,8 +99,9 @@ private fun FileRow(file: GitHubChangedFile, htmlUrl: String?, expanded: Boolean
                 contentDescription = null, tint = p.faint, modifier = Modifier.size(14.dp),
             )
             Text(
+                // GH #378: opening the file shows its whole path too, not just the diff.
                 file.filename, style = ltype(LType.Mono),
-                color = p.text2, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f),
+                color = p.text2, maxLines = if (expanded) Int.MAX_VALUE else 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f),
             )
             DiffCount(file.additions, file.deletions)
         }

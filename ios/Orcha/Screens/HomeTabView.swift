@@ -174,11 +174,10 @@ struct HomeTabView: View {
                     LSection("Updates", count: activity.count) {
                         VStack(spacing: 0) {
                             ForEach(Array(activity.enumerated()), id: \.element.0.id) { index, item in  // one row per task; summary messages often carry no message_id
-                                NavigationLink(value: WorkspaceRoute.task(item.0.id)) {
-                                    UpdateRow(task: item.0, message: item.1)
-                                }
-                                .buttonStyle(.lRow)
-                                .shellRowEntrance(index)
+                                UpdateRow(task: item.0, message: item.1)
+                                    // A newer comment on the task starts a fresh row (collapsed, nothing fetched).
+                                    .id("\(item.0.id)|\(item.1.createdAt ?? "")")
+                                    .shellRowEntrance(index)
                             }
                         }
                     }
@@ -226,13 +225,12 @@ private struct HomeHeader: View {
     @ViewBuilder
     private var objective: some View {
         let text = (snapshot.container.description ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        if canEditObjective {
+        if canEditObjective && text.isEmpty {
             Button(action: onEditObjective) {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Text(text.isEmpty ? "Add an objective…" : text)
+                    Text("Add an objective…")
                         .ltype(.body)
-                        .foregroundStyle(text.isEmpty ? p.muted : p.text2)
-                        .lineLimit(3)
+                        .foregroundStyle(p.muted)
                         .multilineTextAlignment(.leading)
                     Image(systemName: "pencil")
                         .font(.system(size: 12, weight: .medium))
@@ -243,12 +241,27 @@ private struct HomeHeader: View {
                 .contentShape(.rect)
             }
             .buttonStyle(.plain)
-            .accessibilityLabel(text.isEmpty ? "Add an objective" : "Edit objective: \(text)")
+            .accessibilityLabel("Add an objective")
         } else if !text.isEmpty {
-            Text(text)
-                .ltype(.body)
-                .foregroundStyle(p.text2)
-                .lineLimit(3)
+            // GH #378: a long objective opens in place with Show more; the pencil stays its own button.
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                ExpandableText(collapsedLines: 3) {
+                    Text(text)
+                        .ltype(.body)
+                        .foregroundStyle(p.text2)
+                }
+                if canEditObjective {
+                    Button(action: onEditObjective) {
+                        Image(systemName: "pencil")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(p.faint)
+                            .frame(minWidth: 44, minHeight: 44)
+                            .contentShape(.rect)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Edit objective")
+                }
+            }
         }
     }
 
@@ -406,45 +419,152 @@ private struct ActiveTaskRow: View {
     }
 }
 
-/// Updates feed row: avatar, actor + action, muted time.
+/// Updates header: name, "on <task>" and time on one line while the task title gets at least
+/// `taskTitleMinWidth`; otherwise (large text, long name) the title moves to its own line instead of
+/// shrinking to a sliver (GH #378 QA round 2). The name stays on one line.
+struct UpdateHeader: View {
+    @Environment(\.palette) private var p
+    let actor: String
+    let taskTitle: String
+    let ago: String
+
+    /// The narrowest "on <task>" worth showing beside the name: "on" and the start of a word. Scales with Dynamic Type.
+    @ScaledMetric(relativeTo: .body) private var taskTitleMinWidth: CGFloat = 64
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .firstTextBaseline, spacing: LSpace.xs) {
+                // The name stays whole; the task title shortens first (QA: names split mid-word).
+                name
+                title
+                    .frame(minWidth: taskTitleMinWidth, idealWidth: taskTitleMinWidth,
+                           maxWidth: .infinity, alignment: .leading)
+                time
+                    .padding(.leading, LSpace.s - LSpace.xs)
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(alignment: .firstTextBaseline, spacing: LSpace.xs) {
+                    name
+                    Spacer(minLength: LSpace.s)
+                    time
+                }
+                title
+            }
+        }
+    }
+
+    private var name: some View {
+        Text(actor)
+            .ltype(.bodyEmph)
+            .foregroundStyle(p.text)
+            .lineLimit(1)
+            .layoutPriority(1)
+    }
+
+    private var title: some View {
+        Text("on \(taskTitle)")
+            .ltype(.body)
+            .foregroundStyle(p.text2)
+            .lineLimit(1)
+    }
+
+    private var time: some View {
+        Text(ago)
+            .ltype(.meta)
+            .foregroundStyle(p.muted)
+            .lineLimit(1)
+            .fixedSize()
+    }
+}
+
+/// Updates feed row: avatar, actor + action, muted time, and a 2-line preview of the task's latest comment.
+/// The row opens the task; Show more sits below it as its own button (and its own VoiceOver element).
+/// The task list sends only the first 140 characters of that comment, so Show more fetches the complete
+/// comment before expanding (GH #378 QA round 1).
 private struct UpdateRow: View {
     @Environment(AppModel.self) private var model
     @Environment(\.palette) private var p
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let task: TaskDto
     let message: TaskMessageDto
+
+    @State private var expanded = false
+    @State private var completeBody: String?
+    @State private var loading = false
+    @State private var loadFailed = false
+
+    private static let avatarSize: CGFloat = 24
 
     private var actor: String {
         message.authorAlias ?? (message.isHuman ? "you" : "system")
     }
 
+    /// The comment as far as this row knows it: the fetched complete text, else the summary.
+    private var shownBody: String { completeBody ?? message.body }
+
+    private var cut: Bool { completeBody == nil && CommentExpansion.summaryMayBeCut(message.body) }
+
     var body: some View {
-        HStack(alignment: .top, spacing: LSpace.m) {
-            LAvatar(name: actor, isAI: !message.isHuman, size: 24)
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(alignment: .firstTextBaseline, spacing: LSpace.xs) {
-                    Text(actor)
-                        .ltype(.bodyEmph)
-                        .foregroundStyle(p.text)
-                    Text("on \(task.title)")
-                        .ltype(.body)
-                        .foregroundStyle(p.text2)
-                        .lineLimit(1)
-                    Spacer(minLength: LSpace.s)
-                    Text(MobileUx.agoLabel(message.createdAt) ?? "")
-                        .ltype(.meta)
-                        .foregroundStyle(p.muted)
+        VStack(alignment: .leading, spacing: 0) {
+            ExpandableComment(expanded: expanded, onToggle: toggle, collapsedLines: 2,
+                              knownCut: cut, loading: loading,
+                              controlLeading: LSpace.m + Self.avatarSize + LSpace.m,
+                              header: { EmptyView() }) {
+                NavigationLink(value: WorkspaceRoute.task(task.id)) {
+                    HStack(alignment: .top, spacing: LSpace.m) {
+                        LAvatar(name: actor, isAI: !message.isHuman, size: Self.avatarSize)
+                        VStack(alignment: .leading, spacing: 2) {
+                            UpdateHeader(actor: actor, taskTitle: task.title,
+                                         ago: MobileUx.agoLabel(message.createdAt) ?? "")
+                            Text(expanded ? ActivityCopy.humanize(shownBody) : preview)
+                                .ltype(.meta)
+                                .foregroundStyle(p.muted)
+                        }
+                    }
+                    .padding(.horizontal, LSpace.m)
+                    .padding(.vertical, LSpace.s + 2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(.rect)
+                    .accessibilityElement(children: .combine)
                 }
-                Text(ActivityCopy.preview(message.body))
+                .buttonStyle(.lRow)
+            }
+            if loadFailed {
+                Text(CommentExpansion.loadFailedNote)
                     .ltype(.meta)
-                    .foregroundStyle(p.muted)
-                    .lineLimit(2)
+                    .foregroundStyle(p.danger)
+                    .padding(.leading, LSpace.m + Self.avatarSize + LSpace.m)
+                    .padding(.trailing, LSpace.m)
+                    .padding(.bottom, LSpace.s)
             }
         }
-        .padding(.horizontal, LSpace.m)
-        .padding(.vertical, LSpace.s + 2)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .contentShape(.rect)
-        .accessibilityElement(children: .combine)
+    }
+
+    /// Collapsed preview; a cut summary ends in "…" so it never reads as the whole comment.
+    private var preview: String {
+        let text = ActivityCopy.preview(shownBody)
+        return cut ? text + "…" : text
+    }
+
+    private func toggle() {
+        if expanded || !cut {
+            expanded.toggle()
+            return
+        }
+        guard !loading else { return }
+        loading = true
+        loadFailed = false
+        Task {
+            let complete = await model.completeLatestComment(task.id, summary: message)
+            loading = false
+            if let complete {
+                completeBody = complete
+                // The button's own transaction ended before the reply arrived, so honour Reduce Motion here.
+                withAnimation(CommentExpansion.toggleAnimation(reduceMotion: reduceMotion)) { expanded = true }
+            } else {
+                loadFailed = true
+            }
+        }
     }
 }
 

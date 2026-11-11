@@ -227,7 +227,8 @@ private struct DiffFileSection: View {
                     Text(file.path)
                         .ltype(.mono)
                         .foregroundStyle(p.text)
-                        .lineLimit(1)
+                        // GH #378: opening the file shows its whole path too.
+                        .lineLimit(expanded ? nil : 1)
                         .truncationMode(.middle)
                     Spacer(minLength: LSpace.s)
                     DiffCounts(adds: file.adds, dels: file.dels, compact: true)

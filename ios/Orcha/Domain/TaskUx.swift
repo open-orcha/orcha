@@ -154,13 +154,13 @@ enum GoalChainUx {
         let shownParents = parents.suffix(min(parents.count, maxShownParents))
         var out: [GoalCrumb] = []
         if let objective = nodes.first(where: { $0.kind == "objective" }) {
-            let text = objective.text?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let text = objective.text.map(oneLine)
             out.append(.objective(text: (text?.isEmpty ?? true) ? nil : text, projectTitle: objective.title))
         }
         let note = chain.cycle ? "The parent links loop — showing each task once"
             : (chain.truncated ? "More ancestors exist above these" : "")
         if !folded.isEmpty {
-            let names = folded.map(\.title).joined(separator: " › ")
+            let names = folded.map { oneLine($0.title) }.joined(separator: " › ")
             let count = folded.count
             var hint = "\(count) more parent task\(count == 1 ? "" : "s"): \(names)"
             if !note.isEmpty { hint += " — " + note }
@@ -169,10 +169,26 @@ enum GoalChainUx {
             out.append(.gap(label: chain.cycle ? "(loop)" : "(more above)", hint: note))
         }
         for p in shownParents {
-            out.append(.parent(id: p.id ?? "", title: p.title, status: p.status))
+            out.append(.parent(id: p.id ?? "", title: oneLine(p.title), status: p.status))
         }
         if nodes.contains(where: { $0.kind == "task" }) { out.append(.this) }
         return out
+    }
+
+    /// The objective crumb shows this many characters until it is opened (Android/web rule).
+    static let objectiveMaxChars = 60
+
+    /// GH #378: crumbs are single lines in a bar that scrolls sideways, so line breaks and
+    /// runs of spaces fold to one space (Android `TaskInsightsUx.clip` does the same).
+    /// Otherwise a one-line crumb would show only the text before the first line break,
+    /// even after the objective is opened.
+    static func oneLine(_ text: String) -> String {
+        text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+    }
+
+    /// Shortens to `max` characters with a trailing "…" (the input is already one line).
+    static func clip(_ text: String, _ max: Int) -> String {
+        text.count > max ? String(text.prefix(max - 1)) + "…" : text
     }
 
     /// Worth showing only when there is more than "This task" alone.

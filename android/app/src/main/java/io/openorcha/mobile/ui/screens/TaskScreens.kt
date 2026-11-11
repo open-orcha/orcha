@@ -85,9 +85,13 @@ import io.openorcha.mobile.data.TaskDto
 import io.openorcha.mobile.data.TaskMessageDto
 import io.openorcha.mobile.domain.MarkdownLite
 import io.openorcha.mobile.domain.ActivityCopy
+import io.openorcha.mobile.domain.CommentExpansion
 import io.openorcha.mobile.domain.MobileUx
 import io.openorcha.mobile.ui.OrchaUiState
 import io.openorcha.mobile.ui.components.Banner
+import io.openorcha.mobile.ui.components.ExpandableCommentText
+import io.openorcha.mobile.ui.components.commentRevealTarget
+import io.openorcha.mobile.ui.components.rememberCommentReveal
 import io.openorcha.mobile.ui.components.BannerKind
 import io.openorcha.mobile.ui.components.LAvatar
 import io.openorcha.mobile.ui.components.LButton
@@ -104,10 +108,12 @@ import io.openorcha.mobile.ui.components.LStatusGlyph
 import io.openorcha.mobile.ui.components.LTag
 import io.openorcha.mobile.ui.components.LType
 import io.openorcha.mobile.ui.components.MarkdownText
+import io.openorcha.mobile.ui.components.linkedInlineMarkdown
 import io.openorcha.mobile.ui.components.lPrimaryFill
 import io.openorcha.mobile.ui.components.lPrimaryText
 import io.openorcha.mobile.ui.components.ltype
 import io.openorcha.mobile.ui.components.priorityLabel
+import io.openorcha.mobile.ui.components.ExpandableText
 import io.openorcha.mobile.ui.icons.OrchaIcons
 import io.openorcha.mobile.ui.theme.Orcha
 
@@ -117,7 +123,7 @@ import io.openorcha.mobile.ui.theme.Orcha
    dependencies, Activity / Runs panes, and a bottom comment composer.
    ============================================================================= */
 
-private enum class DetailPane { Activity, Runs }
+internal enum class DetailPane { Activity, Runs }
 
 @Composable
 fun TaskDetailScreen(
@@ -352,6 +358,8 @@ fun TaskDetailScreen(
                 item(key = "verify") {
                     VerificationCard(
                         task = task,
+                        tasks = state.snapshot?.tasks.orEmpty(),
+                        onOpenTask = onOpenTask,
                         busy = state.actionInFlight,
                         onReview = { verifyRejecting = false; showVerify = true },
                         onReject = { verifyRejecting = true; showVerify = true },
@@ -401,22 +409,18 @@ fun TaskDetailScreen(
                 }
             }
             item(key = "panes") {
-                Column(verticalArrangement = Arrangement.spacedBy(LSpace.m)) {
-                    LSegmented(
-                        options = listOf(
-                            DetailPane.Activity to "Activity ${activityEntries(task, state.taskMessages).size}",
-                            DetailPane.Runs to "Runs ${state.taskRuns.size}",
-                        ),
-                        selection = pane,
-                        onSelect = { paneName = it.name },
-                    )
-                    AnimatedContent(pane, transitionSpec = { fadeIn() togetherWith fadeOut() }, label = "pane") { current ->
-                        when (current) {
-                            DetailPane.Activity -> ActivityTimeline(task, state.taskMessages, agents, onOpenThread)
-                            DetailPane.Runs -> RunsTimeline(state.taskRuns, onOpenRun)
-                        }
-                    }
-                }
+                TaskDetailPanes(
+                    task = task,
+                    messages = state.taskMessages,
+                    runs = state.taskRuns,
+                    agents = agents,
+                    tasks = state.snapshot?.tasks.orEmpty(),
+                    pane = pane,
+                    onSelectPane = { paneName = it.name },
+                    onOpenThread = onOpenThread,
+                    onOpenTask = onOpenTask,
+                    onOpenRun = onOpenRun,
+                )
             }
             state.error?.let { item(key = "error") { Banner(BannerKind.Danger, it) } }
         }
@@ -602,6 +606,8 @@ private fun TaskMetaRow(task: TaskDto, agents: List<AgentDto>) {
 @Composable
 private fun VerificationCard(
     task: TaskDto,
+    tasks: List<TaskDto>,
+    onOpenTask: (String) -> Unit,
     busy: Boolean,
     onReview: () -> Unit,
     onReject: () -> Unit,
@@ -617,12 +623,11 @@ private fun VerificationCard(
                 Text("Awaiting your verification", style = ltype(LType.Headline), color = p.text, modifier = Modifier.semantics { heading() })
             }
             (task.result ?: task.messageSummary?.last?.body)?.let(ActivityCopy::humanize)?.takeIf { it.isNotBlank() }?.let { result ->
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                val reveal = rememberCommentReveal()
+                Column(Modifier.commentRevealTarget(reveal), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text("Result", style = ltype(LType.Micro), color = p.faint)
-                    Text(
-                        inlineMarkdown(result),
-                        style = ltype(LType.Body), color = p.text2, maxLines = 6, overflow = TextOverflow.Ellipsis,
-                    )
+                    var resultExpanded by rememberSaveable(task.id) { mutableStateOf(false) }
+                    ExpandableCommentText(linkedInlineMarkdown(result, tasks, onOpenTask), expanded = resultExpanded, onExpandedChange = { resultExpanded = it }, reveal = reveal)
                 }
             }
             proof()
@@ -652,10 +657,10 @@ private fun PlanWaitingCard(task: TaskDto, onReview: () -> Unit) {
                 Text("Plan waiting for approval", style = ltype(LType.Headline), color = p.text, modifier = Modifier.weight(1f).semantics { heading() })
                 task.planMessage?.authorAlias?.let { LAvatar(it, isAI = true, size = 20.dp) }
             }
-            Text(
+            ExpandableText(
                 // Preview: drop markdown heading markers ("## Plan") so the card reads as prose.
                 inlineMarkdown(task.planMessage?.body.orEmpty().lines().joinToString("\n") { it.trimStart().trimStart('#').trimStart() }),
-                style = ltype(LType.Body), color = p.text2, maxLines = 4, overflow = TextOverflow.Ellipsis,
+                style = ltype(LType.Body), color = p.text2, collapsedLines = 4,
             )
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                 LButton("Review plan", onReview, kind = LButtonKind.Primary, size = LSize.Small)
@@ -849,8 +854,59 @@ private fun activityEntries(task: TaskDto, messages: List<TaskMessageDto>): List
     }
 }.sortedBy { it.sortKey }
 
+/**
+ * The Activity / Runs switch. GH #378: which comments are open (by id) is kept here, above the switch,
+ * so a trip to Runs and back keeps them open for as long as the task page lives (and across rotation).
+ */
 @Composable
-private fun ActivityTimeline(task: TaskDto, messages: List<TaskMessageDto>, agents: List<AgentDto>, onOpenThread: () -> Unit) {
+internal fun TaskDetailPanes(
+    task: TaskDto,
+    messages: List<TaskMessageDto>,
+    runs: List<RunDto>,
+    agents: List<AgentDto>,
+    tasks: List<TaskDto>,
+    pane: DetailPane,
+    onSelectPane: (DetailPane) -> Unit,
+    onOpenThread: () -> Unit,
+    onOpenTask: (String) -> Unit,
+    onOpenRun: (RunDto) -> Unit,
+) {
+    var expandedIds by rememberSaveable(task.id) { mutableStateOf(emptyList<String>()) }
+    Column(verticalArrangement = Arrangement.spacedBy(LSpace.m)) {
+        LSegmented(
+            options = listOf(
+                DetailPane.Activity to "Activity ${activityEntries(task, messages).size}",
+                DetailPane.Runs to "Runs ${runs.size}",
+            ),
+            selection = pane,
+            onSelect = onSelectPane,
+        )
+        AnimatedContent(pane, transitionSpec = { fadeIn() togetherWith fadeOut() }, label = "pane") { current ->
+            when (current) {
+                DetailPane.Activity -> ActivityTimeline(
+                    task, messages, agents, tasks,
+                    expandedIds = expandedIds,
+                    onToggle = { id -> expandedIds = CommentExpansion.toggled(expandedIds.toSet(), id).toList() },
+                    onOpenThread = onOpenThread,
+                    onOpenTask = onOpenTask,
+                )
+                DetailPane.Runs -> RunsTimeline(runs, onOpenRun)
+            }
+        }
+    }
+}
+
+@Composable
+private fun ActivityTimeline(
+    task: TaskDto,
+    messages: List<TaskMessageDto>,
+    agents: List<AgentDto>,
+    tasks: List<TaskDto>,
+    expandedIds: List<String>,
+    onToggle: (String) -> Unit,
+    onOpenThread: () -> Unit,
+    onOpenTask: (String) -> Unit,
+) {
     val p = Orcha.palette
     val entries = remember(task, messages) { activityEntries(task, messages) }
     Column {
@@ -862,8 +918,9 @@ private fun ActivityTimeline(task: TaskDto, messages: List<TaskMessageDto>, agen
             )
         }
         entries.forEach { e ->
+            val reveal = rememberCommentReveal()
             Row(
-                Modifier.fillMaxWidth().padding(vertical = LSpace.s).semantics(mergeDescendants = true) {},
+                Modifier.fillMaxWidth().commentRevealTarget(reveal).padding(vertical = LSpace.s).semantics(mergeDescendants = true) {},
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 Box(Modifier.size(20.dp), contentAlignment = Alignment.Center) {
@@ -877,7 +934,12 @@ private fun ActivityTimeline(task: TaskDto, messages: List<TaskMessageDto>, agen
                         Text(e.time ?: "", style = ltype(LType.Micro), color = p.faint)
                     }
                     if (e.isMessage) {
-                        Text(inlineMarkdown(e.text), style = ltype(LType.Body), color = p.text2, maxLines = 5, overflow = TextOverflow.Ellipsis)
+                        ExpandableCommentText(
+                            linkedInlineMarkdown(e.text, tasks, onOpenTask),
+                            expanded = e.id in expandedIds,
+                            onExpandedChange = { onToggle(e.id) },
+                            reveal = reveal,
+                        )
                     }
                 }
             }

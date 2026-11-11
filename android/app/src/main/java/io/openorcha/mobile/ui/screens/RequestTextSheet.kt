@@ -73,6 +73,7 @@ import io.openorcha.mobile.ui.components.LButton
 import io.openorcha.mobile.ui.components.LButtonKind
 import io.openorcha.mobile.ui.components.LType
 import io.openorcha.mobile.ui.components.ltype
+import io.openorcha.mobile.ui.components.ExpandableText
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 
@@ -114,7 +115,7 @@ fun TextSheet(
                 color = if (destructive) p.danger else p.text,
                 modifier = Modifier.semantics { heading() },
             )
-            Text(title, style = ltype(LType.Body), color = p.text2, maxLines = 4, overflow = TextOverflow.Ellipsis)
+            ExpandableText(title, style = ltype(LType.Body), color = p.text2, collapsedLines = 4)
             OrchaField(text, { text = it }, label = label, minLines = 3)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 LButton(

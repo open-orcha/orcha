@@ -109,7 +109,8 @@ struct GitHubPullDetailScreen: View {
             }
             .ltype(.micro)
             .monospaced()
-            .lineLimit(1)
+            // GH #378: long branch names wrap instead of being cut; this is the only place they're shown.
+            .fixedSize(horizontal: false, vertical: true)
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
             .background(p.surface2, in: RoundedRectangle(cornerRadius: 5))
@@ -229,7 +230,8 @@ struct ChangedFileRow: View {
                     Text(file.filename)
                         .ltype(.mono)
                         .foregroundStyle(p.text)
-                        .lineLimit(1)
+                        // GH #378: opening the file shows its whole path too, not just the diff.
+                        .lineLimit(expanded ? nil : 1)
                         .truncationMode(.middle)
                     Spacer(minLength: LSpace.s)
                     DiffCounts(adds: file.additions, dels: file.deletions, compact: true)

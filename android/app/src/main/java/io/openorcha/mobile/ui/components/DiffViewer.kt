@@ -127,7 +127,8 @@ private fun DiffFileSection(
                 file.path,
                 style = ltype(LType.Mono).copy(fontWeight = FontWeight.Medium),
                 color = p.text,
-                maxLines = 1,
+                // GH #378: opening the file shows its whole path too.
+                maxLines = if (expanded) Int.MAX_VALUE else 1,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f, fill = false),
             )

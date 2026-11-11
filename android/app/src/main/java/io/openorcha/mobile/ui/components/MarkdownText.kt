@@ -69,6 +69,17 @@ fun MarkdownText(
     }
 }
 
+/**
+ * GH #378: one run of inline markdown with the thread's links (web links, portal chips, bare task refs
+ * that open the task), for text that must honour `maxLines` such as a collapsible comment.
+ */
+@Composable
+fun linkedInlineMarkdown(body: String, tasks: List<TaskDto>, onOpenTask: ((String) -> Unit)?): AnnotatedString {
+    val spans = remember(body) { MarkdownLite.inline(body) }
+    val linker = if (onOpenTask != null && tasks.isNotEmpty()) TaskLinker(tasks, onOpenTask) else null
+    return annotate(spans, linker)
+}
+
 /** Turns bare task refs inside rendered inline text into tappable links. */
 private class TaskLinker(val tasks: List<TaskDto>, val onOpenTask: (String) -> Unit)
 

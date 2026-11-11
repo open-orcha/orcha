@@ -56,6 +56,7 @@ import io.openorcha.mobile.ui.components.LType
 import io.openorcha.mobile.ui.components.ModelProviderMark
 import io.openorcha.mobile.ui.components.lStatusLabel
 import io.openorcha.mobile.ui.components.ltype
+import io.openorcha.mobile.ui.components.ExpandableText
 import io.openorcha.mobile.ui.icons.OrchaIcons
 import io.openorcha.mobile.ui.theme.Orcha
 
@@ -187,7 +188,7 @@ private fun SpendByTask(tasks: List<SpendTaskDto>) {
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(LSpace.s)) {
                         r.status?.let { LStatusGlyph(it) }
-                        Text(title, style = ltype(LType.Body), color = p.text, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                        ExpandableText(title, style = ltype(LType.Body), color = p.text, collapsedLines = 2, modifier = Modifier.weight(1f))
                         Text(cost, style = ltype(LType.Meta), color = if (cost == UsageFormat.NOT_REPORTED) p.muted else p.text)
                     }
                     val bar = p.accent

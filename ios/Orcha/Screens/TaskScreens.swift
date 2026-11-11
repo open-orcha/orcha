@@ -28,6 +28,9 @@ struct TaskDetailScreen: View {
     @State private var recurringSheetTask: TaskDto?
     @State private var acceptTick = 0
     @State private var linkedTaskId: String?
+    /// GH #378: open Activity comments by id. Kept here, above the Activity / Runs switch, so a trip
+    /// to Runs and back keeps them open for as long as this task page lives.
+    @State private var expandedCommentIds: Set<String> = []
     /// Portal-link chips in the description (task / request / agent / GitHub) push here.
     @State private var portalRoute: WorkspaceRoute?
     @Environment(\.openURL) private var openURL
@@ -41,23 +44,28 @@ struct TaskDetailScreen: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: LSpace.xl) {
-                if let task {
-                    detail(task)
-                } else {
-                    LEmptyState(
-                        icon: "questionmark.circle",
-                        title: "Task not found",
-                        message: "Pull to refresh the workspace."
-                    )
+            ScrollViewReader { proxy in
+                VStack(alignment: .leading, spacing: LSpace.xl) {
+                    if let task {
+                        detail(task)
+                    } else {
+                        LEmptyState(
+                            icon: "questionmark.circle",
+                            title: "Task not found",
+                            message: "Pull to refresh the workspace."
+                        )
+                    }
+                    if let error = model.error {
+                        Banner(kind: .danger, text: error)
+                    }
                 }
-                if let error = model.error {
-                    Banner(kind: .danger, text: error)
-                }
+                .padding(.horizontal, LSpace.l)
+                .padding(.vertical, LSpace.m)
+                // GH #378: Show less on a comment read past its top scrolls back to that comment.
+                .environment(\.revealComment, RevealCommentAction { proxy.scrollTo($0, anchor: .top) })
             }
-            .padding(.horizontal, LSpace.l)
-            .padding(.vertical, LSpace.m)
         }
+        .coordinateSpace(.named(CommentExpansion.scrollSpace))
         .background(p.bg)
         .scrollDismissesKeyboard(.interactively)
         .safeAreaInset(edge: .bottom) {
@@ -135,7 +143,11 @@ struct TaskDetailScreen: View {
                 reviewTag: MobileUx.reviewTag(for: task, identity: model.identity),
                 onReview: { verifySheetTask = task },
                 onReject: { rejectSheetTask = task },
-                onAccept: { accept(task) }
+                onAccept: { accept(task) },
+                tasks: model.snapshot?.tasks ?? [],
+                onTapTask: { linkedTaskId = $0 },
+                portalBase: model.portalBase,
+                onTapPortal: openPortal
             )
             .transition(.opacity.combined(with: .move(edge: .top)))
         }
@@ -173,7 +185,10 @@ struct TaskDetailScreen: View {
             )
             switch pane {
             case .activity:
-                ActivityTimeline(task: task, messages: model.taskMessages, agents: agents, taskId: taskId)
+                ActivityTimeline(task: task, messages: model.taskMessages, agents: agents, taskId: taskId,
+                                 expandedIds: $expandedCommentIds, tasks: model.snapshot?.tasks ?? [],
+                                 onTapTask: { linkedTaskId = $0 }, portalBase: model.portalBase,
+                                 onTapPortal: openPortal)
             case .runs:
                 RunsTimeline(runs: model.taskRuns)
             }
@@ -320,6 +335,12 @@ private struct VerificationCard: View {
     let onReview: () -> Void
     let onReject: () -> Void
     let onAccept: () -> Void
+    var tasks: [TaskDto] = []
+    var onTapTask: ((String) -> Void)?
+    var portalBase: String? = nil
+    var onTapPortal: ((PortalLink) -> Void)? = nil
+    @Environment(\.revealComment) private var revealComment
+    @State private var resultExpanded = false
 
     var body: some View {
         LCard(padding: LSpace.l) {
@@ -335,11 +356,16 @@ private struct VerificationCard: View {
                 if let result = task.result ?? task.messageSummary?.last.map({ ActivityCopy.humanize($0.body) }) {
                     VStack(alignment: .leading, spacing: 4) {
                         caption("Result")
-                        Text(ChatMarkdown.inline(result))
-                            .ltype(.body)
-                            .foregroundStyle(p.text2)
-                            .lineLimit(6)
+                        // GH #378: Show less after reading past the Result's top scrolls back to it.
+                        ExpandableComment(expanded: resultExpanded, onToggle: { resultExpanded.toggle() },
+                                          onCollapsedOffscreen: { revealComment?(CommentExpansion.resultAnchor) }) {
+                            ChatInlineText(text: result, tasks: tasks, onTapTask: onTapTask,
+                                           portalBase: portalBase, onTapPortal: onTapPortal)
+                                .ltype(.body)
+                                .foregroundStyle(p.text2)
+                        }
                     }
+                    .id(CommentExpansion.resultAnchor)
                 }
                 TaskProofOfWork(taskId: task.id, reloadKey: task.status)
                 ManagerReviewRow(task: task)
@@ -385,10 +411,11 @@ private struct PlanWaitingCard: View {
                         LAvatar(name: author, isAI: true, size: 20)
                     }
                 }
-                Text(task.planMessage?.body ?? "")
-                    .ltype(.body)
-                    .foregroundStyle(p.text2)
-                    .lineLimit(4)
+                ExpandableText(collapsedLines: 4) {
+                    Text(task.planMessage?.body ?? "")
+                        .ltype(.body)
+                        .foregroundStyle(p.text2)
+                }
                 HStack {
                     Spacer()
                     LButton("Review plan", kind: .primary, size: .small, action: onReview)
@@ -578,6 +605,13 @@ private struct ActivityTimeline: View {
     let messages: [TaskMessageDto]
     let agents: [AgentDto]
     let taskId: String
+    /// GH #378: open comments by id, owned by the task page so the Runs pane does not reset them.
+    @Binding var expandedIds: Set<String>
+    var tasks: [TaskDto] = []
+    var onTapTask: ((String) -> Void)?
+    var portalBase: String? = nil
+    var onTapPortal: ((PortalLink) -> Void)? = nil
+    @Environment(\.revealComment) private var revealComment
 
     fileprivate struct Entry: Identifiable {
         let id: String
@@ -650,25 +684,38 @@ private struct ActivityTimeline: View {
                 }
             }
             .frame(width: 20, height: 20)
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
-                    if let actor = entry.actor {
-                        Text(actor).ltype(.bodyEmph).foregroundStyle(p.text)
-                    } else {
-                        Text(entry.text).ltype(.meta).foregroundStyle(p.text2)
-                    }
-                    Spacer(minLength: 0)
-                    Text(entry.time ?? "").ltype(.micro).foregroundStyle(p.faint)
-                }
-                if entry.isMessage {
-                    Text(entry.text)
+            if entry.isMessage {
+                // GH #378: long comments collapse with Show more / Show less instead of a fixed cut.
+                ExpandableComment(expanded: expandedIds.contains(entry.id),
+                                  onToggle: { expandedIds = CommentExpansion.toggled(expandedIds, entry.id) },
+                                  onCollapsedOffscreen: { revealComment?(CommentExpansion.rowAnchor(entry.id)) }) {
+                    header(entry)
+                } content: {
+                    ChatInlineText(text: entry.text, tasks: tasks, onTapTask: onTapTask,
+                                   portalBase: portalBase, onTapPortal: onTapPortal)
                         .ltype(.body)
                         .foregroundStyle(p.text2)
-                        .lineLimit(5)
                 }
+            } else {
+                header(entry)
             }
         }
         .padding(.vertical, LSpace.s)
+        .id(CommentExpansion.rowAnchor(entry.id))
+        // VoiceOver reads author, time and comment as one element, then Show more as its own button.
+        .accessibilityElement(children: .contain)
+    }
+
+    private func header(_ entry: Entry) -> some View {
+        HStack(spacing: 6) {
+            if let actor = entry.actor {
+                Text(actor).ltype(.bodyEmph).foregroundStyle(p.text)
+            } else {
+                Text(entry.text).ltype(.meta).foregroundStyle(p.text2)
+            }
+            Spacer(minLength: 0)
+            Text(entry.time ?? "").ltype(.micro).foregroundStyle(p.faint)
+        }
         .accessibilityElement(children: .combine)
     }
 }
@@ -733,10 +780,12 @@ struct RunRowCard: View {
                         .ltype(.meta)
                         .foregroundStyle(run.status == "running" ? p.warn : p.text2)
                 }
-                Text(run.taskTitle ?? run.wakeEvent.map(ActivityCopy.humanize) ?? "Worker run")
-                    .ltype(.meta)
-                    .foregroundStyle(p.faint)
-                    .lineLimit(1)
+                // GH #378: the task title or wake event isn't shown in full on the run page, so it opens here.
+                ExpandableText(collapsedLines: 1) {
+                    Text(run.taskTitle ?? run.wakeEvent.map(ActivityCopy.humanize) ?? "Worker run")
+                        .ltype(.meta)
+                        .foregroundStyle(p.faint)
+                }
             }
             Spacer(minLength: LSpace.s)
             if let alias = run.agentAlias {

@@ -284,6 +284,9 @@ struct LRow<Leading: View, Trailing: View>: View {
                     .foregroundStyle(p.text)
                     .lineLimit(2)
                 if let subtitle, !subtitle.isEmpty {
+                    // GH #378: no Show more here. LRow sits inside a Button / NavigationLink, so a nested
+                    // control would steal the row's tap and VoiceOver would merge it into the row; the
+                    // subtitle is a short label and the row itself opens the full item.
                     Text(subtitle)
                         .ltype(.meta)
                         .foregroundStyle(p.muted)

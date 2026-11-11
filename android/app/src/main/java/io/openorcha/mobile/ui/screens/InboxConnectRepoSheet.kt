@@ -53,6 +53,7 @@ import io.openorcha.mobile.ui.components.LSpace
 import io.openorcha.mobile.ui.components.LTag
 import io.openorcha.mobile.ui.components.LType
 import io.openorcha.mobile.ui.components.ltype
+import io.openorcha.mobile.ui.components.ExpandableText
 import io.openorcha.mobile.ui.icons.OrchaIcons
 import io.openorcha.mobile.ui.theme.Orcha
 import kotlinx.coroutines.launch
@@ -194,7 +195,7 @@ private fun RepoRow(repo: InboxGithubRepoDto, bound: Boolean, enabled: Boolean, 
                 if (repo.isPrivate) LTag("private", tint = p.warn)
             }
             repo.description?.takeIf { it.isNotBlank() }?.let {
-                Text(it, style = ltype(LType.Meta), color = p.muted, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                ExpandableText(it, style = ltype(LType.Meta), color = p.muted, collapsedLines = 2)
             }
         }
         if (bound) Icon(OrchaIcons.Check, null, tint = p.accent, modifier = Modifier.size(16.dp))

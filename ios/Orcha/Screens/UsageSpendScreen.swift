@@ -172,7 +172,7 @@ private struct UsageSpendTaskRow: View {
                         .foregroundStyle(p.faint)
                         .accessibilityHidden(true)
                 }
-                Text(title).ltype(.bodyEmph).foregroundStyle(p.text).lineLimit(2)
+                ExpandableText(collapsedLines: 2) { Text(title).ltype(.bodyEmph).foregroundStyle(p.text) }
                 Spacer(minLength: LSpace.s)
                 Text(UsageUx.tokens(m.totalTokens)).ltype(.meta).monospacedDigit().foregroundStyle(p.text)
             }

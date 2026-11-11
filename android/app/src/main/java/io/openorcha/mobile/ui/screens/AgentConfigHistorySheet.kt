@@ -71,6 +71,7 @@ import io.openorcha.mobile.ui.components.LSpace
 import io.openorcha.mobile.ui.components.LTag
 import io.openorcha.mobile.ui.components.LType
 import io.openorcha.mobile.ui.components.ltype
+import io.openorcha.mobile.ui.components.ExpandableText
 import io.openorcha.mobile.ui.icons.OrchaIcons
 import io.openorcha.mobile.ui.theme.Orcha
 import kotlinx.coroutines.launch
@@ -345,7 +346,7 @@ private fun ChangeRow(change: ConfigFieldChangeDto) {
     ) {
         Text(label, style = ltype(LType.Micro), color = p.muted)
         if (long) {
-            Text(after, style = ltype(LType.Meta), color = p.text2, maxLines = 4)
+            ExpandableText(after, style = ltype(LType.Meta), color = p.text2, collapsedLines = 4)
         } else {
             Text("$before → $after", style = ltype(LType.Meta), color = p.text)
         }

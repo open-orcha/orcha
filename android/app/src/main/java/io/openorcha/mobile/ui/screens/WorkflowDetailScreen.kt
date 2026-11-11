@@ -44,6 +44,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -65,6 +66,7 @@ import io.openorcha.mobile.ui.components.LStatusGlyph
 import io.openorcha.mobile.ui.components.LTag
 import io.openorcha.mobile.ui.components.LType
 import io.openorcha.mobile.ui.components.ltype
+import io.openorcha.mobile.ui.components.ExpandableCommentText
 import io.openorcha.mobile.ui.icons.OrchaIcons
 import io.openorcha.mobile.ui.theme.Orcha
 
@@ -236,13 +238,12 @@ private fun WorkflowHeader(
             if (d.semanticsVersion >= 2) Text("Agent turns ${d.turnsUsed} of ${d.turnAllowance}", style = ltype(LType.Meta), color = p.text2)
         }
         if (d.goal.isNotBlank()) {
-            Text(
-                d.goal, style = ltype(LType.Body), color = p.text2,
-                maxLines = if (goalExpanded) Int.MAX_VALUE else 2, overflow = TextOverflow.Ellipsis,
+            // GH #378: measured, so a short goal with line breaks gets Show more too (the old "More"
+            // link only appeared past 120 characters), and it can collapse again.
+            ExpandableCommentText(
+                AnnotatedString(d.goal), goalExpanded, { goalExpanded = it },
+                style = ltype(LType.Body), color = p.text2, collapsedLines = 2,
             )
-            if (!goalExpanded && d.goal.length > 120) {
-                Text("More", style = ltype(LType.Meta), color = p.accent, modifier = Modifier.combinedClickable(onClick = { goalExpanded = true }))
-            }
         }
         val primary = WorkflowLogic.primaryAction(d, hasHuman)
         val primaryReason = if (primary == WorkflowLogic.MenuAction.Finish) null else WorkflowLogic.menuReason(d, primary, hasHuman)

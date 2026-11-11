@@ -82,4 +82,34 @@ class TaskInsightsUxTest {
         assertTrue(TaskInsightsUx.hasAncestry(withParent))
         assertEquals(listOf("proj", "Parent"), TaskInsightsUx.goalCrumbs(withParent).map(TaskInsightsUx::goalCrumbLabel))
     }
+
+    // GH #378: a cut-off objective crumb can open in full; one that fits has nothing to open.
+    @Test
+    fun goalCrumbFullOnlyWhenTheObjectiveWasCut() {
+        val long = "Ship the mobile apps with every long text readable in full, everywhere it appears"
+        val cut = GoalNodeDto("objective", "r", "proj", text = long)
+        assertEquals(long, TaskInsightsUx.goalCrumbFull(cut))
+        assertTrue(TaskInsightsUx.goalCrumbLabel(cut).endsWith("…"))
+        assertEquals(null, TaskInsightsUx.goalCrumbFull(GoalNodeDto("objective", "r", "proj", text = "Short goal")))
+        assertEquals(null, TaskInsightsUx.goalCrumbFull(GoalNodeDto("parent", "p", long)))
+    }
+
+    // GH #378 review round 4 (iOS finding, Android parity): the crumb is one line, so an objective
+    // written on several lines keeps every line, joined by spaces, both shortened and opened.
+    @Test
+    fun goalCrumbObjectiveWithLineBreaksKeepsEveryLine() {
+        val short = GoalNodeDto("objective", "r", "proj", text = "Read the first line\nSECOND LINE SHOULD REMAIN READABLE")
+        assertEquals("Read the first line SECOND LINE SHOULD REMAIN READABLE", TaskInsightsUx.goalCrumbLabel(short))
+        assertEquals(null, TaskInsightsUx.goalCrumbFull(short))
+        val long = GoalNodeDto(
+            "objective", "r", "proj",
+            text = "Read the first line\nSECOND LINE SHOULD REMAIN READABLE even when we expand a long objective on tap",
+        )
+        assertEquals(
+            "Read the first line SECOND LINE SHOULD REMAIN READABLE even when we expand a long objective on tap",
+            TaskInsightsUx.goalCrumbFull(long),
+        )
+        assertTrue(TaskInsightsUx.goalCrumbLabel(long).endsWith("…"))
+        assertTrue('\n' !in TaskInsightsUx.goalCrumbLabel(long))
+    }
 }

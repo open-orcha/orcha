@@ -56,7 +56,7 @@ enum RunFeed {
         guard let obj = parseObject(line) else {
             return line.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 ? []
-                : [RunFeedRow(type: "narrate", label: "log", text: trunc(line, 240))]
+                : [RunFeedRow(type: "narrate", label: "log", text: trunc(line, 240), detail: cutRest(line, 240))]
         }
         var out: [RunFeedRow] = []
         let t = str(obj, "type")
@@ -103,7 +103,9 @@ enum RunFeed {
                         detail: r
                     ))
                 case "text":
-                    out.append(RunFeedRow(type: "boot", label: "injected prompt", text: trunc(str(c, "text") ?? "", 200)))
+                    let prompt = str(c, "text") ?? ""
+                    out.append(RunFeedRow(type: "boot", label: "injected prompt", text: trunc(prompt, 200),
+                                          detail: cutRest(prompt, 200)))
                 default:
                     break
                 }
@@ -121,7 +123,7 @@ enum RunFeed {
         } else if t == "result" {
             let rv = obj["result"] ?? obj["subtype"]
             let text = rv.map { elementToString($0) } ?? "\"done\""
-            out.append(RunFeedRow(type: "done", label: "run-complete", text: trunc(text, 200)))
+            out.append(RunFeedRow(type: "done", label: "run-complete", text: trunc(text, 200), detail: cutRest(text, 200)))
         } else {
             let codex = classifyCodex(obj)
             if codex.isEmpty {
@@ -319,5 +321,10 @@ enum RunFeed {
 
     private static func trunc(_ s: String, _ n: Int) -> String {
         s.count <= n ? s : String(s.prefix(n - 1)) + "…"
+    }
+
+    /// GH #378: when `trunc` cut the text, the whole of it goes in the row's tap-to-expand detail.
+    private static func cutRest(_ s: String, _ n: Int) -> String? {
+        s.count > n ? s : nil
     }
 }

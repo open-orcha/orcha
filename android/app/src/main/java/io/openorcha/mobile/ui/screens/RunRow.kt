@@ -26,6 +26,7 @@ import io.openorcha.mobile.ui.components.ModelProviderMark
 import io.openorcha.mobile.ui.components.LStatusGlyph
 import io.openorcha.mobile.ui.components.LType
 import io.openorcha.mobile.ui.components.ltype
+import io.openorcha.mobile.ui.components.ExpandableText
 import io.openorcha.mobile.ui.theme.Orcha
 
 /** Maps a worker-run status onto the Linear task-status glyph vocabulary. */
@@ -67,7 +68,8 @@ fun RunRow(run: RunDto, onOpenRun: (RunDto) -> Unit) {
                     color = if (run.status == "running") p.warn else p.text2, maxLines = 1,
                 )
             }
-            Text(subtitle, style = ltype(LType.Meta), color = p.faint, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            // GH #378: the task title or wake event isn't shown in full on the run page, so it opens here.
+            ExpandableText(subtitle, style = ltype(LType.Meta), color = p.faint, collapsedLines = 1)
         }
         run.agentAlias?.let { LAvatar(it, isAI = true, size = 18.dp) }
         Text(ago ?: "", style = ltype(LType.Micro), color = p.faint)
