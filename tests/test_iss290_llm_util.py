@@ -242,10 +242,11 @@ def test_catalog_anthropic_defaults_are_current_generation():
     assert L.MODEL_HAIKU == "claude-haiku-4-5-20251001"
     assert {L.MODEL_SONNET, L.MODEL_OPUS} <= L.FORCED_TOOL_CHOICE_UNSUPPORTED
     assert L.MODEL_HAIKU not in L.FORCED_TOOL_CHOICE_UNSUPPORTED
+    assert {"claude-fable-5-2", "claude-fable-5-1"} <= L.FORCED_TOOL_CHOICE_UNSUPPORTED
 
 
 def test_anthropic_forced_tool_choice_translated_for_models_that_reject_it(monkeypatch):
-    # Opus 5.5 / Sonnet 5.5 / Fable 5.1 return 400 on tool_choice {"type": "tool"|"any"}; the
+    # Opus 5.5 / Sonnet 5.5 / Fable 5.1 / Fable 5.2 return 400 on tool_choice {"type": "tool"|"any"}; the
     # provider must send {"type": "auto"} (single call) plus a system instruction naming the tool.
     captured = {}
 
@@ -526,3 +527,23 @@ def test_install_llm_util_copies_module_into_portal(tmp_path):
         assert copied.exists()
         canonical = files("orcha_cli") / mod
         assert copied.read_bytes() == canonical.read_bytes()
+
+
+def test_anthropic_forced_tool_choice_translated_for_fable_5_2(monkeypatch):
+    # Fable 5.2 rejects a forced tool_choice like Fable 5.1 (confirmed 2026-11-09).
+    captured = {}
+
+    def fake_post(url, headers, body, *, timeout_s):
+        captured["body"] = body
+        return _anthropic_tool_response("emit_result", {"label": "spam"})
+
+    monkeypatch.setattr(L, "_http_post_json", fake_post)
+    L.AnthropicProvider().complete(
+        spec=L.ModelSpec(model="claude-fable-5-2"), system="sys",
+        messages=[{"role": "user", "content": "hi"}],
+        tools=[{"name": "emit_result", "description": "d", "input_schema": {"type": "object"}}],
+        tool_choice={"type": "any"}, api_key="k")
+    body = captured["body"]
+    assert body["model"] == "claude-fable-5-2"
+    assert body["tool_choice"] == {"type": "auto", "disable_parallel_tool_use": True}
+    assert "exactly one of the provided tools" in body["system"]

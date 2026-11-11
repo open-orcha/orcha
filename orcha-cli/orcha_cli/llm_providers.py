@@ -52,8 +52,8 @@ def adapt_forced_tool_choice(
 ) -> tuple[Optional[str], Optional[dict]]:
     """Return a (system, tool_choice) pair the given Claude model accepts.
 
-    Claude Fable 5.1, Opus 5.5 and Sonnet 5.5 reject a forced tool_choice
-    ({"type": "tool"} / {"type": "any"}) with a 400. For those models the
+    Claude Fable 5.2, Fable 5.1, Opus 5.5 and Sonnet 5.5 reject a forced
+    tool_choice ({"type": "tool"} / {"type": "any"}) with a 400. For those models the
     equivalent is {"type": "auto"} with parallel calls disabled plus a
     system-prompt instruction naming the tool. Older models keep the forced
     shape untouched.

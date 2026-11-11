@@ -9,7 +9,7 @@ class ModelProviderTest {
     fun `claude family ids and the claude runtime map to Claude`() {
         listOf(
             "claude-opus-4-1", "claude-sonnet-4-5", "opus", "sonnet", "haiku", "Fable-1",
-            "claude", "us.anthropic.claude-3-7", "CLAUDE-HAIKU-4",
+            "claude", "us.anthropic.claude-3-7", "CLAUDE-HAIKU-4", "claude-fable-5-1", "claude-fable-5-2",
         ).forEach { assertEquals(ModelProvider.Claude, providerFor(it), it) }
     }
 

@@ -78,6 +78,7 @@ interface ModelInfo {
 // Seeded with the backend's curated list so the control renders correctly
 // pre-fetch; GET /api/models is the source of truth (picks up new ids).
 const SEED_MODELS: ModelInfo[] = [
+  { id: "claude-fable-5-2", name: "Fable 5.2", runtime: "claude", reasoning_efforts: ["low", "medium", "high", "xhigh", "max"] },
   { id: "claude-fable-5-1", name: "Fable 5.1", runtime: "claude", reasoning_efforts: ["low", "medium", "high", "xhigh", "max"] },
   { id: "claude-opus-5-5", name: "Opus 5.5", runtime: "claude", reasoning_efforts: ["low", "medium", "high", "xhigh", "max"] },
   { id: "claude-sonnet-5-5", name: "Sonnet 5.5", runtime: "claude", reasoning_efforts: ["low", "medium", "high", "xhigh", "max"] },

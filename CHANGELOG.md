@@ -43,6 +43,12 @@ missing.
   renderer process dies; the next click opens a fresh one (GH #347).
 
 ### Added
+- Claude Fable 5.2 (`claude-fable-5-2`) is in the model catalog. The per-agent
+  model picker offers it next to Fable 5.1, the desktop Stats & Usage cost
+  estimate prices it ($8 input / $40 output / $0.20 cache read per million
+  tokens), and the built-in LLM utility client sends it the `tool_choice: auto`
+  request shape because it rejects a forced `tool_choice`. Opus 5.5 stays the
+  default model and Fable 5.1 stays selectable. Desktop version: 2.2.2.
 - **QA for apps** (iOS, Android and web): agents can map an app, explore
   it, draft QA scenarios and check approved ones on a simulator, an emulator or a headless
   browser. `orcha qa enable` in a project gives its agents the `orcha-qa` tools (`orcha qa mcp`;

@@ -3,10 +3,11 @@
  *  report — a subscription (Claude Max/Pro, ChatGPT Plus/Pro) is billed differently, which is
  *  why every figure carries an "Est." label.
  *
- *  Sources (checked 2026-09-30):
+ *  Sources (checked 2026-09-30; Fable 5.2 added 2026-11-09):
  *  - Anthropic: platform.claude.com pricing / Claude API model table (first-party rates).
  *    Cache writes are 1.25× input for the 5-minute TTL and 2× for the 1-hour TTL; cache reads
- *    are listed per model (0.1× on most, $0.25 on Fable 5.1, $0.20 on Opus 5.5 / Sonnet 5.5).
+ *    are listed per model (0.1× on most, $0.25 on Fable 5.1, $0.20 on Fable 5.2 / Opus 5.5 /
+ *    Sonnet 5.5).
  *  - OpenAI: openai.com/api/pricing (standard tier), as maintained in Orca's Codex price table
  *    (github.com/stablyai/orca, MIT © Lovecast Inc.) for the GPT-5.3+ / GPT-6 Codex models,
  *    including their long-context (>272K input) rates. OpenAI bills cached input at the
@@ -54,6 +55,7 @@ function openai(label: string, input: number, output: number, cachedInput: numbe
 /** Keyed by normalised model-id PREFIX (longest match wins). */
 export const PRICE_TABLE: Readonly<Record<string, Price>> = {
   // ---- Anthropic — Claude 5 family (current) ----
+  'claude-fable-5-2': anthropic('Fable 5.2', 8, 40, 0.2),
   'claude-fable-5-1': anthropic('Fable 5.1', 10, 50, 0.25),
   'claude-mythos-5-1': anthropic('Mythos 5.1', 10, 50, 0.25),
   'claude-fable-5': anthropic('Fable 5', 10, 50, 1),
