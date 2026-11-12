@@ -305,3 +305,230 @@ def test_update_default_restarts_bridge_via_real_upgrade(tmp_path, monkeypatch):
     """Without --no-bridge the bridge IS restarted (mutation teeth for the guard)."""
     restarts = _update_with_real_upgrade(tmp_path, monkeypatch, _ns(no_bridge=False))
     assert restarts and all(r is True for r in restarts)
+
+
+# ---- keep installed extras (the [qa] tools) on every self-reinstall ----------------------
+# `orcha update` used to reinstall `<checkout>` bare, silently dropping `[qa]`, so QA runs
+# lost their tools after every update.
+
+from orcha_cli import cli_update  # noqa: E402
+
+_QA_REQS = [
+    "adbutils>=2.9.3; extra == 'qa'",
+    "fb-idb>=1.1.7; extra == 'qa'",
+    "pillow>=10; extra == 'qa'",
+    "websockets>=12",
+]
+
+
+def _dist_info(site: pathlib.Path, name: str, requires=(), direct_url=None):
+    """Write a minimal on-disk dist-info and return it as a real PathDistribution."""
+    info = site / f"{name.replace('-', '_')}-1.0.dist-info"
+    info.mkdir(parents=True)
+    lines = ["Metadata-Version: 2.1", f"Name: {name}", "Version: 1.0"]
+    lines += [f"Requires-Dist: {r}" for r in requires]
+    (info / "METADATA").write_text("\n".join(lines) + "\n")
+    if direct_url is not None:
+        (info / "direct_url.json").write_text(json.dumps(direct_url))
+    return cli_update.pkg_meta.PathDistribution(info)
+
+
+def _fake_env(monkeypatch, tmp_path, *, requires=_QA_REQS, present=(), direct_url=None):
+    site = tmp_path / "site"
+    ours = _dist_info(site, "orcha-cli", requires, direct_url)
+    others = [_dist_info(site, n) for n in present]
+    monkeypatch.setattr(cli_update, "_installed_dist", lambda: ours)
+    monkeypatch.setattr(cli_update.pkg_meta, "distributions", lambda: iter([ours, *others]))
+
+
+def test_installed_extras_reports_qa_when_all_its_requirements_are_present(tmp_path, monkeypatch):
+    # Names normalise across spellings: fb_idb == fb-idb, Pillow == pillow.
+    _fake_env(monkeypatch, tmp_path, present=["adbutils", "fb_idb", "Pillow", "websockets"])
+    assert cli_update.installed_extras() == ["qa"]
+
+
+def test_installed_extras_omits_qa_when_one_requirement_is_missing(tmp_path, monkeypatch):
+    """A CLI installed without [qa] never gains it (mutation teeth: drop pillow)."""
+    _fake_env(monkeypatch, tmp_path, present=["adbutils", "fb-idb", "websockets"])
+    assert cli_update.installed_extras() == []
+
+
+def test_installed_extras_ignores_platform_conditional_requirements(tmp_path, monkeypatch):
+    reqs = [*_QA_REQS, "pywin32; extra == 'qa' and sys_platform == 'win32'"]
+    _fake_env(monkeypatch, tmp_path, requires=reqs, present=["adbutils", "fb-idb", "pillow"])
+    assert cli_update.installed_extras() == ["qa"]
+
+
+def test_installed_extras_empty_when_cli_metadata_is_missing(monkeypatch):
+    monkeypatch.setattr(cli_update, "_installed_dist", lambda: None)
+    assert cli_update.installed_extras() == []
+
+
+class _Ret:
+    returncode = 0
+
+
+def _capture_run(monkeypatch):
+    ran = {}
+
+    def _fake_run(cmd, *a, **k):
+        ran["cmd"] = cmd
+        return _Ret()
+
+    monkeypatch.setattr(cli.subprocess, "run", _fake_run)
+    return ran
+
+
+def test_reinstall_keeps_qa_extra_with_uv(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli.shutil, "which", lambda name: "/bin/uv" if name == "uv" else None)
+    monkeypatch.setattr(cli_update, "installed_extras", lambda: ["qa"])
+    ran = _capture_run(monkeypatch)
+
+    assert cli._reinstall_cli(tmp_path) is True
+    assert ran["cmd"] == ["/bin/uv", "tool", "install", "--reinstall", "--editable",
+                          f"{tmp_path}[qa]"]
+
+
+def test_reinstall_keeps_qa_extra_with_pip(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli.shutil, "which", lambda name: None)
+    monkeypatch.setattr(cli_update, "installed_extras", lambda: ["qa"])
+    ran = _capture_run(monkeypatch)
+
+    assert cli._reinstall_cli(tmp_path) is True
+    assert ran["cmd"] == [cli_update.sys.executable, "-m", "pip", "install", "-e",
+                          f"{tmp_path}[qa]"]
+
+
+def test_reinstall_without_extras_installs_bare_checkout(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli.shutil, "which", lambda name: "/bin/uv" if name == "uv" else None)
+    monkeypatch.setattr(cli_update, "installed_extras", lambda: [])
+    ran = _capture_run(monkeypatch)
+
+    assert cli._reinstall_cli(tmp_path) is True
+    assert ran["cmd"][-1] == str(tmp_path)
+
+
+# ---- self-heal a frozen (non-editable) copy of a local checkout --------------------------
+# Since Nov 9 the live CLI was a frozen copy of the checkout, so `orcha update` printed
+# "Skipping CLI self-update" and merged code never reached it.
+
+def _checkout(tmp_path: pathlib.Path, name: str = "orcha-cli") -> pathlib.Path:
+    root = tmp_path / name
+    (root / "orcha_cli").mkdir(parents=True)
+    (root / "pyproject.toml").write_text("[project]\nname='orcha-cli'\n")
+    return root
+
+
+def test_frozen_checkout_found_for_non_editable_local_directory(tmp_path, monkeypatch):
+    root = _checkout(tmp_path, "my checkout")          # spaces arrive percent-encoded
+    _fake_env(monkeypatch, tmp_path, direct_url={"url": root.as_uri(), "dir_info": {}})
+    assert cli_update.frozen_checkout() == root
+
+
+@pytest.mark.parametrize("direct_url", [
+    {"url": "CHECKOUT", "dir_info": {"editable": True}},           # already editable
+    {"url": "CHECKOUT.whl", "archive_info": {}},                   # a wheel, not a folder
+    {"url": "https://example.com/orcha-cli", "dir_info": {}},      # not a local path
+    {"url": "MISSING", "dir_info": {}},                            # folder since removed
+    None,                                                          # no direct_url.json
+])
+def test_frozen_checkout_none_unless_frozen_local_checkout(tmp_path, monkeypatch, direct_url):
+    root = _checkout(tmp_path)
+    if direct_url is not None:
+        url = direct_url["url"]
+        url = url.replace("CHECKOUT", root.as_uri())
+        url = url.replace("MISSING", (tmp_path / "gone").as_uri())
+        direct_url = {**direct_url, "url": url}
+    _fake_env(monkeypatch, tmp_path, direct_url=direct_url)
+    assert cli_update.frozen_checkout() is None
+
+
+def test_frozen_checkout_none_for_a_folder_that_is_not_orcha_cli(tmp_path, monkeypatch):
+    other = tmp_path / "other"
+    other.mkdir()
+    (other / "pyproject.toml").write_text("[project]\nname='other'\n")
+    _fake_env(monkeypatch, tmp_path, direct_url={"url": other.as_uri(), "dir_info": {}})
+    assert cli_update.frozen_checkout() is None
+
+
+def _no_source_no_brew(monkeypatch):
+    monkeypatch.setattr(cli, "_cli_source_root", lambda: None)
+    monkeypatch.setattr(cli, "_brew_keg", lambda: None)
+
+
+def test_self_update_relinks_frozen_checkout_and_reexecs(tmp_path, monkeypatch, restarts, capsys):
+    monkeypatch.chdir(tmp_path)
+    _make_project(tmp_path)
+    _no_source_no_brew(monkeypatch)
+    root = _checkout(tmp_path)
+    monkeypatch.setattr(cli, "_frozen_checkout", lambda: root)
+    reinstalled = {}
+    monkeypatch.setattr(cli, "_reinstall_cli",
+                        lambda src: reinstalled.setdefault("root", src) or True)
+    forwarded = {}
+
+    class _Done(Exception):
+        pass
+
+    def _fake_run(cmd, *a, **k):
+        forwarded["cmd"] = cmd
+        raise _Done
+
+    monkeypatch.setattr(cli.subprocess, "run", _fake_run)
+
+    with pytest.raises(_Done):
+        cli.cmd_update(_ns(no_self=False))
+
+    assert reinstalled["root"] == root
+    assert forwarded["cmd"][1:] == ["update", "--no-self"]
+    assert restarts["upgrade"] == 0
+    assert "Skipping CLI self-update" not in capsys.readouterr().out
+
+
+def test_self_update_frozen_relink_failure_continues_in_process(tmp_path, monkeypatch,
+                                                                restarts, capsys):
+    monkeypatch.chdir(tmp_path)
+    _make_project(tmp_path)
+    _no_source_no_brew(monkeypatch)
+    monkeypatch.setattr(cli, "_frozen_checkout", lambda: _checkout(tmp_path))
+    monkeypatch.setattr(cli, "_reinstall_cli", lambda src: False)
+
+    cli.cmd_update(_ns(no_self=False))
+
+    assert restarts["upgrade"] == 1 and restarts["daemon"] == [True]
+    assert "could not relink" in capsys.readouterr().err
+
+
+def test_self_update_packaged_install_still_skips(tmp_path, monkeypatch, restarts, capsys):
+    monkeypatch.chdir(tmp_path)
+    _make_project(tmp_path)
+    _no_source_no_brew(monkeypatch)
+    monkeypatch.setattr(cli, "_frozen_checkout", lambda: None)
+    monkeypatch.setattr(cli, "_reinstall_cli",
+                        lambda src: pytest.fail("must not reinstall a packaged install"))
+
+    cli.cmd_update(_ns(no_self=False))
+
+    assert "Skipping CLI self-update" in capsys.readouterr().out
+    assert restarts["upgrade"] == 1
+
+
+def test_frozen_check_never_preempts_brew_editable_or_sidecar(tmp_path, monkeypatch, restarts):
+    """Homebrew, editable and app-bundled installs keep their own paths unchanged."""
+    monkeypatch.chdir(tmp_path)
+    _make_project(tmp_path)
+    monkeypatch.setattr(cli, "_frozen_checkout",
+                        lambda: pytest.fail("frozen check must come after brew/editable"))
+    monkeypatch.setattr(cli, "_cli_source_root", lambda: None)
+    monkeypatch.setattr(cli, "_brew_keg", lambda: "orcha")
+    monkeypatch.setattr(cli, "_brew_upgrade", lambda keg: False)
+    cli.cmd_update(_ns(no_self=False))                       # brew path, no frozen check
+
+    monkeypatch.setenv("ORCHA_SIDECAR", "1")
+    cli.cmd_update(_ns(no_self=False))                       # sidecar path, no frozen check
+    monkeypatch.delenv("ORCHA_SIDECAR")
+
+    monkeypatch.setattr(cli, "_cli_source_root", lambda: tmp_path)
+    monkeypatch.setattr(cli, "_reinstall_cli", lambda src: False)
+    cli.cmd_update(_ns(no_self=False))                       # editable path, no frozen check
+    assert restarts["upgrade"] == 3
