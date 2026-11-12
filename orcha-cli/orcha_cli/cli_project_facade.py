@@ -61,6 +61,7 @@ __all__ = [
     "_ensure_secret_key",
     "_export_pairing_host",
     "_find_free_port",
+    "_frozen_checkout",
     "_full_project",
     "_install_llm_util",
     "_install_orcha_skill_templates",
@@ -234,6 +235,7 @@ _cli_source_root = cli_update.source_root
 _brew_keg = cli_update.brew_keg
 _reinstall_cli = cli_update.reinstall_cli
 _brew_upgrade = cli_update.upgrade_brew
+_frozen_checkout = cli_update.frozen_checkout
 
 
 def cmd_update(args) -> None:
@@ -245,6 +247,7 @@ def cmd_update(args) -> None:
         brew_upgrade=_services()._brew_upgrade,
         upgrade=_services().cmd_upgrade,
         ensure_notifier=_services().ensure_daemon,
+        frozen_checkout=_services()._frozen_checkout,
     )
 
 
