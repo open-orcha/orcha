@@ -454,6 +454,9 @@ async def test_blocked_message_stays_pending_and_is_answered_once_after_recovery
     human = await make_agent("Kedar301", "human", kind="human")
     ai = await make_agent("Atlas301")
     aid = ai["agent_id"]
+    model = {"claude": "claude-opus-5-5", "codex": "gpt-6-astra"}[runtime]
+    selected = await client.post(f"/api/agents/{aid}/model", json={"model": model})
+    assert selected.status_code == 200, selected.text
     started = await client.post(
         f"/api/agents/{aid}/conversations", json={"actor_agent_id": human["agent_id"]}
     )
@@ -469,7 +472,7 @@ async def test_blocked_message_stays_pending_and_is_answered_once_after_recovery
     async def refresh():
         active = (await client.get(f"/api/containers/{container['id']}/active-conversations")).json()
         cand = next(c for c in active["conversations"] if c["conversation_id"] == conv_id)
-        server["active"] = {"conversations": [{**cand, "model_runtime": runtime}]}
+        server["active"] = {"conversations": [cand]}
         server["conversation"] = (await client.get(f"/api/agents/{aid}/conversation?limit=200")).json()
         return cand
 
@@ -545,6 +548,9 @@ async def test_recovery_runs_the_real_reply_and_finish_path_once(
     human = await make_agent("Kedar301b", "human", kind="human")
     ai = await make_agent("Atlas301b")
     aid = ai["agent_id"]
+    model = {"claude": "claude-opus-5-5", "codex": "gpt-6-astra"}[runtime]
+    selected = await client.post(f"/api/agents/{aid}/model", json={"model": model})
+    assert selected.status_code == 200, selected.text
     started = await client.post(
         f"/api/agents/{aid}/conversations", json={"actor_agent_id": human["agent_id"]}
     )
@@ -566,12 +572,7 @@ async def test_recovery_runs_the_real_reply_and_finish_path_once(
         calls.append((method, path.split("?")[0], resp.status_code))
         if resp.status_code >= 400:
             return None  # the real helper returns None on HTTP errors
-        data = resp.json()
-        if "active-conversations" in path and isinstance(data, dict):
-            # The fixture agent has no provider configured; pick this run's provider.
-            for c in data.get("conversations", []):
-                c["model_runtime"] = runtime
-        return data
+        return resp.json()
 
     procs: list = []
 
