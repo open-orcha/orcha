@@ -38,11 +38,8 @@ def agent_next(
         # Budget hard stop (KG-1): a budget-paused agent claims NO new task. A task it is
         # already working stays untouched (in-flight work is never stopped). A human-opened
         # live terminal (token kind 'live') is exempt, matching wake-claim.
-        # GH #343: the token row is locked before the task row, the order run
-        # registration uses (embodiment_token_routes.lock_token_and_task).
         cur.execute(
-            "SELECT kind FROM embodiment_tokens WHERE run_token=%s" + sql.for_update(),
-            (x_orcha_run_token,),
+            "SELECT kind FROM embodiment_tokens WHERE run_token=%s", (x_orcha_run_token,)
         )
         tok = cur.fetchone()
         if not (tok and tok["kind"] == "live"):

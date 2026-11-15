@@ -50,30 +50,65 @@ def _served_task(cur, container_id, aid, body, task_id, guessed):
     return served
 
 
-def _taken_before_registration(cur, aid, body) -> list[str]:
-    """GH #343: tasks this worker accepted or claimed with its token before registering.
+# Each extra pass needs another task taken on in the instant between two reads; the last
+# pass locks any such task after the token instead of starting over.
+_REGISTRATION_LOCK_PASSES = 5
 
-    The notifier starts the worker before it registers the run, so the worker may already
-    have taken on tasks its prompt never named. Those wait on the token
-    (``embodiment_token_tasks``). The token row is locked first, the order acceptance and
-    claims use, so a task taken on concurrently is either listed here or finds the run
-    bound and links to it directly.
-    """
-    if body.lane != "work" or not body.token_id:
-        return []
+
+def _tasks_on_token(cur, aid, body) -> list[str]:
+    """Tasks waiting on this worker's still-unbound token (``embodiment_token_tasks``)."""
     cur.execute(
-        """SELECT run_token FROM embodiment_tokens
-            WHERE run_token=%s AND agent_id=%s AND lane=%s
-              AND revoked_at IS NULL AND run_id IS NULL"""
-        + sql.for_update(),
+        """SELECT ett.task_id FROM embodiment_token_tasks ett
+           JOIN embodiment_tokens et ON et.run_token = ett.run_token
+           WHERE ett.run_token=%s AND et.agent_id=%s AND et.lane=%s
+             AND et.revoked_at IS NULL AND et.run_id IS NULL""",
         (body.token_id, aid, body.lane),
     )
-    if not cur.fetchone():
-        return []
-    cur.execute(
-        "SELECT task_id FROM embodiment_token_tasks WHERE run_token=%s", (body.token_id,)
-    )
     return sorted(str(r["task_id"]) for r in cur.fetchall())
+
+
+def _lock_for_registration(cur, aid, body, task_ids, *, check_recent):
+    """GH #343: lock this run's tasks, then its token; return (pause row or None, taken).
+
+    ``taken`` lists tasks the worker accepted or claimed with its token before
+    registering: the notifier starts the worker first, so it may already have taken on
+    tasks its prompt never named. Those wait on the token (``embodiment_token_tasks``).
+
+    Task rows are locked before the token row, the order acceptance, claims and run
+    shutdown use. A task taken on between the first read and the token lock is not locked
+    yet, so the locks taken since the savepoint are released and taken again with it.
+    Once the token is locked, a task taken on concurrently waits for this registration and
+    then finds the run bound, so it links to it directly.
+    """
+    task_ids = [t for t in task_ids if t]
+    if body.lane != "work":
+        return None, []
+    if not body.token_id:
+        return _pause_blocking_run(cur, aid, task_ids, check_recent=check_recent), []
+    for attempt in range(_REGISTRATION_LOCK_PASSES):
+        cur.execute("SAVEPOINT gh343_registration_lock")
+        taken = _tasks_on_token(cur, aid, body)
+        paused = _pause_blocking_run(cur, aid, [*task_ids, *taken], check_recent=check_recent)
+        cur.execute(
+            """SELECT run_token FROM embodiment_tokens
+                WHERE run_token=%s AND agent_id=%s AND lane=%s
+                  AND revoked_at IS NULL AND run_id IS NULL"""
+            + sql.for_update(),
+            (body.token_id, aid, body.lane),
+        )
+        if not cur.fetchone():
+            cur.execute("RELEASE SAVEPOINT gh343_registration_lock")
+            return paused, []
+        current = _tasks_on_token(cur, aid, body)
+        late = sorted(set(current) - {str(t) for t in task_ids} - set(taken))
+        if not late or attempt == _REGISTRATION_LOCK_PASSES - 1:
+            cur.execute("RELEASE SAVEPOINT gh343_registration_lock")
+            if late:
+                paused = paused or _pause_blocking_run(cur, aid, late, check_recent=False)
+            return paused, current
+        cur.execute("ROLLBACK TO SAVEPOINT gh343_registration_lock")
+        cur.execute("RELEASE SAVEPOINT gh343_registration_lock")
+    return None, []
 
 
 def _pause_blocking_run(cur, aid, task_ids, *, check_recent):
@@ -90,16 +125,19 @@ def _pause_blocking_run(cur, aid, task_ids, *, check_recent):
     since the claim, this run is stopped too. A task paused earlier was already skipped by
     that read, and the run goes on with its inbox work.
     """
+    paused = None
     for tid in sorted({str(t) for t in task_ids if t}):
+        # Every task is locked, not only up to the first paused one: the run is linked to
+        # each of them after its token is locked, and must not wait on them then.
         cur.execute(
             "SELECT paused_at, paused_by FROM tasks WHERE id=%s" + sql.for_update(),
             (tid,),
         )
         row = cur.fetchone()
-        if row and row["paused_at"] is not None:
-            return row
-    if not check_recent:
-        return None
+        if paused is None and row and row["paused_at"] is not None:
+            paused = row
+    if paused is not None or not check_recent:
+        return paused
     cur.execute(
         "SELECT work_dispatch_started_at FROM agent_wake_state WHERE agent_id=%s", (aid,)
     )
@@ -163,14 +201,12 @@ def start_worker_run(aid: str, body: WorkerRunStart, request: Request):
             if str(conversation["agent_id"]) != aid:
                 raise HTTPException(403, "conversation_id belongs to a different agent")
         served = None
-        paused = None
-        taken = _taken_before_registration(cur, aid, body)
         if body.lane == "work":
             served = _served_task(cur, str(agent["container_id"]), aid, body, task_id, guessed)
-            paused = _pause_blocking_run(
-                cur, aid, [task_id, served, *taken],
-                check_recent=guessed and "protocol_task_id" not in body.model_fields_set,
-            )
+        paused, taken = _lock_for_registration(
+            cur, aid, body, [task_id, served],
+            check_recent=guessed and "protocol_task_id" not in body.model_fields_set,
+        )
         cur.execute(
             """INSERT INTO worker_runs
                     (agent_id, task_id, wake_kind, wake_event, log_path, pid, runtime,
