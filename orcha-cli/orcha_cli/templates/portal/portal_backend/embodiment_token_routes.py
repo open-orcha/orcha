@@ -55,15 +55,74 @@ def revoke_embodiment_token(token: str):
     return {"revoked": bool(revoked)}
 
 
-def attribute_token_run_to_task(cur, aid, token, task_id) -> bool:
-    """Pin a live run when empty and record its many-to-many task membership."""
-    if not token or not task_id:
-        return False
-    # GH #343: lock the task so a concurrent pause either sees this link or is seen here.
+def lock_token_and_task(cur, aid, token, task_id):
+    """GH #343: lock the worker's live token row, then the task row; return both.
+
+    Run registration takes the same two locks in the same order, and a pause takes the
+    task's, so a worker taking on a task, its registration and a pause of that task all
+    serialize: each one sees what the others committed. A token with no run yet keeps the
+    task (``embodiment_token_tasks``) until registration links it to the run.
+    """
+    cur.execute(
+        """SELECT run_token, run_id FROM embodiment_tokens
+            WHERE run_token=%s AND agent_id=%s AND lane='work' AND revoked_at IS NULL"""
+        + sql.for_update(),
+        (token, aid),
+    )
+    tok = cur.fetchone()
     cur.execute(
         "SELECT paused_at, paused_by FROM tasks WHERE id=%s" + sql.for_update(), (task_id,)
     )
     task = cur.fetchone()
+    if tok and task and tok["run_id"] is None:
+        cur.execute(
+            "INSERT INTO embodiment_token_tasks (run_token, task_id) VALUES (%s, %s) "
+            "ON CONFLICT DO NOTHING",
+            (token, task_id),
+        )
+    return tok, task
+
+
+def _stop_token_run_if_paused(cur, aid, token, task) -> None:
+    """A person paused this task: the run that just took it on stops like any other."""
+    if not task or task["paused_at"] is None:
+        return
+    cur.execute(
+        """UPDATE worker_runs SET stop_requested_at=now(), stop_requested_by=%s
+            WHERE run_id IN (SELECT et.run_id FROM embodiment_tokens et
+                              WHERE et.run_token=%s AND et.agent_id=%s AND et.lane='work'
+                                AND et.revoked_at IS NULL AND et.run_id IS NOT NULL)
+              AND status='running' AND stop_requested_at IS NULL""",
+        (str(task["paused_by"]) if task["paused_by"] else None, token, aid),
+    )
+
+
+def link_claimed_task(cur, aid, token, task_id) -> None:
+    """GH #343: tie a task the worker just claimed to its run, so pausing the task stops it.
+
+    Before registration the task waits on the token; after it the run gets a
+    ``worker_run_tasks`` link. The run's main task is left as it is.
+    """
+    if not token or not task_id:
+        return
+    tok, task = lock_token_and_task(cur, aid, token, task_id)
+    if not tok or not task or tok["run_id"] is None:
+        return
+    cur.execute(
+        """INSERT INTO worker_run_tasks (run_id, task_id)
+           SELECT run_id, %s FROM worker_runs
+            WHERE run_id=%s AND agent_id=%s AND status='running'
+           ON CONFLICT DO NOTHING""",
+        (task_id, tok["run_id"], aid),
+    )
+    _stop_token_run_if_paused(cur, aid, token, task)
+
+
+def attribute_token_run_to_task(cur, aid, token, task_id) -> bool:
+    """Pin a live run when empty and record its many-to-many task membership."""
+    if not token or not task_id:
+        return False
+    _tok, task = lock_token_and_task(cur, aid, token, task_id)
     # Acceptance can commit before the notifier registers the worker. Save the
     # task's dispatch boundary now: registration (or another accept) may never
     # happen, and the next successful wake claim replaces the lane's clock.
@@ -114,14 +173,5 @@ def attribute_token_run_to_task(cur, aid, token, task_id) -> bool:
            ON CONFLICT DO NOTHING""",
         (task_id, token, aid, task_id),
     )
-    if task and task["paused_at"] is not None:
-        # A person paused this task: the run that just took it on stops like any other.
-        cur.execute(
-            """UPDATE worker_runs SET stop_requested_at=now(), stop_requested_by=%s
-                WHERE run_id IN (SELECT et.run_id FROM embodiment_tokens et
-                                  WHERE et.run_token=%s AND et.agent_id=%s AND et.lane='work'
-                                    AND et.revoked_at IS NULL AND et.run_id IS NOT NULL)
-                  AND status='running' AND stop_requested_at IS NULL""",
-            (str(task["paused_by"]) if task["paused_by"] else None, token, aid),
-        )
+    _stop_token_run_if_paused(cur, aid, token, task)
     return pinned

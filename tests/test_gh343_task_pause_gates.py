@@ -360,3 +360,120 @@ def test_the_notifier_reports_the_task_its_prompt_carries(monkeypatch):
     run = next(b for u, b in posts if u.endswith("/runs"))
     assert run["task_id"] is None
     assert run["protocol_task_id"] == "22222222-2222-2222-2222-222222222222"
+
+
+# Review round 4: the notifier starts the worker before it registers the run, so the worker
+# can accept or claim a task with its token first. That task waits on the token until
+# registration links it to the run; a pause before or after registration stops the worker.
+
+
+async def _claimed_unregistered_worker(client, work_headers, aid):
+    claim = await client.post(f"/api/agents/{aid}/wake-claim", json={
+        "kind": "ephemeral", "event": "request_created", "lane": "work"})
+    assert claim.status_code == 200 and claim.json()["claimed"], claim.text
+    protocol = (await client.get(f"/api/agents/{aid}/protocol")).json()
+    return protocol, await work_headers(aid)
+
+
+async def _register(client, aid, headers, task_id, protocol_task_id):
+    run = await client.post(f"/api/agents/{aid}/runs", json={
+        "wake_kind": "ephemeral", "wake_event": "request_created", "task_id": task_id,
+        "protocol_task_id": protocol_task_id, "token_id": headers["X-Orcha-Run-Token"]})
+    assert run.status_code == 201, run.text
+    return run.json()
+
+
+async def _renewal(client, aid, run_id):
+    renewal = await client.post(f"/api/agents/{aid}/wake-renew", json={"run_id": run_id})
+    assert renewal.status_code == 200, renewal.text
+    return renewal.json()
+
+
+async def _accept(client, make_request, human, aid, headers, title):
+    request = await make_request(human, f"Build {title}", target_alias="Builder", type="task",
+                                 task={"title": title, "definition_of_done": "Done", "priority": 100})
+    accepted = await client.post(f"/api/requests/{request['request_id']}/accept-task",
+                                 json={"responder_agent_id": aid}, headers=headers)
+    assert accepted.status_code == 200, accepted.text
+    return accepted.json()["spawned_task_id"]
+
+
+async def test_a_task_accepted_before_registration_and_paused_stops_the_worker(
+    client, container, make_agent, make_request, work_headers, db,
+):
+    human = (await make_agent("Owner", kind="human"))["agent_id"]
+    aid = (await make_agent("Builder"))["agent_id"]
+    protocol, headers = await _claimed_unregistered_worker(client, work_headers, aid)
+    assert protocol["task_id"] is None, protocol
+    tid = await _accept(client, make_request, human, aid, headers, "Accepted before registration")
+    assert (await pause(client, tid, human)).status_code == 200
+    run = await _register(client, aid, headers, None, None)
+    assert run["task_id"] is None
+    assert (await _renewal(client, aid, run["run_id"]))["stop_requested"] is True
+    stop = _stop(db, run["run_id"])
+    assert str(stop["stop_requested_by"]) == human
+    # The waiting link moved onto the run.
+    linked = db.execute("SELECT task_id FROM worker_run_tasks WHERE run_id=%s", (run["run_id"],))
+    assert [str(r["task_id"]) for r in linked] == [tid]
+    assert db.execute("SELECT run_token FROM embodiment_token_tasks WHERE run_token=%s",
+                      (headers["X-Orcha-Run-Token"],)) == []
+
+
+@pytest.mark.parametrize("pause_timing", ["before_registration", "after_registration"])
+async def test_a_second_task_accepted_before_registration_stops_the_worker_when_paused(
+    client, container, make_agent, make_task, make_request, work_headers, db, pause_timing,
+):
+    human = (await make_agent("Owner", kind="human"))["agent_id"]
+    aid = (await make_agent("Builder"))["agent_id"]
+    first = (await make_task("First task", "Done", assignee_alias="Builder"))["id"]
+    protocol, headers = await _claimed_unregistered_worker(client, work_headers, aid)
+    assert protocol["task_id"] == first, protocol
+    second = await _accept(client, make_request, human, aid, headers, "Second task")
+    if pause_timing == "before_registration":
+        assert (await pause(client, second, human)).status_code == 200
+    run = await _register(client, aid, headers, first, first)
+    if pause_timing == "after_registration":
+        paused = await pause(client, second, human)
+        assert paused.status_code == 200 and run["run_id"] in paused.json()["stopped_runs"], paused.text
+    assert (await _renewal(client, aid, run["run_id"]))["stop_requested"] is True
+    # The worker's own task is untouched.
+    assert db.execute("SELECT paused_at FROM tasks WHERE id=%s", (first,))[0]["paused_at"] is None
+
+
+async def test_an_unpaused_task_accepted_before_registration_lets_the_worker_run(
+    client, container, make_agent, make_task, make_request, work_headers, db,
+):
+    human = (await make_agent("Owner", kind="human"))["agent_id"]
+    aid = (await make_agent("Builder"))["agent_id"]
+    first = (await make_task("First task", "Done", assignee_alias="Builder"))["id"]
+    protocol, headers = await _claimed_unregistered_worker(client, work_headers, aid)
+    await _accept(client, make_request, human, aid, headers, "Second task")
+    run = await _register(client, aid, headers, first, protocol["task_id"])
+    assert (await _renewal(client, aid, run["run_id"]))["stop_requested"] is False
+    # Pausing the worker's other, unrelated work does not stop it.
+    other = (await make_task("Unrelated", "Done", assignee_alias="Builder"))["id"]
+    assert (await pause(client, other, human)).status_code == 200
+    assert (await _renewal(client, aid, run["run_id"]))["stop_requested"] is False
+
+
+@pytest.mark.parametrize("pause_timing", ["before_registration", "after_registration"])
+async def test_a_task_claimed_with_next_stops_the_worker_when_paused(
+    client, container, make_agent, make_task, work_headers, db, pause_timing,
+):
+    human = (await make_agent("Owner", kind="human"))["agent_id"]
+    aid = (await make_agent("Builder"))["agent_id"]
+    tid = (await make_task("Ready work", "Done", assignee_alias="Builder"))["id"]
+    db.execute("UPDATE tasks SET status='ready' WHERE id=%s", (tid,))
+    protocol, headers = await _claimed_unregistered_worker(client, work_headers, aid)
+    run = None
+    if pause_timing == "after_registration":
+        run = await _register(client, aid, headers, None, protocol["task_id"])
+    claimed = await client.post(f"/api/agents/{aid}/next", headers=headers)
+    assert claimed.status_code == 200 and claimed.json()["task"]["id"] == tid, claimed.text
+    paused = await pause(client, tid, human)
+    assert paused.status_code == 200, paused.text
+    if run is None:
+        run = await _register(client, aid, headers, None, protocol["task_id"])
+    else:
+        assert run["run_id"] in paused.json()["stopped_runs"], paused.text
+    assert (await _renewal(client, aid, run["run_id"]))["stop_requested"] is True

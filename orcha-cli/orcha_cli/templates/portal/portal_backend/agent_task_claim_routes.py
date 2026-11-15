@@ -9,6 +9,7 @@ from portal_backend.application import app
 from portal_backend import sql
 from portal_backend.budget_routes import agent_budget_block
 from portal_backend.database import db_cursor
+from portal_backend.embodiment_token_routes import link_claimed_task
 from portal_backend.event_acknowledgement import _ack_events_handled
 from portal_backend.guards import reject_if_retired as _reject_if_retired
 from portal_backend.guards import require_agent as _require_agent
@@ -37,8 +38,11 @@ def agent_next(
         # Budget hard stop (KG-1): a budget-paused agent claims NO new task. A task it is
         # already working stays untouched (in-flight work is never stopped). A human-opened
         # live terminal (token kind 'live') is exempt, matching wake-claim.
+        # GH #343: the token row is locked before the task row, the order run
+        # registration uses (embodiment_token_routes.lock_token_and_task).
         cur.execute(
-            "SELECT kind FROM embodiment_tokens WHERE run_token=%s", (x_orcha_run_token,)
+            "SELECT kind FROM embodiment_tokens WHERE run_token=%s" + sql.for_update(),
+            (x_orcha_run_token,),
         )
         tok = cur.fetchone()
         if not (tok and tok["kind"] == "live"):
@@ -83,6 +87,8 @@ def agent_next(
                ON CONFLICT (agent_id, task_id) DO UPDATE SET assignment_status='working'""",
             (aid, tid),
         )
+        # GH #343: tie the claimed task to this worker, so pausing it stops the worker.
+        link_claimed_task(cur, aid, x_orcha_run_token, tid)
         _ack_events_handled(cur, aid, "task_assigned", "task_id", tid)
         _ack_events_handled(cur, aid, "task_ready", "task_id", tid)
         bump_agent(cur, aid)

@@ -50,13 +50,39 @@ def _served_task(cur, container_id, aid, body, task_id, guessed):
     return served
 
 
+def _taken_before_registration(cur, aid, body) -> list[str]:
+    """GH #343: tasks this worker accepted or claimed with its token before registering.
+
+    The notifier starts the worker before it registers the run, so the worker may already
+    have taken on tasks its prompt never named. Those wait on the token
+    (``embodiment_token_tasks``). The token row is locked first, the order acceptance and
+    claims use, so a task taken on concurrently is either listed here or finds the run
+    bound and links to it directly.
+    """
+    if body.lane != "work" or not body.token_id:
+        return []
+    cur.execute(
+        """SELECT run_token FROM embodiment_tokens
+            WHERE run_token=%s AND agent_id=%s AND lane=%s
+              AND revoked_at IS NULL AND run_id IS NULL"""
+        + sql.for_update(),
+        (body.token_id, aid, body.lane),
+    )
+    if not cur.fetchone():
+        return []
+    cur.execute(
+        "SELECT task_id FROM embodiment_token_tasks WHERE run_token=%s", (body.token_id,)
+    )
+    return sorted(str(r["task_id"]) for r in cur.fetchall())
+
+
 def _pause_blocking_run(cur, aid, task_ids, *, check_recent):
     """GH #343: the pause row that must stop this new work run, or None.
 
     The worker is already spawned, so a person may have paused its task after the wake
-    scan. Each task the run is tied to (named, inferred, or the one its prompt carries) is
-    locked, so this read and ``pause_task``'s update-then-stop serialize: either the pause
-    sees this run, or this run sees the pause.
+    scan. Each task the run is tied to (named, inferred, the one its prompt carries, or
+    one it took on before registering) is locked, so this read and ``pause_task``'s
+    update-then-stop serialize: either the pause sees this run, or this run sees the pause.
 
     ``check_recent`` covers a caller that did not report which task the protocol served:
     the protocol read after the wake claim may have served a task that was paused since,
@@ -138,10 +164,11 @@ def start_worker_run(aid: str, body: WorkerRunStart, request: Request):
                 raise HTTPException(403, "conversation_id belongs to a different agent")
         served = None
         paused = None
+        taken = _taken_before_registration(cur, aid, body)
         if body.lane == "work":
             served = _served_task(cur, str(agent["container_id"]), aid, body, task_id, guessed)
             paused = _pause_blocking_run(
-                cur, aid, [task_id, served],
+                cur, aid, [task_id, served, *taken],
                 check_recent=guessed and "protocol_task_id" not in body.model_fields_set,
             )
         cur.execute(
@@ -176,6 +203,18 @@ def start_worker_run(aid: str, body: WorkerRunStart, request: Request):
                 "INSERT INTO worker_run_tasks (run_id, task_id) VALUES (%s, %s) "
                 "ON CONFLICT DO NOTHING",
                 (row["run_id"], served),
+            )
+        for taken_id in taken:
+            # Same link acceptance makes once the run exists (attribute_token_run_to_task).
+            cur.execute(
+                """INSERT INTO worker_run_tasks (run_id, task_id)
+                   SELECT %s, id FROM tasks WHERE id=%s AND status='in_progress'
+                   ON CONFLICT DO NOTHING""",
+                (row["run_id"], taken_id),
+            )
+        if taken:
+            cur.execute(
+                "DELETE FROM embodiment_token_tasks WHERE run_token=%s", (body.token_id,)
             )
         if paused:
             # Same path as the Stop button: lease renewal tells the worker to save and exit.
