@@ -415,7 +415,7 @@ def test_checkpoint_never_reuses_a_retired_cached_model(tmp_path, monkeypatch, a
         posts.append((url, body))
         if url.endswith("/wake-claim"):
             return {"claimed": admitted, "model": "claude-opus-5-5",
-                    "model_runtime": "claude", "reasoning_effort": "high"}
+                    "model_runtime": "claude", "reasoning_effort": "high", "claim_id": body['claim_id']}
         return {}
     monkeypatch.setattr(notifier, "_post_json", post)
     monkeypatch.setattr(notifier, "spawn_headless", lambda *a, **k:

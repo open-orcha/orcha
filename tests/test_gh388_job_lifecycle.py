@@ -43,6 +43,8 @@ async def test_yield_original_supervisor_survives_and_notifier_launches_once(
     await publish(client,managed,seconds=120)
     db.execute("UPDATE tasks SET autonomy='on' WHERE id=%s",(managed['tid'],))
     db.execute('UPDATE worker_runs SET runtime=%s WHERE run_id=%s',(runtime,managed['rid']))
+    db.execute('UPDATE agents SET model=%s WHERE id=%s',
+               ('gpt-6-astra' if runtime == 'codex' else 'claude-opus-5-5', managed['aid']))
     api=JobAPI(service[0],managed['token'],managed['tid'])
     store=JobStore(tmp_path)
     code="import os,time;from pathlib import Path;p=Path(os.environ['ORCHA_JOB_SCRATCH'])/'starts';p.write_text('once');time.sleep(3);print('private-result-marker')"
@@ -69,7 +71,6 @@ async def test_yield_original_supervisor_survives_and_notifier_launches_once(
         assert c['should_wake'] and c['completion']
         assert 'private-result-marker' not in json.dumps(c)
         c['headless_cwd']=str(tmp_path)
-        c['model_runtime']=runtime
         # Only the unavailable model executable is substituted. All claim,
         # token, startup, run-registration and fixed-limit calls remain real.
         spawned=[]

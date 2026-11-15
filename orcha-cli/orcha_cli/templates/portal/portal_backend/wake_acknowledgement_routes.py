@@ -120,8 +120,14 @@ def wake_ack(aid: str, body: WakeAck):
         agent = require_agent(cur, aid)
         lane = body.lane or "work"
         runs, held = lock_agent_runs(cur, aid, lane)
-        if body.release_lease and not scheduling_run_matches(
-                cur, runs, held, lane, body.run_id, allow_terminal=True):
+        if body.claim_id:
+            claim_column = "conv_claim_id" if lane == "conversation" else "wake_claim_id"
+            owner_column = "conv_run_id" if lane == "conversation" else "work_run_id"
+            owns_lease = bool(held and not runs and not held[owner_column]
+                              and not body.run_id and str(held[claim_column]) == str(body.claim_id))
+        else:
+            owns_lease = scheduling_run_matches(cur, runs, held, lane, body.run_id, allow_terminal=True)
+        if body.release_lease and not owns_lease:
             return {"agent_id": aid, "lane": lane, "released": False,
                     "cleared_self_wake": False, "reason": "worker_owner_changed"}
         row = _acknowledge_lane(cur, aid, body, lane)
@@ -137,6 +143,8 @@ def wake_ack(aid: str, body: WakeAck):
             cur.execute("DELETE FROM agent_self_wake WHERE agent_id=%s AND task_id=%s" + identity_filter, params)
             cleared_self_wake = cur.rowcount > 0
         if body.release_lease:
+            claim_column = "conv_claim_id" if lane == "conversation" else "wake_claim_id"
+            cur.execute(f"UPDATE agent_wake_state SET {claim_column}=NULL WHERE agent_id=%s", (aid,))
             cur.execute(
                 "SELECT run_id FROM worker_runs WHERE agent_id=%s AND status='running' "
                 "AND lane=%s ORDER BY run_id", (aid, lane),

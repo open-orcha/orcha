@@ -11,6 +11,7 @@ import json
 from pathlib import Path
 import subprocess
 import time
+import uuid
 from contextlib import nullcontext
 
 import pytest
@@ -26,19 +27,25 @@ def inactive(rows):
 
 
 @pytest.mark.parametrize("scenario", ["cold", "resume", "git_failure", "held_lock", "preview_failure",
-                                      "cancelled_preview", "cleanup_success", "interrupted_cleanup"])
+                                      "cancelled_preview", "cleanup_success", "interrupted_cleanup", "runtime_switch"])
 async def test_two_agents_reply_once_and_recover_visible_startup_errors(
     client, container, make_agent, db, monkeypatch, repository, scenario
 ):
     human = await make_agent("Fixture owner", "human", kind="human")
+    session_id = str(uuid.uuid4())
+    models = {"codex": "gpt-6-astra", "claude": "claude-opus-5-5"}
     actors = {}
     for runtime in ("codex", "claude"):
         actor = await make_agent("Fixture " + runtime)
         aid = actor["agent_id"]
+        assert (await client.post(f"/api/agents/{aid}/model", json={"model": models[runtime]})).status_code == 200
         response = await client.post(f"/api/agents/{aid}/conversations",
                                      json={"actor_agent_id": human["agent_id"]})
         assert response.status_code < 300, response.text
         conv_id = response.json()["conversation"]["id"]
+        if scenario in {"resume", "runtime_switch"}:
+            assert (await client.post(f"/api/conversations/{conv_id}/session",
+                                     json={"session_id": session_id})).status_code == 200
         response = await client.post(f"/api/conversations/{conv_id}/turns", json={
             "role": "human", "author_agent_id": human["agent_id"], "content": "Please reply once."})
         assert response.status_code == 201, response.text
@@ -48,18 +55,20 @@ async def test_two_agents_reply_once_and_recover_visible_startup_errors(
 
     def call(method, url, body=None):
         path = "/" + url.split("://", 1)[1].split("/", 1)[1]
+        if scenario == "runtime_switch" and path.endswith("/wake-claim"):
+            actor = actors[path.split("/")[3]]
+            if not actor.get("switched"):
+                actor["runtime"] = "claude" if actor["runtime"] == "codex" else "codex"
+                actor["switched"] = True
+                response = asyncio.run_coroutine_threadsafe(client.post(
+                    path.replace("/wake-claim", "/model"), json={"model": models[actor["runtime"]]}), loop).result(timeout=30)
+                assert response.status_code == 200, response.text
         coro = client.post(path, json=body) if method == "POST" else client.get(path)
         response = asyncio.run_coroutine_threadsafe(coro, loop).result(timeout=30)
         calls.append((method, path.split("?")[0], response.status_code, body))
         if response.status_code >= 400:
             return None
-        data = response.json()
-        if path.endswith("active-conversations"):
-            for candidate in data.get("conversations", []):
-                candidate["model_runtime"] = actors[candidate["agent_id"]]["runtime"]
-                if scenario == "resume":
-                    candidate.update(session_id="fixture-session", cold_required=False)
-        return data
+        return response.json()
 
     def spawn(cwd, *args, **kwargs):
         # The only real command is a local, supervised child; no provider or network.
@@ -132,6 +141,15 @@ async def test_two_agents_reply_once_and_recover_visible_startup_errors(
             await tick()
             assert time.monotonic() - before < 15, "one blocked checkout must not hang the notifier"
 
+        if scenario == "runtime_switch":
+            assert not processes and not live  # no mismatched launcher or consumed turn
+            for aid in actors:
+                lease = db.execute("SELECT conv_lease_until FROM agent_wake_state WHERE agent_id=%s", (aid,))
+                assert not lease or lease[0]["conv_lease_until"] is None
+            await tick()  # fresh discovery selects the matching full lifecycle
+            assert all(options.get("resume_session_id") is None for options in spawn_options)
+            assert {(o["model"], o["runtime"]) for o in spawn_options} == {(m, r) for r, m in models.items()}
+
         failed = scenario in {"git_failure", "held_lock", "interrupted_cleanup"}
         if failed:
             blocked = 0
@@ -161,7 +179,7 @@ async def test_two_agents_reply_once_and_recover_visible_startup_errors(
 
         assert len(processes) == 2 and len(live) == 2
         if scenario == "resume":
-            assert all(options.get("resume_session_id") == "fixture-session" for options in spawn_options)
+            assert all(options.get("resume_session_id") == session_id for options in spawn_options)
         for aid, actor in actors.items():
             assert (await conversation(aid))["startup_blocked"] is None
             resident = live[actor["conversation_id"]]
@@ -177,7 +195,7 @@ async def test_two_agents_reply_once_and_recover_visible_startup_errors(
                 path.parent.mkdir(parents=True, exist_ok=True)
                 with path.open("a") as stream:
                     stream.write(json.dumps({"type": "result", "subtype": "success", "num_turns": 1,
-                                             "result": "Fixture reply from claude", "session_id": "fixture-session"}) + "\n")
+                                             "result": "Fixture reply from claude", "session_id": session_id}) + "\n")
         await tick()
         for proc in processes:
             if proc.poll() is None:
