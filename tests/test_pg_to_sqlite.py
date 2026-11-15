@@ -216,7 +216,7 @@ def test_report_renders_counts_and_json():
     assert d["total_rows"] == 7 and d["table_count"] == 2 and json.dumps(d)
 
 
-# ---------------------------------------------------------------- end to end (Postgres leg)
+# ---------------------------------------------------------------- child-portal helpers (reused by test_cli_backup_restore.py)
 
 _CHILD = r"""
 import asyncio, json, sys
