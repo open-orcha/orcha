@@ -6,7 +6,6 @@ import json
 
 import pytest
 
-from conftest import BACKEND
 from portal_backend import qa_onboarding as qo
 
 
@@ -84,8 +83,7 @@ def flow(client, container, people):
 def test_migration_094_is_stamped(db):
     stamped = {r["version"] for r in db.execute("SELECT version FROM schema_migrations")}
     assert "094_qa_onboarding.sql" in stamped
-    if BACKEND == "sqlite":
-        assert "024_qa_onboarding.sql" in stamped
+    assert "024_qa_onboarding.sql" in stamped
 
 
 async def test_an_untouched_project_reads_idle(flow, repo):

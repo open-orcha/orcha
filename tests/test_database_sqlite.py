@@ -12,11 +12,7 @@ import threading
 
 import pytest
 
-from conftest import BACKEND
 from portal_backend import database, sql
-
-pytestmark = pytest.mark.skipif(BACKEND != "sqlite", reason="SQLite engine only")
-
 
 @pytest.fixture
 def scratch(db):

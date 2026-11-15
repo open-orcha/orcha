@@ -2,16 +2,10 @@
 
 import pathlib
 import sqlite3
-import uuid
-
-import pytest
-
-from conftest import BACKEND, TEST_URL
 
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
-MIGRATIONS = REPO / "orcha-cli" / "orcha_cli" / "templates" / "migrations"
-SQLITE_MIGRATIONS = MIGRATIONS / "sqlite"
+SQLITE_MIGRATIONS = REPO / "orcha-cli" / "orcha_cli" / "templates" / "migrations" / "sqlite"
 
 CONTAINER = "11111111-1111-4111-8111-111111111111"
 OWNER = "22222222-2222-4222-8222-222222222222"
@@ -118,28 +112,3 @@ def test_populated_sqlite_upgrade_preserves_authority_history_and_evidence(tmp_p
         _assert_upgrade(lambda statement: con.execute(statement).fetchall())
     finally:
         con.close()
-
-
-@pytest.mark.skipif(BACKEND != "postgres", reason="runs the populated PostgreSQL upgrade leg")
-def test_populated_postgres_upgrade_preserves_authority_history_and_evidence():
-    import psycopg
-    from psycopg import sql
-
-    schema = "upgrade_" + uuid.uuid4().hex
-    with psycopg.connect(TEST_URL) as con:
-        con.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(schema)))
-        con.execute(sql.SQL("SET search_path TO {}, public").format(sql.Identifier(schema)))
-        for path in sorted(MIGRATIONS.glob("0*.sql")):
-            if int(path.name[:3]) > 73:
-                break
-            con.execute(path.read_text())
-        _seed_legacy(lambda statement: con.execute(statement))
-        con.execute((MIGRATIONS / "074_task_autonomy.sql").read_text())
-        for name in ("075_workflows.sql", "076_workflow_evidence.sql",
-                     "077_workflow_workers.sql"):
-            con.execute((MIGRATIONS / name).read_text())
-        _seed_accepted_evidence(lambda statement: con.execute(statement))
-        con.execute((MIGRATIONS / "078_workflow_evidence_supplier.sql").read_text())
-        con.execute((MIGRATIONS / "079_workflow_import_evidence.sql").read_text())
-        _assert_upgrade(lambda statement: con.execute(statement).fetchall())
-        con.rollback()

@@ -9,7 +9,7 @@ import time
 
 import pytest
 
-from conftest import BACKEND, run_task_id
+from conftest import run_task_id
 from orcha_cli.qa.device import android_u2, ios_idb, listing, locks
 from orcha_cli.qa.onboarding import auth_scan, found, sandbox_scan
 from portal_backend import qa_onboarding as qo

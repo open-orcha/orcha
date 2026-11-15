@@ -5,7 +5,7 @@ GET /api/tasks/{tid}/qa. The map and scenarios are in test_qa_portal_map_scenari
 import pytest
 
 import main
-from conftest import BACKEND, run_task_id
+from conftest import run_task_id
 
 
 def jpeg(width=390, height=844, pad=0):
@@ -39,17 +39,14 @@ async def _session(client, cid, actor, **kw):
 # ---------------------------------------------------------------- schema
 
 def test_migration_093_tables_and_stamps(db):
-    names = {r["name"] if "name" in r else r["table_name"] for r in db.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'qa_%'"
-        if BACKEND == "sqlite" else
-        "SELECT table_name FROM information_schema.tables WHERE table_name LIKE 'qa_%%'")}
+    names = {r["name"] for r in db.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'qa_%'")}
     assert {"qa_targets", "qa_features", "qa_map_nodes", "qa_map_edges", "qa_map_builds", "qa_sessions",
             "qa_frames", "qa_steps", "qa_findings", "qa_flows", "qa_walks", "qa_scenarios",
             "qa_scenario_evidence", "qa_scenario_suggestions", "qa_verdicts"} <= names
     stamped = {r["version"] for r in db.execute("SELECT version FROM schema_migrations")}
     assert "093_qa.sql" in stamped
-    if BACKEND == "sqlite":
-        assert "023_qa.sql" in stamped
+    assert "023_qa.sql" in stamped
 
 
 # ---------------------------------------------------------------- targets

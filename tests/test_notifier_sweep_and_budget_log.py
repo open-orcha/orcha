@@ -9,7 +9,7 @@ B27: the daemon printed "[notifier] skip <alias> — Monthly budget reached …"
 scan (26 lines in 40s at --interval 2). It now prints once per (agent, reason) and
 re-arms when the pause lifts.
 
-Run: ORCHA_TEST_DB_NAME=orcha_test_fq_cli_notifier_hooks pytest tests/test_notifier_sweep_and_budget_log.py
+Run: pytest tests/test_notifier_sweep_and_budget_log.py
 """
 import time
 

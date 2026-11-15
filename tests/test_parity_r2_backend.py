@@ -377,18 +377,17 @@ def _free_port():
     return port
 
 
-@pytest.mark.skipif(
-    __import__("conftest").BACKEND != "postgres",
-    reason="the child portal can't share the SQLite leg's test DB; runs on the Postgres leg",
-)
-def test_sigterm_with_open_sse_exits_promptly():
+def test_sigterm_with_open_sse_exits_promptly(tmp_path):
     """Real uvicorn process + an open container /events stream: SIGTERM must finish the
     graceful stop in well under 3 s (it previously hung until SIGKILL)."""
     pytest.importorskip("uvicorn")
     import conftest
 
     port = _free_port()
-    env = dict(os.environ)  # carries the leg's DB (ORCHA_DB_PATH on SQLite, DATABASE_URL on Postgres)
+    env = dict(os.environ)
+    # The child gets its own SQLite file: it can't share this session's test DB.
+    env["ORCHA_DB_PATH"] = str(tmp_path / "child.db")
+    env.pop("DATABASE_URL", None)
     # The child needs orcha-cli on its path too (the portal imports orcha_cli.llm_util), the
     # same as conftest gives this process — without it main.py fails to import and the
     # test only ever saw "uvicorn did not start".

@@ -13,37 +13,17 @@ A bare `pytest` needs **no Postgres and no Docker**: `tests/conftest.py` creates
 temporary SQLite file per session, points the app at it *before* importing `main`, and
 deletes it afterwards. It never touches a project's `.orcha/orcha.db`.
 
-### Optional: the Postgres leg (until the cleanup release)
+The suite runs on SQLite only (GH #377). There is no Postgres test mode: `tests/conftest.py`
+refuses any `ORCHA_TEST_BACKEND` other than `sqlite`, and CI has no Postgres service.
 
-While `portal_backend/sql.py` still carries both dialects (removed in GH #258 plan PR 20),
-PRs that touch SQL also run the suite on Postgres. Set `ORCHA_TEST_BACKEND=postgres` plus:
-
-| Var | Default | Purpose |
-|-----|---------|---------|
-| `ORCHA_TEST_ADMIN_URL` | `postgresql://orcha:orcha@localhost:5432/postgres` | admin conn used to `DROP/CREATE` the test DB |
-| `ORCHA_TEST_DB_NAME` | `orcha_test` | name of the throwaway test DB (isolated; never `orcha`); use a unique name per worktree |
-| `ORCHA_TEST_DATABASE_URL` | `postgresql://orcha:orcha@localhost:5432/<ORCHA_TEST_DB_NAME>` | the test DB the app runs against |
-
-Any reachable Postgres works — e.g. a legacy Docker project's Postgres
-(`db_port` in its `.claude/orcha.json`), or a throwaway one:
-
-```bash
-docker run --rm -d --name orcha-test-pg -p 5432:5432 \
-  -e POSTGRES_USER=orcha -e POSTGRES_PASSWORD=orcha postgres:16
-```
-
-conftest creates/drops only the separate test DB; it never mutates `orcha`.
-
-> Note: the self-hosted CI runner uses its own docker-run Postgres on `:55432` — that's a
-> CI-only port, not something you set locally.
-
-**Adding a migration while both dialects ship:** write the Postgres file
-`templates/migrations/NNN_x.sql` and its SQLite twin `templates/migrations/sqlite/00M_x.sql`.
-The twin must end by stamping both names
-(`INSERT OR IGNORE INTO schema_migrations (version) VALUES ('00M_x.sql'), ('NNN_x.sql');`):
-`test_schema_parity.py` applies the files directly and expects every file's own row, and
-`pg_to_sqlite` excuses the SQLite file names when it compares a Postgres DB's history to the
-CLI's. The three failures that teach this are all Postgres-leg only, so run that leg.
+**Adding a migration:** the app still ships Postgres migrations for legacy Docker projects, so
+write the Postgres file `templates/migrations/NNN_x.sql` and its SQLite twin
+`templates/migrations/sqlite/00M_x.sql` (same name after the number). The twin must end by
+stamping both names
+(`INSERT OR IGNORE INTO schema_migrations (version) VALUES ('00M_x.sql'), ('NNN_x.sql');`),
+because `pg_to_sqlite` excuses the SQLite file names when it compares a Postgres DB's history
+to the CLI's. `tests/test_migration_twins.py` fails when either file is missing or the two
+lists fall out of order.
 
 ---
 
@@ -56,7 +36,7 @@ pip install -r tests/requirements.txt
 ```
 
 `tests/requirements.txt` already carries the app deps the unit suite imports (`fastapi`,
-`pydantic`) plus the test tooling (`pytest`, `pytest-asyncio`, `httpx`, and `psycopg[binary]` for the Postgres leg until plan PR 20).
+`pydantic`) plus the test tooling (`pytest`, `pytest-asyncio`, `httpx`).
 
 **For the smoke gate (`pytest -m smoke`), also install `uvicorn`** — the end-to-end test
 boots a real uvicorn server (`tests/test_e2e_terminal_smoke.py:62-68`) and it is **not** in
@@ -75,8 +55,7 @@ pytest
 ```
 
 `pytest.ini` sets `asyncio_mode=auto`, `testpaths=tests`, `-q`, so a bare `pytest` runs the
-whole unit suite against a temp SQLite file (or the Postgres test DB with
-`ORCHA_TEST_BACKEND=postgres`). PRs that touch SQL report the `N passed` count for **both** legs.
+whole unit suite against a temp SQLite file. PRs report the `N passed` count.
 
 ### Smoke gate — the one real-seam merge gate
 

@@ -45,7 +45,7 @@ concerned.)
 
 ```bash
 make test-install   # once: test deps (pip)
-pytest -q           # needs Postgres at ORCHA_TEST_ADMIN_URL (default localhost:5432, user/pass orcha)
+pytest -q           # runs on a temp SQLite file; no Postgres or Docker needed
 ```
 
 The CLI/distribution tests run without a DB:

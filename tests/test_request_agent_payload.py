@@ -7,20 +7,14 @@ so people saw "[code thread — teach] …", the lesson guide placeholders and "
 The point of half these tests is that AGENTS DO NOT REGRESS: every agent read path still
 delivers the reply instruction + lesson guide, byte-identical to the old payload.
 """
-import pathlib
-
 import pytest
 
 import main  # noqa: F401  (conftest binds the app before import)
 from orcha_cli import notifier  # noqa: E402
 from portal_backend import code_space_routes as cs
 from portal_backend import github_repo_browse_routes as browse
-from conftest import BACKEND, ts_from_now
+from conftest import ts_from_now
 
-MIGRATION_065 = (
-    pathlib.Path(__file__).resolve().parents[1]
-    / "orcha-cli/orcha_cli/templates/migrations/065_request_agent_payload.sql"
-)
 QUESTION = (
     "Give me a tour of the deploy/ folder, starting from docker-compose.yml: what lives here, "
     "how the files fit together, and where to start reading."
@@ -187,39 +181,6 @@ async def test_openapi_documents_agent_payload(client):
 
 
 # ------------------------------------------------------------ old rows ---
-
-@pytest.mark.skipif(BACKEND != "postgres", reason="re-applies Postgres migration 065; the SQLite "
-                    "leg starts from its 001 baseline, which has no pre-065 rows to backfill")
-async def test_migration_065_backfills_legacy_combined_rows(client, db, container, make_agent, gh):
-    cid = container["id"]
-    human = await make_agent("Kedar", kind="human")
-    atlas = await make_agent("Atlas")
-    t = await _thread(client, cid, human["agent_id"], atlas["agent_id"])
-    rid = t["request_id"]
-    legacy = _req(db, rid)["agent_payload"]
-    # rewind the row to the pre-065 shape: combined text in payload, no agent_payload/detail
-    db.execute("UPDATE requests SET payload=%s, agent_payload=NULL, detail=NULL WHERE id=%s", (legacy, rid))
-    plain = await make_request_row(db, cid, human["agent_id"], atlas["agent_id"], "Unrelated ask")
-
-    _run_sql(MIGRATION_065.read_text())
-    row = _req(db, rid)
-    assert row["agent_payload"] == legacy          # the agent's view is unchanged
-    assert row["payload"] == QUESTION              # people see the question
-    assert row["detail"]["code_thread"]["thread_id"] == t["id"]
-    assert row["detail"]["code_thread"]["link"] == f"/code?path=deploy/docker-compose.yml&thread={t['id']}"
-    other = _req(db, plain)
-    assert other["agent_payload"] is None and other["payload"] == "Unrelated ask"
-    _run_sql(MIGRATION_065.read_text())            # idempotent
-    assert _req(db, rid)["payload"] == QUESTION
-
-
-def _run_sql(sql):
-    """Run a migration file as the runner does (no bind params, so LIKE '%' is literal)."""
-    import psycopg
-    from conftest import TEST_URL
-    with psycopg.connect(TEST_URL, autocommit=True) as conn:
-        conn.execute(sql)
-
 
 async def make_request_row(db, cid, requester, target, payload):
     return str(db.execute(

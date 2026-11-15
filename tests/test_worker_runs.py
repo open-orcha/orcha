@@ -216,3 +216,40 @@ async def test_worker_run_sse_unknown_run_404(client, make_agent):
     a = await make_agent("W", "eng")
     r = await client.get(f"/api/agents/{a['agent_id']}/runs/{uuid.uuid4()}/stream")
     assert r.status_code == 404, r.text
+
+
+# Ordinary (non-race) late-finish checks, kept from the deleted Postgres-only
+# test_worker_terminal_races.py (GH #377): they never needed a second transaction.
+
+async def _new_owned_run(make_agent, make_task, db):
+    await make_agent("Review owner", kind="human")
+    worker = await make_agent("Review worker")
+    task = await make_task("Ordinary work", "Checked result", assignee_alias="Review worker")
+    rid = str(uuid.uuid4())
+    db.execute("INSERT INTO worker_runs(run_id,agent_id,task_id,wake_kind,status) "
+               "VALUES (%s,%s,%s,'ephemeral','running')", (rid, worker["agent_id"], task["id"]))
+    return rid, worker["agent_id"]
+
+
+async def test_late_ordinary_finish_updates_diagnostics_without_another_failure(
+    make_agent, make_task, db, client,
+):
+    rid, aid = await _new_owned_run(make_agent, make_task, db)
+    url = f"/api/runs/{rid}/finish"
+    assert (await client.post(url, json={"status": "failed", "exit_code": 1})).status_code == 200
+    assert (await client.post(url, json={
+        "status": "exited", "exit_code": 0, "output": "late diagnostics", "diff": "+saved",
+    })).status_code == 200
+    row = db.execute("SELECT status,exit_code,output,diff FROM worker_runs WHERE run_id=%s", (rid,))[0]
+    assert row == {"status": "exited", "exit_code": 0, "output": "late diagnostics", "diff": "+saved"}
+    assert db.execute("SELECT strikes FROM wake_backoff WHERE agent_id=%s", (aid,))[0]["strikes"] == 1
+
+
+async def test_late_task_inference_preserves_ordinary_task_attribution(make_agent, make_task, db, client):
+    rid, _ = await _new_owned_run(make_agent, make_task, db)
+    tid = db.execute("SELECT task_id FROM worker_runs WHERE run_id=%s", (rid,))[0]["task_id"]
+    db.execute("UPDATE tasks SET status='in_progress' WHERE id=%s", (tid,))
+    db.execute("UPDATE worker_runs SET task_id=NULL WHERE run_id=%s", (rid,))
+    reply = await client.post(f"/api/runs/{rid}/finish", json={"status": "exited", "exit_code": 0})
+    assert reply.status_code == 200, reply.text
+    assert str(db.execute("SELECT task_id FROM worker_runs WHERE run_id=%s", (rid,))[0]["task_id"]) == str(tid)
