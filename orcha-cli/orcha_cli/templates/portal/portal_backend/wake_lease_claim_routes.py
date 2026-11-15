@@ -1,5 +1,7 @@
 """Claim one of an agent's independent wake leases before starting work."""
 
+from uuid import uuid4
+
 from fastapi import HTTPException, Request
 
 from portal_backend.managed_run_auth import lock_agent_runs
@@ -12,6 +14,7 @@ from portal_backend.database import db_cursor
 from portal_backend.guards import require_agent, valid_uuid
 from portal_backend.identity_routes import require_machine_lane_member
 from portal_backend.schemas.wakes import WakeClaim
+from portal_backend.model_retirement import launch_model_state, migrate_retired_models
 
 
 def resolve_claim_lane(body) -> str:
@@ -106,6 +109,14 @@ def wake_claim(aid: str, body: WakeClaim, request: Request):
             failure_reason = failure_block(cur, aid)
             if failure_reason:
                 return {"agent_id": aid, "claimed": False, "reason": failure_reason, "lane": lane}
+        # Persist retirements BEFORE acquiring our own lease, under the same graph
+        # lock as admission. The other lane or an unconfirmed run can still defer it.
+        migrate_retired_models(cur, str(agent["container_id"]), agent_id=aid)
+        launch_state = launch_model_state(cur, aid)
+        if (body.expected_model_runtime
+                and launch_state.get("model_runtime") != body.expected_model_runtime):
+            conn.commit()
+            return dict(agent_id=aid, claimed=False, reason="model runtime changed; rediscover before launch")
         lease_until = sql.from_now(body.lease_ttl)
         if lane == "conversation":
             cur.execute(
@@ -217,6 +228,9 @@ def wake_claim(aid: str, body: WakeClaim, request: Request):
                     else None
                 ),
             }
+        claim_id = str(body.claim_id or uuid4())
+        claim_column = "conv_claim_id" if lane == "conversation" else "wake_claim_id"
+        cur.execute(f"UPDATE agent_wake_state SET {claim_column}=%s WHERE agent_id=%s", (claim_id, aid))
         admission_id = None
         if body.completion:
             from portal_backend.job_monitor_service import consume_attempt, one
@@ -244,8 +258,10 @@ def wake_claim(aid: str, body: WakeClaim, request: Request):
         )
         conn.commit()
     response = {
+        **launch_state,
         "agent_id": aid,
         "claimed": True,
+        "claim_id": claim_id,
         "lane": lane,
         "lease_kind": row["lease_kind"],
         "wake_lease_until": row["wake_lease_until"].isoformat(),

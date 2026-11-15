@@ -56,6 +56,7 @@ function openai(label: string, input: number, output: number, cachedInput: numbe
 export const PRICE_TABLE: Readonly<Record<string, Price>> = {
   // ---- Anthropic — Claude 5 family (current) ----
   'claude-fable-5-2': anthropic('Fable 5.2', 8, 40, 0.2),
+  // Retired from model selection; retained to price historical logs (GH #432).
   'claude-fable-5-1': anthropic('Fable 5.1', 10, 50, 0.25),
   'claude-mythos-5-1': anthropic('Mythos 5.1', 10, 50, 0.25),
   'claude-fable-5': anthropic('Fable 5', 10, 50, 1),

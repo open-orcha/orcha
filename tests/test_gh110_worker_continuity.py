@@ -396,6 +396,51 @@ def test_checkpoint_respawn_spawn_failure_preserves_task_worktree(tmp_path, monk
     assert any(u.endswith("/messages") for u, _ in posts)          # saved-ref surfaced to the feed
 
 
+@pytest.mark.parametrize("admitted,finished", [(True, True), (False, True), (True, False)])
+def test_checkpoint_never_reuses_a_retired_cached_model(tmp_path, monkeypatch, admitted, finished):
+    from orcha_cli import notifier_workflow
+
+    work = _make_repo(tmp_path)
+    wt, branch = notifier._provision_task_worktree(str(work), "Andrew", "retired-model")
+    worker = _respawn_worker(work, wt, branch, notifier.RUNTIME_CLAUDE, task_id="retired-model")
+    worker["respawn_ctx"]["model"] = "claude-fable-5-1"
+    posts, launches = [], []
+    _wire(monkeypatch, posts)
+    monkeypatch.setattr(notifier_workflow, "runner_post", lambda *a, **k: {})
+    monkeypatch.setattr(notifier, "_finish_run", lambda *a, **k: finished)
+    monkeypatch.setattr(notifier, "_kill_worker", lambda *a, **k: None)
+    monkeypatch.setattr(notifier, "_build_persona", lambda *a, **k: "")
+    monkeypatch.setattr(notifier, "_capture_diff", lambda *a, **k: "diff")
+    def post(url, body, **kwargs):
+        posts.append((url, body))
+        if url.endswith("/wake-claim"):
+            return {"claimed": admitted, "model": "claude-opus-5-5",
+                    "model_runtime": "claude", "reasoning_effort": "high", "claim_id": body['claim_id']}
+        return {}
+    monkeypatch.setattr(notifier, "_post_json", post)
+    monkeypatch.setattr(notifier, "spawn_headless", lambda *a, **k:
+                        (launches.append(k) or True, "cmd", _ExitedProc(pid=1234)))
+    live = {"agent-X": worker}
+    notifier._checkpoint_and_respawn("http://x", "agent-X", worker, live, quiet=True)
+    if admitted and finished:
+        assert [x["model"] for x in launches] == ["claude-opus-5-5"]
+        assert launches[0]["reasoning_effort"] == "high"
+        assert live["agent-X"]["respawn_ctx"]["model"] == "claude-opus-5-5"
+        assert live["agent-X"]["worktree"] == wt
+        assert live["agent-X"]["respawn_ctx"]["task_id"] == "retired-model"
+    else:
+        assert launches == []  # never launch without confirmed stop and fresh admission
+        assert worker["respawns"] == notifier.HARD_CAP_RESPAWN_MAX
+    if finished:
+        release = next(i for i, (url, body) in enumerate(posts)
+                       if url.endswith("/wake-ack") and body.get("release_lease"))
+        claim = next(i for i, (url, _) in enumerate(posts) if url.endswith("/wake-claim"))
+        assert release < claim
+        assert posts[release][1]["run_id"] == worker["run_id"]
+    else:
+        assert not any(url.endswith("/wake-claim") for url, _ in posts)
+
+
 # ---------- BLOCKER 2 (PR #121 review): §2c terminal-task worktree reaper ----------
 
 def test_terminal_task_worktrees_reclaimed_conservatively(tmp_path, monkeypatch):

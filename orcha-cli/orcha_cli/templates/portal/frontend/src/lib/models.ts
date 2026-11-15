@@ -15,6 +15,11 @@ import { useEffect, useState } from "react";
 import { getJSON } from "../api/client";
 import { registerTestReset } from "./testResets";
 
+/** Explicitly retired choices stay readable in history, but never reappear in pickers. */
+export function isRetiredModel(id: string | null | undefined): boolean {
+  return id === "claude-fable-5-1";
+}
+
 export interface ModelInfo { id: string; name?: string }
 
 /** /api/models rows → {id, name?}. Tolerates bare string ids (older servers). */

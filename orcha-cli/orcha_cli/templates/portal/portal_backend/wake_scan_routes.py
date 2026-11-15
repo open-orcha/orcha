@@ -9,6 +9,7 @@ from portal_backend.database import db_cursor
 from portal_backend.guards import require_container, valid_uuid
 from portal_backend.identity_routes import proxy_login, require_member_read
 from portal_backend.model_setting_routes import _resolve_use_case_model
+from portal_backend.model_retirement import migrate_retired_models
 from portal_backend.provider_keys import (
     agent_keys_enc,
     effective_use_case_provider,
@@ -94,6 +95,8 @@ def wake_scan(
         # Agent runs on an API key (migration 071): the sealed key per agent runtime whose
         # provider key is opted in (use_for_agents); None = leave the worker on its subscription.
         agent_key_blobs = agent_keys_enc(cur, cid)
+        if not browser:
+            migrate_retired_models(cur, cid)
         agents = list_wake_agents(cur, cid, cooldown)
         if not browser and container["status"] == "active" and wakes_enabled:
             from portal_backend.stale_wake_events import stale_pending_events, reconcile_events

@@ -291,7 +291,7 @@ describe("SEED_MODELS fallback list (model catalog refresh)", () => {
     vi.restoreAllMocks();
   });
 
-  it("contains Fable 5.2, Fable 5.1, Opus 5.5, Sonnet 5.5 and GPT-6 Astra alongside the current model families", async () => {
+  it("contains Fable 5.2, Opus 5.5, Sonnet 5.5 and GPT-6 Astra alongside the current model families", async () => {
     stubFetch(); // /api/models returns { models: [] } — the seed stays in effect
     const { container } = mount("/agents?tab=config");
     await screen.findByText("Roster · 3");
@@ -299,7 +299,7 @@ describe("SEED_MODELS fallback list (model catalog refresh)", () => {
     // ONE list: every runtime's models, grouped (not only the active runtime's)
     const all = modelLabels(openModels(container));
     expect(all).toContain("Fable 5.2");
-    expect(all).toContain("Fable 5.1");
+    expect(all).not.toContain("Fable 5.1");
     expect(all).toContain("Opus 5.5");
     expect(all).toContain("Sonnet 5.5");
     expect(all).toContain("Opus 5");

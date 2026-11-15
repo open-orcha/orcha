@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .launch_model import admitted_candidate
+
 import sys
 import time
 import uuid
@@ -251,6 +253,8 @@ def spawn(
                 print(f"[notifier] skip {candidate['alias']} — single-flight: {reason}")
             return None
 
+    if not dry_run:
+        candidate = admitted_candidate(candidate, claim)
     auto_tasks = candidate.get("auto_start_task_ids") or []
     run_task_id = candidate.get("context_task_id") or (
         auto_tasks[0] if auto_tasks else candidate.get("wake_task_id")
@@ -266,6 +270,7 @@ def spawn(
             notifier_workflow.announce_refusal(api_base, candidate, services._post_json, quiet=quiet,
                                                log=getattr(services, "_lifecycle_log", None))
             return None
+        candidate = admitted_candidate(candidate, workflow_launch)
     resume_rendered = False
     if dry_run:
         persona = None

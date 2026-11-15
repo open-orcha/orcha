@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .launch_model import admitted_candidate
+
 import pathlib
 import sys
 import time
@@ -72,6 +74,7 @@ def start_candidate(
             "kind": "conversation",
             "event": "conversation_turn",
             "lease_kind": "ephemeral",
+            "expected_model_runtime": services.RUNTIME_CODEX,
         },
     )
     if not (claim and claim.get("claimed")):
@@ -83,6 +86,7 @@ def start_candidate(
             )
         return
 
+    candidate = admitted_candidate(candidate, claim)
     in_git = services._is_git_repo(base_cwd)
     worktree, branch = (
         services._provision_resident_worktree(base_cwd, conv_id)
