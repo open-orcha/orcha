@@ -40,7 +40,7 @@ import { Conversation } from "./Conversation";
 import { BringInDialog, type BringInDirection } from "../settings/BringInDialog";
 import type { WorktreeItem, WorktreesPayload } from "../settings/AgentWorktreesSection";
 import { RunsFeed, runReasonText, useAgentRuns } from "./runlog";
-import { modelLabel } from "../../lib/models";
+import { isRetiredModel, modelLabel } from "../../lib/models";
 import { agentPresence, humanizeModelId, type ConvPresence } from "./presence";
 import { SortCtl, sortComparator, type SortAcc } from "../../lib/sort";
 import { SnapshotPending } from "../../components/SnapshotPending";
@@ -79,7 +79,6 @@ interface ModelInfo {
 // pre-fetch; GET /api/models is the source of truth (picks up new ids).
 const SEED_MODELS: ModelInfo[] = [
   { id: "claude-fable-5-2", name: "Fable 5.2", runtime: "claude", reasoning_efforts: ["low", "medium", "high", "xhigh", "max"] },
-  { id: "claude-fable-5-1", name: "Fable 5.1", runtime: "claude", reasoning_efforts: ["low", "medium", "high", "xhigh", "max"] },
   { id: "claude-opus-5-5", name: "Opus 5.5", runtime: "claude", reasoning_efforts: ["low", "medium", "high", "xhigh", "max"] },
   { id: "claude-sonnet-5-5", name: "Sonnet 5.5", runtime: "claude", reasoning_efforts: ["low", "medium", "high", "xhigh", "max"] },
   { id: "claude-fable-5", name: "Fable 5", runtime: "claude", reasoning_efforts: ["low", "medium", "high", "xhigh", "max"] },
@@ -816,8 +815,8 @@ export function AgentsPage() {
     const selectedRuntime = modelRuntimeForAgent(a);
     const modelVal = modelOverride && modelOverride.aid === a.id ? modelOverride.model : a.model;
     // null model = the runtime default: mark (and light) the default model instead of nothing
-    const litModel = modelVal || defaultModel;
-    const legacyModel = modelVal && models.length > 0 && !models.some((m) => m.id === modelVal) && modelRuntimeOf(modelVal) === selectedRuntime ? modelVal : null;
+    const litModel = isRetiredModel(modelVal) ? defaultModel : modelVal || defaultModel;
+    const legacyModel = modelVal && !isRetiredModel(modelVal) && models.length > 0 && !models.some((m) => m.id === modelVal) && modelRuntimeOf(modelVal) === selectedRuntime ? modelVal : null;
     const visibleReasoningEfforts = reasoningEffortsForModel(modelVal);
     const awakeVal = awakeOverride && awakeOverride.aid === a.id ? awakeOverride.val : a.auto_wake_interval_secs != null ? a.auto_wake_interval_secs : null;
     const effortVal = effortOverride && effortOverride.aid === a.id ? effortOverride.val : a.reasoning_effort != null ? a.reasoning_effort : null;

@@ -599,6 +599,26 @@ def test_service_residents_cold_boot_forced_by_cold_required(monkeypatch, tmp_pa
     assert live["C1"]["cold"] is True and live["C1"]["session_pinned"] is False
 
 
+def test_resident_spawn_discards_candidate_model_and_pin_after_admission(monkeypatch, tmp_path):
+    conv = {"conversation_id": "C1", "agent_id": "A1", "agent_alias": "Vox",
+            "model": "claude-fable-5-1", "model_runtime": "claude", "session_id": "old-pin",
+            "pending_human": True, "last_turn_seq": 1}
+    _wire(monkeypatch, active=[conv], turns=[{"seq": 1, "role": "human", "content": "hello"}])
+    previous_post = notifier._post_json
+    def post(url, body, **kwargs):
+        result = previous_post(url, body, **kwargs)
+        if url.endswith("/wake-claim"):
+            result.update(model="claude-opus-5-5", model_runtime="claude", reasoning_effort="high", cold_required=True)
+        return result
+    monkeypatch.setattr(notifier, "_post_json", post)
+    spawned = []
+    monkeypatch.setattr(notifier, "spawn_resident", lambda *a, **k: spawned.append(k) or (True, "repr", ResidentProc()))
+    notifier.service_residents("http://x", "cid", {}, quiet=True, base_cwd=str(tmp_path))
+    assert spawned[0]["model"] == "claude-opus-5-5"
+    assert spawned[0]["reasoning_effort"] == "high"
+    assert spawned[0]["resume_session_id"] is None
+
+
 def test_service_residents_warm_resume_when_cold_required_false(monkeypatch, tmp_path):
     """ISS-70 negative: a pinned session with cold_required=False (no newer digest) still warm-
     resumes — the override is one-shot per new digest, never a blanket cold-on-every-turn."""

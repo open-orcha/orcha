@@ -46,7 +46,7 @@ from portal_backend.identity_routes import (
     require_member_read,
     trusted_actor,
 )
-from portal_backend.model_policy import MODELS_BY_ID
+from portal_backend.model_policy import MODELS_BY_ID, RETIRED_MODEL_IDS
 
 # The agent config a revision captures — and the ONLY columns ever stored.
 CAPTURED_FIELDS = (
@@ -96,6 +96,8 @@ def redact(value):
 
 
 def _provider(model):
+    if model in RETIRED_MODEL_IDS:
+        return "claude"  # historical snapshots retain their original provider
     return MODELS_BY_ID.get(model, {}).get("runtime") if model else None
 
 
@@ -344,6 +346,9 @@ def _restore_plan(agent, snapshot, redacted_fields):
             continue
         target = snapshot[field]
         current = agent[field]
+        if field == "model" and target in RETIRED_MODEL_IDS:
+            blocked.append((field, "was retired; choose a supported model instead"))
+            continue
         if field == "autonomy_override":
             # Task autonomy is now the only execution authority. Keep historical
             # overrides visible as audit evidence, but never make them live again.

@@ -286,6 +286,28 @@ async def test_handle_connection_passes_target_model_runtime_to_spawn(monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_live_spawn_uses_admitted_model_after_retirement(monkeypatch):
+    _wire_handle(monkeypatch)
+    previous_get = notifier._get_json
+    def get(url, **kwargs):
+        result = previous_get(url, **kwargs)
+        if url.endswith("/agents/AID/persona"):
+            result.update(model="claude-fable-5-1", model_runtime="claude")
+        return result
+    monkeypatch.setattr(notifier, "_get_json", get)
+    monkeypatch.setattr(tb, "claim_live_lease", lambda *a, **k: {
+        "claimed": True, "cold": False, "session_id": "old-pin", "cold_required": True,
+        "model": "claude-opus-5-5", "model_runtime": "claude",
+    })
+    captured = {}
+    monkeypatch.setattr(tb, "spawn_pty", lambda alias, cold, sid, cwd, **k:
+                        captured.update(cold=cold, **k) or (_DEAD_PID, os.open(os.devnull, os.O_RDONLY)))
+    await tb.handle_connection(_FakeWS("/terminal?agent_id=AID&actor_agent_id=HUMAN"), "http://x", "/base", quiet=True)
+    assert captured["model"] == "claude-opus-5-5"
+    assert captured["cold"] is True
+
+
+@pytest.mark.asyncio
 async def test_handle_connection_human_target_normalizes_runtime_to_claude(monkeypatch):
     """#297 (Lens P2): a HUMAN target's /persona carries model=None AND model_runtime=None
     (runtime is only set when model is truthy). The bridge must still mark the spawn as resolved by

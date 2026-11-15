@@ -12,6 +12,7 @@ from portal_backend.database import db_cursor
 from portal_backend.guards import require_agent, valid_uuid
 from portal_backend.identity_routes import require_machine_lane_member
 from portal_backend.schemas.wakes import WakeClaim
+from portal_backend.model_retirement import launch_model_state, migrate_retired_models
 
 
 def resolve_claim_lane(body) -> str:
@@ -106,6 +107,10 @@ def wake_claim(aid: str, body: WakeClaim, request: Request):
             failure_reason = failure_block(cur, aid)
             if failure_reason:
                 return {"agent_id": aid, "claimed": False, "reason": failure_reason, "lane": lane}
+        # Persist retirements BEFORE acquiring our own lease, under the same graph
+        # lock as admission. The other lane or an unconfirmed run can still defer it.
+        migrate_retired_models(cur, str(agent["container_id"]), agent_id=aid)
+        launch_state = launch_model_state(cur, aid)
         lease_until = sql.from_now(body.lease_ttl)
         if lane == "conversation":
             cur.execute(
@@ -244,6 +249,7 @@ def wake_claim(aid: str, body: WakeClaim, request: Request):
         )
         conn.commit()
     response = {
+        **launch_state,
         "agent_id": aid,
         "claimed": True,
         "lane": lane,

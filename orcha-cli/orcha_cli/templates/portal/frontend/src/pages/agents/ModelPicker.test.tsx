@@ -270,6 +270,20 @@ describe("gating: members without manage_agents / viewers", () => {
 });
 
 describe("ModelPicker (isolated)", () => {
+  it("never reintroduces retired Fable 5.1 as a saved legacy choice", () => {
+    const onPick = vi.fn();
+    render(
+      <ModelPicker
+        agentAlias="atlas" models={MODELS} runtime="claude" currentId="claude-fable-5-1" legacyId="claude-fable-5-1" legacyLabel="Fable 5.1 (legacy)"
+        defaultId="claude-opus-5" label="Opus 5" lockReason="" effortName={effortName} onPick={onPick}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Opus 5/ }));
+    expect(list().querySelector('[data-model="claude-fable-5-1"]')).toBeNull();
+    expect(within(list()).getByRole("option", { name: /Opus 5/ }).getAttribute("aria-selected")).toBe("true");
+    expect(onPick).not.toHaveBeenCalled();
+  });
+
   it("a legacy id is listed first in its runtime group, current and not pickable", () => {
     const onPick = vi.fn();
     render(

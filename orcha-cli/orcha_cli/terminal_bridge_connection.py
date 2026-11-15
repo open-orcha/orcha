@@ -149,7 +149,9 @@ async def _start_session(
         await ws.close(code=4409)
         return None
 
-    cold = bool(claim.get("cold", True))
+    model = claim.get("model", model)
+    runtime = claim.get("model_runtime", runtime)
+    cold = bool(claim.get("cold_required") or claim.get("cold", True))
     worktree, branch = notifier._provision_live_worktree(base_cwd, alias)
     run_cwd = worktree or base_cwd
     if not carry_previous_checkout(

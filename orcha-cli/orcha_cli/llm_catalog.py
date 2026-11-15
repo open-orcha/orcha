@@ -16,6 +16,7 @@ MODEL_OPUS = "claude-opus-5-5"
 MODEL_GROK_4_3 = "grok-4.3"
 MODEL_GROK_4_20_REASONING = "grok-4.20-0309-reasoning"
 MODEL_GROK_4_20_NONREASONING = "grok-4.20-0309-non-reasoning"
+RETIRED_MODEL_IDS = frozenset({"claude-fable-5-1"})
 
 # Claude models that reject a forced tool_choice ({"type": "tool"|"any"}) with a
 # 400. The provider translates a forced choice into {"type": "auto"} plus a
@@ -23,7 +24,7 @@ MODEL_GROK_4_20_NONREASONING = "grok-4.20-0309-non-reasoning"
 FORCED_TOOL_CHOICE_UNSUPPORTED: frozenset[str] = frozenset(
     {
         "claude-fable-5-2",
-        "claude-fable-5-1",
+        "claude-fable-5-1",  # retired choice; keep transport compatibility for in-flight callers
         "claude-opus-5-5",
         "claude-sonnet-5-5",
     }
