@@ -207,6 +207,17 @@ def register_runtime_commands(
         default=None,
         help="UUID of the Orcha container; defaults to current_container_id from .claude/orcha.json",
     )
+    pause.add_argument(
+        "--task",
+        default=None,
+        metavar="TASK_ID",
+        help="pause only this task instead of the whole container: no agent wakes for it, "
+        "claims it or continues it until `orcha resume --task`; a running agent is asked to "
+        "stop and save first. Its status is kept.",
+    )
+    pause.add_argument(
+        "--reason", default=None, help="with --task: why it is paused (shown on its badge)"
+    )
     pause.set_defaults(func=handlers["pause"])
 
     resume = sub.add_parser(
@@ -218,6 +229,12 @@ def register_runtime_commands(
         nargs="?",
         default=None,
         help="UUID of the Orcha container; defaults to current_container_id from .claude/orcha.json",
+    )
+    resume.add_argument(
+        "--task",
+        default=None,
+        metavar="TASK_ID",
+        help="resume only this paused task; its assigned agent is woken to pick it back up",
     )
     resume.set_defaults(func=handlers["resume"])
 

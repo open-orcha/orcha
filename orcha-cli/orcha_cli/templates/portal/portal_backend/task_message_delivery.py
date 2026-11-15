@@ -60,6 +60,10 @@ def recipient_state(cur, task, agent, wake, container, backoff):
     """Explain eligibility, not proof of launch, receipt or reply. No writes."""
     if task["status"] in ("completed", "cancelled"):
         return "task_finished", "This task is finished. A thread message will not start an agent."
+    if task.get("paused_at") is not None:
+        return "wake_disabled_or_paused", (
+            "A person paused this task. Messages wait here and reach the agent when it is resumed."
+        )
     if agent["kind"] != "ai" or agent["terminated_at"] is not None:
         return "wake_disabled_or_paused", "This assignee cannot start automatic agent work."
     if not wake:

@@ -14,7 +14,7 @@ import { MODE_LABEL, WorkflowProgressBar, workflowStatusIcon } from "./WorkflowL
 /** Workflow-level actions in the menu's fixed order (§4.2 callout 4). `hide` is §4.14. */
 export type WorkflowMenuAction = "run_again" | "start" | "pause" | "resume" | "add_tasks" | "import" | "move" | "review_round" | "settings" | "transfer_owner" | "hide" | "cancel" | "finish";
 export const WORKFLOW_ACTION_LABEL: Record<WorkflowMenuAction, string> = {
-  run_again: "Run again…", start: "Review start", pause: "Pause new starts", resume: "Resume workflow", add_tasks: "Add new tasks…", import: "Add existing tasks…",
+  run_again: "Run again…", start: "Review start", pause: "Pause workflow", resume: "Resume workflow", add_tasks: "Add new tasks…", import: "Add existing tasks…",
   move: "Move or remove tasks…", review_round: "Record review outcome…", settings: "Workflow settings…", transfer_owner: "Transfer ownership…",
   hide: "Hide workflow…", cancel: "Cancel workflow…", finish: "Finish checklist",
 };

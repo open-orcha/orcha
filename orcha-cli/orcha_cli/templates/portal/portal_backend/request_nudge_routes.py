@@ -6,6 +6,7 @@ from portal_backend.agent_status import bump_agent, log_event
 from portal_backend.application import app
 from portal_backend.database import db_cursor
 from portal_backend.events import poke_path_forward as _poke_path_forward
+from portal_backend.task_pause import is_paused as is_task_paused
 from portal_backend.events import publish_event as _publish_event
 from portal_backend.guards import (
     require_container_active as _require_container_active,
@@ -113,6 +114,14 @@ def nudge_request(rid: str, body: NudgeBody, request: Request):
             )
         else:  # rejected, converted_to_task, closed — terminal, nothing to nudge
             raise HTTPException(409, f"nothing to nudge: request is '{status}'")
+        # GH #343: a request that belongs to a task a person paused does not wake anyone.
+        # The answer or ask waits with the task and reaches the agent when it is resumed.
+        if r.get("originating_task_id") and is_task_paused(cur, r["originating_task_id"]):
+            raise HTTPException(
+                409,
+                "this request belongs to a paused task — resume the task and its agent "
+                "picks the request up then",
+            )
         # No distinct AI to wake: the next action sits with a human (escalated-to-human, a
         # human target/requester, or a null target) or with the nudger themselves → clean no-op.
         recipient_id = str(recipient_id) if recipient_id else None

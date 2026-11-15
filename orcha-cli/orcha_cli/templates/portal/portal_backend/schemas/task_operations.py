@@ -136,3 +136,44 @@ class TaskCancel(BaseModel):
         description="UUID of the actor (human or AI orchestrator may cancel any non-root task)",
     )
     reason: Optional[str] = Field(default=None, max_length=MAX_FEEDBACK_LEN)
+
+
+class TaskPauseUpdate(BaseModel):
+    """A person pauses or resumes one task (GH #343). Agents cannot."""
+
+    actor_agent_id: Optional[str] = Field(
+        default=None,
+        description="Human UUID fallback when verified proxy identity is unavailable",
+    )
+    reason: Optional[str] = Field(
+        default=None,
+        max_length=500,
+        description="Why the task is paused; shown on the badge. Ignored on resume.",
+    )
+
+
+class TaskPauseState(BaseModel):
+    """Whether a person has paused a task. Status is unchanged while paused."""
+
+    task_id: str
+    paused: bool
+    paused_at: Optional[datetime] = None
+    paused_by: Optional[str] = None
+    paused_by_alias: Optional[str] = None
+    reason: Optional[str] = None
+    via_workflow: bool = Field(
+        default=False,
+        description="True when the pause came from pausing the task's workflow",
+    )
+
+
+class TaskPauseResult(TaskPauseState):
+    changed: bool
+    stopped_runs: list[str] = Field(
+        default_factory=list,
+        description="Runs on this task asked to stop and save their work (pause only)",
+    )
+    woken_agent_ids: list[str] = Field(
+        default_factory=list,
+        description="Assigned agents woken to pick the task back up (resume only)",
+    )

@@ -16,6 +16,7 @@ from fastapi import HTTPException
 from portal_backend import sql
 from portal_backend.events import publish_event
 from portal_backend.schemas.workflows import WorkflowDetail
+from portal_backend.task_pause import pause_task, resume_task
 from portal_backend.workflow_graph import (
     conflict,
     dependency_closure,
@@ -2297,7 +2298,15 @@ class WorkflowService:
         if not w["launch_enabled"]:
             conflict("workflow_not_started", "A preparing workflow cannot be paused.")
         self.cur.execute("UPDATE workflows SET status='paused' WHERE id=%s", (w["id"],))
-        self.audit(w, p, "workflow_paused", {})
+        # GH #343: pausing a workflow pauses every open task in it, and a step that is
+        # running is asked to stop and save its work. Resume lifts only these pauses.
+        paused, stopped = [], []
+        for t in self._open_tasks_for_pause(w["id"]):
+            outcome = pause_task(self.cur, t, p["id"], None, via_workflow=True)
+            if outcome["paused"] and not outcome["already_paused"]:
+                paused.append(str(t["id"]))
+            stopped += outcome["stopped_runs"]
+        self.audit(w, p, "workflow_paused", {"paused_tasks": paused, "stopped_runs": stopped})
 
     def op_resume(self, w, actor, b, tid):
         p = self.owner(w, actor)
@@ -2305,7 +2314,20 @@ class WorkflowService:
         if w["status"] != "paused":
             conflict("workflow_not_paused", "This workflow is not paused.")
         self.cur.execute("UPDATE workflows SET status='active' WHERE id=%s", (w["id"],))
-        self.audit(w, p, "workflow_resumed", {})
+        resumed = []
+        for t in self._open_tasks_for_pause(w["id"]):
+            if resume_task(self.cur, t, p["id"], via_workflow=True)["resumed"]:
+                resumed.append(str(t["id"]))
+        self.audit(w, p, "workflow_resumed", {"resumed_tasks": resumed})
+
+    def _open_tasks_for_pause(self, wid):
+        self.cur.execute(
+            """SELECT id, container_id, title, status, paused_at, paused_via_workflow
+                 FROM tasks WHERE workflow_id=%s AND status NOT IN ('completed','cancelled')
+                ORDER BY created_at, id""",
+            (wid,),
+        )
+        return self.cur.fetchall()
 
     def op_patch(self, w, actor, b, tid):
         p = self.owner(w, actor)

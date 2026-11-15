@@ -42,7 +42,7 @@ export function WorkflowSettings({ detail, scope, verified, stale, humans, onSav
       <WorkflowChange detail={detail} scope={scope} verified={verified} stale={stale} operation="patch" url={workflowPaths.detail(detail.id)} method="PATCH"
         label="Settings change" invalid={invalid || actionReason(detail, "patch", verified)} body={{ title: draft.title.trim(), goal: draft.goal.trim(), execution_mode: draft.mode,
           task_limit: Number(draft.taskLimit), round_limit: Number(draft.roundLimit), ...(loops ? { turn_allowance: Number(draft.turns) } : {}), reason: draft.reason.trim() }} onSaved={(result) => { setOpen(false); onSaved(result); }}
-        check={(latest) => actionReason(latest, "patch", verified) || (latest.launch_enabled && latest.status !== "paused" && latest.execution_mode !== draft.mode ? "Pause new starts and wait for current turns before changing how work runs." : null)}>
+        check={(latest) => actionReason(latest, "patch", verified) || (latest.launch_enabled && latest.status !== "paused" && latest.execution_mode !== draft.mode ? "Pause the workflow and wait for current turns before changing how work runs." : null)}>
         {(latest) => <><p>{latest.title} → {draft.title}. Goal: {draft.goal}</p><p>Task limit: {draft.taskLimit}. Review-round limit: {draft.roundLimit}.{loops ? ` Agent-turn allowance: ${draft.turns}.` : ""} No automatic start or resume follows this save.</p></>}
       </WorkflowChange>
       <h3>Objectives</h3>

@@ -85,6 +85,7 @@ import { setTaskOnDone } from "../qa/requests/on-done";
 import { TaskAuthority, useWorkflowPlanApproval } from "./TaskAuthority";
 import { pausedById, useContainerBudgets, type AgentBudgetStatus } from "../agents/budget/budgetModel";
 import { BudgetPausedChip } from "../agents/budget/AgentBudgetSection";
+import { TaskPauseControl, TaskPausedChip } from "./TaskPause";
 import { logRowText } from "../agents/runlog";
 import { useRunStream } from "../../hooks/useRunStream";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
@@ -3242,6 +3243,8 @@ function TaskDetail({
               )}
             </AssignControl>
             {budgetStop ? <BudgetPausedChip status={budgetStop} /> : null}
+            <TaskPausedChip t={t} />
+            <TaskPauseControl t={t} />
             {last ? (
               <>
                 <span className="td-meta-sep" aria-hidden="true" />
@@ -3278,6 +3281,7 @@ function TaskDetail({
               )}
             </span>
             {budgetStop ? <BudgetPausedChip status={budgetStop} /> : null}
+            <TaskPausedChip t={t} />
           </div>
         ) : null}
         <WorkflowTaskInspector taskId={t.id} />
@@ -3343,6 +3347,15 @@ function TaskDetail({
             {full ? (
               <Property label="Status">
                 <WorkflowTaskStatus taskId={t.id} fallback={t.status} showLabel />
+              </Property>
+            ) : null}
+            {full && !t.is_root && t.status !== "completed" && t.status !== "cancelled" ? (
+              <Property label="Paused" hint="A person can pause this task: agents don't start or continue it until it's resumed. Comments still work.">
+                <span className="td-pause">
+                  <TaskPausedChip t={t} />
+                  {!t.paused_at ? <span className="v2-muted">No</span> : null}
+                  <TaskPauseControl t={t} />
+                </span>
               </Property>
             ) : null}
             {full ? (

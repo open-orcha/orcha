@@ -54,6 +54,7 @@ def resident_inbox_task_work_id(
                JOIN agent_tasks at ON at.task_id = t.id
                WHERE t.id = %s AND at.agent_id = %s
                  AND t.status = 'in_progress' AND t.is_root = false
+                 AND t.paused_at IS NULL
                  AND at.assignment_status IN ('assigned','accepted','working')
                LIMIT 1""",
             (task_id, aid),

@@ -71,6 +71,11 @@ def checkpoint_and_respawn(
     task_worktree = bool(worker.get("task_worktree"))
     destination_cwd = worktree or base_cwd
     services._revoke_or_defer(api_base, worker.get("run_token"))
+    if task_id and _task_paused(api_base, task_id, services):
+        # GH #343: a person paused this task while the worker ran. The old worker has
+        # saved and exited; no replacement starts. Resume wakes the agent again.
+        worker["respawns"] = services.HARD_CAP_RESPAWN_MAX
+        return
     new_token = services._mint_embodiment_token(api_base, agent_id, "work", "headless")
     persona = services._build_persona(api_base, agent_id, force_fresh=True)
     from .job_guidance import startup_guidance
@@ -177,6 +182,13 @@ def checkpoint_and_respawn(
             f"(C1 digest) + respawned (pid {new_process.pid}, respawn "
             f"{respawns}/{services.HARD_CAP_RESPAWN_MAX}) in the selected project checkout"
         )
+
+
+def _task_paused(api_base, task_id, services) -> bool:
+    """True when a person has paused the task (GH #343). Unknown counts as not paused,
+    matching the ordinary wake path, which re-checks the pause server-side."""
+    data = services._get_json(f"{api_base}/api/tasks/{task_id}/pause")
+    return bool(data and data.get("paused"))
 
 
 def _current_run(api_base, agent_id, worker, services):
