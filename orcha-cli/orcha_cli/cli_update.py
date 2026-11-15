@@ -3,12 +3,17 @@
 
 from __future__ import annotations
 
+import importlib.metadata as pkg_meta
 import importlib.resources as pkg_res
+import json
 import os
 import pathlib
+import re
 import shutil
 import subprocess
 import sys
+import urllib.parse
+import urllib.request
 from collections.abc import Callable
 from typing import Any
 
@@ -37,13 +42,91 @@ def brew_keg() -> str | None:
     return None
 
 
-def reinstall_cli(source: pathlib.Path) -> bool:
-    """Reinstall an editable host CLI with uv, falling back to pip."""
+DIST_NAME = "orcha-cli"
+_EXTRA_MARKER = re.compile(r"""^extra\s*==\s*['"]([^'"]+)['"]$""")
+_REQUIREMENT_NAME = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)")
+
+
+def _normalize(name: str) -> str:
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def _installed_dist() -> Any:
+    try:
+        return pkg_meta.distribution(DIST_NAME)
+    except Exception:
+        return None
+
+
+def installed_extras() -> list[str]:
+    """Return the optional extras (e.g. ``qa``) whose requirements are all installed.
+
+    ``orcha update`` reinstalls the CLI; without this it dropped extras such as the QA
+    tools. An extra counts only when every requirement guarded solely by its marker is
+    present here, so a CLI installed without it never gains it.
+    """
+    dist = _installed_dist()
+    if dist is None:
+        return []
+    by_extra: dict[str, set[str]] = {}
+    try:
+        for requirement in dist.requires or []:
+            spec, _, marker = requirement.partition(";")
+            extra = _EXTRA_MARKER.match(marker.strip())
+            name = _REQUIREMENT_NAME.match(spec)
+            if extra and name:
+                by_extra.setdefault(extra.group(1), set()).add(_normalize(name.group(1)))
+        if not by_extra:
+            return []
+        present = {
+            _normalize(d.metadata.get("Name") or "") for d in pkg_meta.distributions()
+        }
+    except Exception as exc:
+        print(f"[orcha] warn: could not read installed extras ({exc})", file=sys.stderr)
+        return []
+    return sorted(extra for extra, names in by_extra.items() if names <= present)
+
+
+def frozen_checkout() -> pathlib.Path | None:
+    """Return the orcha-cli checkout a non-editable local-directory install was copied from.
+
+    A plain ``uv tool install <checkout>`` (no ``--editable``) freezes a copy, so later
+    merges never reach the live CLI. ``direct_url.json`` still names the folder it came
+    from; when that folder is still an orcha-cli checkout, ``orcha update`` relinks to it.
+    """
+    dist = _installed_dist()
+    if dist is None:
+        return None
+    try:
+        info = json.loads(dist.read_text("direct_url.json") or "null")
+    except (OSError, ValueError):
+        return None
+    if not isinstance(info, dict):
+        return None
+    dir_info = info.get("dir_info")
+    if not isinstance(dir_info, dict) or dir_info.get("editable"):
+        return None
+    url = urllib.parse.urlparse(str(info.get("url") or ""))
+    if url.scheme != "file" or url.netloc not in ("", "localhost"):
+        return None
+    root = pathlib.Path(urllib.request.url2pathname(url.path))
+    if (root / "pyproject.toml").is_file() and (root / "orcha_cli").is_dir():
+        return root
+    return None
+
+
+def reinstall_cli(source: pathlib.Path, extras: list[str] | None = None) -> bool:
+    """Reinstall the host CLI editable from ``source`` with uv, falling back to pip.
+
+    The currently installed extras (e.g. ``[qa]``) are carried over.
+    """
+    chosen = installed_extras() if extras is None else extras
+    target = f"{source}[{','.join(chosen)}]" if chosen else str(source)
     uv = shutil.which("uv")
     command = (
-        [uv, "tool", "install", "--reinstall", "--editable", str(source)]
+        [uv, "tool", "install", "--reinstall", "--editable", target]
         if uv
-        else [sys.executable, "-m", "pip", "install", "-e", str(source)]
+        else [sys.executable, "-m", "pip", "install", "-e", target]
     )
     print(f"[orcha] reinstalling host CLI from {source}\n        $ {' '.join(command)}")
     try:
@@ -96,6 +179,7 @@ def _self_update(
     brew_keg: Callable[[], str | None],
     reinstall_cli: Callable[[pathlib.Path], bool],
     brew_upgrade: Callable[[str], bool],
+    frozen_checkout: Callable[[], pathlib.Path | None] | None = None,
 ) -> None:
     """Refresh a source or Homebrew installation, then re-enter when successful."""
     if os.environ.get("ORCHA_SIDECAR") == "1":
@@ -129,6 +213,23 @@ def _self_update(
             _rerun_updated_cli(args)
         print("[orcha] continuing with the currently-installed CLI.")
         return
+    checkout = frozen_checkout() if frozen_checkout is not None else None
+    if checkout is not None:
+        print(
+            f"[orcha] host CLI is a frozen copy of {checkout} — relinking it to that "
+            "checkout so updates reach it ..."
+        )
+        if reinstall_cli(checkout):
+            print(
+                "[orcha] ✓ host CLI relinked — re-running update under the new code ...\n"
+            )
+            _rerun_updated_cli(args)
+        print(
+            "[orcha] warn: could not relink the host CLI — continuing with the "
+            "currently-installed code.",
+            file=sys.stderr,
+        )
+        return
     print(
         "[orcha] host CLI is a packaged install — update it via your package "
         "manager (e.g. `uv tool upgrade orcha-cli` or `pip install -U orcha-cli`), "
@@ -145,6 +246,7 @@ def update_command(
     brew_upgrade: Callable[[str], bool],
     upgrade: Callable[[Any], None],
     ensure_notifier: Callable[..., None],
+    frozen_checkout: Callable[[], pathlib.Path | None] | None = None,
 ) -> None:
     """Apply an idempotent host and project update without changing project data."""
     cwd = pathlib.Path.cwd()
@@ -163,6 +265,7 @@ def update_command(
             brew_keg=brew_keg,
             reinstall_cli=reinstall_cli,
             brew_upgrade=brew_upgrade,
+            frozen_checkout=frozen_checkout,
         )
 
     upgrade(args)
