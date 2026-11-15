@@ -1,5 +1,6 @@
 """Start worker runs and expose live-run reconciliation views."""
 
+from datetime import timedelta
 from typing import Optional
 
 from fastapi import HTTPException, Request
@@ -24,6 +25,55 @@ from portal_backend.worker_run_support import (
 )
 
 
+# A pause this close before the wake claim may still have been missed by the protocol
+# read that follows the claim (the pause commits a moment after it stamps paused_at).
+_PAUSE_RACE_MARGIN = timedelta(seconds=5)
+
+
+def _pause_blocking_run(cur, aid, task_id, *, guessed):
+    """GH #343: the pause row that must stop this new work run, or None.
+
+    The worker is already spawned, so a person may have paused its task after the wake
+    scan. The resolved task, named or inferred, is locked so this read and
+    ``pause_task``'s update-then-stop serialize: either the pause sees this run, or this
+    run sees the pause. A guessed (notification) run can carry a different task's
+    instructions than the one inferred for it: the protocol read after the wake claim
+    falls back to the agent's newest in-progress task. If any of those was paused since
+    the claim, the prompt may hold its instructions, so this run is stopped too. A task
+    paused earlier was already skipped by that read, and the run goes on with its inbox
+    work.
+    """
+    if task_id is not None:
+        cur.execute(
+            "SELECT paused_at, paused_by FROM tasks WHERE id=%s" + sql.for_update(),
+            (task_id,),
+        )
+        row = cur.fetchone()
+        if row and row["paused_at"] is not None:
+            return row
+    if not guessed:
+        return None
+    cur.execute(
+        "SELECT work_dispatch_started_at FROM agent_wake_state WHERE agent_id=%s", (aid,)
+    )
+    lane = cur.fetchone()
+    claimed_at = lane["work_dispatch_started_at"] if lane else None
+    since = (claimed_at or sql.utcnow()) - _PAUSE_RACE_MARGIN
+    cur.execute(
+        """SELECT t.paused_at, t.paused_by
+           FROM tasks t
+           JOIN agent_tasks at ON at.task_id = t.id
+           WHERE at.agent_id=%s AND at.assignment_status IN ('assigned','accepted','working')
+             AND t.status='in_progress' AND t.is_root = false
+             AND t.paused_at IS NOT NULL""",
+        (aid,),
+    )
+    for row in cur.fetchall():
+        if row["paused_at"] >= since:
+            return row
+    return None
+
+
 @app.post("/api/agents/{aid}/runs", status_code=201)
 def start_worker_run(aid: str, body: WorkerRunStart, request: Request):
     """A2: the notifier records a worker it just spawned (status=running). Returns run_id;
@@ -40,11 +90,13 @@ def start_worker_run(aid: str, body: WorkerRunStart, request: Request):
         require_machine_lane_member(cur, request, str(agent["container_id"]))  # PS-07
         task_id = body.task_id
         lazy_attributed = False
+        guessed = False
         if task_id is not None:
             require_task(cur, task_id)
         elif not is_non_task_work(
             body.wake_kind, body.wake_event, body.conversation_id
         ):
+            guessed = True
             task_id = infer_agent_active_task(cur, aid)
             lazy_attributed = task_id is not None
         from portal_backend.workflow_worker_auth import refuse_legacy_workflow_run
@@ -61,18 +113,9 @@ def start_worker_run(aid: str, body: WorkerRunStart, request: Request):
                 )
             if str(conversation["agent_id"]) != aid:
                 raise HTTPException(403, "conversation_id belongs to a different agent")
-        # GH #343: a person may pause the task between the wake scan and this call (the
-        # worker is already spawned). Lock the task row so this read and pause_task's
-        # update-then-stop serialize: either pause sees this run, or this run sees pause.
         paused = None
-        if body.task_id is not None and body.lane == "work":
-            cur.execute(
-                "SELECT paused_at, paused_by FROM tasks WHERE id=%s" + sql.for_update(),
-                (task_id,),
-            )
-            paused = cur.fetchone()
-            if paused and paused["paused_at"] is None:
-                paused = None
+        if body.lane == "work":
+            paused = _pause_blocking_run(cur, aid, task_id, guessed=guessed)
         cur.execute(
             """INSERT INTO worker_runs
                     (agent_id, task_id, wake_kind, wake_event, log_path, pid, runtime,

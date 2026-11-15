@@ -6,6 +6,7 @@ step the workflow already paused must survive the workflow's resume.
 """
 
 import hashlib
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 import pytest
@@ -126,3 +127,81 @@ def test_a_persons_pause_after_the_workflows_survives_workflow_resume(setup_work
         row = cur.fetchone()
     assert row["paused_at"] is not None and not row["paused_via_workflow"]
     assert str(row["paused_by"]) == other_human and row["paused_reason"] == "Mine"
+
+
+# Review round 2: a general notification (no task on the wake) must not hand a paused
+# task to the worker it starts, yet must still let the agent do its inbox work.
+
+def _backdate_pause(db, tid):
+    db.execute("UPDATE tasks SET paused_at=%s WHERE id=%s",
+               (datetime.now(timezone.utc) - timedelta(minutes=10), tid))
+
+
+async def _notification_worker(client, aid):
+    claim = await client.post(f"/api/agents/{aid}/wake-claim", json={"lease_ttl": 300})
+    assert claim.status_code == 200, claim.text
+    protocol = (await client.get(f"/api/agents/{aid}/protocol")).json()
+    run = await client.post(f"/api/agents/{aid}/runs", json={"wake_kind": "ephemeral"})
+    assert run.status_code == 201, run.text
+    return protocol, run.json()
+
+
+def _stop(db, run_id):
+    return db.execute("SELECT stop_requested_at, stop_requested_by FROM worker_runs WHERE run_id=%s",
+                      (run_id,))[0]
+
+
+async def test_a_notification_worker_never_takes_on_a_paused_task(client, container, make_agent, make_task, db):
+    human = (await make_agent("Owner", kind="human"))["agent_id"]
+    aid = (await make_agent("Builder"))["agent_id"]
+    tid = (await make_task("Paused work", "Done", assignee_alias="Builder"))["id"]
+    assert (await pause(client, tid, human)).status_code == 200
+    _backdate_pause(db, tid)
+    protocol, run = await _notification_worker(client, aid)
+    assert protocol["task_id"] is None  # the paused task's instructions are not served
+    assert run["task_id"] is None  # and it is not attached to the worker
+    assert _stop(db, run["run_id"])["stop_requested_at"] is None  # inbox work goes on
+    other = (await make_task("Other work", "Done", assignee_alias="Builder"))["id"]
+    db.execute("UPDATE worker_runs SET status='exited' WHERE run_id=%s", (run["run_id"],))
+    db.execute("UPDATE agent_wake_state SET wake_lease_until=NULL, work_run_id=NULL WHERE agent_id=%s", (aid,))
+    protocol, run = await _notification_worker(client, aid)
+    assert protocol["task_id"] == other and run["task_id"] == other  # the unpaused task still is
+    assert _stop(db, run["run_id"])["stop_requested_at"] is None
+
+
+async def test_a_notification_worker_is_stopped_when_the_pause_lands_after_its_claim(
+    client, container, make_agent, make_task, db,
+):
+    human = (await make_agent("Owner", kind="human"))["agent_id"]
+    aid = (await make_agent("Builder"))["agent_id"]
+    tid = (await make_task("Work", "Done", assignee_alias="Builder"))["id"]
+    claim = await client.post(f"/api/agents/{aid}/wake-claim", json={"lease_ttl": 300})
+    assert claim.status_code == 200, claim.text
+    # The protocol read right after the claim served this task; then a person pauses it.
+    assert (await client.get(f"/api/agents/{aid}/protocol")).json()["task_id"] == tid
+    assert (await pause(client, tid, human)).status_code == 200
+    run = await client.post(f"/api/agents/{aid}/runs", json={"wake_kind": "ephemeral"})
+    assert run.status_code == 201, run.text
+    assert run.json()["task_id"] is None
+    stop = _stop(db, run.json()["run_id"])
+    assert stop["stop_requested_at"] is not None and str(stop["stop_requested_by"]) == human
+
+
+async def test_a_notification_worker_attached_to_another_task_still_stops_for_a_fresh_pause(
+    client, container, make_agent, make_task, db,
+):
+    human = (await make_agent("Owner", kind="human"))["agent_id"]
+    aid = (await make_agent("Builder"))["agent_id"]
+    other = (await make_task("Other work", "Done", assignee_alias="Builder"))["id"]
+    newest = (await make_task("Newest work", "Done", assignee_alias="Builder"))["id"]
+    db.execute("UPDATE tasks SET started_at=%s WHERE id=%s",
+               (datetime.now(timezone.utc) - timedelta(hours=1), other))
+    assert (await client.post(f"/api/agents/{aid}/wake-claim", json={"lease_ttl": 300})).status_code == 200
+    # The protocol read served the newest task; it is paused before the worker registers,
+    # so inference now attaches the other task, but the prompt holds the paused one.
+    assert (await client.get(f"/api/agents/{aid}/protocol")).json()["task_id"] == newest
+    assert (await pause(client, newest, human)).status_code == 200
+    run = await client.post(f"/api/agents/{aid}/runs", json={"wake_kind": "ephemeral"})
+    assert run.status_code == 201, run.text
+    assert run.json()["task_id"] == other
+    assert _stop(db, run.json()["run_id"])["stop_requested_at"] is not None

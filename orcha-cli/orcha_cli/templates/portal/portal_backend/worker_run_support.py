@@ -54,14 +54,16 @@ def run_row(row: dict) -> dict:
 
 
 def infer_agent_active_task(cur, aid: str) -> Optional[str]:
-    """Return an agent's sole active non-root task, if it is unambiguous."""
+    """Return an agent's sole active non-root task, if it is unambiguous.
+
+    A paused task is not active (GH #343), so a general notification never attaches one."""
     cur.execute(
         """SELECT t.id
            FROM tasks t
            JOIN agent_tasks at ON at.task_id = t.id
            WHERE at.agent_id=%s AND at.assignment_status IN ('assigned','accepted','working')
              AND t.status='in_progress' AND t.is_root = false
-             AND t.workflow_id IS NULL
+             AND t.workflow_id IS NULL AND t.paused_at IS NULL
            ORDER BY t.started_at DESC NULLS LAST, t.created_at DESC
            LIMIT 2""",
         (aid,),

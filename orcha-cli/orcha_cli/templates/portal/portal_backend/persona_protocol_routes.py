@@ -85,7 +85,8 @@ def get_agent_protocol(aid: str, request: Request, task_id: str | None = None):
     in_progress task" guess. That guess serves the WRONG protocol to an agent juggling several
     in-progress tasks; the link removes that risk. The hint is honored only when the agent actually
     participates in that task (looser participant check), so a stale/foreign id can never leak a
-    protocol; otherwise we fall back to the in_progress guess.
+    protocol; otherwise we fall back to the in_progress guess, which never picks a paused
+    task (GH #343).
 
     GH #33: the resolved task's FULL body rides here too — title AND description AND
     definition_of_done — so EVERY wake that resolves a task (the request-answer originating-link
@@ -135,6 +136,7 @@ def get_agent_protocol(aid: str, request: Request, task_id: str | None = None):
                    JOIN agent_tasks at ON at.task_id = t.id
                    WHERE at.agent_id=%s AND at.assignment_status IN ('assigned','accepted','working')
                      AND t.status='in_progress' AND t.is_root = false
+                     AND t.paused_at IS NULL
                    ORDER BY t.started_at DESC NULLS LAST, t.created_at DESC
                    LIMIT 1""",
                 (aid,),
