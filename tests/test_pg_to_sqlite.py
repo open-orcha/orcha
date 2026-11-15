@@ -3,13 +3,12 @@
 Two layers:
 
 * pure tests of the value mapper, the foreign-key ordering and the never-overwrite rule
-  (run on both test legs; no database server needed);
-* the end-to-end check (Postgres leg only, ``ORCHA_TEST_BACKEND=postgres``): the plan S8
-  scenario from ``tests/test_dialect_parity.py`` is driven through the API into the Postgres
-  test database, the database is converted into a temp SQLite file, and the same read
-  endpoints are served by a child portal process bound to that file. Every response must
-  match the Postgres one exactly, after only the fields that are computed from the clock at
-  request time are masked.
+  (no database server needed);
+* the child-portal helpers (``_serve_from_sqlite``, ``_mask``, ``_leaf_diff``) that
+  ``tests/test_cli_backup_restore.py`` reuses to compare a restored SQLite file.
+
+The test suite runs on SQLite only (GH #377), so the old end-to-end check that converted a
+live Postgres test database is gone.
 """
 import datetime as _dt
 import decimal
@@ -23,11 +22,9 @@ import uuid
 
 import pytest
 
-import main
-from conftest import BACKEND, PORTAL_DIR, REPO, TEST_URL
+from conftest import PORTAL_DIR, REPO
 from orcha_cli import db_convert
 from portal_backend import database
-from test_dialect_parity import _endpoints, _run_scenario, diff_recordings, record
 
 UTC = _dt.timezone.utc
 
@@ -250,23 +247,6 @@ def _mask(v):
     return v
 
 
-@pytest.fixture
-def stamped_pg():
-    """The test database is built by executing the migration files directly (conftest), so
-    it has no schema_migrations table; a live stack's portal runner always writes one.
-    Stamp it the way that runner does."""
-    import psycopg
-
-    with psycopg.connect(TEST_URL, autocommit=True) as conn:
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS schema_migrations "
-            "(version TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT now())")
-        for f in sorted((REPO / "orcha-cli" / "orcha_cli" / "templates" / "migrations").glob("*.sql")):
-            conn.execute("INSERT INTO schema_migrations (version) VALUES (%s) "
-                         "ON CONFLICT (version) DO NOTHING", (f.name,))
-    yield
-
-
 def _leaf_diff(a, b, path="$"):
     if isinstance(a, dict) and isinstance(b, dict):
         for k in sorted(set(a) | set(b)):
@@ -297,72 +277,3 @@ def _serve_from_sqlite(db_file: pathlib.Path, requests) -> dict:
                           env=env, capture_output=True, text=True, timeout=120)
     assert proc.returncode == 0, proc.stderr[-3000:]
     return json.loads(proc.stdout.strip().splitlines()[-1])
-
-
-@pytest.mark.skipif(BACKEND != "postgres", reason="converts the Postgres test DB (Postgres leg)")
-async def test_converted_database_serves_the_same_responses(
-        client, container, make_agent, make_task, make_request, work_headers, tmp_path,
-        monkeypatch, stamped_pg):
-    att = tmp_path / "orcha-attachments"
-    att.mkdir()
-    monkeypatch.setattr(main, "ATTACHMENTS_DIR", att)
-    ids = await _run_scenario(client, container, make_agent, make_task, make_request,
-                              work_headers)
-    requests = _endpoints(ids)
-
-    pg_bodies = {}
-    for label, path, params in requests:
-        r = await client.get(path, params=params)
-        assert r.status_code == 200, f"{label}: {r.status_code} {r.text[:300]}"
-        pg_bodies[label] = r.json()
-
-    out = tmp_path / "converted" / "orcha.db"
-    events = []
-    report = db_convert.convert(TEST_URL, out, verify_sample=1000, progress=events.append, seed=1)
-    assert out.exists() and not out.with_name("orcha.db-wal").exists()
-    assert [e["stage"] for e in events][:1] == ["schema"] and events[-1]["stage"] == "done"
-    counts = {t.table: t.rows for t in report.tables}
-    assert counts["tasks"] >= 3 and counts["requests"] >= 2 and counts["agents"] >= 3
-    assert report.sampled == report.total_rows  # every row compared field by field
-    con = sqlite3.connect(str(out))
-    assert con.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
-    assert con.execute("PRAGMA foreign_key_check").fetchall() == []
-    stamped = {r[0] for r in con.execute("SELECT version FROM schema_migrations")}
-    assert "001_baseline.sql" in stamped and "001_init.sql" in stamped
-    triggers = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='trigger'")}
-    assert "worker_run_task_sync_ins" in triggers  # dropped for the load, put back after
-    con.close()
-
-    served = _serve_from_sqlite(out, [[label, path, params] for label, path, params in requests])
-    bad = [f"{label}: HTTP {v['status']}" for label, v in served.items() if v["status"] != 200]
-    assert not bad, bad
-    lite_bodies = {label: v["body"] for label, v in served.items()}
-
-    shape = diff_recordings({k: record(v) for k, v in pg_bodies.items()},
-                            {k: record(v) for k, v in lite_bodies.items()})
-    assert not shape, "response shapes differ after conversion:\n" + "\n".join(shape)
-    differing = []
-    for label in pg_bodies:
-        differing += [f"  {label} {path}: pg {a!r} != sqlite {b!r}"
-                      for path, a, b in _leaf_diff(_mask(pg_bodies[label]), _mask(lite_bodies[label]))]
-    assert not differing, "values differ after conversion:\n" + "\n".join(differing[:40])
-
-
-@pytest.mark.skipif(BACKEND != "postgres", reason="converts the Postgres test DB (Postgres leg)")
-def test_cli_json_mode_reports_counts_and_refuses_overwrite(tmp_path, container, stamped_pg):
-    out = tmp_path / "cli.db"
-    argv = [sys.executable, str(REPO / "tools" / "db" / "pg_to_sqlite.py"), "--pg", TEST_URL,
-            "--out", str(out), "--json"]
-    env = {**os.environ, "PYTHONPATH": str(REPO / "orcha-cli")}
-    proc = subprocess.run(argv, capture_output=True, text=True, timeout=120, env=env)
-    assert proc.returncode == 0, proc.stderr
-    lines = [json.loads(line) for line in proc.stdout.splitlines()]
-    assert lines[0] == {"event": "progress", "stage": "schema"}
-    rep = lines[-1]
-    assert rep["event"] == "report" and rep["out"] == str(out)
-    assert {t["table"]: t["rows"] for t in rep["tables"]}["containers"] == 1
-    assert rep["table_count"] == len(rep["tables"]) > 50
-    again = subprocess.run(argv, capture_output=True, text=True, timeout=120, env=env)
-    assert again.returncode == 1
-    assert json.loads(again.stdout.splitlines()[-1])["event"] == "error"
-    assert out.exists()  # the refused second run left the first output alone

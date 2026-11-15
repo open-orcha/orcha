@@ -6,11 +6,10 @@ at-most-one catch-up task after downtime, slot idempotency, run-now, disable/ena
 author-authority failures, paused projects, the owner/manage_agents/viewer matrix in
 both identity lanes, audit events, and the notifier's throttled tick call.
 
-Run: ORCHA_TEST_DB_NAME=orcha_test_routines pytest tests/test_routines.py
+Run: pytest tests/test_routines.py
 """
 from datetime import datetime, timedelta, timezone
 
-import psycopg
 import pytest
 
 import conftest

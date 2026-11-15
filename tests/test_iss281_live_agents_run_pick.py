@@ -9,7 +9,7 @@ Ubuntu runners ship 3.45, so fresh native projects 500'd on the project list.
 
 Each case makes the run that must be picked the OLDER one, so a pick by recency alone (a
 regression that drops the lane preference) fails. The picked run is read back through its
-task title. Runs on both backends (ORCHA_TEST_BACKEND=sqlite|postgres).
+task title.
 """
 import pytest
 from conftest import ts_ago, ts_from_now

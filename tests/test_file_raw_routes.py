@@ -3,7 +3,6 @@
 checkout, or rebuilt from the CAPTURED diff's `GIT binary patch` / blob ids).
 
 Real git throughout (the test-teeth convention): temp repos, real `git diff --binary`.
-Run with ORCHA_TEST_DB_NAME=orcha_test_file_raw.
 """
 import subprocess
 

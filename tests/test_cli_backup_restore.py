@@ -15,7 +15,7 @@ import time
 import pytest
 
 import main
-from conftest import BACKEND, TEST_DB_PATH
+from conftest import TEST_DB_PATH
 from orcha_cli import cli_backup
 from test_dialect_parity import _endpoints, _run_scenario, diff_recordings, record
 from test_pg_to_sqlite import _leaf_diff, _mask, _serve_from_sqlite
@@ -369,7 +369,6 @@ def test_cli_json_mode(proj, monkeypatch, capsys):
 
 # ---------------------------------------------------------------- acceptance: under traffic
 
-@pytest.mark.skipif(BACKEND != "sqlite", reason="backs up the live SQLite test database")
 async def test_backup_under_traffic_restores_to_identical_parity_snapshot(
         client, container, make_agent, make_task, make_request, work_headers, tmp_path,
         monkeypatch, db):

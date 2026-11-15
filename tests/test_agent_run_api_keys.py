@@ -16,7 +16,6 @@ import pathlib
 import sys
 
 import pytest
-from conftest import BACKEND
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "orcha-cli"))
 from orcha_cli import notifier, notifier_agent_keys, notifier_headless, sandbox, secret_box  # noqa: E402
@@ -51,14 +50,6 @@ def test_migration_adds_use_for_agents_default_false(db):
     assert col["data_type"] == "boolean"
     assert col["is_nullable"] == "NO"
     assert col["column_default"] == "false"
-
-
-@pytest.mark.skipif(BACKEND != "postgres", reason="re-applies a Postgres migration file; the SQLite leg starts from its 001 baseline")
-def test_migration_is_idempotent(db):
-    sql = (pathlib.Path(__file__).resolve().parent.parent / "orcha-cli" / "orcha_cli" / "templates"
-           / "migrations" / "071_provider_key_agent_use.sql").read_text()
-    db.execute(sql)  # re-applying must not fail
-    db.execute(sql)
 
 
 # =============================================================================================

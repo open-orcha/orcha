@@ -15,12 +15,7 @@ import datetime as _dt
 
 import pytest
 
-from conftest import BACKEND
 from portal_backend import database, sql
-
-pytestmark = pytest.mark.skipif(
-    BACKEND == "postgres", reason="freezes the SQLite now() UDF via sql.utcnow; Postgres now() is the server clock"
-)
 
 FROZEN = _dt.datetime(2026, 10, 6, 12, 0, 0, tzinfo=_dt.timezone.utc)
 FIVE_H = 5 * 3600

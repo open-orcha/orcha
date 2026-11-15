@@ -15,15 +15,16 @@ of read endpoints and reduces every response to three dialect-sensitive facts:
 
 Nothing volatile is recorded: no ids, no timestamp values, no free-text values.
 
-The recording made on Postgres is committed as ``tests/fixtures/parity_postgres.json``. The
-normal run compares the live run against it (type tree equal, booleans equal, every datetime
+The recording was first made on Postgres and is committed as
+``tests/fixtures/parity_postgres.json`` (the name is kept; it is the frozen API-shape contract
+the SQLite port had to match). The test suite runs on SQLite only (GH #377), so the normal run compares the live run against it (type tree equal, booleans equal, every datetime
 ISO-8601 with ``+00:00``) and fails with a readable per-endpoint / per-path diff. This is the
 guard the SQLite port (Workstream S) must keep green: it catches ``EXISTS(...)``/bool columns
 coming back as ``0/1`` (iOS decodes ``Bool`` strictly), JSON aggregates coming back as strings,
 ``Decimal`` → ``float`` drift, and any datetime that lost its ``+00:00``.
 
-Regenerate the fixture (only when a response shape changes ON PURPOSE; the fixture is a
-contract, so review the diff):
+Regenerate the fixture on the SQLite suite (only when a response shape changes ON PURPOSE;
+the fixture is a contract, so review the diff):
 
     pytest tests/test_dialect_parity.py --regen-parity
 
@@ -460,7 +461,7 @@ async def test_api_response_shape_parity(request, client, container, make_agent,
     if request.config.getoption("--regen-parity"):
         FIXTURE.parent.mkdir(parents=True, exist_ok=True)
         FIXTURE.write_text(json.dumps(
-            {"_meta": {"backend": "postgres",
+            {"_meta": {"backend": "sqlite",
                        "regenerate": "pytest tests/test_dialect_parity.py --regen-parity",
                        "spec": "docs/superpowers/plans/2026-09-28-no-docker-no-postgres-"
                                "implementation-plan.md Part 4 S8"},
@@ -469,7 +470,7 @@ async def test_api_response_shape_parity(request, client, container, make_agent,
         assert not bad_dt, "refusing to bless non-'+00:00' datetimes:\n" + "\n".join(bad_dt)
         pytest.skip(f"parity fixture regenerated → {FIXTURE}")
 
-    assert FIXTURE.exists(), f"{FIXTURE} missing — run with --regen-parity on Postgres"
+    assert FIXTURE.exists(), f"{FIXTURE} missing — run with --regen-parity"
     expected = json.loads(FIXTURE.read_text())["endpoints"]
     problems = diff_recordings(expected, live)
     if bad_dt:

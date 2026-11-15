@@ -9,7 +9,6 @@ authority (human actor, grants, viewer read-only); secret exclusion; row immutab
 """
 import sqlite3
 
-import psycopg
 import pytest
 
 
@@ -304,9 +303,8 @@ async def test_secrets_are_redacted_and_never_restored(client, boss_and_bot, db)
 async def test_revisions_are_immutable(client, boss_and_bot, db):
     _, aid = boss_and_bot
     await _history(client, aid)
-    # the immutability trigger RAISEs: plpgsql RAISE on Postgres, RAISE(ABORT) on SQLite
-    err = psycopg.errors.RaiseException if db.backend == "postgres" else sqlite3.IntegrityError
-    with pytest.raises(err):
+    # the immutability trigger RAISE(ABORT)s
+    with pytest.raises(sqlite3.IntegrityError):
         db.execute("UPDATE agent_config_revisions SET reason='x' WHERE agent_id=%s", (aid,))
 
 

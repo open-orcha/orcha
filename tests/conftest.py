@@ -11,8 +11,8 @@ has actually committed. Transactional-rollback isolation would hide those rows,
 so we commit-and-truncate uniformly rather than special-casing bus tests.
 
 The app binds its database at import time, so we (re)create the test DB and set
-the env var *before* importing `main`: `ORCHA_DB_PATH` (a temp SQLite file, the default)
-or `DATABASE_URL` (Postgres, with ORCHA_TEST_BACKEND=postgres).
+the env var *before* importing `main`: `ORCHA_DB_PATH`, a temp SQLite file per session.
+The suite runs on SQLite only (GH #377 removed the PostgreSQL test mode).
 """
 import asyncio
 import datetime as _dt
@@ -35,102 +35,27 @@ PORTAL_DIR = REPO / "orcha-cli" / "orcha_cli" / "templates" / "portal"
 MIGRATIONS_DIR = REPO / "orcha-cli" / "orcha_cli" / "templates" / "migrations"
 SCHEMA_SQL = MIGRATIONS_DIR / "001_init.sql"
 
-# GH #258 PR 7b: the suite runs on SQLite by default (a temp file per session, no server).
-# ORCHA_TEST_BACKEND=postgres keeps the Postgres leg alive until the cleanup PR (plan S9).
-BACKEND = os.environ.get("ORCHA_TEST_BACKEND", "sqlite")
-if BACKEND not in ("sqlite", "postgres"):
-    raise RuntimeError(f"ORCHA_TEST_BACKEND must be sqlite or postgres, got {BACKEND!r}")
+# GH #377: the suite runs on SQLite only (a temp file per session, no server). The
+# PostgreSQL test mode is gone; BACKEND stays as a constant for tests that still read it.
+BACKEND = "sqlite"
+if os.environ.get("ORCHA_TEST_BACKEND", "sqlite") != "sqlite":
+    raise RuntimeError("ORCHA_TEST_BACKEND is no longer supported: the suite runs on SQLite only (GH #377)")
 # A worker can inherit the live installation's migration directory. Always test
 # this checkout's schema, just as we always use an isolated database below.
-os.environ["MIGRATIONS_DIR"] = str(
-    MIGRATIONS_DIR / "sqlite" if BACKEND == "sqlite" else MIGRATIONS_DIR
-)
-
-# --- Postgres leg: a SEPARATE database so a test run never touches a live stack's data ---
-# (also read by tests/test_schema_parity.py, which always compares against Postgres)
-ADMIN_URL = os.environ.get("ORCHA_TEST_ADMIN_URL", "postgresql://orcha:orcha@localhost:5432/postgres")
-TEST_DB = os.environ.get("ORCHA_TEST_DB_NAME", "orcha_test")
-TEST_URL = os.environ.get(
-    "ORCHA_TEST_DATABASE_URL", f"postgresql://orcha:orcha@localhost:5432/{TEST_DB}"
-)
-
-# Truncate order doesn't matter with CASCADE, but list every app table explicitly
-# so a new table added to the schema fails loudly here until it's wired in.
-# (Postgres leg only: the SQLite leg derives its table list from sqlite_master.)
-APP_TABLES = [
-    'managed_message_windows', 'managed_task_dispatches',
-    'worker_stop_observations', 'managed_job_transfers',
-    'managed_job_wake_receipts', 'managed_job_waits', 'managed_job_monitor_operations',
-    'managed_job_outcomes', 'managed_job_monitors',
-    "managed_message_receipts", "managed_run_limits", "managed_jobs", "managed_job_operations", "system_notice_receipts",
-    "conversation_turns", "conversations",
-    "agent_wake_state", "agent_reachability", "agent_memory_digests",
-    "agent_notification_state", "agent_self_wake", "agent_event_acks",
-    "decisions", "agent_events", "events", "task_messages", "agent_tasks",
-    "task_dependencies", "requests", "tasks", "container_provider_keys",
-    "container_github_pat",
-    "device_tokens", "user_prefs", "plan_usage_snapshots", "plan_usage_display", "push_devices", "push_outbox",
-    "wake_backoff",
-    "agents", "containers",
-    # mig 063 — FK'd to agents/containers, so listed last (the CASCADE lock order)
-    "notification_prefs", "notification_pref_defaults",
-    "workflow_review_handoffs",
-    "container_task_graph_guard", "workflows", "workflow_objectives",
-    "workflow_executions", "workflow_task_acceptances", "task_outside_evidence",
-    "workflow_review_rounds", "workflow_operation_receipts", "workflow_history",
-    "workflow_notification_receipts", "workflow_evidence_sets", "workflow_evidence",
-    "workflow_terminal_receipts",
-    "workflow_runner_credentials", "workflow_launch_permits", "workflow_stop_intents",
-    # mig 093 — Orcha QA
-    "qa_targets", "qa_features", "qa_sessions", "qa_frames", "qa_map_nodes", "qa_map_edges",
-    "qa_map_builds", "qa_steps", "qa_findings", "qa_flows", "qa_walks", "qa_scenarios",
-    "qa_scenario_evidence", "qa_scenario_suggestions", "qa_verdicts", "qa_measured", "qa_app_models", "qa_onboarding", "qa_session_messages",
-    "qa_scenario_versions", "qa_scenario_health_flags", "qa_scenario_health_audits", "qa_check_fix_dismissals",
-    "qa_coverage_baselines", "qa_coverage_points", "qa_coverage_links", "qa_data_variations", "qa_scenario_files",
-    "qa_example_secrets",
-    "qa_session_logs", "qa_session_requests", "qa_criterion_feedback",
-    "qa_perf_settings",
-    # mig 096 — QA handoff
-    "qa_acceptance_verdicts", "qa_requests", "qa_settings",
-]
-
-
-def _bootstrap_database() -> None:
-    """Drop+recreate the test DB and load the initdb-owned baseline.
-
-    The production runner applies and records every incremental migration after the
-    database module is imported below.  Keeping bootstrap limited to 001 makes the
-    test database follow the same ownership boundary as ``orcha up``.
-    """
-    import psycopg
-
-    with psycopg.connect(ADMIN_URL, autocommit=True) as conn:
-        conn.execute(f'DROP DATABASE IF EXISTS "{TEST_DB}" WITH (FORCE)')
-        conn.execute(f'CREATE DATABASE "{TEST_DB}"')
-    with psycopg.connect(TEST_URL) as conn:
-        conn.execute(SCHEMA_SQL.read_text())
-        conn.commit()
-
+os.environ["MIGRATIONS_DIR"] = str(MIGRATIONS_DIR / "sqlite")
 
 # Run once at collection, BEFORE importing main (which binds the database at import).
-if BACKEND == "postgres":
-    _bootstrap_database()
-    os.environ.pop("ORCHA_DB_PATH", None)
-    os.environ["DATABASE_URL"] = TEST_URL
-    TEST_DB_PATH = None
-else:
-    TEST_DB_PATH = str(pathlib.Path(tempfile.mkdtemp(prefix="orcha-test-")) / "orcha.db")
-    os.environ.pop("DATABASE_URL", None)
-    os.environ["ORCHA_DB_PATH"] = TEST_DB_PATH
-    os.environ.setdefault("ORCHA_DB_ASSERT_READONLY", "1")  # plan S3 note 5: on in tests
+TEST_DB_PATH = str(pathlib.Path(tempfile.mkdtemp(prefix="orcha-test-")) / "orcha.db")
+os.environ.pop("DATABASE_URL", None)
+os.environ["ORCHA_DB_PATH"] = TEST_DB_PATH
+os.environ.setdefault("ORCHA_DB_ASSERT_READONLY", "1")  # plan S3 note 5: on in tests
 sys.path.insert(0, str(PORTAL_DIR))
 # Also expose the CLI package so tests can `from orcha_cli import notifier` even when
 # collected standalone (orcha-cli isn't installed in every env — e.g. a targeted run).
 sys.path.insert(0, str(REPO / "orcha-cli"))
 from portal_backend import database, sql  # noqa: E402  (must follow the env + path setup above)
 
-# Use the real runner on both backends so the schema and its migration ledger cannot
-# drift apart. PostgreSQL records 001 as the existing initdb baseline, then applies 002+.
+# Use the real runner so the schema and its migration ledger cannot drift apart.
 database.run_migrations()
 import main  # noqa: E402
 
@@ -142,7 +67,7 @@ def _sqlite_app_tables() -> list:
             "AND name <> 'schema_migrations' ORDER BY name")]
 
 
-SQLITE_TABLES = _sqlite_app_tables() if BACKEND == "sqlite" else []
+SQLITE_TABLES = _sqlite_app_tables()
 
 # Plan PR 7b acceptance / risk R2: every scope held past the 250 ms threshold during the run,
 # listed in the terminal summary (the app's own log line is swallowed by output capture).
@@ -162,33 +87,16 @@ database.report_slow_transaction = _record_slow_transaction
 @pytest.fixture(autouse=True)
 def _clean_db():
     """Empty every app table before each test → each test starts empty."""
-    if BACKEND == "postgres":
-        import psycopg
-
-        # A background thread left over from the previous test, still finishing a
-        # read, can hold a share lock on one table while
-        # TRUNCATE holds another; Postgres then picks the TRUNCATE as the deadlock
-        # victim. The other side finishes on its own, so retry rather than error.
-        for attempt in range(5):
-            try:
-                with psycopg.connect(TEST_URL, autocommit=True) as conn:
-                    conn.execute("TRUNCATE " + ", ".join(APP_TABLES) + " RESTART IDENTITY CASCADE")
-                break
-            except psycopg.errors.DeadlockDetected:
-                if attempt == 4:
-                    raise
-                time.sleep(0.2)
-    else:
-        conn = sqlite3.connect(TEST_DB_PATH, isolation_level=None, timeout=10)
-        try:
-            conn.execute("PRAGMA foreign_keys=OFF")
-            conn.execute("BEGIN IMMEDIATE")
-            for table in SQLITE_TABLES:
-                conn.execute(f'DELETE FROM "{table}"')
-            conn.execute("DELETE FROM sqlite_sequence")  # RESTART IDENTITY
-            conn.execute("COMMIT")
-        finally:
-            conn.close()
+    conn = sqlite3.connect(TEST_DB_PATH, isolation_level=None, timeout=10)
+    try:
+        conn.execute("PRAGMA foreign_keys=OFF")
+        conn.execute("BEGIN IMMEDIATE")
+        for table in SQLITE_TABLES:
+            conn.execute(f'DELETE FROM "{table}"')
+        conn.execute("DELETE FROM sqlite_sequence")  # RESTART IDENTITY
+        conn.execute("COMMIT")
+    finally:
+        conn.close()
     yield
 
 
@@ -251,16 +159,6 @@ class Db:
     backend = BACKEND
 
     def execute(self, sql, params=()):
-        if BACKEND == "postgres":
-            import psycopg
-            from psycopg.rows import dict_row
-
-            with psycopg.connect(TEST_URL, row_factory=dict_row, autocommit=True) as conn:
-                cur = conn.execute(sql, params)
-                try:
-                    return cur.fetchall()
-                except psycopg.ProgrammingError:
-                    return []
         with database.db_cursor() as (_conn, cur):  # same adapters + %s translation as the app
             cur.execute(sql, params)
             return cur.fetchall() if cur.description else []
@@ -280,12 +178,6 @@ class Db:
         is_nullable, column_default) on either backend: PRAGMA table_info on SQLite, whose
         declared types (BOOLEAN, UUID, ...) lower-case to the Postgres names; boolean
         defaults 0/1 read back as 'false'/'true' like Postgres prints them."""
-        if BACKEND == "postgres":
-            return self.execute(
-                "SELECT column_name, data_type, is_nullable, column_default"
-                " FROM information_schema.columns WHERE table_name=%s ORDER BY ordinal_position",
-                (table,),
-            )
         out = []
         for r in self.execute(f"PRAGMA table_info({table})"):
             dtype = (r["type"] or "").lower()
@@ -304,10 +196,6 @@ class Db:
     @staticmethod
     def check_violation():
         """The exception a CHECK-constraint breach raises on this backend."""
-        if BACKEND == "postgres":
-            import psycopg
-
-            return psycopg.errors.CheckViolation
         import sqlite3
 
         return sqlite3.IntegrityError
@@ -349,19 +237,12 @@ def schema_migrations_hidden():
     finally:
         execute("DROP TABLE IF EXISTS schema_migrations")
         if existed:
-            if BACKEND == "postgres":
-                execute(
-                    "CREATE TABLE schema_migrations ("
-                    "version TEXT PRIMARY KEY, "
-                    "applied_at TIMESTAMPTZ NOT NULL DEFAULT now())"
-                )
-            else:
-                execute(
-                    "CREATE TABLE schema_migrations ("
-                    "version TEXT PRIMARY KEY NOT NULL, "
-                    "applied_at TIMESTAMPTZ NOT NULL DEFAULT "
-                    f"{sql.now_text_default()})"
-                )
+            execute(
+                "CREATE TABLE schema_migrations ("
+                "version TEXT PRIMARY KEY NOT NULL, "
+                "applied_at TIMESTAMPTZ NOT NULL DEFAULT "
+                f"{sql.now_text_default()})"
+            )
             for row in rows:
                 execute(
                     "INSERT INTO schema_migrations(version, applied_at) VALUES (%s, %s)",
@@ -526,8 +407,6 @@ def pytest_configure(config):
 
 
 def pytest_terminal_summary(terminalreporter):
-    if BACKEND != "sqlite":
-        return
     terminalreporter.write_line(
         f"[db] slow transactions (> {database.SLOW_TX_SECS * 1000:.0f} ms): {len(SLOW_TRANSACTIONS)}")
     for held, readonly, where, test in sorted(SLOW_TRANSACTIONS, reverse=True):

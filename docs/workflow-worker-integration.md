@@ -195,5 +195,5 @@ run with CodeCleanupAgent's real evidence guard.
 
 Run isolated SQLite tests with `MIGRATIONS_DIR` explicitly pointing at this
 checkout's `templates/migrations/sqlite`; a worker environment may otherwise point
-at installed migrations. PostgreSQL tests use a uniquely named disposable test
-database and also run `test_schema_parity.py`. No live project database is changed.
+at installed migrations. The suite runs on SQLite only (GH #377). No live project
+database is changed.

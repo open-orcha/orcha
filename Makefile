@@ -5,7 +5,7 @@ test-install:
 	pip install -r tests/requirements.txt -r orcha-cli/orcha_cli/templates/portal/requirements.txt
 
 # Run the API state-machine suite (Orcha#22).
-# Needs a Postgres reachable at ORCHA_TEST_ADMIN_URL (default localhost:5432, user/pass orcha).
+# Runs on a temp SQLite file; no Postgres or Docker needed (GH #377).
 test:
 	pytest -q
 

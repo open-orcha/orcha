@@ -9,7 +9,6 @@ The "container" tests reproduce the Docker reality: the run records HOST paths t
 exist here, the project is reachable only through ORCHA_LOCAL_REPO_DIR, and the
 worktree's `.git` file names its gitdir by that absolute HOST path.
 
-Run with ORCHA_TEST_DB_NAME=orcha_test_live_changes.
 """
 import subprocess
 

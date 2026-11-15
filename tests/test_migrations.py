@@ -13,11 +13,9 @@ import pytest
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent
                        / "orcha-cli" / "orcha_cli" / "templates" / "portal"))
 import main  # noqa: E402
-from conftest import BACKEND  # noqa: E402
 from portal_backend import database, sql  # noqa: E402
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
-INIT_SQL = REPO / "orcha-cli" / "orcha_cli" / "templates" / "migrations" / "001_init.sql"
 
 _PROBE_TABLES = ("r1_probe", "r1_after")
 
@@ -41,25 +39,7 @@ def _clean_runner_tables(isolated_schema_migrations):
         _sql(f"DROP TABLE IF EXISTS {t}")
 
 
-@pytest.mark.skipif(BACKEND != "postgres", reason="the Postgres 001_init baseline-recording path; "
-                    "the SQLite leg's 001 is its own baseline file")
-def test_baseline_records_001_without_rerun_then_applies_next(tmp_path):
-    # test DB already has the 001 schema (conftest) -> containers exists -> baseline path
-    (tmp_path / "001_init.sql").write_text(INIT_SQL.read_text())
-    (tmp_path / "002_probe.sql").write_text("CREATE TABLE r1_probe (id INT PRIMARY KEY);")
-    applied = main.run_migrations(tmp_path)
-    assert any(a == "baseline:001_init.sql" for a in applied)   # recorded, NOT re-run
-    assert "002_probe.sql" in applied
-    versions = {r[0] for r in _sql("SELECT version FROM schema_migrations")}
-    assert {"001_init.sql", "002_probe.sql"} <= versions
-    assert _exists("r1_probe")
-    # idempotent: a second run applies nothing
-    assert main.run_migrations(tmp_path) == []
-
-
 def test_failing_migration_halts_and_records_nothing(tmp_path):
-    if BACKEND == "postgres":  # (SQLite: the conftest schema came from its own baseline file)
-        (tmp_path / "001_init.sql").write_text(INIT_SQL.read_text())
     (tmp_path / "002_bad.sql").write_text("CREATE TABLE bad (;")     # invalid SQL
     (tmp_path / "003_after.sql").write_text("CREATE TABLE r1_after (id INT);")
     with pytest.raises(RuntimeError):

@@ -16,21 +16,13 @@ Covers, in order:
 """
 import itertools
 import json
-import pathlib
 from datetime import datetime, timezone
 
-import psycopg
 import pytest
 
-from conftest import TEST_URL
 from portal_backend import notification_prefs as np
 from portal_backend import notification_taxonomy as tax
 from portal_backend import push_outbox, slack_notify
-
-MIGRATION = (
-    pathlib.Path(__file__).resolve().parent.parent
-    / "orcha-cli" / "orcha_cli" / "templates" / "migrations" / "063_notification_prefs.sql"
-)
 
 OCTO = {"X-Auth-Request-User": "octocat"}
 HUBOT = {"X-Auth-Request-User": "hubot"}
@@ -79,18 +71,9 @@ def test_migration_creates_tables_and_is_idempotent(db):
         ("notification_pref_defaults", "identity_key"),
         ("notification_pref_defaults", "prefs"),
     } <= cols
-    # ADD-only + tolerant re-apply: running it again is a no-op, not an error
-    # (Postgres leg only: the SQLite leg starts from its 001 baseline, not migration files)
-    if db.backend == "postgres":
-        with psycopg.connect(TEST_URL, autocommit=True) as conn:
-            conn.execute(MIGRATION.read_text())
-        idx = db.execute(
-            "SELECT indexname AS name FROM pg_indexes WHERE tablename='notification_prefs'"
-        )
-    else:
-        idx = db.execute(
-            "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='notification_prefs'"
-        )
+    idx = db.execute(
+        "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='notification_prefs'"
+    )
     assert "notification_prefs_container_idx" in {r["name"] for r in idx}
 
 

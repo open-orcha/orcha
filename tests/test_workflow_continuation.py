@@ -356,7 +356,16 @@ async def test_reservation_does_not_allow_early_schedule_or_unbounded_automatic_
 async def test_concurrent_reservations_replay_one_permit(client):
     import asyncio
     from concurrent.futures import ThreadPoolExecutor
-    from test_evidence_review_races import post
+    from fastapi.testclient import TestClient
+    import main
+
+    def post(path, body):
+        http = TestClient(main.app, raise_server_exceptions=False)
+        try:
+            return http.post(path, json=body)
+        finally:
+            http.close()
+
     p, r = await setup(client)
     await finish(p, r)
     due(p)

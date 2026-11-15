@@ -7,17 +7,15 @@ existing handlers (agents, reporting lines, routines), DoD presets into the shar
 project_dod_presets store (mig 956), objective, audit row + event, idempotent re-apply,
 partial failures reported honestly, and Code projects left untouched.
 
-Run: ORCHA_TEST_DB_NAME=orcha_test_on_general_mode_templates pytest tests/test_general_mode_templates.py
+Run: pytest tests/test_general_mode_templates.py
 """
 import copy
 
 import contextlib
 
-import psycopg
 import pytest
 from fastapi import HTTPException
 
-import conftest
 from portal_backend import templates_catalog as cat
 from portal_backend import templates_routes
 
@@ -438,12 +436,7 @@ async def test_a_failing_item_is_reported_not_hidden(client, arena, db, monkeypa
 
 @contextlib.contextmanager
 def _hold_template_lock(cid):
-    """Hold the per-project apply lock from outside the request (GH #258: per backend)."""
-    if conftest.BACKEND == "postgres":
-        with psycopg.connect(conftest.TEST_URL, autocommit=True) as holder:
-            holder.execute("SELECT pg_advisory_lock(hashtext('orcha-template:' || %s))", (cid,))
-            yield
-        return
+    """Hold the per-project apply lock from outside the request."""
     from portal_backend import templates_routes
 
     templates_routes._APPLYING.add(cid)

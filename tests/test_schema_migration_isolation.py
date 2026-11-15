@@ -11,13 +11,6 @@ def _rows(statement):
 
 
 def _schema_signature():
-    if database.BACKEND == "postgres":
-        return _rows(
-            "SELECT column_name, data_type, is_nullable, column_default "
-            "FROM information_schema.columns "
-            "WHERE table_schema='public' AND table_name='schema_migrations' "
-            "ORDER BY ordinal_position"
-        )
     return _rows("PRAGMA table_info(schema_migrations)")
 
 
