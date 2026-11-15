@@ -20,6 +20,14 @@ class WorkerRunStart(BaseModel):
     task_id: Optional[str] = Field(
         default=None, description="the wake's auto-start task, if any"
     )
+    # GH #343: the protocol read can serve a task the run is not registered for (a general
+    # notification for an agent with several tasks, or a respawn's newest task). Linking the
+    # run to that task lets pausing it stop this worker.
+    protocol_task_id: Optional[str] = Field(
+        default=None,
+        description="the task whose instructions the worker's prompt carries, when it "
+        "differs from task_id",
+    )
     log_path: Optional[str] = Field(
         default=None, description="host path of the per-wake stream-json log (A1)"
     )

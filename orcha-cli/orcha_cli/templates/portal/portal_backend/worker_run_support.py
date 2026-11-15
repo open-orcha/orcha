@@ -53,6 +53,25 @@ def run_row(row: dict) -> dict:
     }
 
 
+# The task a protocol read serves an agent when the wake names none: its newest unpaused
+# in-progress task (GH #343). Run registration links a guessed run to the same task, so
+# the rule lives in one place. Prefix with the columns to select; the parameter is aid.
+PROTOCOL_FALLBACK_FROM = """FROM tasks t
+   JOIN agent_tasks at ON at.task_id = t.id
+   WHERE at.agent_id=%s AND at.assignment_status IN ('assigned','accepted','working')
+     AND t.status='in_progress' AND t.is_root = false
+     AND t.paused_at IS NULL
+   ORDER BY t.started_at DESC NULLS LAST, t.created_at DESC
+   LIMIT 1"""
+
+
+def protocol_fallback_task(cur, aid: str) -> Optional[str]:
+    """The task whose instructions a protocol read with no task hint serves this agent."""
+    cur.execute("SELECT t.id " + PROTOCOL_FALLBACK_FROM, (aid,))
+    row = cur.fetchone()
+    return str(row["id"]) if row else None
+
+
 def infer_agent_active_task(cur, aid: str) -> Optional[str]:
     """Return an agent's sole active non-root task, if it is unambiguous.
 

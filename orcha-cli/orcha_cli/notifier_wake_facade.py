@@ -159,6 +159,7 @@ def _build_persona(
     lane: str = "work",
     self_wake: Optional[dict] = None,
     return_resume_rendered: bool = False,
+    protocol_sink: Optional[dict] = None,
 ):
     return _persona_cache.build_persona(
         api_base,
@@ -169,6 +170,7 @@ def _build_persona(
         self_wake=self_wake,
         return_resume_rendered=return_resume_rendered,
         services=_compat(),
+        protocol_sink=protocol_sink,
     )
 
 

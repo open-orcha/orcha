@@ -49,12 +49,18 @@ def pause_state(row) -> dict | None:
 
 
 def _stop_running_work(cur, task_id, actor_id) -> list[str]:
-    """Ask every live work run on this task to stop (the Stop button's path)."""
+    """Ask every live work run on this task to stop (the Stop button's path).
+
+    A run counts when the task is its main task or any task linked to it: one it
+    accepted later in the same session, or the one whose instructions its prompt carries.
+    """
     cur.execute(
         """SELECT run_id FROM worker_runs
-           WHERE task_id=%s AND status='running' AND lane='work'
+           WHERE (task_id=%s OR run_id IN (
+                     SELECT run_id FROM worker_run_tasks WHERE task_id=%s))
+             AND status='running' AND lane='work'
              AND stop_requested_at IS NULL""",
-        (str(task_id),),
+        (str(task_id), str(task_id)),
     )
     run_ids = [str(r["run_id"]) for r in cur.fetchall()]
     for run_id in run_ids:

@@ -77,7 +77,10 @@ def checkpoint_and_respawn(
         worker["respawns"] = services.HARD_CAP_RESPAWN_MAX
         return
     new_token = services._mint_embodiment_token(api_base, agent_id, "work", "headless")
-    persona = services._build_persona(api_base, agent_id, force_fresh=True)
+    protocol_sink: dict = {}
+    persona = services._build_persona(
+        api_base, agent_id, force_fresh=True, protocol_sink=protocol_sink
+    )
     from .job_guidance import startup_guidance
     persona = (persona or '') + startup_guidance(base_cwd, task_id)
     log_path = _next_log_path(base_cwd, context, services)
@@ -124,6 +127,9 @@ def checkpoint_and_respawn(
         "lane": worker.get("lane", "work"),
         "token_id": new_token,
     }
+    if "task_id" in protocol_sink:
+        # GH #343: the task whose instructions the prompt carries, so pausing it stops us.
+        _run_payload["protocol_task_id"] = protocol_sink["task_id"]
     # Remote-runner §3.3c: a sandbox wake stamps its container name on the run row (and its
     # wake_kind) so a restarted daemon re-adopts the live container by label instead of
     # orphaning it, and metering can attribute container runtime to the run.

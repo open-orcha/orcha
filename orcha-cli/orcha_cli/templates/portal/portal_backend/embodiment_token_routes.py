@@ -4,6 +4,7 @@ import secrets
 
 from fastapi import HTTPException, Request
 
+from portal_backend import sql
 from portal_backend.application import app
 from portal_backend.database import db_cursor
 from portal_backend.guards import require_agent, valid_uuid
@@ -58,6 +59,11 @@ def attribute_token_run_to_task(cur, aid, token, task_id) -> bool:
     """Pin a live run when empty and record its many-to-many task membership."""
     if not token or not task_id:
         return False
+    # GH #343: lock the task so a concurrent pause either sees this link or is seen here.
+    cur.execute(
+        "SELECT paused_at, paused_by FROM tasks WHERE id=%s" + sql.for_update(), (task_id,)
+    )
+    task = cur.fetchone()
     # Acceptance can commit before the notifier registers the worker. Save the
     # task's dispatch boundary now: registration (or another accept) may never
     # happen, and the next successful wake claim replaces the lane's clock.
@@ -108,4 +114,14 @@ def attribute_token_run_to_task(cur, aid, token, task_id) -> bool:
            ON CONFLICT DO NOTHING""",
         (task_id, token, aid, task_id),
     )
+    if task and task["paused_at"] is not None:
+        # A person paused this task: the run that just took it on stops like any other.
+        cur.execute(
+            """UPDATE worker_runs SET stop_requested_at=now(), stop_requested_by=%s
+                WHERE run_id IN (SELECT et.run_id FROM embodiment_tokens et
+                                  WHERE et.run_token=%s AND et.agent_id=%s AND et.lane='work'
+                                    AND et.revoked_at IS NULL AND et.run_id IS NOT NULL)
+                  AND status='running' AND stop_requested_at IS NULL""",
+            (str(task["paused_by"]) if task["paused_by"] else None, token, aid),
+        )
     return pinned

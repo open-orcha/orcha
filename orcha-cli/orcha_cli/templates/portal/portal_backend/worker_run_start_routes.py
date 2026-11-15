@@ -11,6 +11,7 @@ from portal_backend.database import db_cursor
 from portal_backend import stream_signal, sql
 from portal_backend.events import publish_event
 from portal_backend.guards import (
+    agent_participates_in_task,
     require_agent,
     require_container,
     require_task,
@@ -21,6 +22,7 @@ from portal_backend.schemas.worker_runs import WorkerRunStart
 from portal_backend.worker_run_support import (
     infer_agent_active_task,
     is_non_task_work,
+    protocol_fallback_task,
     run_row,
 )
 
@@ -30,28 +32,47 @@ from portal_backend.worker_run_support import (
 _PAUSE_RACE_MARGIN = timedelta(seconds=5)
 
 
-def _pause_blocking_run(cur, aid, task_id, *, guessed):
+def _served_task(cur, container_id, aid, body, task_id, guessed):
+    """GH #343: another task whose instructions this worker's prompt carries, or None.
+
+    The notifier reports the task its protocol read served (``protocol_task_id``, null
+    when it served none). A caller that does not report it gets the protocol's own
+    fallback rule for a guessed run: the agent's newest unpaused in-progress task.
+    """
+    if "protocol_task_id" in body.model_fields_set:
+        served = body.protocol_task_id
+    else:
+        served = protocol_fallback_task(cur, aid) if guessed else None
+    if not served or served == task_id:
+        return None
+    if not agent_participates_in_task(cur, container_id, aid, served):
+        return None
+    return served
+
+
+def _pause_blocking_run(cur, aid, task_ids, *, check_recent):
     """GH #343: the pause row that must stop this new work run, or None.
 
     The worker is already spawned, so a person may have paused its task after the wake
-    scan. The resolved task, named or inferred, is locked so this read and
-    ``pause_task``'s update-then-stop serialize: either the pause sees this run, or this
-    run sees the pause. A guessed (notification) run can carry a different task's
-    instructions than the one inferred for it: the protocol read after the wake claim
-    falls back to the agent's newest in-progress task. If any of those was paused since
-    the claim, the prompt may hold its instructions, so this run is stopped too. A task
-    paused earlier was already skipped by that read, and the run goes on with its inbox
-    work.
+    scan. Each task the run is tied to (named, inferred, or the one its prompt carries) is
+    locked, so this read and ``pause_task``'s update-then-stop serialize: either the pause
+    sees this run, or this run sees the pause.
+
+    ``check_recent`` covers a caller that did not report which task the protocol served:
+    the protocol read after the wake claim may have served a task that was paused since,
+    which the fallback rule now skips. If any of the agent's in-progress tasks was paused
+    since the claim, this run is stopped too. A task paused earlier was already skipped by
+    that read, and the run goes on with its inbox work.
     """
-    if task_id is not None:
+    for tid in sorted({str(t) for t in task_ids if t}):
         cur.execute(
             "SELECT paused_at, paused_by FROM tasks WHERE id=%s" + sql.for_update(),
-            (task_id,),
+            (tid,),
         )
         row = cur.fetchone()
         if row and row["paused_at"] is not None:
             return row
-    if not guessed:
+    if not check_recent:
         return None
     cur.execute(
         "SELECT work_dispatch_started_at FROM agent_wake_state WHERE agent_id=%s", (aid,)
@@ -83,6 +104,8 @@ def start_worker_run(aid: str, body: WorkerRunStart, request: Request):
         raise HTTPException(400, "agent_id is not a valid UUID")
     if body.task_id is not None and not valid_uuid(body.task_id):
         raise HTTPException(400, "task_id is not a valid UUID")
+    if body.protocol_task_id is not None and not valid_uuid(body.protocol_task_id):
+        raise HTTPException(400, "protocol_task_id is not a valid UUID")
     if body.conversation_id is not None and not valid_uuid(body.conversation_id):
         raise HTTPException(400, "conversation_id is not a valid UUID")
     with db_cursor() as (conn, cur):
@@ -113,9 +136,14 @@ def start_worker_run(aid: str, body: WorkerRunStart, request: Request):
                 )
             if str(conversation["agent_id"]) != aid:
                 raise HTTPException(403, "conversation_id belongs to a different agent")
+        served = None
         paused = None
         if body.lane == "work":
-            paused = _pause_blocking_run(cur, aid, task_id, guessed=guessed)
+            served = _served_task(cur, str(agent["container_id"]), aid, body, task_id, guessed)
+            paused = _pause_blocking_run(
+                cur, aid, [task_id, served],
+                check_recent=guessed and "protocol_task_id" not in body.model_fields_set,
+            )
         cur.execute(
             """INSERT INTO worker_runs
                     (agent_id, task_id, wake_kind, wake_event, log_path, pid, runtime,
@@ -142,6 +170,13 @@ def start_worker_run(aid: str, body: WorkerRunStart, request: Request):
             ),
         )
         row = cur.fetchone()
+        if served:
+            # The run feed and a later pause both find the run through this link.
+            cur.execute(
+                "INSERT INTO worker_run_tasks (run_id, task_id) VALUES (%s, %s) "
+                "ON CONFLICT DO NOTHING",
+                (row["run_id"], served),
+            )
         if paused:
             # Same path as the Stop button: lease renewal tells the worker to save and exit.
             cur.execute(

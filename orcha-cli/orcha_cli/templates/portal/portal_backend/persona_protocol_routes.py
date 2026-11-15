@@ -12,6 +12,7 @@ from portal_backend.guards import (
     valid_uuid,
 )
 from portal_backend.identity_routes import require_member_read
+from portal_backend.worker_run_support import PROTOCOL_FALLBACK_FROM
 
 
 def _fallback_model(model: str | None) -> str:
@@ -132,13 +133,7 @@ def get_agent_protocol(aid: str, request: Request, task_id: str | None = None):
             cur.execute(
                 """SELECT t.id, t.title, t.description, t.definition_of_done, t.protocol,
                           t.created_by_agent_id, t.workflow_id, t.container_id, t.qa_step
-                   FROM tasks t
-                   JOIN agent_tasks at ON at.task_id = t.id
-                   WHERE at.agent_id=%s AND at.assignment_status IN ('assigned','accepted','working')
-                     AND t.status='in_progress' AND t.is_root = false
-                     AND t.paused_at IS NULL
-                   ORDER BY t.started_at DESC NULLS LAST, t.created_at DESC
-                   LIMIT 1""",
+                   """ + PROTOCOL_FALLBACK_FROM,
                 (aid,),
             )
             row = cur.fetchone()

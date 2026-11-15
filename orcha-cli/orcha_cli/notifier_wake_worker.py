@@ -267,6 +267,7 @@ def spawn(
                                                log=getattr(services, "_lifecycle_log", None))
             return None
     resume_rendered = False
+    protocol_sink: dict = {}
     if dry_run:
         persona = None
     else:
@@ -279,6 +280,7 @@ def spawn(
                 "task_id": candidate.get("self_wake_task_id"),
             },
             return_resume_rendered=True,
+            protocol_sink=protocol_sink,
         )
         if isinstance(persona_result, tuple):
             persona, resume_rendered = persona_result
@@ -382,6 +384,9 @@ def spawn(
             "lane": lane,
             "token_id": token,
         }
+        if "task_id" in protocol_sink:
+            # GH #343: the task whose instructions the prompt carries, so pausing it stops us.
+            _run_payload["protocol_task_id"] = protocol_sink["task_id"]
         # Remote-runner §3.3c: a sandbox wake stamps its container name (and wake_kind)
         # so re-adoption by label + container-runtime metering work off the run row.
         if _spawn_info.get("sandbox_container_id"):
