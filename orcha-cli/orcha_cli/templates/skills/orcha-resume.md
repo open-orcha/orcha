@@ -18,3 +18,6 @@ You are executing `/orcha-resume` (human-only — API enforces kind='human').
      -d '{"status": "active", "actor_agent_id": "<my human agent_id>"}'
    ```
 5. Report: `container <short-id> resumed (was <prev>) by <human alias>.`
+
+> To resume **one paused task** (GH #343), run `orcha resume --task <task_id>` (or `POST /api/tasks/<task_id>/resume`
+> with `{"actor_agent_id": "<my human agent_id>"}`). Its assigned agent is woken to pick it back up.

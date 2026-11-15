@@ -111,6 +111,10 @@ def _task_list_sql(where: str, order: str) -> str:
                       t.is_root, t.created_by_agent_id, t.result,
                       t.autonomy, t.autonomy_revision, t.autonomy_changed_at,
                       t.autonomy_changed_by, t.workflow_id, t.work_revision,
+                      -- GH #343: a person's pause (status unchanged). NULL paused_at = not
+                      -- paused; the badge shows who paused it, when, and why.
+                      t.paused_at, t.paused_reason, t.paused_via_workflow,
+                      (SELECT pa.alias FROM agents pa WHERE pa.id = t.paused_by) AS paused_by_alias,
                       -- GH #350 §4.14: hidden membership is presentation-only. Task views drop
                       -- the workflow chip / crumb / section when this is true; the task itself,
                       -- its status, messages, result and evidence are untouched.

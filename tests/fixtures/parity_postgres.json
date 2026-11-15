@@ -521,6 +521,12 @@
         ],
         "$.tasks[*].message_summary.last.is_human": [
           true
+        ],
+        "$.tasks[*].paused_via_workflow": [
+          false,
+          false,
+          false,
+          false
         ]
       },
       "datetime_formats": {
@@ -724,6 +730,10 @@
                 ]
               }
             },
+            "paused_at": "null",
+            "paused_by_alias": "null",
+            "paused_reason": "null",
+            "paused_via_workflow": "bool",
             "plan_decision": "null",
             "plan_message": {
               "anyOf": [
@@ -1074,6 +1084,12 @@
         ],
         "$.tasks[*].message_summary.last.is_human": [
           true
+        ],
+        "$.tasks[*].paused_via_workflow": [
+          false,
+          false,
+          false,
+          false
         ]
       },
       "datetime_formats": {
@@ -1129,6 +1145,10 @@
                 ]
               }
             },
+            "paused_at": "null",
+            "paused_by_alias": "null",
+            "paused_reason": "null",
+            "paused_via_workflow": "bool",
             "plan_decision": "null",
             "plan_message": {
               "anyOf": [
@@ -1541,6 +1561,12 @@
         ],
         "$.tasks[*].message_summary.last.is_human": [
           true
+        ],
+        "$.tasks[*].paused_via_workflow": [
+          false,
+          false,
+          false,
+          false
         ]
       },
       "datetime_formats": {
@@ -1744,6 +1770,10 @@
                 ]
               }
             },
+            "paused_at": "null",
+            "paused_by_alias": "null",
+            "paused_reason": "null",
+            "paused_via_workflow": "bool",
             "plan_decision": "null",
             "plan_message": {
               "anyOf": [

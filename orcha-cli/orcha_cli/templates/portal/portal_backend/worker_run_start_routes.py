@@ -1,5 +1,6 @@
 """Start worker runs and expose live-run reconciliation views."""
 
+from datetime import timedelta
 from typing import Optional
 
 from fastapi import HTTPException, Request
@@ -10,6 +11,7 @@ from portal_backend.database import db_cursor
 from portal_backend import stream_signal, sql
 from portal_backend.events import publish_event
 from portal_backend.guards import (
+    agent_participates_in_task,
     require_agent,
     require_container,
     require_task,
@@ -20,8 +22,138 @@ from portal_backend.schemas.worker_runs import WorkerRunStart
 from portal_backend.worker_run_support import (
     infer_agent_active_task,
     is_non_task_work,
+    protocol_fallback_task,
     run_row,
 )
+
+
+# A pause this close before the wake claim may still have been missed by the protocol
+# read that follows the claim (the pause commits a moment after it stamps paused_at).
+_PAUSE_RACE_MARGIN = timedelta(seconds=5)
+
+
+def _served_task(cur, container_id, aid, body, task_id, guessed):
+    """GH #343: another task whose instructions this worker's prompt carries, or None.
+
+    The notifier reports the task its protocol read served (``protocol_task_id``, null
+    when it served none). A caller that does not report it gets the protocol's own
+    fallback rule for a guessed run: the agent's newest unpaused in-progress task.
+    """
+    if "protocol_task_id" in body.model_fields_set:
+        served = body.protocol_task_id
+    else:
+        served = protocol_fallback_task(cur, aid) if guessed else None
+    if not served or served == task_id:
+        return None
+    if not agent_participates_in_task(cur, container_id, aid, served):
+        return None
+    return served
+
+
+def _tasks_on_token(cur, aid, body) -> list[str]:
+    """Tasks waiting on this worker's still-unbound token (``embodiment_token_tasks``)."""
+    cur.execute(
+        """SELECT ett.task_id FROM embodiment_token_tasks ett
+           JOIN embodiment_tokens et ON et.run_token = ett.run_token
+           WHERE ett.run_token=%s AND et.agent_id=%s AND et.lane=%s
+             AND et.revoked_at IS NULL AND et.run_id IS NULL""",
+        (body.token_id, aid, body.lane),
+    )
+    return sorted(str(r["task_id"]) for r in cur.fetchall())
+
+
+def _lock_for_registration(cur, aid, body, task_ids, *, check_recent):
+    """GH #343: lock this run's tasks, then its token; return (pause row or None, taken).
+
+    ``taken`` lists tasks the worker accepted or claimed with its token before
+    registering: the notifier starts the worker first, so it may already have taken on
+    tasks its prompt never named. Those wait on the token (``embodiment_token_tasks``).
+
+    Task rows are locked before the token row, the order acceptance, claims and run
+    shutdown use. A task taken on between the first read and the token lock is not locked
+    yet, so the locks taken since the savepoint are released and the pass starts over with
+    it. A task is never locked while the token is held: an acceptance of that task may hold
+    it and be waiting for the token, which would deadlock on PostgreSQL. Once the token is
+    locked, a task taken on concurrently waits for this registration and then finds the run
+    bound, so it links to it directly.
+
+    The passes end: each new one needs a task taken on with this token that no earlier pass
+    saw, the set only grows while the token is unbound, and only this one worker holds it.
+    """
+    task_ids = [t for t in task_ids if t]
+    if body.lane != "work":
+        return None, []
+    if not body.token_id:
+        return _pause_blocking_run(cur, aid, task_ids, check_recent=check_recent), []
+    while True:
+        cur.execute("SAVEPOINT gh343_registration_lock")
+        taken = _tasks_on_token(cur, aid, body)
+        paused = _pause_blocking_run(cur, aid, [*task_ids, *taken], check_recent=check_recent)
+        cur.execute(
+            """SELECT run_token FROM embodiment_tokens
+                WHERE run_token=%s AND agent_id=%s AND lane=%s
+                  AND revoked_at IS NULL AND run_id IS NULL"""
+            + sql.for_update(),
+            (body.token_id, aid, body.lane),
+        )
+        if not cur.fetchone():
+            cur.execute("RELEASE SAVEPOINT gh343_registration_lock")
+            return paused, []
+        current = _tasks_on_token(cur, aid, body)
+        if not set(current) - {str(t) for t in task_ids} - set(taken):
+            cur.execute("RELEASE SAVEPOINT gh343_registration_lock")
+            return paused, current
+        # ROLLBACK TO frees this pass's task and token locks (RELEASE alone keeps them).
+        cur.execute("ROLLBACK TO SAVEPOINT gh343_registration_lock")
+        cur.execute("RELEASE SAVEPOINT gh343_registration_lock")
+
+
+def _pause_blocking_run(cur, aid, task_ids, *, check_recent):
+    """GH #343: the pause row that must stop this new work run, or None.
+
+    The worker is already spawned, so a person may have paused its task after the wake
+    scan. Each task the run is tied to (named, inferred, the one its prompt carries, or
+    one it took on before registering) is locked, so this read and ``pause_task``'s
+    update-then-stop serialize: either the pause sees this run, or this run sees the pause.
+
+    ``check_recent`` covers a caller that did not report which task the protocol served:
+    the protocol read after the wake claim may have served a task that was paused since,
+    which the fallback rule now skips. If any of the agent's in-progress tasks was paused
+    since the claim, this run is stopped too. A task paused earlier was already skipped by
+    that read, and the run goes on with its inbox work.
+    """
+    paused = None
+    for tid in sorted({str(t) for t in task_ids if t}):
+        # Every task is locked, not only up to the first paused one: the run is linked to
+        # each of them after its token is locked, and must not wait on them then.
+        cur.execute(
+            "SELECT paused_at, paused_by FROM tasks WHERE id=%s" + sql.for_update(),
+            (tid,),
+        )
+        row = cur.fetchone()
+        if paused is None and row and row["paused_at"] is not None:
+            paused = row
+    if paused is not None or not check_recent:
+        return paused
+    cur.execute(
+        "SELECT work_dispatch_started_at FROM agent_wake_state WHERE agent_id=%s", (aid,)
+    )
+    lane = cur.fetchone()
+    claimed_at = lane["work_dispatch_started_at"] if lane else None
+    since = (claimed_at or sql.utcnow()) - _PAUSE_RACE_MARGIN
+    cur.execute(
+        """SELECT t.paused_at, t.paused_by
+           FROM tasks t
+           JOIN agent_tasks at ON at.task_id = t.id
+           WHERE at.agent_id=%s AND at.assignment_status IN ('assigned','accepted','working')
+             AND t.status='in_progress' AND t.is_root = false
+             AND t.paused_at IS NOT NULL""",
+        (aid,),
+    )
+    for row in cur.fetchall():
+        if row["paused_at"] >= since:
+            return row
+    return None
 
 
 @app.post("/api/agents/{aid}/runs", status_code=201)
@@ -33,6 +165,8 @@ def start_worker_run(aid: str, body: WorkerRunStart, request: Request):
         raise HTTPException(400, "agent_id is not a valid UUID")
     if body.task_id is not None and not valid_uuid(body.task_id):
         raise HTTPException(400, "task_id is not a valid UUID")
+    if body.protocol_task_id is not None and not valid_uuid(body.protocol_task_id):
+        raise HTTPException(400, "protocol_task_id is not a valid UUID")
     if body.conversation_id is not None and not valid_uuid(body.conversation_id):
         raise HTTPException(400, "conversation_id is not a valid UUID")
     with db_cursor() as (conn, cur):
@@ -40,11 +174,13 @@ def start_worker_run(aid: str, body: WorkerRunStart, request: Request):
         require_machine_lane_member(cur, request, str(agent["container_id"]))  # PS-07
         task_id = body.task_id
         lazy_attributed = False
+        guessed = False
         if task_id is not None:
             require_task(cur, task_id)
         elif not is_non_task_work(
             body.wake_kind, body.wake_event, body.conversation_id
         ):
+            guessed = True
             task_id = infer_agent_active_task(cur, aid)
             lazy_attributed = task_id is not None
         from portal_backend.workflow_worker_auth import refuse_legacy_workflow_run
@@ -61,6 +197,13 @@ def start_worker_run(aid: str, body: WorkerRunStart, request: Request):
                 )
             if str(conversation["agent_id"]) != aid:
                 raise HTTPException(403, "conversation_id belongs to a different agent")
+        served = None
+        if body.lane == "work":
+            served = _served_task(cur, str(agent["container_id"]), aid, body, task_id, guessed)
+        paused, taken = _lock_for_registration(
+            cur, aid, body, [task_id, served],
+            check_recent=guessed and "protocol_task_id" not in body.model_fields_set,
+        )
         cur.execute(
             """INSERT INTO worker_runs
                     (agent_id, task_id, wake_kind, wake_event, log_path, pid, runtime,
@@ -87,6 +230,34 @@ def start_worker_run(aid: str, body: WorkerRunStart, request: Request):
             ),
         )
         row = cur.fetchone()
+        if served:
+            # The run feed and a later pause both find the run through this link.
+            cur.execute(
+                "INSERT INTO worker_run_tasks (run_id, task_id) VALUES (%s, %s) "
+                "ON CONFLICT DO NOTHING",
+                (row["run_id"], served),
+            )
+        for taken_id in taken:
+            # Same link acceptance makes once the run exists (attribute_token_run_to_task).
+            cur.execute(
+                """INSERT INTO worker_run_tasks (run_id, task_id)
+                   SELECT %s, id FROM tasks WHERE id=%s AND status='in_progress'
+                   ON CONFLICT DO NOTHING""",
+                (row["run_id"], taken_id),
+            )
+        if taken:
+            cur.execute(
+                "DELETE FROM embodiment_token_tasks WHERE run_token=%s", (body.token_id,)
+            )
+        if paused:
+            # Same path as the Stop button: lease renewal tells the worker to save and exit.
+            cur.execute(
+                "UPDATE worker_runs SET stop_requested_at=now(), stop_requested_by=%s "
+                "WHERE run_id=%s",
+                (str(paused["paused_by"]) if paused["paused_by"] else None, row["run_id"]),
+            )
+            cur.execute("SELECT * FROM worker_runs WHERE run_id=%s", (row["run_id"],))
+            row = cur.fetchone()
         # Bind the lane under the same graph lock used by claims and retirement.
         column = "conv_run_id" if body.lane == "conversation" else "work_run_id"
         cur.execute("SELECT agent_id FROM agent_wake_state WHERE agent_id=%s" + sql.for_update(), (aid,))

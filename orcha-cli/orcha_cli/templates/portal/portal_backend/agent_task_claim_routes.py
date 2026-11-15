@@ -9,6 +9,7 @@ from portal_backend.application import app
 from portal_backend import sql
 from portal_backend.budget_routes import agent_budget_block
 from portal_backend.database import db_cursor
+from portal_backend.embodiment_token_routes import link_claimed_task
 from portal_backend.event_acknowledgement import _ack_events_handled
 from portal_backend.guards import reject_if_retired as _reject_if_retired
 from portal_backend.guards import require_agent as _require_agent
@@ -56,7 +57,8 @@ def agent_next(
         # LOCKED) sends a concurrent claimer on to the next ready task instead of the same one.
         # `status='ready'` is re-checked on the outer row as a belt-and-braces guard.
         # A workflow's step takes its turn from the workflow's scheduler, never from this claim:
-        # taken here it shows Running with no worker and the turn is lost.
+        # taken here it shows Running with no worker and the turn is lost. A task a person
+        # paused (GH #343) is skipped, so the agent goes on to its next ready task.
         cur.execute(
             f"""UPDATE tasks SET status='in_progress', started_at = COALESCE(started_at, now())
                 WHERE status='ready' AND id = (
@@ -64,7 +66,7 @@ def agent_next(
                   JOIN agent_tasks at ON at.task_id = t.id AND at.agent_id = %s
                    AND at.assignment_status IN ('assigned','accepted','working')
                   WHERE t.container_id=%s AND t.status='ready' AND t.is_root = false
-                    AND t.workflow_id IS NULL
+                    AND t.workflow_id IS NULL AND t.paused_at IS NULL
                   ORDER BY t.priority, t.created_at
                   LIMIT 1{sql.for_update(skip_locked=True)})
                 RETURNING id, title, description, definition_of_done, priority, protocol,
@@ -82,6 +84,8 @@ def agent_next(
                ON CONFLICT (agent_id, task_id) DO UPDATE SET assignment_status='working'""",
             (aid, tid),
         )
+        # GH #343: tie the claimed task to this worker, so pausing it stops the worker.
+        link_claimed_task(cur, aid, x_orcha_run_token, tid)
         _ack_events_handled(cur, aid, "task_assigned", "task_id", tid)
         _ack_events_handled(cur, aid, "task_ready", "task_id", tid)
         bump_agent(cur, aid)

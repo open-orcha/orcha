@@ -4,6 +4,7 @@ import secrets
 
 from fastapi import HTTPException, Request
 
+from portal_backend import sql
 from portal_backend.application import app
 from portal_backend.database import db_cursor
 from portal_backend.guards import require_agent, valid_uuid
@@ -54,10 +55,106 @@ def revoke_embodiment_token(token: str):
     return {"revoked": bool(revoked)}
 
 
+_LIVE_TOKEN = """SELECT run_token, run_id FROM embodiment_tokens
+                   WHERE run_token=%s AND agent_id=%s AND lane='work' AND revoked_at IS NULL"""
+
+
+def _lock_live_token(cur, aid, token):
+    """Lock the worker's live token row after its run's row, the order shutdown uses.
+
+    Ending a run locks the task and the run (``workflow_evidence_service._lock_context``)
+    and then revokes the token, so the run row is locked here before the token row. The
+    run comes from an unlocked read; if registration bound the token in between, the
+    locks taken since the savepoint are released and taken again, run first. Binding
+    happens once, so the second pass finds the same run.
+    """
+    for attempt in range(3):
+        cur.execute("SAVEPOINT gh343_token_lock")
+        cur.execute(_LIVE_TOKEN, (token, aid))
+        seen = cur.fetchone()
+        run_id = seen["run_id"] if seen else None
+        if run_id:
+            cur.execute(
+                "SELECT run_id FROM worker_runs WHERE run_id=%s" + sql.for_update(), (run_id,)
+            )
+            cur.fetchone()
+        cur.execute(_LIVE_TOKEN + sql.for_update(), (token, aid))
+        tok = cur.fetchone()
+        if tok is None or (seen is not None and tok["run_id"] == run_id) or attempt == 2:
+            cur.execute("RELEASE SAVEPOINT gh343_token_lock")
+            return tok
+        cur.execute("ROLLBACK TO SAVEPOINT gh343_token_lock")
+        cur.execute("RELEASE SAVEPOINT gh343_token_lock")
+    return None
+
+
+def lock_task_and_token(cur, aid, token, task_id):
+    """GH #343: lock the task row, then the worker's run and token rows; return token and task.
+
+    Shutdown, run registration and a pause take the same order (task, then run, then
+    token; a pause takes only the task), so a worker taking on a task, its registration, a
+    pause of that task and the worker ending all serialize without waiting on each other
+    in a circle. A token with no run yet keeps the task (``embodiment_token_tasks``) until
+    registration links it to the run.
+    """
+    cur.execute(
+        "SELECT paused_at, paused_by FROM tasks WHERE id=%s" + sql.for_update(), (task_id,)
+    )
+    task = cur.fetchone()
+    tok = _lock_live_token(cur, aid, token)
+    if tok and task and tok["run_id"] is None:
+        cur.execute(
+            "INSERT INTO embodiment_token_tasks (run_token, task_id) VALUES (%s, %s) "
+            "ON CONFLICT DO NOTHING",
+            (token, task_id),
+        )
+    return tok, task
+
+
+def _stop_token_run_if_paused(cur, aid, token, task) -> None:
+    """A person paused this task: the run that just took it on stops like any other."""
+    if not task or task["paused_at"] is None:
+        return
+    cur.execute(
+        """UPDATE worker_runs SET stop_requested_at=now(), stop_requested_by=%s
+            WHERE run_id IN (SELECT et.run_id FROM embodiment_tokens et
+                              WHERE et.run_token=%s AND et.agent_id=%s AND et.lane='work'
+                                AND et.revoked_at IS NULL AND et.run_id IS NOT NULL)
+              AND status='running' AND stop_requested_at IS NULL""",
+        (str(task["paused_by"]) if task["paused_by"] else None, token, aid),
+    )
+
+
+def link_claimed_task(cur, aid, token, task_id) -> None:
+    """GH #343: tie a task the worker just claimed to its run, so pausing the task stops it.
+
+    Before registration the task waits on the token; after it the run gets a
+    ``worker_run_tasks`` link. The run's main task is left as it is.
+    """
+    if not token or not task_id:
+        return
+    tok, task = lock_task_and_token(cur, aid, token, task_id)
+    if not tok or not task or tok["run_id"] is None:
+        return
+    cur.execute(
+        """INSERT INTO worker_run_tasks (run_id, task_id)
+           SELECT run_id, %s FROM worker_runs
+            WHERE run_id=%s AND agent_id=%s AND status='running'
+           ON CONFLICT DO NOTHING""",
+        (task_id, tok["run_id"], aid),
+    )
+    _stop_token_run_if_paused(cur, aid, token, task)
+
+
 def attribute_token_run_to_task(cur, aid, token, task_id) -> bool:
     """Pin a live run when empty and record its many-to-many task membership."""
     if not token or not task_id:
         return False
+    tok, task = lock_task_and_token(cur, aid, token, task_id)
+    if tok is None:
+        return False
+    if tok["run_id"] is not None:
+        return _attribute_bound_run(cur, aid, token, task_id, task)
     # Acceptance can commit before the notifier registers the worker. Save the
     # task's dispatch boundary now: registration (or another accept) may never
     # happen, and the next successful wake claim replaces the lane's clock.
@@ -73,6 +170,11 @@ def attribute_token_run_to_task(cur, aid, token, task_id) -> bool:
            ON CONFLICT DO NOTHING""",
         (task_id, token, aid),
     )
+    return False
+
+
+def _attribute_bound_run(cur, aid, token, task_id, task) -> bool:
+    """The token's run is registered (and locked): pin it when empty and link the task."""
     cur.execute(
         # No UPDATE ... FROM: SQLite's RETURNING can't name the alias, and Postgres would find
         # a bare run_id ambiguous with the joined token row.
@@ -108,4 +210,5 @@ def attribute_token_run_to_task(cur, aid, token, task_id) -> bool:
            ON CONFLICT DO NOTHING""",
         (task_id, token, aid, task_id),
     )
+    _stop_token_run_if_paused(cur, aid, token, task)
     return pinned

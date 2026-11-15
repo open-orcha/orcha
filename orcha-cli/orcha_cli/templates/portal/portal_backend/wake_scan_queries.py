@@ -119,13 +119,14 @@ def newest_answer_task_id(cur, aid: str, delivered_ts):
 
 
 def ready_task_ids(cur, aid: str, cid: str):
-    """Return assigned ready tasks in claim order."""
+    """Return assigned ready tasks in claim order. A task a person paused is never one."""
     cur.execute(
         """SELECT t.id FROM tasks t
            JOIN agent_tasks at ON at.task_id = t.id AND at.agent_id = %s
            WHERE t.container_id = %s AND t.status = 'ready'
              AND at.assignment_status <> 'done'
              AND t.is_root = false
+             AND t.paused_at IS NULL
            ORDER BY t.priority, t.created_at""",
         (aid, cid),
     )
@@ -141,6 +142,10 @@ class WorkflowParking:
     whose stopped worker can continue its live turn is not parked: the continue route
     re-checks every gate. Uses the same eligibility the reserve route checks, so nothing
     the reserve would admit is parked. Snapshots are cached per Workflow for one scan.
+
+    Any open task a person paused (GH #343, task_pause.py) is parked too, in or out of a
+    Workflow and even with a turn it could continue: its wakes, messages, answers and
+    self-wakes wait, unacknowledged, until it is resumed.
     """
 
     def __init__(self, cur, aid: str):
@@ -172,10 +177,14 @@ class WorkflowParking:
         return self._parked[tid]
 
     def _compute(self, tid: str) -> bool:
-        self.cur.execute("SELECT workflow_id, status FROM tasks WHERE id=%s", (tid,))
+        self.cur.execute("SELECT workflow_id, status, paused_at FROM tasks WHERE id=%s", (tid,))
         task = self.cur.fetchone()
         # Completed/cancelled tasks keep their existing drain rules; only live work parks.
-        if not task or not task["workflow_id"] or task["status"] in ("completed", "cancelled"):
+        if not task or task["status"] in ("completed", "cancelled"):
+            return False
+        if task["paused_at"] is not None:
+            return True
+        if not task["workflow_id"]:
             return False
         choice = self._choice(str(task["workflow_id"]), tid)
         if choice is None or (choice["can_start"] and choice["source_kind"] == "worker"):

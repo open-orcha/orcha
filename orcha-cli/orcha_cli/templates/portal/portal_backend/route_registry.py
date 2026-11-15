@@ -100,6 +100,7 @@ from portal_backend import (
     task_impact_routes,
     task_message_routes,
     task_message_delivery_routes,
+    task_pause_routes,  # GH #343: a person pauses/resumes one task
     task_protocol_routes,
     task_reviewer_routes,
     task_verification_routes,
@@ -218,6 +219,7 @@ ROUTE_MODULES = (
     task_impact_routes,
     task_message_routes,
     task_message_delivery_routes,
+    task_pause_routes,  # GH #343: a person pauses/resumes one task
     task_protocol_routes,
     task_reviewer_routes,
     task_verification_routes,

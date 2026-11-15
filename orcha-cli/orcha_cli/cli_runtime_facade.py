@@ -196,11 +196,26 @@ def _lifecycle_call(container_id: str | None, new_status: str, verb: str) -> Non
 
 
 def cmd_pause(args) -> None:
+    if getattr(args, "task", None):
+        _task_pause_call(args.task, "pause", getattr(args, "reason", None))
+        return
     _services()._lifecycle_call(args.container_id, "paused", "pause")
 
 
 def cmd_resume(args) -> None:
+    if getattr(args, "task", None):
+        _task_pause_call(args.task, "resume", None)
+        return
     _services()._lifecycle_call(args.container_id, "active", "resume")
+
+
+def _task_pause_call(task_id, verb, reason) -> None:
+    cli_lifecycle.task_pause_call(
+        task_id,
+        verb,
+        reason=reason,
+        resolve_human_agent_id=_services()._resolve_human_agent_id,
+    )
 
 
 def cmd_stop(args) -> None:

@@ -108,6 +108,12 @@ export interface Task {
   autonomy_revision?: number;
   autonomy_changed_at?: string | null;
   autonomy_changed_by?: string | null;
+  /** GH #343: a person's pause (status unchanged). null/undefined = not paused. */
+  paused_at?: string | null;
+  paused_by_alias?: string | null;
+  paused_reason?: string | null;
+  /** true when the pause came from pausing the task's workflow (SQLite sends 0/1) */
+  paused_via_workflow?: boolean | number | null;
   workflow_id?: string | null;
   work_revision?: number;
   reviewer_agent_id?: string | null; // cloud collab v1: owner-assigned reviewer

@@ -136,6 +136,8 @@ def execution_refusal(cur, run, task, job, monitor):
         return 'unsupported_continuation'
     if run['stop_requested_at']:
         return 'explicit_stop'
+    if task.get('paused_at') is not None:
+        return 'task_paused'  # GH #343
     if (task_completion_blockers(task) or task.get('human_hold_by') or task.get('awaiting_loop_decision')
             or task['work_revision'] != monitor['work_revision']):
         return 'task_unavailable'
@@ -251,7 +253,8 @@ def completion_eligible(cur, aid, reason, *, locked=False):
     if (not task or not job or not monitor or str(job['task_id']) != str(task['id'])
             or str(monitor['agent_id']) != str(aid) or monitor['suppress_wake']
             or task['work_revision'] != reason.work_revision or monitor['work_revision'] != reason.work_revision
-            or task_completion_blockers(task) or task.get('human_hold_by') or task.get('awaiting_loop_decision')):
+            or task_completion_blockers(task) or task.get('human_hold_by') or task.get('awaiting_loop_decision')
+            or task.get('paused_at')):
         return False
     source = one(cur, 'SELECT stop_requested_at FROM worker_runs WHERE run_id=%s', (monitor['launch_run_id'],))
     policy = one(cur, '''SELECT a.terminated_at,c.status,c.wakes_enabled,r.wake_enabled

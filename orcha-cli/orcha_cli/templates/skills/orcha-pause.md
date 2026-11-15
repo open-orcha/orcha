@@ -20,3 +20,8 @@ You are executing `/orcha-pause` (human-only — API enforces kind='human').
 5. **Report**: `container <short-id> paused (was <prev>) by <human alias>. Use /orcha-resume to bring back online.`
 
 > Note: pausing flips the container row's status only. The Docker stack stays up; use `orcha down` in your shell to stop the stack.
+
+> To pause **one task** instead of the whole project (GH #343), run `orcha pause --task <task_id> [--reason "..."]`
+> (or `POST /api/tasks/<task_id>/pause` with `{"actor_agent_id": "<my human agent_id>", "reason": "..."}`).
+> The task keeps its status; no agent wakes for it, claims it or continues it, and a running agent is asked
+> to stop and save. Pausing a workflow from its page pauses every open task in it.

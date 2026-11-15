@@ -146,6 +146,12 @@ def accept_task_request(
             ),
         )
         tid = str(cur.fetchone()["id"])
+        # GH #343: link the worker first. Ending a run locks the task, the run, the token,
+        # then the agent row (run_failure_backoff); the assignment row below references the
+        # agent row, so the run and token are locked before it.
+        _attribute_token_run_to_task_getter()(
+            cur, body.responder_agent_id, x_orcha_run_token, tid
+        )
         cur.execute(
             "INSERT INTO agent_tasks (agent_id, task_id, assignment_status) VALUES (%s, %s, 'working')",
             (body.responder_agent_id, tid),
@@ -177,9 +183,6 @@ def accept_task_request(
             tid,
             "created",
             {"title": task["title"], "via": "task-request accept"},
-        )
-        _attribute_token_run_to_task_getter()(
-            cur, body.responder_agent_id, x_orcha_run_token, tid
         )
         # GH #56 (Point 6): accept must NOT wake the requester — only the real ANSWER (at material
         # completion) wakes them. The accept stays in the audit feed via log_event above, but we no

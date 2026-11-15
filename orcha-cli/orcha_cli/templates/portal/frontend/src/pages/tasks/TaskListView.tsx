@@ -31,6 +31,7 @@ import { Avatar, AvatarStack, type AvatarActor } from "../../components/primitiv
 import { StatusGlyph } from "../../components/primitives";
 import { PriorityGlyph, PriorityIcon, priorityLevel } from "../../components/primitives";
 import { Chip } from "../../components/primitives";
+import { isTaskPaused, pauseTitle } from "./taskPauseBadge";
 import { LivePill } from "../../components/primitives";
 import { IconButton } from "../../components/primitives";
 import { GroupHeader } from "../../components/primitives";
@@ -134,6 +135,16 @@ export function taskIsWorking(snap: Snapshot | null, t: Task): boolean {
   });
 }
 
+/** GH #343: a person's pause leads the chips (who paused it; when and why on hover). */
+function pausedChip(t: Task): ReactNode[] {
+  if (!isTaskPaused(t)) return [];
+  return [
+    <Chip key="paused" size="sm" dot="warn" className="tl-pausechip" title={pauseTitle(t)}>
+      {"Paused by " + (t.paused_by_alias || "a person")}
+    </Chip>,
+  ];
+}
+
 /** ≤ 2 metadata chips, most decision-relevant first. */
 function taskChips(snap: Snapshot | null, t: Task, opts: { reviewOn: boolean; level: string }): ReactNode[] {
   const out: ReactNode[] = [];
@@ -216,7 +227,7 @@ export function TaskRow({ t, snap, selected, onSelect, compact, groupedBy, revie
   const { member } = useTaskWorkflow(t.id);
   const run = isRunTaskRow(t, useRunTaskIds());
   const quality = run ? [<Chip key="quality" size="sm" className="tl-qualitychip" icon={<Icon name="shield" cls="v2-ico" />} title="A Quality run">Quality</Chip>] : [];
-  const chips = member && !member.detail.hidden ? [<Chip key="workflow" size="sm">Workflow</Chip>, ...quality].slice(0, phone ? 1 : 2) : [...quality, ...taskChips(snap, t, { reviewOn, level })].slice(0, phone ? 1 : 2);
+  const chips = member && !member.detail.hidden ? [...pausedChip(t), <Chip key="workflow" size="sm">Workflow</Chip>, ...quality].slice(0, phone ? 1 : 2) : [...pausedChip(t), ...quality, ...taskChips(snap, t, { reviewOn, level })].slice(0, phone ? 1 : 2);
   const hideWho = groupedBy === "assignee" && assigneesOf(t).length <= 1;
   return (
     <Row
@@ -410,7 +421,7 @@ export function TaskBoard({ tasks, selected, onSelect, snap, reviewOn, level, st
                 const actors = actorsOf(snap, x);
                 const working = taskIsWorking(snap, x);
                 const member = workflows?.members.get(x.id);
-                const chips = member && !member.detail.hidden ? <Chip size="sm">Workflow</Chip> : taskChips(snap, x, { reviewOn, level });
+                const chips = member && !member.detail.hidden ? [...pausedChip(x), <Chip key="workflow" size="sm">Workflow</Chip>] : [...pausedChip(x), ...taskChips(snap, x, { reviewOn, level })].slice(0, 2);
                 return (
                   <BoardCard
                     key={x.id}

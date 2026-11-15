@@ -149,8 +149,8 @@ def managed_job_heartbeat(tid: UUID, jid: UUID, request: Request,
         job = require_job_owner(cur, str(tid), str(jid), run)
         cur.execute('SELECT revoked_at FROM managed_job_monitors WHERE job_id=%s', (str(jid),))
         monitor = cur.fetchone()
-        if monitor and monitor['revoked_at']:
-            conflict('managed_job_stop_requested')
+        if (monitor and monitor['revoked_at']) or task.get('paused_at') is not None:
+            conflict('managed_job_stop_requested')  # GH #343: a paused task stops its commands
         now = sql.utcnow()
         until = authority_until(cur, run, task, limits, job)
         if until <= now:

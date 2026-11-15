@@ -47,8 +47,13 @@ def build_persona(
     self_wake: dict | None,
     return_resume_rendered: bool,
     services: Any,
+    protocol_sink: dict | None = None,
 ):
-    """Render cached identity and digest with a freshly fetched task protocol."""
+    """Render cached identity and digest with a freshly fetched task protocol.
+
+    ``protocol_sink`` receives ``task_id``: the task whose instructions the protocol
+    served (None when it served none). Run registration links the worker to it, so
+    pausing that task stops the worker (GH #343)."""
     persona, digest = services._persona_and_digest(
         api_base, agent_id, force_fresh=force_fresh
     )
@@ -56,6 +61,8 @@ def build_persona(
     if task_id:
         protocol_url += f"?task_id={task_id}"
     protocol = services._get_json(protocol_url)
+    if protocol_sink is not None:
+        protocol_sink["task_id"] = (protocol or {}).get("task_id")
     render_resume = bool(
         self_wake
         and self_wake.get("injected")

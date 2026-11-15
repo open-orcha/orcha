@@ -191,6 +191,8 @@ def _base_blockers(
         add("start_hold", "The owner has not released this task.")
     if task.get("human_hold_by"):
         add("human_hold", "This task is on hold.")
+    if task.get("paused_at"):
+        add("task_paused", "A person paused this task.")
     if source_kind == "worker" and task.get("awaiting_owner_decision"):
         add("owner_decision", "This task is waiting for the owner to decide.")
     evidence = outside_evidence.get(task["id"])

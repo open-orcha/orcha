@@ -178,3 +178,49 @@ def lifecycle_call(
         sys.exit(f"error: cannot reach {url} — is the stack up? ({exc.reason})")
 
     print(f"container {container}: {data.get('from', '?')} → {data.get('status', '?')}")
+
+
+def task_pause_call(
+    task_id: str,
+    verb: str,
+    *,
+    reason: Optional[str] = None,
+    resolve_human_agent_id: Callable[[pathlib.Path], str],
+) -> None:
+    """Pause or resume one task as the project's person (GH #343). ``verb`` is pause|resume."""
+    import urllib.error
+    import urllib.request
+
+    cwd = pathlib.Path.cwd()
+    config_path = cwd / ".claude" / "orcha.json"
+    if not config_path.exists():
+        sys.exit("error: no .claude/orcha.json in CWD. cd to your project root first.")
+    api_base = json.loads(config_path.read_text()).get("api_base_url")
+    if not api_base:
+        sys.exit("error: api_base_url missing from .claude/orcha.json")
+    payload = {"actor_agent_id": resolve_human_agent_id(cwd)}
+    if verb == "pause" and reason:
+        payload["reason"] = reason
+    url = f"{api_base}/api/tasks/{task_id}/{verb}"
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode(),
+        method="POST",
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            data = json.loads(response.read())
+    except urllib.error.HTTPError as exc:
+        sys.exit(f"error: HTTP {exc.code} from {url}\n{exc.read().decode(errors='replace')}")
+    except urllib.error.URLError as exc:
+        sys.exit(f"error: cannot reach {url} — is the stack up? ({exc.reason})")
+    if data.get("paused"):
+        who = data.get("paused_by_alias") or "a person"
+        note = "" if data.get("changed") else " (already paused)"
+        stopped = len(data.get("stopped_runs") or [])
+        extra = f"; asked {stopped} running agent(s) to stop and save" if stopped else ""
+        print(f"task {task_id}: paused by {who}{note}{extra}")
+    else:
+        note = "" if data.get("changed") else " (was not paused)"
+        print(f"task {task_id}: resumed{note}")

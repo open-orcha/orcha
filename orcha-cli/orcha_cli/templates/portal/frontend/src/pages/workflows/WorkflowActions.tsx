@@ -18,8 +18,8 @@ export type WorkflowAction = "start" | "pause" | "resume" | "cancel" | "finish";
 type Action = WorkflowAction;
 /** A header-menu request (issue #350 §4.2): `seq` lets the same action be requested twice in a row. */
 export interface WorkflowActionRequest { action: WorkflowAction; seq: number }
-const labels: Record<Action, string> = { start: "Review start", pause: "Pause new starts", resume: "Resume workflow", cancel: "Cancel workflow", finish: "Finish checklist" };
-const confirmation: Record<Action, string> = { start: "Start selected tasks", pause: "Pause new starts", resume: "Resume workflow", cancel: "Cancel workflow", finish: "Finish workflow" };
+const labels: Record<Action, string> = { start: "Review start", pause: "Pause workflow", resume: "Resume workflow", cancel: "Cancel workflow", finish: "Finish checklist" };
+const confirmation: Record<Action, string> = { start: "Start selected tasks", pause: "Pause workflow", resume: "Resume workflow", cancel: "Cancel workflow", finish: "Finish workflow" };
 
 /** What a loop means for Finish, from the same facts the server's completion check reads: only steps
  * still on the path count, a waiting decision always blocks, and nothing blocks once Finish is allowed. */
@@ -132,7 +132,7 @@ export function WorkflowActions({ detail, scope, verified, stale, onSaved, reque
           {checkedSelection && impact && <WorkflowImpactView impact={impact} detail={preview} />}
           <WorkflowRouteSummary detail={preview} />
         </>}
-        {action === "pause" && <p>Running work may finish. New tasks will not start until you resume the workflow.</p>}
+        {action === "pause" && <p>Every task in this workflow is paused. A running task is asked to stop and save its work, and no task starts or continues until you resume. Resuming lifts only this pause; a task someone paused on its own stays paused.</p>}
         {action === "resume" && <p>Eligible tasks may start after resuming. Dependencies, holds and task autonomy still apply.</p>}
         {action === "cancel" && <>
           <p>Cancel unfinished work in this workflow. Accepted results, saved evidence and the record of what happened are kept. Workers may take time to stop; cancellation does not confirm shutdown.</p>
