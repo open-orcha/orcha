@@ -182,7 +182,13 @@ async def test_continuation_requires_positive_exit_preserves_turn_and_fences_old
         with pytest.raises(HTTPException):
             continue_turn(cur, e, turn["runner"], operation_key="next", payload={})
         confirm_stopped(cur, e, run_id=e["run_id"], generation=1, terminalize=terminalize, now=NOW)
+    # GH #343: a paused workflow holds the next worker until a person resumes it.
     db.execute("UPDATE workflows SET status='paused' WHERE id=%s", (turn["wid"],))
+    with db_cursor() as (_, cur):
+        _, _, e = lock_run(cur, turn["launch"]["run_id"])
+        with pytest.raises(HTTPException):
+            continue_turn(cur, e, turn["runner"], operation_key="next", payload={}, now=NOW)
+    db.execute("UPDATE workflows SET status='active' WHERE id=%s", (turn["wid"],))
     with db_cursor() as (_, cur):
         _, _, e = lock_run(cur, turn["launch"]["run_id"])
         new = continue_turn(cur, e, turn["runner"], operation_key="next", payload={}, now=NOW)

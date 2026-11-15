@@ -375,6 +375,11 @@ async def test_token_less_continue_after_a_confirmed_exit_and_wrong_agent_is_ref
     with db_cursor() as (_, cur):
         cur.execute("UPDATE workflows SET status='paused' WHERE id=%s", (project.wid,))
     assert (await client.post(base + "/confirm-stopped", json={"generation": 1})).status_code == 200
+    # GH #343: a paused workflow gets no replacement worker until a person resumes it.
+    held = await client.post(base + "/continue-reserve", json={"operation_key": uid()})
+    assert held.status_code == 409 and "paused the workflow" in held.text, held.text
+    with db_cursor() as (_, cur):
+        cur.execute("UPDATE workflows SET status='active' WHERE id=%s", (project.wid,))
     again = await client.post(base + "/continue-reserve", json={"operation_key": uid()})
     assert again.status_code == 201, again.text
     assert again.json()["generation"] == 2 and again.json()["run_id"] != launch["run_id"]

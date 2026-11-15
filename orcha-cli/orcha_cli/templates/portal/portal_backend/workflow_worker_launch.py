@@ -130,11 +130,14 @@ def activate(cur, execution, *, aid, run_id, permit, process_key, pid, run_detai
         conflict("stale_generation", "This worker no longer owns the task turn.")
     cur.execute("SELECT status, launch_enabled FROM workflows WHERE id=%s", (execution["workflow_id"],))
     workflow = cur.fetchone()
-    cur.execute("SELECT status, work_revision, awaiting_owner_decision FROM tasks WHERE id=%s", (execution["task_id"],))
+    cur.execute("SELECT status, work_revision, awaiting_owner_decision, paused_at FROM tasks WHERE id=%s", (execution["task_id"],))
     task = cur.fetchone()
     cur.execute("SELECT status,ended_at FROM worker_runs WHERE run_id=%s", (run_id,))
     run = cur.fetchone()
-    if (workflow["status"] not in {"active", "paused"} or not workflow["launch_enabled"]
+    # GH #343: a person's pause on the workflow or this step holds a reserved launch.
+    if workflow["status"] == "paused" or task["paused_at"] is not None:
+        conflict("launch_paused", "A person paused this task or its workflow; it starts again on resume.")
+    if (workflow["status"] != "active" or not workflow["launch_enabled"]
             or task["status"] != "in_progress" or task["work_revision"] != execution["work_revision"]
             or task["awaiting_owner_decision"] or not run or run["ended_at"]
             or run["status"] not in {"reserved", "running"}):
@@ -202,7 +205,7 @@ def continue_turn(cur, execution, runner, *, operation_key, payload, now=None):
         conflict("stale_generation", "This continuation refers to an earlier worker.")
     cur.execute("SELECT status,launch_enabled,container_id FROM workflows WHERE id=%s", (execution["workflow_id"],))
     workflow = cur.fetchone()
-    cur.execute("SELECT status,work_revision,awaiting_owner_decision FROM tasks WHERE id=%s", (execution["task_id"],))
+    cur.execute("SELECT status,work_revision,awaiting_owner_decision,paused_at FROM tasks WHERE id=%s", (execution["task_id"],))
     task = cur.fetchone()
     cur.execute("SELECT status FROM containers WHERE id=%s", (workflow["container_id"],))
     project = cur.fetchone()
@@ -219,7 +222,9 @@ def continue_turn(cur, execution, runner, *, operation_key, payload, now=None):
         (str(execution["claimant_id"]) != str(runner["agent_id"]), "This turn belongs to another agent."),
         (not assignment, "The agent is no longer assigned to this task."),
         (project["status"] != "active", "The project is not active."),
-        (workflow["status"] not in {"active", "paused"}, "The workflow is not active."),
+        (workflow["status"] == "paused", "A person paused the workflow."),
+        (task["paused_at"] is not None, "A person paused this task."),
+        (workflow["status"] != "active", "The workflow is not active."),
         (not workflow["launch_enabled"], "Waiting for the owner to Start the workflow."),
         (task["status"] != "in_progress", "This task is no longer in progress."),
         (task["awaiting_owner_decision"], "This task is waiting for the owner to decide."),

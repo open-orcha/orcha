@@ -61,6 +61,18 @@ def start_worker_run(aid: str, body: WorkerRunStart, request: Request):
                 )
             if str(conversation["agent_id"]) != aid:
                 raise HTTPException(403, "conversation_id belongs to a different agent")
+        # GH #343: a person may pause the task between the wake scan and this call (the
+        # worker is already spawned). Lock the task row so this read and pause_task's
+        # update-then-stop serialize: either pause sees this run, or this run sees pause.
+        paused = None
+        if body.task_id is not None and body.lane == "work":
+            cur.execute(
+                "SELECT paused_at, paused_by FROM tasks WHERE id=%s" + sql.for_update(),
+                (task_id,),
+            )
+            paused = cur.fetchone()
+            if paused and paused["paused_at"] is None:
+                paused = None
         cur.execute(
             """INSERT INTO worker_runs
                     (agent_id, task_id, wake_kind, wake_event, log_path, pid, runtime,
@@ -87,6 +99,15 @@ def start_worker_run(aid: str, body: WorkerRunStart, request: Request):
             ),
         )
         row = cur.fetchone()
+        if paused:
+            # Same path as the Stop button: lease renewal tells the worker to save and exit.
+            cur.execute(
+                "UPDATE worker_runs SET stop_requested_at=now(), stop_requested_by=%s "
+                "WHERE run_id=%s",
+                (str(paused["paused_by"]) if paused["paused_by"] else None, row["run_id"]),
+            )
+            cur.execute("SELECT * FROM worker_runs WHERE run_id=%s", (row["run_id"],))
+            row = cur.fetchone()
         # Bind the lane under the same graph lock used by claims and retirement.
         column = "conv_run_id" if body.lane == "conversation" else "work_run_id"
         cur.execute("SELECT agent_id FROM agent_wake_state WHERE agent_id=%s" + sql.for_update(), (aid,))

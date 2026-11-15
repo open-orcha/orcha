@@ -136,6 +136,8 @@ def execution_refusal(cur, run, task, job, monitor):
         return 'unsupported_continuation'
     if run['stop_requested_at']:
         return 'explicit_stop'
+    if task.get('paused_at') is not None:
+        return 'task_paused'  # GH #343
     if (task_completion_blockers(task) or task.get('human_hold_by') or task.get('awaiting_loop_decision')
             or task['work_revision'] != monitor['work_revision']):
         return 'task_unavailable'

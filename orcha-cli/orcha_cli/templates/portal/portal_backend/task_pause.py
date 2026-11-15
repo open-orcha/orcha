@@ -7,7 +7,8 @@ the run cap does not respawn it. People can still read and comment. Every gate u
 ``is_paused`` or ``NOT_PAUSED`` from here so they agree.
 
 Pausing asks any run working on the task to stop through the same path as the Stop
-button, so the agent saves its work first. Resuming wakes each assigned agent with a
+button, so the agent saves its work first, and revokes its managed commands, including
+ones that outlived their worker. Resuming wakes each assigned agent with a
 ``task_assigned`` event, and the messages that waited are delivered then.
 
 Pausing a workflow pauses every open task in it (``paused_via_workflow``); resuming the
@@ -65,6 +66,23 @@ def _stop_running_work(cur, task_id, actor_id) -> list[str]:
     return run_ids
 
 
+def _revoke_task_commands(cur, task_id) -> list[str]:
+    """Revoke every live managed command on this task, even one whose worker exited.
+
+    A revoked monitor fails the command's next heartbeat, so its supervisor stops it.
+    """
+    cur.execute(
+        """UPDATE managed_job_monitors SET revoked_at=COALESCE(revoked_at,now()),
+                  stop_reason=COALESCE(stop_reason,'task_paused')
+           WHERE revoked_at IS NULL AND job_id IN (
+               SELECT job_id FROM managed_jobs
+               WHERE task_id=%s AND state IN ('reserved','running'))
+           RETURNING job_id""",
+        (str(task_id),),
+    )
+    return [str(r["job_id"]) for r in cur.fetchall()]
+
+
 def pause_task(cur, task, actor_id, reason=None, *, via_workflow=False) -> dict:
     """Pause one task. ``task`` needs id, container_id, status, paused_at.
 
@@ -73,6 +91,19 @@ def pause_task(cur, task, actor_id, reason=None, *, via_workflow=False) -> dict:
     """
     tid = str(task["id"])
     if task["paused_at"] is not None:
+        if not via_workflow and task.get("paused_via_workflow"):
+            # A person pauses a step the workflow already paused: the pause becomes
+            # theirs, so resuming the workflow no longer lifts it.
+            cur.execute(
+                """UPDATE tasks SET paused_by=%s, paused_reason=%s, paused_via_workflow=%s
+                   WHERE id=%s AND paused_at IS NOT NULL""",
+                (str(actor_id), reason, False, tid),
+            )
+            log_event(
+                cur, str(task["container_id"]), "human", str(actor_id), "task", tid,
+                "task_paused", {"reason": reason, "via_workflow": False, "took_over_workflow_pause": True},
+            )
+            return {"paused": True, "already_paused": True, "took_over": True, "stopped_runs": []}
         return {"paused": True, "already_paused": True, "stopped_runs": []}
     cur.execute(
         f"""UPDATE tasks SET paused_at=%s, paused_by=%s, paused_reason=%s,
@@ -83,6 +114,7 @@ def pause_task(cur, task, actor_id, reason=None, *, via_workflow=False) -> dict:
     if not cur.rowcount:
         return {"paused": False, "already_paused": False, "stopped_runs": []}
     stopped = _stop_running_work(cur, tid, actor_id)
+    revoked = _revoke_task_commands(cur, tid)
     log_event(
         cur,
         str(task["container_id"]),
@@ -91,7 +123,8 @@ def pause_task(cur, task, actor_id, reason=None, *, via_workflow=False) -> dict:
         "task",
         tid,
         "task_paused",
-        {"reason": reason, "via_workflow": bool(via_workflow), "stopped_runs": stopped},
+        {"reason": reason, "via_workflow": bool(via_workflow), "stopped_runs": stopped,
+         "stopped_commands": revoked},
     )
     return {"paused": True, "already_paused": False, "stopped_runs": stopped}
 

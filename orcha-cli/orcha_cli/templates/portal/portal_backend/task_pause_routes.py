@@ -84,7 +84,7 @@ def pause_one_task(tid: str, body: TaskPauseUpdate, request: Request):
         outcome = pause_task(cur, task, actor, reason)
         return {
             **_state(cur, tid),
-            "changed": outcome["paused"] and not outcome["already_paused"],
+            "changed": outcome["paused"] and (not outcome["already_paused"] or outcome.get("took_over", False)),
             "stopped_runs": outcome["stopped_runs"],
         }
 
