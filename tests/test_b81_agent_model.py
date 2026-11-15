@@ -78,18 +78,13 @@ async def test_new_models_listed_with_efforts_and_selectable(client, container, 
     r = await client.get("/api/models")
     models = r.json()["models"]
     ids = {m["id"] for m in models}
-    assert {"claude-fable-5-2", "claude-fable-5-1", "gpt-6-astra"} <= ids
+    assert {"claude-fable-5-2", "gpt-6-astra"} <= ids
     assert "gpt-5.5" in ids and "gpt-5.3-codex-spark" in ids
     assert {"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"} <= ids
     assert "gpt-5.6" not in ids
     assert "gpt-5.6-tera" not in ids
     by_id = {m["id"]: m for m in models}
-    assert by_id["claude-fable-5-1"] == {
-        "id": "claude-fable-5-1",
-        "name": "Fable 5.1",
-        "runtime": "claude",
-        "reasoning_efforts": ["low", "medium", "high", "xhigh", "max"],
-    }
+    assert "claude-fable-5-1" not in by_id
     assert by_id["claude-fable-5-2"] == {
         "id": "claude-fable-5-2",
         "name": "Fable 5.2",
@@ -104,9 +99,6 @@ async def test_new_models_listed_with_efforts_and_selectable(client, container, 
     assert by_id["gpt-5.6-terra"]["reasoning_efforts"][-2:] == ["max", "ultra"]
     assert by_id["gpt-5.6-luna"]["runtime"] == "codex"
     a = await make_agent("Faby", "eng")
-    r = await client.post(f"/api/agents/{a['agent_id']}/model", json={"model": "claude-fable-5-1"})
-    assert r.status_code == 200, r.text
-    assert await _agent_model_in_payload(client, container["id"], "Faby") == "claude-fable-5-1"
     r = await client.post(f"/api/agents/{a['agent_id']}/model", json={"model": "claude-fable-5-2"})
     assert r.status_code == 200, r.text
     assert await _agent_model_in_payload(client, container["id"], "Faby") == "claude-fable-5-2"

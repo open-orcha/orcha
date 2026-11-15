@@ -16,6 +16,7 @@ from portal_backend import sql
 from portal_backend.event_acknowledgement import _ack_events_handled
 from portal_backend.workflow_graph import conflict
 from portal_backend.workflow_scheduling import _time
+from portal_backend.model_retirement import launch_model_state, migrate_retired_models
 
 LOCAL_RUNNER = "orcha-local"
 
@@ -58,8 +59,9 @@ def _permit(runner, run_id):
     return hmac.new(key, ("workflow-launch:" + str(run_id)).encode(), hashlib.sha256).hexdigest()
 
 
-def _result(row, runner):
-    return {"run_id": str(row["run_id"]), "execution_id": str(row["execution_id"]),
+def _result(cur, row, runner):
+    return {**launch_model_state(cur, str(runner["agent_id"])),
+            "run_id": str(row["run_id"]), "execution_id": str(row["execution_id"]),
             "task_id": str(row["task_id"]), "generation": row["generation"],
             "permit": _permit(runner, row["run_id"]), "expires_at": _time(row["expires_at"]).isoformat()}
 
@@ -76,7 +78,7 @@ def launch_receipt(cur, runner, operation_key, payload):
             conflict("idempotency_conflict", "This launch receipt belongs to another request.")
         if row["revoked_at"]:
             conflict("launch_revoked", "This launch was revoked.")
-        return _result(row, runner)
+        return _result(cur, row, runner)
     return None
 
 
@@ -95,6 +97,10 @@ def preallocate_run(cur, execution, runner, *, operation_key, payload, now=None)
     cur.execute("SELECT run_id FROM worker_runs WHERE run_id=%s", (run_id,))
     if cur.fetchone():
         conflict("launch_exists", "Replay the original launch receipt instead of creating another worker.")
+    # The admitted execution has no process/run yet. All OTHER reservations,
+    # workers and leases still fence migration, including an unconfirmed old stop.
+    migrate_retired_models(cur, str(runner["container_id"]), agent_id=str(runner["agent_id"]),
+                           admitting_execution_id=str(execution["id"]))
     permit = _permit(runner, run_id)
     cur.execute("""INSERT INTO worker_runs (run_id,agent_id,task_id,wake_kind,lane,status)
                    VALUES (%s,%s,%s,'workflow','work','reserved')""",
@@ -110,7 +116,7 @@ def preallocate_run(cur, execution, runner, *, operation_key, payload, now=None)
     row = cur.fetchone()
     row["task_id"] = execution["task_id"]
     cur.execute("UPDATE workflow_executions SET run_id=%s WHERE id=%s", (run_id, execution["id"]))
-    return _result(row, runner)
+    return _result(cur, row, runner)
 
 
 def activate(cur, execution, *, aid, run_id, permit, process_key, pid, run_details=None, now=None):

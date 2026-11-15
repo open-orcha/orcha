@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from . import notifier_managed_limits, notifier_managed_jobs
+from .llm_catalog import RETIRED_MODEL_IDS
 
 
 
@@ -70,6 +71,29 @@ def checkpoint_and_respawn(
     # (worktrees are never switched off), so no carry between checkouts happens here.
     task_worktree = bool(worker.get("task_worktree"))
     destination_cwd = worktree or base_cwd
+    if context.get("model") in RETIRED_MODEL_IDS:
+        # Re-enter ordinary admission after the exact old run has stopped. A
+        # persona read while we retain its lease would only resolve a fallback,
+        # leaving the retired preference unsaved on every checkpoint.
+        if not exit_confirmed:
+            worker["respawns"] = services.HARD_CAP_RESPAWN_MAX
+            return
+        lane = worker.get("lane", "work")
+        services._post_json(f"{api_base}/api/agents/{agent_id}/wake-ack", {
+            "kind": "model_retired_checkpoint", "run_id": worker.get("run_id"),
+            "release_lease": True, "lane": lane,
+        })
+        selection = services._post_json(f"{api_base}/api/agents/{agent_id}/wake-claim", {
+            "kind": "ephemeral", "lease_kind": "ephemeral", "lane": lane,
+            "lease_ttl": min(cap, 3600), "event": "checkpoint_respawn",
+        }) or {}
+        if (not selection.get("claimed") or not selection.get("model")
+                or selection["model"] in RETIRED_MODEL_IDS):
+            worker["respawns"] = services.HARD_CAP_RESPAWN_MAX
+            return  # normal reaping releases the old run; retry via a fresh wake
+        context = {**context, "model": selection["model"],
+                   "model_runtime": selection.get("model_runtime") or "claude",
+                   "reasoning_effort": selection.get("reasoning_effort")}
     services._revoke_or_defer(api_base, worker.get("run_token"))
     new_token = services._mint_embodiment_token(api_base, agent_id, "work", "headless")
     persona = services._build_persona(api_base, agent_id, force_fresh=True)

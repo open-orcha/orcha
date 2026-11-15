@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .launch_model import admitted_candidate
+
 import pathlib
 import sys
 import time
@@ -83,6 +85,7 @@ def start_candidate(
             )
         return
 
+    candidate = admitted_candidate(candidate, claim)
     in_git = services._is_git_repo(base_cwd)
     worktree, branch = (
         services._provision_resident_worktree(base_cwd, conv_id)

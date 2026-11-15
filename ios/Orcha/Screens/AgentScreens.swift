@@ -482,8 +482,13 @@ struct ModelPickerSheet: View {
 
     @State private var picked: String?
 
-    private var groups: [(String, [ModelDto])] {
-        Dictionary(grouping: model.models) { m in
+    private var groups: [(String, [ModelDto])] { Self.groups(model.models) }
+
+    /// The offered rows are exactly the server's `/api/models` catalog, grouped by
+    /// provider. Deliberately takes no `current`: an agent's saved model that the server
+    /// no longer offers (e.g. a retired id) is never re-inserted as a pickable row.
+    static func groups(_ catalog: [ModelDto]) -> [(String, [ModelDto])] {
+        Dictionary(grouping: catalog) { m in
             let raw = m.runtime ?? m.provider
             return ModelProvider.for(raw ?? m.id)?.label ?? raw ?? "Other models"
         }

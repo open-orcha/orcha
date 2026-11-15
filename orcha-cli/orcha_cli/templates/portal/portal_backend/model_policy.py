@@ -2,6 +2,11 @@
 
 from typing import Optional
 
+try:  # Rendered portal modules sit beside llm_catalog; native installs use the package.
+    from llm_catalog import RETIRED_MODEL_IDS
+except ImportError:
+    from orcha_cli.llm_catalog import RETIRED_MODEL_IDS
+
 _STANDARD_EFFORTS = ["low", "medium", "high", "xhigh"]
 _MAX_EFFORTS = [*_STANDARD_EFFORTS, "max"]
 _ULTRA_EFFORTS = [*_MAX_EFFORTS, "ultra"]
@@ -10,12 +15,6 @@ AVAILABLE_MODELS = [
     {
         "id": "claude-fable-5-2",
         "name": "Fable 5.2",
-        "runtime": "claude",
-        "reasoning_efforts": _MAX_EFFORTS,
-    },
-    {
-        "id": "claude-fable-5-1",
-        "name": "Fable 5.1",
         "runtime": "claude",
         "reasoning_efforts": _MAX_EFFORTS,
     },
