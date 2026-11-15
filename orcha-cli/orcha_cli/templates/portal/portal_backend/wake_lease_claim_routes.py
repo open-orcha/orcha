@@ -1,5 +1,7 @@
 """Claim one of an agent's independent wake leases before starting work."""
 
+from uuid import uuid4
+
 from fastapi import HTTPException, Request
 
 from portal_backend.managed_run_auth import lock_agent_runs
@@ -111,6 +113,10 @@ def wake_claim(aid: str, body: WakeClaim, request: Request):
         # lock as admission. The other lane or an unconfirmed run can still defer it.
         migrate_retired_models(cur, str(agent["container_id"]), agent_id=aid)
         launch_state = launch_model_state(cur, aid)
+        if (body.expected_model_runtime
+                and launch_state.get("model_runtime") != body.expected_model_runtime):
+            conn.commit()
+            return dict(agent_id=aid, claimed=False, reason="model runtime changed; rediscover before launch")
         lease_until = sql.from_now(body.lease_ttl)
         if lane == "conversation":
             cur.execute(
@@ -222,6 +228,9 @@ def wake_claim(aid: str, body: WakeClaim, request: Request):
                     else None
                 ),
             }
+        claim_id = str(body.claim_id or uuid4())
+        claim_column = "conv_claim_id" if lane == "conversation" else "wake_claim_id"
+        cur.execute(f"UPDATE agent_wake_state SET {claim_column}=%s WHERE agent_id=%s", (claim_id, aid))
         admission_id = None
         if body.completion:
             from portal_backend.job_monitor_service import consume_attempt, one
@@ -252,6 +261,7 @@ def wake_claim(aid: str, body: WakeClaim, request: Request):
         **launch_state,
         "agent_id": aid,
         "claimed": True,
+        "claim_id": claim_id,
         "lane": lane,
         "lease_kind": row["lease_kind"],
         "wake_lease_until": row["wake_lease_until"].isoformat(),

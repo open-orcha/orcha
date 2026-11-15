@@ -74,6 +74,7 @@ def start_candidate(
             "kind": "conversation",
             "event": "conversation_turn",
             "lease_kind": "ephemeral",
+            "expected_model_runtime": services.RUNTIME_CODEX,
         },
     )
     if not (claim and claim.get("claimed")):

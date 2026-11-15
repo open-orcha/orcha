@@ -13,6 +13,7 @@ class WakeAck(BaseModel):
     """Notifier daemon acknowledges that it issued (or attempted) a wake."""
 
     run_id: Optional[UUID] = Field(default=None, description="Exact worker releasing this lane; stale releases are ignored")
+    claim_id: Optional[UUID] = Field(default=None, description="Exact unregistered admission to release; never releases a registered worker or a later claim")
 
     delivered_ts: Optional[float] = Field(
         default=None,
@@ -100,6 +101,11 @@ class WakeClaim(BaseModel):
     """R2.4: the daemon's atomic single-flight claim before spawning a headless worker."""
 
     run_id: Optional[UUID] = Field(default=None, description="Exact worker renewing this lane; never renew a successor")
+    claim_id: Optional[UUID] = Field(
+        default=None, description="Launcher-chosen unique admission identity, known even if the claim response is lost")
+    expected_model_runtime: Optional[str] = Field(
+        default=None, pattern="^(claude|codex)$",
+        description="Refuse admission if the chosen conversation launcher no longer matches the saved model; pending turns retry through fresh discovery")
     completion: CompletionReason | None = None
     admission_id: Optional[UUID] = Field(
         default=None, description="Launcher-chosen identity of a completion admission; returned when admitted")

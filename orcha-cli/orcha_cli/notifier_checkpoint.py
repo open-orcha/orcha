@@ -1,6 +1,7 @@
 """Checkpoint long-running task workers and respawn them with fresh context."""
 
 from __future__ import annotations
+from uuid import uuid4
 
 from . import notifier_managed_limits, notifier_managed_jobs
 from .llm_catalog import RETIRED_MODEL_IDS
@@ -83,14 +84,23 @@ def checkpoint_and_respawn(
             "kind": "model_retired_checkpoint", "run_id": worker.get("run_id"),
             "release_lease": True, "lane": lane,
         })
+        claim_id = str(uuid4())
+        worker["checkpoint_claim_id"] = claim_id
         selection = services._post_json(f"{api_base}/api/agents/{agent_id}/wake-claim", {
             "kind": "ephemeral", "lease_kind": "ephemeral", "lane": lane,
             "lease_ttl": min(cap, 3600), "event": "checkpoint_respawn",
+            "claim_id": claim_id,
         }) or {}
         if (not selection.get("claimed") or not selection.get("model")
-                or selection["model"] in RETIRED_MODEL_IDS):
+                or selection["model"] in RETIRED_MODEL_IDS or selection.get("claim_id") != claim_id):
             worker["respawns"] = services.HARD_CAP_RESPAWN_MAX
-            return  # normal reaping releases the old run; retry via a fresh wake
+            # The claim may have committed even when its reply was lost. Release
+            # only this launcher's admission; a competitor remains untouched.
+            services._post_json(f"{api_base}/api/agents/{agent_id}/wake-ack", {
+                "kind": "model_retired_checkpoint_failed", "claim_id": claim_id,
+                "release_lease": True, "lane": lane,
+            })
+            return
         context = {**context, "model": selection["model"],
                    "model_runtime": selection.get("model_runtime") or "claude",
                    "reasoning_effort": selection.get("reasoning_effort")}
@@ -273,7 +283,8 @@ def _handle_spawn_failure(
         f"{api_base}/api/agents/{agent_id}/wake-ack",
         {
             "kind": "worker_checkpoint_respawn_failed",
-            "run_id": worker.get("run_id"),
+            **({"claim_id": worker["checkpoint_claim_id"]} if worker.get("checkpoint_claim_id")
+               else {"run_id": worker.get("run_id")}),
             "release_lease": True,
             "lane": worker.get("lane", "work"),
         },

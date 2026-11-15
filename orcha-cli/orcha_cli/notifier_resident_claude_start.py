@@ -121,6 +121,7 @@ def _boot(
                 "lease_ttl": services.WAKE_LEASE_TTL_SECS,
                 "kind": "resident",
                 "lease_kind": "resident",
+                "expected_model_runtime": services.RUNTIME_CLAUDE,
             },
         )
     )

@@ -130,6 +130,27 @@ async def test_claim_migrates_and_returns_fresh_cold_launch_state(client, make_a
     assert len(db.execute("SELECT 1 FROM events WHERE entity_id=%s AND event_type='model_changed'", (aid,))) == 1
 
 
+@pytest.mark.parametrize('lane', ['work', 'conversation'])
+async def test_claim_cleanup_never_releases_a_later_claim_or_registered_worker(client, make_agent, lane):
+    aid = (await make_agent("Admission ownership"))["agent_id"]
+    first = str(uuid.uuid4())
+    second = str(uuid.uuid4())
+    async def claim(identity):
+        return (await client.post(f"/api/agents/{aid}/wake-claim", json={"lane": lane, "claim_id": identity})).json()
+    async def release(identity):
+        return (await client.post(f"/api/agents/{aid}/wake-ack", json={
+            "lane": lane, "claim_id": identity, "release_lease": True, "kind": "failed_launch",
+        })).json()
+    assert (await claim(first))['claim_id'] == first
+    assert (await release(second))['released'] is False
+    await release(first)
+    assert (await claim(second))['claimed']
+    assert (await release(first))['released'] is False
+    response = await client.post(f"/api/agents/{aid}/runs", json={"wake_kind": "ephemeral", "lane": lane})
+    assert response.status_code == 201
+    assert (await release(second))['released'] is False
+
+
 @pytest.mark.parametrize("conversation_busy", [False, True])
 async def test_checkpoint_reentry_persists_once_without_changing_an_active_conversation(
     client, make_agent, container, db, conversation_busy,
