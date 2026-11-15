@@ -50,11 +50,6 @@ def _served_task(cur, container_id, aid, body, task_id, guessed):
     return served
 
 
-# Each extra pass needs another task taken on in the instant between two reads; the last
-# pass locks any such task after the token instead of starting over.
-_REGISTRATION_LOCK_PASSES = 5
-
-
 def _tasks_on_token(cur, aid, body) -> list[str]:
     """Tasks waiting on this worker's still-unbound token (``embodiment_token_tasks``)."""
     cur.execute(
@@ -76,16 +71,21 @@ def _lock_for_registration(cur, aid, body, task_ids, *, check_recent):
 
     Task rows are locked before the token row, the order acceptance, claims and run
     shutdown use. A task taken on between the first read and the token lock is not locked
-    yet, so the locks taken since the savepoint are released and taken again with it.
-    Once the token is locked, a task taken on concurrently waits for this registration and
-    then finds the run bound, so it links to it directly.
+    yet, so the locks taken since the savepoint are released and the pass starts over with
+    it. A task is never locked while the token is held: an acceptance of that task may hold
+    it and be waiting for the token, which would deadlock on PostgreSQL. Once the token is
+    locked, a task taken on concurrently waits for this registration and then finds the run
+    bound, so it links to it directly.
+
+    The passes end: each new one needs a task taken on with this token that no earlier pass
+    saw, the set only grows while the token is unbound, and only this one worker holds it.
     """
     task_ids = [t for t in task_ids if t]
     if body.lane != "work":
         return None, []
     if not body.token_id:
         return _pause_blocking_run(cur, aid, task_ids, check_recent=check_recent), []
-    for attempt in range(_REGISTRATION_LOCK_PASSES):
+    while True:
         cur.execute("SAVEPOINT gh343_registration_lock")
         taken = _tasks_on_token(cur, aid, body)
         paused = _pause_blocking_run(cur, aid, [*task_ids, *taken], check_recent=check_recent)
@@ -100,15 +100,12 @@ def _lock_for_registration(cur, aid, body, task_ids, *, check_recent):
             cur.execute("RELEASE SAVEPOINT gh343_registration_lock")
             return paused, []
         current = _tasks_on_token(cur, aid, body)
-        late = sorted(set(current) - {str(t) for t in task_ids} - set(taken))
-        if not late or attempt == _REGISTRATION_LOCK_PASSES - 1:
+        if not set(current) - {str(t) for t in task_ids} - set(taken):
             cur.execute("RELEASE SAVEPOINT gh343_registration_lock")
-            if late:
-                paused = paused or _pause_blocking_run(cur, aid, late, check_recent=False)
             return paused, current
+        # ROLLBACK TO frees this pass's task and token locks (RELEASE alone keeps them).
         cur.execute("ROLLBACK TO SAVEPOINT gh343_registration_lock")
         cur.execute("RELEASE SAVEPOINT gh343_registration_lock")
-    return None, []
 
 
 def _pause_blocking_run(cur, aid, task_ids, *, check_recent):

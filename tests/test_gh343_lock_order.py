@@ -188,3 +188,46 @@ async def test_a_task_accepted_between_registrations_two_reads_is_locked_and_che
     assert (await _renewal(client, aid, run["run_id"]))["stop_requested"] is True
     assert [str(r["task_id"]) for r in db.execute(
         "SELECT task_id FROM worker_run_tasks WHERE run_id=%s", (run["run_id"],))] == [late]
+
+
+async def test_tasks_accepted_between_the_reads_on_every_pass_never_lock_a_task_after_the_token(
+    client, container, make_agent, make_task, make_request, work_headers, db, trace,
+):
+    """Review round 6: registration starts over as often as tasks keep arriving in between.
+
+    Earlier, the fifth pass kept the token and then locked the newly arrived task, so an
+    acceptance holding that task and waiting for the token deadlocked on PostgreSQL. Here a
+    task arrives between the two reads on seven passes in a row; every pass that keeps its
+    locks took the tasks first, and the run ends up linked to all of them.
+    """
+    seen, hooks = trace
+    human, aid, protocol, headers = await _setup(make_agent, client, work_headers)
+    token = headers["X-Orcha-Run-Token"]
+    pending = [
+        (await make_task(f"Accepted in between {i}", "Done", assignee_alias="Builder"))["id"]
+        for i in range(7)
+    ]
+    db.execute("UPDATE tasks SET paused_at=now(), paused_by=%s WHERE id=%s", (human, pending[-1]))
+    accept = "INSERT INTO embodiment_token_tasks (run_token, task_id) VALUES (%s, %s)"
+    arrived = []
+
+    def acceptances_commit(cur, query, execute):
+        locking_token = _LOCK in query and "FROM embodiment_tokens" in query and "run_id IS NULL" in query
+        if locking_token and len(arrived) < len(pending):
+            arrived.append(pending[len(arrived)])
+            execute(cur, accept, (token, arrived[-1]))
+        elif query.startswith("ROLLBACK TO SAVEPOINT gh343_registration_lock"):
+            # The rollback also undoes this pass's acceptance; it committed, so redo it.
+            hooks.append(lambda c, q, e, tid=arrived[-1]: (hooks.pop(), e(c, accept, (token, tid))))
+
+    hooks.append(acceptances_commit)
+    seen.clear()
+    run = await _register(client, aid, headers, None, protocol["task_id"])
+    hooks.clear()
+    restarts = [e for e in seen if e[0].startswith("ROLLBACK TO SAVEPOINT gh343_registration_lock")]
+    assert len(restarts) == len(pending), seen
+    assert_in_order(seen, fresh=("worker_runs",))
+    assert (await _renewal(client, aid, run["run_id"]))["stop_requested"] is True
+    assert sorted(str(r["task_id"]) for r in db.execute(
+        "SELECT task_id FROM worker_run_tasks WHERE run_id=%s", (run["run_id"],))) == sorted(pending)
+    assert db.execute("SELECT task_id FROM embodiment_token_tasks WHERE run_token=%s", (token,)) == []
