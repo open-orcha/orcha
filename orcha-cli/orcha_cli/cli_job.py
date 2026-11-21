@@ -40,6 +40,10 @@ def register(sub, handler):
     start.add_argument('command', nargs=argparse.REMAINDER)
     status = commands.add_parser('status', help='read status and saved exit information without raw logs')
     status.add_argument('job_id', nargs='?')
+    submit = commands.add_parser('submit', help='submit this task for review only after a managed command succeeded')
+    submit.add_argument('job_id')
+    submit.add_argument('--agent', required=True, help='assigned Orcha agent ID')
+    submit.add_argument('--result', required=True, help='task result to submit for normal review')
     wait = commands.add_parser('wait', help='bounded wait; returns early for guidance or deadline')
     wait.add_argument('job_id')
     wait.add_argument('--seconds', type=float, default=100)
@@ -244,6 +248,22 @@ def current_job(api, job_id, *, timeout=None):
     return next((job for job in jobs if job['job_id'] == str(UUID(job_id))), None)
 
 
+def submit_after_successful_job(api, store, job_id, agent_id, result):
+    """Submit work through Orcha's normal /done route only after verified exit 0."""
+    if not isinstance(result, str) or not result.strip():
+        raise ValueError('A nonempty task result is required')
+    job = current_job(api, job_id)
+    if job is None:
+        raise JobStorageError('Managed command not found in this task')
+    evidence = summary(store, job)
+    if (evidence.get('status') != 'completed' or evidence.get('exit_code') != 0
+            or evidence.get('termination_verified') is not True):
+        raise JobStorageError('Managed command has no verified successful exit; task was not submitted')
+    # This remains the ordinary Orcha submission path: workflow evidence capture,
+    # autonomy and human-verification rules are enforced by the existing route.
+    return api.request('done', {'agent_id': agent_id, 'result': result})
+
+
 def save_guidance(store, job_id, page):
     # Message bodies remain in the authoritative thread, not startup pointers.
     refs = {k: page.get(k) for k in ('received_position', 'handled_position')}
@@ -394,6 +414,8 @@ def cmd_job(args):
             jobs = api.request('managed-jobs', method='GET')['jobs']
             result = {'jobs': [summary(store, j) for j in jobs if not args.job_id or j['job_id'] == args.job_id]}
             result.update(api.request('job-outcomes/poll', {}))
+        elif args.job_action == 'submit':
+            result = submit_after_successful_job(api, store, str(UUID(args.job_id)), args.agent, args.result)
         elif args.job_action == 'wait':
             result = wait_for_job(api, store, args.job_id, args.seconds)
         elif args.job_action == 'handled':
