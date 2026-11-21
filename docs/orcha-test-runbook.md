@@ -127,7 +127,30 @@ not authorize a pull-request merge and never bypasses workflow admission, depend
 stop/cancellation rules, evidence review, or the human-only workflow Finish action. Existing
 project and per-agent values are compatibility history only.
 
-## 8. Back up and restore a native project's database (GH #258 S7)
+## 8. Optional GRF acceptance as a managed task check
+
+For a task whose owner has supplied a GRF acceptance action, run that action as an Orcha
+managed foreground command. The managed-job receipt records the verified child exit; submit
+the task through Orcha only after that receipt is a successful exit:
+
+```bash
+orcha job start --key acceptance-attempt-1 --purpose "GRF acceptance check" -- \
+  python3 grf_client.py task-acceptance.grf --config enrollment.json
+orcha job wait <job-id> --seconds 100
+orcha job status <job-id>
+orcha job submit <job-id> --agent <assigned-agent-uuid> --result "Acceptance passed; summary of work"
+```
+
+`job submit` refuses while the command is running, if termination/result evidence is missing,
+or unless the verified exit code is exactly 0. A failed GRF action therefore does not send the
+Orcha `/done` request; fix the work and use a new stable `--key` for the next managed attempt.
+On success, `job submit` uses the ordinary `/done` API, so autonomy and human `needs_verification`
+remain unchanged. This is an opt-in worker-side path, not a server security boundary: clients
+that call `/done` directly do not acquire GRF enforcement, and Orcha does not evaluate whether
+an arbitrary command is safe or whether its result proves every task requirement. No GRF setup is
+required for existing tasks or commands.
+
+## 9. Back up and restore a native project's database (GH #258 S7)
 
 A native project (no Docker) keeps structured data in `.orcha/orcha.db` and file evidence in
 `.claude/.orcha-attachments`.
