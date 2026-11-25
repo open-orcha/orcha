@@ -1,0 +1,42 @@
+/* Reply style chip (ReplyStyleChip.tsx): a small pill by the composer. The native select sits
+   invisibly on top of the pill, so it stays keyboard- and screen-reader-friendly. */
+.reply-style-chip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--text-2, var(--text));
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.reply-style-chip.is-override {
+  border-color: var(--accent-line);
+  color: var(--text);
+}
+.reply-style-chip:focus-within {
+  border-color: var(--accent-line);
+  box-shadow: var(--ring);
+}
+.reply-style-chip__select {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+  font: inherit;
+}
+.reply-style-chip__select:disabled {
+  cursor: not-allowed;
+}
+.reply-style-chip:has(.reply-style-chip__select:disabled) {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
