@@ -31,6 +31,7 @@ from portal_backend.reply_style import DEFAULT_REPLY_STYLE, clean_style
 from portal_backend.limits import MAX_PROMPT_BATCH_CHARS
 from portal_backend.model_policy import (
     MODEL_IDS,
+    RETIRED_MODEL_IDS,
     resolve_model as _resolve_model,
     resolve_model_runtime as _resolve_model_runtime,
     resolve_reasoning_effort,
@@ -172,6 +173,10 @@ def active_conversations(cid: str, request: Request):
             r["reply_style"] = (r["reply_style_override"]
                                 or clean_style(r.pop("_project_reply_style", None))
                                 or DEFAULT_REPLY_STYLE)
+            # Even while migration is deferred for a busy worker, the next turn
+            # must boot cold rather than resume a pinned session's retired model.
+            if r["model"] in RETIRED_MODEL_IDS:
+                r["cold_required"] = True
             r["model"] = _resolve_model(r["model"], _supported_models())
             r["model_runtime"] = _resolve_model_runtime(r["model"], _supported_models())
             r["reasoning_effort"] = resolve_reasoning_effort(

@@ -25,6 +25,9 @@ missing.
   "not a bug" is remembered.
 
 ### Changed
+- Fable 5.1 is no longer offered for new model selections. Saved agents move to the supported
+  default at an idle launch boundary, with the change recorded once. Active runs and historical
+  model labels, usage and cost estimates are preserved; Fable 5.2 remains available (GH #432).
 - QA onboarding: a person's Run click now approves the agent's plan, so it goes straight on. Bringing your
   tests in is free and immediate: each one becomes a draft pointing at its file, with no agent. A stuck live
   pass says why, the cost shown is what the run really cost, and the estimate is realistic.
@@ -44,11 +47,11 @@ missing.
 
 ### Added
 - Claude Fable 5.2 (`claude-fable-5-2`) is in the model catalog. The per-agent
-  model picker offers it next to Fable 5.1, the desktop Stats & Usage cost
+  model picker offers it, the desktop Stats & Usage cost
   estimate prices it ($8 input / $40 output / $0.20 cache read per million
   tokens), and the built-in LLM utility client sends it the `tool_choice: auto`
   request shape because it rejects a forced `tool_choice`. Opus 5.5 stays the
-  default model and Fable 5.1 stays selectable. Desktop version: 2.2.2.
+  default model. Desktop version: 2.2.2.
 - **QA for apps** (iOS, Android and web): agents can map an app, explore
   it, draft QA scenarios and check approved ones on a simulator, an emulator or a headless
   browser. `orcha qa enable` in a project gives its agents the `orcha-qa` tools (`orcha qa mcp`;
@@ -109,7 +112,7 @@ missing.
   The `orcha` CLI command, `ORCHA_*` env vars, API paths and the `orcha://`
   URL scheme are unchanged.
 - Claude model catalog refreshed to the current generation. The per-agent
-  model picker now offers Opus 5.5 and Sonnet 5.5 next to Fable 5.1, and
+  model picker now offers Opus 5.5 and Sonnet 5.5, and
   Opus 5.5 is the default for agents that never picked a model; Fable 5,
   Opus 5 and Sonnet 5 stay selectable so existing agents keep their choice.
   The built-in LLM utility client (onboarding roster drafts, digest

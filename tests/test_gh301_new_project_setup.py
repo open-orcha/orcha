@@ -407,6 +407,9 @@ async def test_setup_click_recovers_through_the_real_path_with_one_reply(
     human = await make_agent("KedarSetupE2E", "human", kind="human")
     ai = await make_agent("AtlasSetupE2E")
     aid = ai["agent_id"]
+    model = {"claude": "claude-opus-5-5", "codex": "gpt-6-astra"}[runtime]
+    selected = await client.post(f"/api/agents/{aid}/model", json={"model": model})
+    assert selected.status_code == 200, selected.text
     started = await client.post(
         f"/api/agents/{aid}/conversations", json={"actor_agent_id": human["agent_id"]}
     )
@@ -428,12 +431,7 @@ async def test_setup_click_recovers_through_the_real_path_with_one_reply(
         calls.append((method, path.split("?")[0], resp.status_code))
         if resp.status_code >= 400:
             return None  # the real helper returns None on HTTP errors
-        data = resp.json()
-        if "active-conversations" in path and isinstance(data, dict):
-            # The fixture agent has no provider configured; pick this run's provider.
-            for c in data.get("conversations", []):
-                c["model_runtime"] = runtime
-        return data
+        return resp.json()
 
     procs: list = []
 

@@ -142,6 +142,40 @@ async def test_prepared_local_workflow_starts_and_the_assigned_task_reserves(cli
 
 
 @pytest.mark.asyncio
+async def test_direct_workflow_reservation_migrates_retired_model_without_wake_claim(client, db):
+    from portal_backend.model_policy import DEFAULT_MODEL
+
+    project = Project(client)
+    await project.start("serial", [("a", project.ann, [])])
+    db.execute("UPDATE agents SET model='claude-fable-5-1',reasoning_effort='max' WHERE id=%s", (project.ann,))
+    reserved = await project.reserve(project.ann, "a")
+    assert reserved["model"] == DEFAULT_MODEL and reserved["reasoning_effort"] == "max"
+    assert db.execute("SELECT model FROM agents WHERE id=%s", (project.ann,))[0]["model"] == DEFAULT_MODEL
+    assert len(db.execute("SELECT 1 FROM events WHERE entity_id=%s AND event_type='model_changed'", (project.ann,))) == 1
+
+
+@pytest.mark.asyncio
+async def test_workflow_retirement_waits_for_confirmed_stop_then_migrates_on_continuation(client, db):
+    from portal_backend.model_policy import DEFAULT_MODEL
+
+    project = Project(client)
+    await project.start("serial", [("a", project.ann, [])])
+    launch = await project.reserve(project.ann, "a")
+    await project.activate(project.ann, launch)
+    # Simulate an existing installation whose live worker was launched on Fable 5.1.
+    db.execute("UPDATE agents SET model='claude-fable-5-1' WHERE id=%s", (project.ann,))
+    await client.post(f"/api/runs/{launch['run_id']}/finish", json={"status": "exited", "exit_code": 0})
+    await client.get(f"/api/containers/{project.cid}/wake-scan")
+    assert db.execute("SELECT model FROM agents WHERE id=%s", (project.ann,))[0]["model"] == "claude-fable-5-1"
+    base = f"/api/agents/{project.ann}/runs/{launch['run_id']}"
+    assert (await client.post(base + "/confirm-stopped", json={"generation": 1})).status_code == 200
+    response = await client.post(base + "/continue-reserve", json={"operation_key": uid()})
+    assert response.status_code == 201, response.text
+    assert response.json()["model"] == DEFAULT_MODEL
+    assert db.execute("SELECT model FROM agents WHERE id=%s", (project.ann,))[0]["model"] == DEFAULT_MODEL
+
+
+@pytest.mark.asyncio
 async def test_unprepared_task_and_non_owner_cannot_start(client):
     project = Project(client)
     draft = {"title": "Local", "goal": "Ship it", "idempotency_key": uid(), "tasks": [

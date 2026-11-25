@@ -20,6 +20,7 @@ import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent as Reac
 import { Icon } from "../../components/ui";
 import { Popover } from "../../components/primitives";
 import { BrandLogo } from "../../components/primitives/BrandLogo";
+import { isRetiredModel } from "../../lib/models";
 import "./modelPicker.css";
 
 export type ManagedRuntime = "claude" | "codex";
@@ -86,7 +87,9 @@ function effortHint(m: PickerModel, effortName: (id: string) => string): { text:
 }
 
 export function ModelPicker(p: ModelPickerProps) {
-  const { agentAlias, models, runtime, currentId, legacyId, defaultId, lockReason, effortName, onPick } = p;
+  const { agentAlias, models, runtime, defaultId, lockReason, effortName, onPick } = p;
+  const legacyId = isRetiredModel(p.legacyId) ? null : p.legacyId;
+  const currentId = isRetiredModel(p.currentId) ? defaultId : p.currentId;
   const trigger = useRef<HTMLButtonElement | null>(null);
   const confirmBtn = useRef<HTMLButtonElement | null>(null);
   const uid = useId().replace(/:/g, "");
@@ -100,7 +103,7 @@ export function ModelPicker(p: ModelPickerProps) {
     const rows: Row[] = [];
     for (const r of MANAGED_RUNTIMES) {
       if (legacyId && r.id === runtime) rows.push({ m: { id: legacyId, name: p.legacyLabel || legacyId }, rt: r.id, legacy: true });
-      for (const m of models) if (managedRuntimeOf(m) === r.id) rows.push({ m, rt: r.id });
+      for (const m of models) if (!isRetiredModel(m.id) && managedRuntimeOf(m) === r.id) rows.push({ m, rt: r.id });
     }
     return rows;
   }, [models, legacyId, runtime, p.legacyLabel]);

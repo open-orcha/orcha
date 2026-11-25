@@ -9,6 +9,7 @@ import time
 from . import notifier_resident_claude_feed as _feed_service
 from . import notifier_startup_preflight as _preflight
 from .notifier_routing_handoff import carry_previous_checkout
+from .launch_model import admitted_candidate
 
 
 def _answered_through(turns) -> int:
@@ -120,6 +121,7 @@ def _boot(
                 "lease_ttl": services.WAKE_LEASE_TTL_SECS,
                 "kind": "resident",
                 "lease_kind": "resident",
+                "expected_model_runtime": services.RUNTIME_CLAUDE,
             },
         )
     )
@@ -130,6 +132,7 @@ def _boot(
                 f"{(claim or {}).get('reason', 'claim failed')}"
             )
         return None
+    candidate = admitted_candidate(candidate, claim)
     session_id = candidate.get("session_id")
     cold = (
         not session_id

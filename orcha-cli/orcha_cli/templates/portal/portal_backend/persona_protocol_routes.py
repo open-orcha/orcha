@@ -11,7 +11,8 @@ from portal_backend.guards import (
     require_agent,
     valid_uuid,
 )
-from portal_backend.identity_routes import require_member_read
+from portal_backend.identity_routes import proxy_login, require_member_read
+from portal_backend.model_retirement import migrate_retired_models
 from portal_backend.reply_style import reply_style_for_prompt
 
 
@@ -43,7 +44,11 @@ def get_persona(aid: str, request: Request):
     on purpose (the prompt can be large; only the daemon needs it)."""
     if not valid_uuid(aid):
         raise HTTPException(400, "agent_id is not a valid UUID")
-    with db_cursor() as (_, cur):
+    with db_cursor() as (conn, cur):
+        agent = require_agent(cur, aid)
+        require_member_read(cur, request, str(agent["container_id"]))
+        if proxy_login(request) is None:
+            migrate_retired_models(cur, str(agent["container_id"]), agent_id=aid)
         cur.execute(
             """SELECT a.alias, a.role, a.kind, a.model, a.system_prompt,
                       a.container_id
@@ -54,6 +59,7 @@ def get_persona(aid: str, request: Request):
         row = cur.fetchone()
         if row:
             require_member_read(cur, request, str(row["container_id"]))  # PS-08
+        conn.commit()
     if not row:
         raise HTTPException(404, f"agent {aid} not found")
     model = _resolve_model(row["model"]) if row["kind"] != "human" else None

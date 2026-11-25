@@ -67,8 +67,9 @@ async def test_list_models_endpoint(client):
     body = r.json()
     assert body["default"] == "claude-opus-5-5"
     ids = {m["id"] for m in body["models"]}
-    assert {"claude-fable-5-2", "claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5"} <= ids
+    assert {"claude-fable-5-2", "claude-opus-5-5", "claude-sonnet-5-5"} <= ids
     assert {"claude-fable-5", "claude-opus-5", "claude-sonnet-5"} <= ids   # previous generation stays selectable
+    assert "claude-fable-5-1" not in ids
     assert "claude-opus-4-8" not in ids
     assert {"gpt-6-astra", "gpt-5.5", "gpt-5.4-mini"} <= ids
     assert {"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"} <= ids
