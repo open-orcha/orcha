@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 import time
 
+from .notifier_reply_style import remember_delivered
+
 
 def maybe_pin_session(api_base: str, conversation_id: str, resident: dict, services):
     """Persist a newly observed Codex session so the next turn can resume it."""
@@ -62,6 +64,9 @@ def finish(
     if real_text and posted:
         services._maybe_pin_codex_session(api_base, conversation_id, resident)
         services._CODEX_RESUME_FAILED.discard(conversation_id)
+        # Codex answered this turn, so it read the style rules the turn carried.
+        if "reply_style_sent" in resident:
+            remember_delivered(conversation_id, resident["reply_style_sent"])
 
     if services._finish_run(
         api_base,

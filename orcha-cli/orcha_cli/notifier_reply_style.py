@@ -125,6 +125,12 @@ def remember_delivered(conv_id: Optional[str], style: Optional[str]) -> None:
         _DELIVERED[conv_id] = style
 
 
+def forget_delivered(conv_id: Optional[str]) -> None:
+    """Mark chat ``conv_id``'s style as unknown, so its next turn states the current style."""
+    if conv_id:
+        _DELIVERED.pop(conv_id, None)
+
+
 def turn_style_note(style: Optional[str], *, delivered: Optional[str] = None) -> Optional[str]:
     """What a fed chat turn carries so a mid-chat style change takes effect.
 

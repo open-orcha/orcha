@@ -1,4 +1,4 @@
-"""Reply style (mig 102 / sqlite 032): the project setting, the per-thread overrides and the
+"""Reply style (mig 103 / sqlite 033): the project setting, the per-thread overrides and the
 prompt section agents get.
 
 Storage: projects default to Normal; owners (or manage_agents) change it; any human member sets
@@ -337,12 +337,35 @@ def test_resumed_claude_chat_states_normal_when_its_last_style_is_unknown(monkey
     assert say(2, "two", "normal") == notifier._wrap_conversation_turn("two")
 
 
-def _codex_turn(monkeypatch, tmp_path, **conv):
-    """One Codex conversation turn through the service; returns (prompt, spawn kwargs)."""
+def _codex_turn(monkeypatch, tmp_path, *, outcome="reply", **conv):
+    """One Codex conversation turn through the service; returns (prompt, spawn kwargs).
+
+    ``outcome`` is how the turn ends: "reply" (Codex answers and the reply is posted), "crash"
+    (the worker exits without a reply) or "no_run" (run registration fails, so the launch is
+    aborted and the worker killed before it can read its prompt)."""
     notifier._CODEX_RESUME_FAILED.discard("c1")
-    _, spawned = _wire_codex_spawn(monkeypatch, _codex_resume_conv(**conv))
-    notifier.service_residents("http://x", "cid", {}, quiet=True, base_cwd=str(tmp_path))
+    conv = _codex_resume_conv(**conv)
+    _, spawned = _wire_codex_spawn(monkeypatch, conv)
+    killed = []
+    monkeypatch.setattr(notifier, "_kill_worker", lambda proc, **k: killed.append(proc))
+    if outcome == "no_run":
+        post = notifier._post_json
+        monkeypatch.setattr(notifier, "_post_json", lambda url, body, **k:
+                            None if url.endswith("/runs") else post(url, body, **k))
+    live = {}
+    notifier.service_residents("http://x", "cid", live, quiet=True, base_cwd=str(tmp_path))
     args, kw = spawned[0]
+    if outcome == "no_run":
+        assert killed and not live                                      # launch aborted
+    else:
+        resident = live["c1"]
+        if outcome == "reply":
+            resident["last_message_path"].parent.mkdir(parents=True, exist_ok=True)
+            resident["last_message_path"].write_text("done")
+        resident["proc"].returncode = 0 if outcome == "reply" else 1
+        conv["pending_human"] = False
+        notifier.service_residents("http://x", "cid", live, quiet=True, base_cwd=str(tmp_path))
+        assert not live and len(spawned) == 1                           # turn finished
     return args[1], kw
 
 
@@ -375,6 +398,40 @@ def test_cold_codex_chat_remembers_the_style_its_persona_carried(monkeypatch, tm
     assert ASD_STE100_SECTION not in prompt
     prompt, kw = _codex_turn(monkeypatch, tmp_path, reply_style="asd_ste100")
     assert kw["resume_session_id"] and ASD_STE100_SECTION not in prompt and NORMAL_TURN_NOTE not in prompt
+
+
+@pytest.mark.parametrize("outcome", ["no_run", "crash"])
+def test_codex_retry_after_a_failed_turn_states_the_style_again(monkeypatch, tmp_path, outcome):
+    """Code review r2: a launch can die before Codex reads its prompt (run registration fails and
+    the worker is killed, or the worker exits without replying). The style it carried was never
+    confirmed, so the retry of the same session must carry it again."""
+    _codex_turn(monkeypatch, tmp_path, reply_style="normal")                # known: Normal
+    prompt, _ = _codex_turn(monkeypatch, tmp_path, outcome=outcome, reply_style="caveman")
+    assert CAVEMAN_SECTION in prompt
+    prompt, kw = _codex_turn(monkeypatch, tmp_path, reply_style="caveman")  # retry, same session
+    assert kw["resume_session_id"] and CAVEMAN_SECTION in prompt
+    prompt, _ = _codex_turn(monkeypatch, tmp_path, reply_style="caveman")  # now confirmed
+    assert CAVEMAN_SECTION not in prompt
+
+
+def test_codex_retry_after_a_failed_turn_states_normal_again(monkeypatch, tmp_path):
+    """The same for a return to Normal: an unconfirmed reset is sent again on the retry."""
+    _codex_turn(monkeypatch, tmp_path, reply_style="caveman")
+    prompt, _ = _codex_turn(monkeypatch, tmp_path, outcome="no_run", reply_style="normal")
+    assert NORMAL_TURN_NOTE in prompt
+    prompt, _ = _codex_turn(monkeypatch, tmp_path, reply_style="normal")
+    assert NORMAL_TURN_NOTE in prompt
+    prompt, _ = _codex_turn(monkeypatch, tmp_path, reply_style="normal")
+    assert NORMAL_TURN_NOTE not in prompt
+
+
+def test_failed_codex_turn_without_a_note_keeps_the_known_style(monkeypatch, tmp_path):
+    """A failed turn that carried no style rules changes nothing the session knows."""
+    _codex_turn(monkeypatch, tmp_path, reply_style="caveman")
+    prompt, _ = _codex_turn(monkeypatch, tmp_path, outcome="crash", reply_style="caveman")
+    assert CAVEMAN_SECTION not in prompt
+    prompt, _ = _codex_turn(monkeypatch, tmp_path, reply_style="caveman")
+    assert CAVEMAN_SECTION not in prompt
 
 
 def test_chats_without_style_info_never_get_a_note(monkeypatch, tmp_path):
