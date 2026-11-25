@@ -101,32 +101,48 @@ NORMAL_TURN_NOTE = (
     "rules given earlier in this session."
 )
 
+# The style each chat session is known to be writing in, by conversation id: what its boot
+# prompt carried (cold start), then whatever the last fed turn delivered. It lives as long as the
+# notifier process; after a restart, or for a session resumed from before it, the style is
+# unknown and the next turn states it outright (see turn_style_note).
+_DELIVERED: dict = {}
 
-def turn_style_note(
-    style: Optional[str],
-    *,
-    started_style: Optional[str] = None,
-    override: Optional[str] = None,
-) -> Optional[str]:
-    """What a warm conversation turn carries so a mid-chat style change takes effect.
 
-    A running (or resumed) chat session keeps the system prompt it booted with, so the
-    composer chip / project setting has to ride on the fed turn itself. ``style`` is the
-    conversation's current style (None from an older server: add nothing). ``started_style``
-    is the style the session was cold-booted with (None when unknown, e.g. a resumed session).
+def delivered_style(conv_id: Optional[str]) -> Optional[str]:
+    """The style chat ``conv_id`` last received, or ``None`` when unknown."""
+    return _DELIVERED.get(conv_id) if conv_id else None
 
-    - Same style as the boot prompt: nothing (the rules are already in the system prompt).
+
+def remember_delivered(conv_id: Optional[str], style: Optional[str]) -> None:
+    """Record that chat ``conv_id`` now writes in ``style`` (a boot prompt or a fed turn carried
+    it). No style info (an older server) forgets the entry, so nothing stale is trusted later."""
+    if not conv_id:
+        return
+    style = _valid(style)
+    if style is None:
+        _DELIVERED.pop(conv_id, None)
+    else:
+        _DELIVERED[conv_id] = style
+
+
+def turn_style_note(style: Optional[str], *, delivered: Optional[str] = None) -> Optional[str]:
+    """What a fed chat turn carries so a mid-chat style change takes effect.
+
+    A running (or resumed) chat session keeps the prompt it booted with, so the composer chip /
+    project setting has to ride on the fed turn itself. ``style`` is the conversation's current
+    style (None from an older server: add nothing). ``delivered`` is the style the session last
+    received (remembered per conversation; None when unknown, e.g. after a notifier restart).
+
+    - Same as the last delivered style: nothing (the session already has those rules).
     - Another non-Normal style: that style's full rules.
-    - Normal: a one-line note to drop earlier style rules, when the session started under a
-      style or the chat explicitly chose Normal; otherwise nothing (the common default case).
+    - Normal after another style, or when the last style is unknown: a one-line note to drop any
+      earlier style rules. Once delivered, later Normal turns add nothing.
     """
     style = _valid(style)
     if style is None:
         return None
-    if started_style is not None and style == started_style:
+    if style == _valid(delivered):
         return None
     if style != NORMAL:
         return f"[reply style for this conversation]\n{_SECTIONS[style]}"
-    if override == NORMAL or _valid(started_style) not in (None, NORMAL):
-        return NORMAL_TURN_NOTE
-    return None
+    return NORMAL_TURN_NOTE

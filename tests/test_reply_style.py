@@ -8,9 +8,11 @@ by lane (thread beats project), Normal adds nothing, and each style keeps the fi
 code/paths/quotes, one Normal reply on "elaborate", GitHub and agent-to-agent stay Normal, plans
 never Caveman). Everything is in /openapi.json.
 """
+import json
+
 import pytest
 
-from orcha_cli import notifier
+from orcha_cli import notifier, notifier_reply_style
 from orcha_cli.notifier_reply_style import (
     ASD_STE100_SECTION,
     CAVEMAN_SECTION,
@@ -19,8 +21,17 @@ from orcha_cli.notifier_reply_style import (
     reply_style_section,
 )
 from test_evidence_pack import HUBOT, OCTO, VERA, _members
+from test_resident_session import ResidentProc, _codex_resume_conv, _wire, _wire_codex_spawn
 
 PERSONA = {"system_prompt": "You are Tim."}
+
+
+@pytest.fixture(autouse=True)
+def _fresh_delivered_styles():
+    """Each test starts as a freshly started notifier: no chat's last style is known."""
+    notifier_reply_style._DELIVERED.clear()
+    yield
+    notifier_reply_style._DELIVERED.clear()
 
 
 @pytest.fixture
@@ -244,22 +255,132 @@ def test_plans_never_use_caveman():
 
 def test_warm_turn_carries_a_changed_style_and_nothing_by_default():
     plain = notifier._wrap_conversation_turn("hi")
-    # no style info (older server) and the default Normal chat: unchanged
+    # no style info (older server): unchanged, whatever the session last had
     assert notifier._wrap_conversation_turn("hi", reply_style=None) == plain
-    assert notifier._wrap_conversation_turn("hi", reply_style="normal", started_style="normal") == plain
-    assert notifier._wrap_conversation_turn("hi", reply_style="normal") == plain
-    # same style the session booted with: the rules are already in its system prompt
-    assert notifier._wrap_conversation_turn("hi", reply_style="caveman", started_style="caveman") == plain
+    assert notifier._wrap_conversation_turn("hi", reply_style=None, delivered_style="caveman") == plain
+    # same style the session last received: the rules are already there
+    assert notifier._wrap_conversation_turn("hi", reply_style="normal", delivered_style="normal") == plain
+    assert notifier._wrap_conversation_turn("hi", reply_style="caveman", delivered_style="caveman") == plain
     # switched mid-chat (chip or project setting): the new rules ride on the turn
-    out = notifier._wrap_conversation_turn("hi", reply_style="asd_ste100", started_style="caveman")
+    out = notifier._wrap_conversation_turn("hi", reply_style="asd_ste100", delivered_style="caveman")
     assert ASD_STE100_SECTION in out and out.endswith("\n\nhi")
-    # resumed session (boot style unknown): non-Normal styles always ride
+    # last style unknown (resumed session, notifier restarted): the current style is stated outright
     assert CAVEMAN_SECTION in notifier._wrap_conversation_turn("hi", reply_style="caveman")
+    assert NORMAL_TURN_NOTE in notifier._wrap_conversation_turn("hi", reply_style="normal")
     # back to Normal: tell the session to drop the old rules
-    back = notifier._wrap_conversation_turn("hi", reply_style="normal", started_style="caveman")
-    assert NORMAL_TURN_NOTE in back
-    assert NORMAL_TURN_NOTE in notifier._wrap_conversation_turn("hi", reply_style="normal",
-                                                                style_override="normal")
+    back = notifier._wrap_conversation_turn("hi", reply_style="normal", delivered_style="caveman")
+    assert NORMAL_TURN_NOTE in back and CAVEMAN_SECTION not in back
+
+
+def _fed_text(proc) -> str:
+    """The text of the last user turn written to a resident's stdin."""
+    line = proc.stdin.getvalue().decode().strip().splitlines()[-1]
+    return json.loads(line)["message"]["content"][0]["text"]
+
+
+def _claude_chat(monkeypatch, tmp_path, *, style, session_id=None):
+    """A Claude chat driven through the resident conversation service. Returns ``say(seq, text,
+    style, override)``, which queues a human turn, runs one service tick and returns what the
+    session received."""
+    conv = {"conversation_id": "C1", "agent_id": "A1", "agent_alias": "Vox",
+            "session_id": session_id, "cold_required": False, "pending_human": True,
+            "last_turn_seq": 0, "reply_style": style, "reply_style_override": None}
+    turns = []
+    _wire(monkeypatch, active=[conv], turns=turns)
+    proc = ResidentProc()
+    spawned = []
+    monkeypatch.setattr(notifier, "spawn_resident",
+                        lambda *a, **k: spawned.append(k) or (True, "r", proc))
+    live = {}
+
+    def say(seq, text, style, override=None):
+        turns.append({"seq": seq, "role": "human", "content": text})
+        conv.update(last_turn_seq=seq, reply_style=style, reply_style_override=override)
+        if "C1" in live:                       # the previous reply was captured: session idle
+            live["C1"].update(awaiting_result=False, current_run_id=None)
+        notifier.service_residents("http://x", "cid", live, base_cwd=str(tmp_path))
+        return _fed_text(proc)
+
+    return say, spawned
+
+
+def test_claude_chat_switching_back_to_its_starting_style_sends_the_reset(monkeypatch, tmp_path):
+    """Code review r1: Normal -> Caveman -> Normal on one running session. The third turn must
+    tell the session to drop the Caveman rules (it compared with the boot style before)."""
+    say, spawned = _claude_chat(monkeypatch, tmp_path, style="normal")
+    assert say(1, "one", "normal") == notifier._wrap_conversation_turn("one")   # boot prompt has it
+    assert spawned[0]["resume_session_id"] is None                              # one cold boot ...
+    assert CAVEMAN_SECTION in say(2, "two", "caveman", override="caveman")
+    third = say(3, "three", "normal", override="normal")                        # explicit Normal chip
+    assert NORMAL_TURN_NOTE in third and CAVEMAN_SECTION not in third and third.endswith("three")
+    assert say(4, "four", "normal", override="normal") == notifier._wrap_conversation_turn("four")
+    assert len(spawned) == 1                                                    # ... one live session
+
+
+def test_claude_chat_follows_the_project_back_to_normal(monkeypatch, tmp_path):
+    """Boot under the project's Caveman, then the project goes back to Normal (no chip)."""
+    say, _ = _claude_chat(monkeypatch, tmp_path, style="caveman")
+    assert say(1, "one", "caveman") == notifier._wrap_conversation_turn("one")
+    assert NORMAL_TURN_NOTE in say(2, "two", "normal")
+    assert say(3, "three", "normal") == notifier._wrap_conversation_turn("three")
+    assert CAVEMAN_SECTION in say(4, "four", "caveman")                          # and back again
+
+
+def test_resumed_claude_chat_states_normal_when_its_last_style_is_unknown(monkeypatch, tmp_path):
+    """Code review r1: a resumed session may still hold Caveman rules from before a notifier
+    restart; with the project now Normal, its first turn says so once, then adds nothing."""
+    say, spawned = _claude_chat(monkeypatch, tmp_path, style="normal",
+                                session_id="99999999-8888-7777-6666-555555555555")
+    first = say(1, "one", "normal")
+    assert spawned[0]["resume_session_id"] is not None and spawned[0]["system_prompt"] is None
+    assert NORMAL_TURN_NOTE in first
+    assert say(2, "two", "normal") == notifier._wrap_conversation_turn("two")
+
+
+def _codex_turn(monkeypatch, tmp_path, **conv):
+    """One Codex conversation turn through the service; returns (prompt, spawn kwargs)."""
+    notifier._CODEX_RESUME_FAILED.discard("c1")
+    _, spawned = _wire_codex_spawn(monkeypatch, _codex_resume_conv(**conv))
+    notifier.service_residents("http://x", "cid", {}, quiet=True, base_cwd=str(tmp_path))
+    args, kw = spawned[0]
+    return args[1], kw
+
+
+def test_resumed_codex_chat_returns_to_the_project_normal(monkeypatch, tmp_path):
+    """Code review r1: a resumed Codex chat got Caveman; the project goes back to Normal with no
+    chat override. The next resume prompt must reset it, and the one after adds nothing."""
+    prompt, kw = _codex_turn(monkeypatch, tmp_path, reply_style="caveman")
+    assert kw["resume_session_id"] and kw["system_prompt"] is None
+    assert CAVEMAN_SECTION in prompt
+    prompt, _ = _codex_turn(monkeypatch, tmp_path, reply_style="caveman")
+    assert CAVEMAN_SECTION not in prompt                                         # already has it
+    prompt, _ = _codex_turn(monkeypatch, tmp_path, reply_style="normal")
+    assert NORMAL_TURN_NOTE in prompt and CAVEMAN_SECTION not in prompt
+    prompt, _ = _codex_turn(monkeypatch, tmp_path, reply_style="normal")
+    assert NORMAL_TURN_NOTE not in prompt
+
+
+def test_resumed_codex_chat_states_normal_when_its_last_style_is_unknown(monkeypatch, tmp_path):
+    """After a notifier restart the last style is unknown: state Normal outright, once."""
+    prompt, _ = _codex_turn(monkeypatch, tmp_path, reply_style="normal")
+    assert NORMAL_TURN_NOTE in prompt
+    prompt, _ = _codex_turn(monkeypatch, tmp_path, reply_style="normal")
+    assert NORMAL_TURN_NOTE not in prompt
+
+
+def test_cold_codex_chat_remembers_the_style_its_persona_carried(monkeypatch, tmp_path):
+    """A cold boot puts the style in the persona, so the next resume adds nothing for it."""
+    prompt, kw = _codex_turn(monkeypatch, tmp_path, reply_style="asd_ste100", session_id=None)
+    assert kw["resume_session_id"] is None and kw["system_prompt"] == "PERSONA"
+    assert ASD_STE100_SECTION not in prompt
+    prompt, kw = _codex_turn(monkeypatch, tmp_path, reply_style="asd_ste100")
+    assert kw["resume_session_id"] and ASD_STE100_SECTION not in prompt and NORMAL_TURN_NOTE not in prompt
+
+
+def test_chats_without_style_info_never_get_a_note(monkeypatch, tmp_path):
+    """An older server sends no reply_style: resumed chats stay exactly as before."""
+    prompt, _ = _codex_turn(monkeypatch, tmp_path)
+    assert NORMAL_TURN_NOTE not in prompt and "[reply style" not in prompt
 
 
 async def test_active_conversations_carry_the_chat_style(client, container, make_agent):

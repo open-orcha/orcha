@@ -9,7 +9,7 @@ import sys
 import time
 
 from . import notifier_startup_preflight as _preflight
-from .notifier_reply_style import turn_style_note
+from .notifier_reply_style import delivered_style, remember_delivered, turn_style_note
 from .notifier_routing_handoff import carry_previous_checkout
 
 
@@ -134,11 +134,11 @@ def start_candidate(
         prompt = services._codex_resume_prompt(
             candidate.get("agent_alias"), pending
         )
-        # Reply style: a resumed session keeps its first prompt, so the chat's current style
-        # rides on the resume prompt (nothing for the default Normal chat).
+        # Reply style: a resumed session keeps its first prompt, so a changed style (or, when
+        # the last one is unknown, the current style) rides on the resume prompt.
         style_note = turn_style_note(
             candidate.get("reply_style"),
-            override=candidate.get("reply_style_override"),
+            delivered=delivered_style(conv_id),
         )
         if style_note:
             prompt = f"{style_note}\n\n{prompt}"
@@ -192,6 +192,10 @@ def start_candidate(
             quiet=quiet,
         )
         return
+    # The session now writes in the chat's current style: the cold persona carried it, or the
+    # resume prompt's style note did (or the session already had it).
+    if not use_resume or candidate.get("reply_style") is not None:
+        remember_delivered(conv_id, candidate.get("reply_style"))
     _run_payload = {
         "wake_kind": "ephemeral",
         "wake_event": "conversation_turn",

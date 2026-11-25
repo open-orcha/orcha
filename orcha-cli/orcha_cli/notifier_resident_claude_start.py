@@ -9,6 +9,7 @@ import time
 from . import notifier_resident_claude_feed as _feed_service
 from . import notifier_startup_preflight as _preflight
 from .notifier_routing_handoff import carry_previous_checkout
+from .notifier_reply_style import remember_delivered
 from .launch_model import admitted_candidate
 
 
@@ -278,9 +279,6 @@ def _boot(
         "session_id": session_id,
         "session_pinned": not cold,
         "cold": cold,
-        # Reply style the boot prompt carries (cold boots only; a resumed session keeps its
-        # original prompt, so unknown) — fed turns add a style note when it changes.
-        "reply_style_started": candidate.get("reply_style") if cold else None,
         # Sandbox resident (remote-runner un-deferral): the warm session's ONE
         # container, threaded through the handle so every turn's run row records
         # it and the close/exit/stop paths can reap it (container + api-config).
@@ -301,6 +299,9 @@ def _boot(
     _preflight.record_success(conv_id)
     if cold:
         services._RESIDENT_RESUME_FAILED.discard(conv_id)
+        # A fresh session writes in the style its boot prompt carried. A resumed one keeps
+        # whatever it last received (remembered, or unknown after a restart).
+        remember_delivered(conv_id, candidate.get("reply_style"))
     return resident
 
 
