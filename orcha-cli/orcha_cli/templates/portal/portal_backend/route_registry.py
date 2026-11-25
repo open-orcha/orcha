@@ -77,6 +77,7 @@ from portal_backend import (
     qa_scenario_parity_routes,  # scenario history, health, coverage growth (mig 095)
     qa_runs_routes,  # Orcha QA: the run page (mig 095)
     qa_report_routes,  # Orcha QA: a task's report, import someone else's (mig 100)
+    reply_style_routes,  # agent reply style: project setting + thread overrides (mig 102)
     request_acceptance_routes,
     request_close_routes,
     request_conversion_routes,

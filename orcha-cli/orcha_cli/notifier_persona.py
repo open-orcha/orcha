@@ -12,6 +12,7 @@ from .notifier_handoff_policy import (
 )
 from .notifier_protocol import _render_protocol, _render_resume_context, _render_task_body
 from .notifier_deliverables import DELIVERABLES_GUIDANCE
+from .notifier_reply_style import reply_style_section, resolve_reply_style
 
 # #325: the standing plain-language rule for every message an agent sends a HUMAN. Orcha is
 # built for non-engineers to run their own agent teams, so communication clarity is a product
@@ -256,6 +257,14 @@ def format_persona(persona: Optional[dict], digest: Optional[dict],
     # #325: standing guardrail rides whenever we're actually booting as an agent.
     if parts:
         parts.append(HUMAN_COMMS_GUARDRAIL)
+        # Reply style (project setting, per-thread override): the chosen style's rules ride
+        # right after the guardrail so every lane that writes to people gets them. Normal adds
+        # nothing. Read from the protocol, which is fetched fresh every wake.
+        style_section = reply_style_section(
+            resolve_reply_style((protocol or {}).get("reply_style"), lane)
+        )
+        if style_section:
+            parts.append(style_section)
         # Multi-human conflict rules ride every agent boot too (owner > member,
         # DoD > chat, explicit overrides, escalate unresolved contradictions).
         parts.append(MULTI_HUMAN_STEERING)
