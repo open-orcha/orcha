@@ -7,6 +7,7 @@ import sys
 import time
 
 from . import notifier_startup_preflight as _preflight
+from .notifier_reply_style import turn_style_note
 from .notifier_routing_handoff import carry_previous_checkout
 
 
@@ -129,6 +130,14 @@ def start_candidate(
         prompt = services._codex_resume_prompt(
             candidate.get("agent_alias"), pending
         )
+        # Reply style: a resumed session keeps its first prompt, so the chat's current style
+        # rides on the resume prompt (nothing for the default Normal chat).
+        style_note = turn_style_note(
+            candidate.get("reply_style"),
+            override=candidate.get("reply_style_override"),
+        )
+        if style_note:
+            prompt = f"{style_note}\n\n{prompt}"
         persona = None
     else:
         prompt = services._conversation_worker_prompt(

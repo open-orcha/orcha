@@ -27,6 +27,7 @@ from portal_backend.guards import (
 )
 from portal_backend.identity_routes import require_member_read
 from portal_backend.orphan_lease_routes import ORPHAN_LEASE_SECS
+from portal_backend.reply_style import DEFAULT_REPLY_STYLE, clean_style
 from portal_backend.limits import MAX_PROMPT_BATCH_CHARS
 from portal_backend.model_policy import (
     MODEL_IDS,
@@ -89,6 +90,11 @@ def active_conversations(cid: str, request: Request):
             f"""SELECT cv.id AS conversation_id, cv.agent_id, a.alias AS agent_alias, a.model,
                       a.reasoning_effort,
                       cv.session_id, cv.status, cv.last_turn_at,
+                      -- Reply style (mig 102): the chat's override and the project setting, so a
+                      -- warm resident can carry the current style on each fed turn.
+                      cv.reply_style AS reply_style_override,
+                      (SELECT c.reply_style FROM containers c WHERE c.id = cv.container_id)
+                          AS _project_reply_style,
                       -- #266: the clock-driven auto-wake inputs, so an idle warm resident can YIELD
                       -- its lease when the cadence is due (the wake then fires ephemeral, never
                       -- injected — ISS-78). Same truth table as wake_scan's auto_wake_due.
@@ -162,6 +168,10 @@ def active_conversations(cid: str, request: Request):
             r.pop("turns_used", None)
             r.pop("turn_budget", None)
             r.pop("_secs_since_woken", None)
+            r["reply_style_override"] = clean_style(r["reply_style_override"])
+            r["reply_style"] = (r["reply_style_override"]
+                                or clean_style(r.pop("_project_reply_style", None))
+                                or DEFAULT_REPLY_STYLE)
             r["model"] = _resolve_model(r["model"], _supported_models())
             r["model_runtime"] = _resolve_model_runtime(r["model"], _supported_models())
             r["reasoning_effort"] = resolve_reasoning_effort(

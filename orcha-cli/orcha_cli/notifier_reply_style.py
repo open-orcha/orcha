@@ -94,3 +94,39 @@ def resolve_reply_style(reply_style: Optional[dict], lane: str = "work") -> str:
 def reply_style_section(style: Optional[str]) -> Optional[str]:
     """The prompt section for ``style``; ``None`` for Normal (or anything unknown)."""
     return _SECTIONS.get(style or NORMAL)
+
+
+NORMAL_TURN_NOTE = (
+    "[reply style for this conversation] Normal: write normally and ignore any \"Reply style\" "
+    "rules given earlier in this session."
+)
+
+
+def turn_style_note(
+    style: Optional[str],
+    *,
+    started_style: Optional[str] = None,
+    override: Optional[str] = None,
+) -> Optional[str]:
+    """What a warm conversation turn carries so a mid-chat style change takes effect.
+
+    A running (or resumed) chat session keeps the system prompt it booted with, so the
+    composer chip / project setting has to ride on the fed turn itself. ``style`` is the
+    conversation's current style (None from an older server: add nothing). ``started_style``
+    is the style the session was cold-booted with (None when unknown, e.g. a resumed session).
+
+    - Same style as the boot prompt: nothing (the rules are already in the system prompt).
+    - Another non-Normal style: that style's full rules.
+    - Normal: a one-line note to drop earlier style rules, when the session started under a
+      style or the chat explicitly chose Normal; otherwise nothing (the common default case).
+    """
+    style = _valid(style)
+    if style is None:
+        return None
+    if started_style is not None and style == started_style:
+        return None
+    if style != NORMAL:
+        return f"[reply style for this conversation]\n{_SECTIONS[style]}"
+    if override == NORMAL or _valid(started_style) not in (None, NORMAL):
+        return NORMAL_TURN_NOTE
+    return None

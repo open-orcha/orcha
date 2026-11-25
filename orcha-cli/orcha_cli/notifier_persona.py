@@ -12,7 +12,7 @@ from .notifier_handoff_policy import (
 )
 from .notifier_protocol import _render_protocol, _render_resume_context, _render_task_body
 from .notifier_deliverables import DELIVERABLES_GUIDANCE
-from .notifier_reply_style import reply_style_section, resolve_reply_style
+from .notifier_reply_style import reply_style_section, resolve_reply_style, turn_style_note
 
 # #325: the standing plain-language rule for every message an agent sends a HUMAN. Orcha is
 # built for non-engineers to run their own agent teams, so communication clarity is a product
@@ -212,10 +212,19 @@ _CONVERSATION_TURN_REMINDER = (
 )
 
 
-def _wrap_conversation_turn(content: str) -> str:
+def _wrap_conversation_turn(content: str, *, reply_style: Optional[str] = None,
+                            started_style: Optional[str] = None,
+                            style_override: Optional[str] = None) -> str:
     """Prepend the stable conversation-lane reminder to a warm turn's content (GH #91/#90). Kept as
     ONE fixed sentence so it stays prompt-cache friendly across turns; the full directive rode in on
-    the cold-boot persona."""
+    the cold-boot persona.
+
+    Reply style: when the chat's current style differs from the one the session booted with (the
+    composer chip or the project setting changed mid-chat), the style note rides between the
+    reminder and the content (notifier_reply_style.turn_style_note). No style info = unchanged."""
+    note = turn_style_note(reply_style, started_style=started_style, override=style_override)
+    if note:
+        return f"{_CONVERSATION_TURN_REMINDER}\n\n{note}\n\n{content}"
     return f"{_CONVERSATION_TURN_REMINDER}\n\n{content}"
 
 

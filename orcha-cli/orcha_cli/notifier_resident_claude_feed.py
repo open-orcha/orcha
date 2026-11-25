@@ -25,7 +25,12 @@ def feed(services, api_base, conv_id, candidate, resident) -> None:
         )
     if not services._send_user_turn(
         resident["proc"],
-        services._wrap_conversation_turn(next_turn["content"]),
+        services._wrap_conversation_turn(
+            next_turn["content"],
+            reply_style=candidate.get("reply_style"),
+            started_style=resident.get("reply_style_started"),
+            style_override=candidate.get("reply_style_override"),
+        ),
     ):
         return
     _run_payload = {

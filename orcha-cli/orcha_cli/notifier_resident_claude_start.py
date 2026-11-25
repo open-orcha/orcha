@@ -275,6 +275,9 @@ def _boot(
         "session_id": session_id,
         "session_pinned": not cold,
         "cold": cold,
+        # Reply style the boot prompt carries (cold boots only; a resumed session keeps its
+        # original prompt, so unknown) — fed turns add a style note when it changes.
+        "reply_style_started": candidate.get("reply_style") if cold else None,
         # Sandbox resident (remote-runner un-deferral): the warm session's ONE
         # container, threaded through the handle so every turn's run row records
         # it and the close/exit/stop paths can reap it (container + api-config).

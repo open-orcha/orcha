@@ -14,6 +14,7 @@ from orcha_cli import notifier
 from orcha_cli.notifier_reply_style import (
     ASD_STE100_SECTION,
     CAVEMAN_SECTION,
+    NORMAL_TURN_NOTE,
     resolve_reply_style,
     reply_style_section,
 )
@@ -237,3 +238,47 @@ def test_plans_never_use_caveman():
     assert "Write plans in ASD-STE100" in CAVEMAN_SECTION
     # ASD-STE100 covers plans with its own rules; no Caveman anywhere in it
     assert "Caveman" not in ASD_STE100_SECTION and "plans" in ASD_STE100_SECTION
+
+
+# ------------------------------------------------------------------ warm chat sessions
+
+def test_warm_turn_carries_a_changed_style_and_nothing_by_default():
+    plain = notifier._wrap_conversation_turn("hi")
+    # no style info (older server) and the default Normal chat: unchanged
+    assert notifier._wrap_conversation_turn("hi", reply_style=None) == plain
+    assert notifier._wrap_conversation_turn("hi", reply_style="normal", started_style="normal") == plain
+    assert notifier._wrap_conversation_turn("hi", reply_style="normal") == plain
+    # same style the session booted with: the rules are already in its system prompt
+    assert notifier._wrap_conversation_turn("hi", reply_style="caveman", started_style="caveman") == plain
+    # switched mid-chat (chip or project setting): the new rules ride on the turn
+    out = notifier._wrap_conversation_turn("hi", reply_style="asd_ste100", started_style="caveman")
+    assert ASD_STE100_SECTION in out and out.endswith("\n\nhi")
+    # resumed session (boot style unknown): non-Normal styles always ride
+    assert CAVEMAN_SECTION in notifier._wrap_conversation_turn("hi", reply_style="caveman")
+    # back to Normal: tell the session to drop the old rules
+    back = notifier._wrap_conversation_turn("hi", reply_style="normal", started_style="caveman")
+    assert NORMAL_TURN_NOTE in back
+    assert NORMAL_TURN_NOTE in notifier._wrap_conversation_turn("hi", reply_style="normal",
+                                                                style_override="normal")
+
+
+async def test_active_conversations_carry_the_chat_style(client, container, make_agent):
+    cid = container["id"]
+    human = await make_agent("operator", kind="human")
+    ai = await make_agent("builder")
+    conv = await _conversation(client, ai["agent_id"], human["agent_id"])
+
+    async def row():
+        rows = (await client.get(f"/api/containers/{cid}/active-conversations")).json()
+        rows = rows.get("conversations", rows) if isinstance(rows, dict) else rows
+        return next(r for r in rows if r["conversation_id"] == conv)
+
+    r = await row()
+    assert r["reply_style"] == "normal" and r["reply_style_override"] is None
+    await client.put(f"/api/containers/{cid}/reply-style",
+                     json={"reply_style": "caveman", "actor_agent_id": human["agent_id"]})
+    assert (await row())["reply_style"] == "caveman"
+    await client.put(f"/api/conversations/{conv}/reply-style",
+                     json={"reply_style": "normal", "actor_agent_id": human["agent_id"]})
+    r = await row()
+    assert r["reply_style"] == "normal" and r["reply_style_override"] == "normal"
