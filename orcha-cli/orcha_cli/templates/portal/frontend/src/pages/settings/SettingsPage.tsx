@@ -46,6 +46,7 @@ import { VoiceSection } from "./voice/VoiceSection";
 import { AgentLimitRow } from "./AgentLimitRow";
 import { ObjectiveRow } from "./ObjectiveRow";
 import { ReviewRoutingRow } from "./ReviewRoutingRow";
+import { ReplyStyleRow } from "./ReplyStyleRow";
 import { PortabilitySection } from "./portability/PortabilitySection";
 import { ProjectModeSection } from "../onboarding/templates/ProjectModeSection";
 import { DefaultBadge, KeyDetail, PROVIDER_DOCS, ProviderRow, RuntimesGroup } from "./providerRows";
@@ -1432,6 +1433,15 @@ function ExecutionSection() {
         {/* mig 056: the agent limit (PUT …/limits, owner-or-manage_agents) */}
         <SettingRows id="execLimits">
           <AgentLimitRow cid={cid} />
+        </SettingRows>
+      </SettingsGroup>
+      {/* mig 102: how agents write to people (GET/PUT …/reply-style, owner-or-manage_agents) */}
+      <SettingsGroup
+        settab="execution" title="Agent replies" flush
+        help="The writing style agents use for every message to a person. A conversation or task can override it from the style chip by its message box."
+      >
+        <SettingRows id="execReplyStyle">
+          <ReplyStyleRow cid={cid} />
         </SettingRows>
       </SettingsGroup>
       {/* mig 067: agent worktree clean-up (GET/PUT …/agent-worktrees, owner-or-manage_autonomy) */}

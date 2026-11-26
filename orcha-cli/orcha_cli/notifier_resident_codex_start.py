@@ -9,6 +9,7 @@ import sys
 import time
 
 from . import notifier_startup_preflight as _preflight
+from .notifier_reply_style import delivered_style, forget_delivered, turn_style_note
 from .notifier_routing_handoff import carry_previous_checkout
 
 
@@ -133,6 +134,15 @@ def start_candidate(
         prompt = services._codex_resume_prompt(
             candidate.get("agent_alias"), pending
         )
+        # Reply style: a resumed session keeps its first prompt, so a changed style (or, when
+        # the last one is unknown, the current style) rides on the resume prompt.
+        style_note = turn_style_note(
+            candidate.get("reply_style"),
+            delivered=delivered_style(conv_id),
+        )
+        if style_note:
+            prompt = f"{style_note}\n\n{prompt}"
+        style_sent = style_note is not None
         persona = None
     else:
         prompt = services._conversation_worker_prompt(
@@ -148,6 +158,7 @@ def start_candidate(
         persona = services._build_persona(
             api_base, candidate["agent_id"], lane="conversation"
         )
+        style_sent = True
     token = services._mint_embodiment_token(
         api_base, candidate["agent_id"], "conversation", "headless"
     )
@@ -183,6 +194,12 @@ def start_candidate(
             quiet=quiet,
         )
         return
+    # This launch carries style rules (the cold persona, or the resume prompt's style note). The
+    # worker may still die before Codex reads them (an aborted launch below, a crash, a stop), so
+    # the session's style stays unknown until the turn's reply is posted (see
+    # notifier_codex_conversation.finish); a retry meanwhile states the current style again.
+    if style_sent:
+        forget_delivered(conv_id)
     _run_payload = {
         "wake_kind": "ephemeral",
         "wake_event": "conversation_turn",
@@ -242,6 +259,8 @@ def start_candidate(
         "sandbox_container_id": _spawn_info.get("sandbox_container_id"),
         "conversation_ack_ts": candidate.get("conversation_ack_ts"),
         "resume_session_id": session_id if use_resume else None,
+        # The style this turn delivered, recorded once its reply is posted (finish()).
+        **({"reply_style_sent": candidate.get("reply_style")} if style_sent else {}),
         "run_token": token,
         "hard_deadline": time.time() + services.HARD_CAP_MIN_SECS,
         "last_size": 0,

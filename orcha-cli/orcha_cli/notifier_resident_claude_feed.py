@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import time
 
+from .notifier_reply_style import delivered_style, remember_delivered
+
 
 def feed(services, api_base, conv_id, candidate, resident) -> None:
     """Send first, then persist the run so broken pipes cannot orphan rows."""
@@ -23,11 +25,19 @@ def feed(services, api_base, conv_id, candidate, resident) -> None:
             if next_turn["content"]
             else attachment_feed
         )
+    reply_style = candidate.get("reply_style")
     if not services._send_user_turn(
         resident["proc"],
-        services._wrap_conversation_turn(next_turn["content"]),
+        services._wrap_conversation_turn(
+            next_turn["content"],
+            reply_style=reply_style,
+            delivered_style=delivered_style(conv_id),
+        ),
     ):
         return
+    # The session now writes in this style (the note rode on the turn, or it already had it).
+    if reply_style is not None:
+        remember_delivered(conv_id, reply_style)
     _run_payload = {
         "wake_kind": "resident",
         "wake_event": "conversation_turn",

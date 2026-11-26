@@ -26,6 +26,7 @@
           "ended_at": "null",
           "id": "str",
           "last_turn_at": "iso-datetime",
+          "reply_style": "null",
           "session_id": "null",
           "session_pinned_at": "null",
           "started_by": "str",
@@ -220,6 +221,11 @@
         "definition_of_done": "str",
         "description": "str",
         "protocol": "null",
+        "reply_style": {
+          "conversation": "null",
+          "project": "str",
+          "task": "null"
+        },
         "requested_by": {
           "alias": "str",
           "git_email": "null",
@@ -820,6 +826,8 @@
             "pending_human": "bool",
             "pending_inbox": "int",
             "reasoning_effort": "null",
+            "reply_style": "str",
+            "reply_style_override": "null",
             "session_id": "null",
             "setup_requested_at": "null",
             "status": "str"
@@ -1431,6 +1439,7 @@
           "ended_at": "null",
           "id": "str",
           "last_turn_at": "iso-datetime",
+          "reply_style": "null",
           "session_id": "null",
           "session_pinned_at": "null",
           "started_by": "str",

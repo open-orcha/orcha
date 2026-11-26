@@ -56,6 +56,7 @@ import { Timeline, TimelineCard, TimelineEvent, TimelineMessage } from "../../co
 import { MakeRecurringDialog, RecurringLink, makeRecurringItem, useMakeRecurringGate, useTaskRoutines } from "../routines/MakeRecurring";
 import { Property, PropertyRail, PropertySection } from "../../components/primitives";
 import { AttachGlyph, Composer } from "../../components/primitives";
+import { ReplyStyleChip } from "../../components/ReplyStyleChip";
 import { PageHeader, Pager } from "../../shell/PageChrome";
 import {
   agentByAlias,
@@ -1790,6 +1791,8 @@ function ThreadCard({
           // Composer's attach button is a fixed "Attach files", so while the
           // composer is locked this pane renders its own with the reason
           onFiles={locked || !h ? undefined : uploadFiles}
+          // mig 102: this task thread's reply style (overrides the project setting)
+          leading={<ReplyStyleChip kind="task" id={t.id} />}
           tools={
             locked || !h ? (
               <IconButton

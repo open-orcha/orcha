@@ -13,6 +13,7 @@ from portal_backend.guards import (
 )
 from portal_backend.identity_routes import proxy_login, require_member_read
 from portal_backend.model_retirement import migrate_retired_models
+from portal_backend.reply_style import reply_style_for_prompt
 
 
 def _fallback_model(model: str | None) -> str:
@@ -110,9 +111,14 @@ def get_agent_protocol(aid: str, request: Request, task_id: str | None = None):
     Workflow tasks also carry `workflow`: id, title, goal, step_number and tasks
     (id, title, status, assignees, result), scoped only to the resolved task's workflow_id.
 
-    Returns {task_id, title, description, definition_of_done, protocol, requested_by} for the
-    resolved task, or {task_id: null, protocol: null} when none resolves — so a cold/idle wake
-    carries neither a body nor a protocol section."""
+    Reply style (mig 102): `reply_style` = {project, task, conversation} — the project setting,
+    the resolved task's thread override and the agent's active conversation override (null =
+    follows the project). It rides on every response, task or not, because conversation replies
+    need it too; the notifier picks the thread value by lane (notifier_reply_style.py).
+
+    Returns {task_id, title, description, definition_of_done, protocol, requested_by,
+    reply_style} for the resolved task, or {task_id: null, protocol: null, reply_style} when
+    none resolves — so a cold/idle wake carries neither a body nor a protocol section."""
     if not valid_uuid(aid):
         raise HTTPException(400, "agent_id is not a valid UUID")
     with db_cursor() as (_, cur):
@@ -185,8 +191,13 @@ def get_agent_protocol(aid: str, request: Request, task_id: str | None = None):
         # Goal ancestry: the WHY (objective -> parent(s) -> this task) rides the wake context.
         goal = goal_chain_for_prompt(cur, str(row["id"])) if row is not None else None
         workflow = workflow_for_prompt(cur, row) if row is not None else None
+        # Reply style: project setting + this task's and the active conversation's override.
+        reply_style = reply_style_for_prompt(
+            cur, str(agent["container_id"]),
+            task_id=row["id"] if row is not None else None, agent_id=aid,
+        )
     if not row:
-        return {"task_id": None, "protocol": None}
+        return {"task_id": None, "protocol": None, "reply_style": reply_style}
     result = {
         "task_id": str(row["id"]),
         "title": row["title"],
@@ -194,6 +205,7 @@ def get_agent_protocol(aid: str, request: Request, task_id: str | None = None):
         "definition_of_done": row["definition_of_done"],
         "protocol": row["protocol"] or None,
         "requested_by": dict(requested_by) if requested_by else None,
+        "reply_style": reply_style,
     }
     if resume_context:
         result["resume_context"] = resume_context

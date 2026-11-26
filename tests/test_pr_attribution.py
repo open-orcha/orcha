@@ -70,7 +70,8 @@ def test_migration_042_exists_and_is_next_sequential():
     # to Quality when it finishes (tasks.qa_on_done); 100 imported Quality reports (qa_reports);
     # 101 run conditions on scenarios, findings, requests and sessions.
     # 102 identifies each pending launch separately for safe failed-start cleanup.
-    assert numbers[-1] == 102, f"102 must be the latest migration, saw {numbers[-1]:03d}"
+    # 103 adds the project reply style and per-conversation/per-task overrides.
+    assert numbers[-1] == 103, f"103 must be the latest migration, saw {numbers[-1]:03d}"
 
 
 def test_agents_git_email_column_applied(db):

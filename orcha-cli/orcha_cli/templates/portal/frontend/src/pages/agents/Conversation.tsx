@@ -23,6 +23,7 @@ import { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useLayou
 import { registerTestReset } from "../../lib/testResets";
 import { getJSON } from "../../api/client";
 import { MessageComposer } from "../../components/MessageComposer";
+import { ReplyStyleChip } from "../../components/ReplyStyleChip";
 import { usePairing } from "../../components/terminal/TerminalPane";
 import { Icon, Md, useToast } from "../../components/ui";
 import { Avatar, Button, HelpTip, IconButton, RelTime, WorkedFor, formatDuration } from "../../components/primitives";
@@ -707,9 +708,11 @@ interface ConvComposerProps {
   ensureConv: () => Promise<{ ok: boolean; status?: number; noHuman?: boolean }>;
   getConvId: () => string | null;
   noHumanMsg: string;
+  /** the active conversation (null before the first message) — for the reply style chip */
+  convId: string | null;
 }
 const ConvComposer = memo(forwardRef<ComposerApi, ConvComposerProps>(function ConvComposer(
-  { agentId, alias, placeholder, disabled, skillsDisabled, sending, stopShown, stopRequested, onStop, onSend, ensureConv, getConvId, noHumanMsg },
+  { agentId, alias, placeholder, disabled, skillsDisabled, sending, stopShown, stopRequested, onStop, onSend, ensureConv, getConvId, noHumanMsg, convId },
   ref,
 ) {
   const toast = useToast();
@@ -866,6 +869,8 @@ const ConvComposer = memo(forwardRef<ComposerApi, ConvComposerProps>(function Co
             Skills
             <Icon name="chev" cls="v2-ico conv-skills-chev" />
           </button>
+          {/* mig 102: this conversation's reply style (overrides the project setting) */}
+          <ReplyStyleChip kind="conversation" id={convId} />
           {/* D16: while the turn's run is live and there is nothing to send, the
               circular send becomes a circular STOP (confirm-first, human-gated) */}
           {showStop ? (
@@ -1900,6 +1905,7 @@ export function Conversation({
           ensureConv={ensureConv}
           getConvId={getConvId}
           noHumanMsg={noHumanMsg}
+          convId={convId}
         />
       </div>
       <div className="term-slot" id="convTermSlot">{pairing.termSlot}</div>

@@ -9,6 +9,7 @@ import time
 from . import notifier_resident_claude_feed as _feed_service
 from . import notifier_startup_preflight as _preflight
 from .notifier_routing_handoff import carry_previous_checkout
+from .notifier_reply_style import remember_delivered
 from .launch_model import admitted_candidate
 
 
@@ -298,6 +299,9 @@ def _boot(
     _preflight.record_success(conv_id)
     if cold:
         services._RESIDENT_RESUME_FAILED.discard(conv_id)
+        # A fresh session writes in the style its boot prompt carried. A resumed one keeps
+        # whatever it last received (remembered, or unknown after a restart).
+        remember_delivered(conv_id, candidate.get("reply_style"))
     return resident
 
 

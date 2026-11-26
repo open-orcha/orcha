@@ -12,6 +12,7 @@ from .notifier_handoff_policy import (
 )
 from .notifier_protocol import _render_protocol, _render_resume_context, _render_task_body
 from .notifier_deliverables import DELIVERABLES_GUIDANCE
+from .notifier_reply_style import reply_style_section, resolve_reply_style, turn_style_note
 
 # #325: the standing plain-language rule for every message an agent sends a HUMAN. Orcha is
 # built for non-engineers to run their own agent teams, so communication clarity is a product
@@ -211,10 +212,19 @@ _CONVERSATION_TURN_REMINDER = (
 )
 
 
-def _wrap_conversation_turn(content: str) -> str:
+def _wrap_conversation_turn(content: str, *, reply_style: Optional[str] = None,
+                            delivered_style: Optional[str] = None) -> str:
     """Prepend the stable conversation-lane reminder to a warm turn's content (GH #91/#90). Kept as
     ONE fixed sentence so it stays prompt-cache friendly across turns; the full directive rode in on
-    the cold-boot persona."""
+    the cold-boot persona.
+
+    Reply style: when the chat's current style differs from the last one the session received
+    (the composer chip or the project setting changed mid-chat, or the last style is unknown), the
+    style note rides between the reminder and the content (notifier_reply_style.turn_style_note).
+    No style info = unchanged."""
+    note = turn_style_note(reply_style, delivered=delivered_style)
+    if note:
+        return f"{_CONVERSATION_TURN_REMINDER}\n\n{note}\n\n{content}"
     return f"{_CONVERSATION_TURN_REMINDER}\n\n{content}"
 
 
@@ -256,6 +266,14 @@ def format_persona(persona: Optional[dict], digest: Optional[dict],
     # #325: standing guardrail rides whenever we're actually booting as an agent.
     if parts:
         parts.append(HUMAN_COMMS_GUARDRAIL)
+        # Reply style (project setting, per-thread override): the chosen style's rules ride
+        # right after the guardrail so every lane that writes to people gets them. Normal adds
+        # nothing. Read from the protocol, which is fetched fresh every wake.
+        style_section = reply_style_section(
+            resolve_reply_style((protocol or {}).get("reply_style"), lane)
+        )
+        if style_section:
+            parts.append(style_section)
         # Multi-human conflict rules ride every agent boot too (owner > member,
         # DoD > chat, explicit overrides, escalate unresolved contradictions).
         parts.append(MULTI_HUMAN_STEERING)
