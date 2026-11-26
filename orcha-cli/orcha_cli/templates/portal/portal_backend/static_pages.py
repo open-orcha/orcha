@@ -5,21 +5,29 @@ import pathlib
 from fastapi.responses import HTMLResponse
 
 STATIC_DIR = pathlib.Path(__file__).parent.parent / "static"
-_HTML_CACHE: dict[str, str] = {}
+# name -> ((st_mtime_ns, st_size), html). The signature lets a rebuilt page (a pulled
+# update, `npm run build`) replace the cached copy without a restart. Serving the old
+# copy would point browsers at a hashed script the rebuild deleted: a blank page (#297).
+_HTML_CACHE: dict[str, tuple[tuple[int, int], str]] = {}
 
 
 def serve_page(name: str) -> HTMLResponse:
-    if name not in _HTML_CACHE:
-        path = STATIC_DIR / name
-        if not path.is_file():
-            cause = (
-                "the portal/static/ directory is missing entirely"
-                if not STATIC_DIR.is_dir()
-                else f"portal/static/{name} is missing"
-            )
-            return HTMLResponse(missing_static_page(name, cause), status_code=503)
-        _HTML_CACHE[name] = path.read_text(encoding="utf-8")
-    return HTMLResponse(_HTML_CACHE[name])
+    path = STATIC_DIR / name
+    if not path.is_file():
+        _HTML_CACHE.pop(name, None)
+        cause = (
+            "the portal/static/ directory is missing entirely"
+            if not STATIC_DIR.is_dir()
+            else f"portal/static/{name} is missing"
+        )
+        return HTMLResponse(missing_static_page(name, cause), status_code=503)
+    stat = path.stat()
+    signature = (stat.st_mtime_ns, stat.st_size)
+    cached = _HTML_CACHE.get(name)
+    if cached is None or cached[0] != signature:
+        cached = (signature, path.read_text(encoding="utf-8"))
+        _HTML_CACHE[name] = cached
+    return HTMLResponse(cached[1])
 
 
 def missing_static_page(name: str, cause: str) -> str:
