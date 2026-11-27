@@ -208,13 +208,17 @@ def run() -> int:
             return 1
 
         def read() -> None:
+            # The percent only goes up: after the browser, Playwright downloads a small second file
+            # (ffmpeg) whose own 0-100% would make the number jump back. The size stays the browser's.
             assert proc.stdout is not None
+            best = 0
             with contextlib.suppress(OSError, ValueError):
                 for line in proc.stdout:
                     tail[:] = (tail + [line.rstrip()])[-40:]
                     m = _PROGRESS.search(line)
-                    if m:
-                        _write(state="downloading", percent=min(100, int(m.group(1))), size=m.group(2))
+                    if m and (pct := min(100, int(m.group(1)))) > best:
+                        best = pct
+                        _write(state="downloading", percent=pct, size=m.group(2))
 
         reader = threading.Thread(target=read, name="browser-setup-output", daemon=True)
         reader.start()

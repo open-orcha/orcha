@@ -44,6 +44,10 @@ FAKE = textwrap.dedent('''
         time.sleep(60)
     for pct in (10, 40, 100):
         print(f"|■■■■■■■■                | {pct:3d}% of 92.1 MiB", flush=True)
+    if mode == "two_files":  # like Playwright: a small second file (ffmpeg) after the browser
+        print("Downloading FFMPEG playwright build v1011", flush=True)
+        for pct in (10, 50, 100):
+            print(f"|■■■■■■■■                | {pct:3d}% of 1.4 MiB", flush=True)
     where.mkdir(parents=True, exist_ok=True)
     (where / "INSTALLATION_COMPLETE").write_text("")
 ''')
@@ -78,6 +82,20 @@ def test_missing_then_download_reports_progress_and_ready(fake):
     assert bs.installed()
     assert bs.status() == {"installed": True, "state": "ready", "percent": 100, "size": "92.1 MiB", "error": None, "message": None}
     assert bs.ensure_for_session() is None
+
+
+def test_percent_never_goes_back_for_the_second_file(fake):
+    fake["state"]["mode"] = "two_files"
+    seen = []
+    real_write = bs._write
+    bs._write = lambda **f: seen.append(f) or real_write(**f)
+    try:
+        assert bs.run() == 0
+    finally:
+        bs._write = real_write
+    assert [f["percent"] for f in seen if f.get("state") == "downloading"] == [0, 10, 40, 100]
+    assert all(f.get("size") in (None, "92.1 MiB") for f in seen)
+    assert bs.status()["size"] == "92.1 MiB"
 
 
 @pytest.mark.parametrize(("mode", "words"), [("fail", "No internet connection"), ("nospace", "Not enough disk space")])
