@@ -98,7 +98,7 @@ def approve_qa_time_limit(rid: str, body: QaTimeLimitBody, request: Request):
         if not tid or req.get("source_workflow_id"):
             raise HTTPException(409, "Set a workflow step's time limit in the workflow.")
         from portal_backend import sql
-        cur.execute("SELECT status, workflow_id FROM tasks WHERE id=%s" + sql.for_update(), (str(tid),))
+        cur.execute("SELECT status, workflow_id, description FROM tasks WHERE id=%s" + sql.for_update(), (str(tid),))
         task = cur.fetchone()
         if not task or task["workflow_id"] or task["status"] not in ("pending", "ready", "in_progress"):
             raise HTTPException(409, "Choose the time limit on an open QA task outside a workflow.")
@@ -111,8 +111,9 @@ def approve_qa_time_limit(rid: str, body: QaTimeLimitBody, request: Request):
         cur.execute("""UPDATE qa_sessions SET budget_minutes=%s WHERE request_id=%s AND status='running'
                        AND queued_at IS NOT NULL AND claimed_at IS NULL""", (body.minutes, rid))
         req = qa_handoff.load(cur, rid)
-        _, description, dod = qa_handoff._task_texts(req, None, who["alias"])
-        cur.execute("UPDATE tasks SET description=%s, definition_of_done=%s WHERE id=%s", (description, dod, str(tid)))
+        from portal_backend import qa_time
+        description = qa_time.task_description(task.get("description"), body.minutes)
+        cur.execute("UPDATE tasks SET description=%s WHERE id=%s", (description, str(tid)))
         qa_handoff.approve_plan(cur, str(tid), who["id"], qa_handoff.person_run_line(who["alias"]))
         qa_handoff._changed(cur, cid, req)
         out = qa_handoff.public(cur, req)

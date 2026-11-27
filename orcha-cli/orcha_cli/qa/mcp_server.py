@@ -115,6 +115,10 @@ SCREEN_DOC = (
 SECRET_MASK = "••••••"
 
 
+class _SessionStopped(RuntimeError):
+    """The portal ended a session before device startup finished."""
+
+
 def _safe(fn: Callable[..., Awaitable[str]]) -> Callable[..., Awaitable[str]]:
     """Never raise into the client: any failure is `error: ...` text."""
 
@@ -1050,6 +1054,11 @@ class QATools:
                 opts["on_stage"] = lambda text: self._say_starting(sid, text)
             try:
                 dev = await self._open_in_line(key, row, sid, platform, app_id, device_name, opts)
+            except _SessionStopped as e:
+                self.queued = None
+                device_locks.leave_line()
+                self.ended_note = str(e)
+                return f"error: {e}"
             except Exception as e:  # noqa: BLE001
                 self.queued = None
                 device_locks.leave_line()
@@ -1068,6 +1077,13 @@ class QATools:
             udid = getattr(dev, "udid", None) or getattr(dev, "serial", None)
             build = (build or "").strip() or await app_version(dev)
             shade = await device_says(dev, "appearance_setting")
+            try:
+                self._starting_row(sid)
+            except Exception as e:  # noqa: BLE001 - startup must still be authorized after device awaits
+                with contextlib.suppress(Exception):
+                    await dev.end()
+                self.ended_note = str(e)
+                return f"error: {e}"
             if device_name or udid or build or shade or waited:
                 try:
                     self.portal.patch_session(sid, {"device_name": device_name or None, "device_udid": udid or None,
@@ -1191,15 +1207,14 @@ class QATools:
             self.portal.patch_session(q["id"], {"status": "cancelled", "result": {"error": "It left the line for a device."}})
         return None
 
-    def _device_picked(self, sid: str, device_name: Optional[str]) -> Optional[str]:
-        """The device a person sent this run to from its page, while it waits for another one."""
-        try:
-            row = self.portal.get_session(sid)
-        except Exception:  # noqa: BLE001 - a passing failure: the next try asks again
-            return None
-        row = row.get("session", row) if isinstance(row, dict) else None
-        name = row.get("device_name") if isinstance(row, dict) else None
-        return str(name) if name and name != device_name else None
+    def _starting_row(self, sid: str) -> dict[str, Any]:
+        """Recheck authority during a wait and after the device opener yields."""
+        row = self.portal.get_session(sid)
+        row = row.get("session", row) if isinstance(row, dict) else {}
+        if row.get("status") != "running":
+            why = row.get("stop_reason") or row.get("status") or "no longer available"
+            raise _SessionStopped(f"QA session has ended ({why}); device startup stopped.")
+        return row
 
     def _wait_facts(self, sid: str, devices: list[str]) -> dict[str, Any]:
         """What this run waits for, as the portal shows it, read from the lock files: which device,
@@ -1228,11 +1243,12 @@ class QATools:
         tried = -QUEUE_RETRY_S
         devices = list((self.queued or {}).get("devices") or [])
         while True:
+            current = self._starting_row(sid)
             now = self.clock()
             if not devices or now - tried >= QUEUE_RETRY_S or device_locks.may_claim(devices):
                 tried = now
-                picked = self._device_picked(sid, device_name) if devices else None
-                if picked:
+                picked = current.get("device_name") if devices else None
+                if picked and picked != device_name:
                     device_name, opts, devices = picked, {**opts, "any_device": False}, []
                 try:
                     dev = await self.device_opener(platform, app_id, device_name, **opts)
@@ -1241,6 +1257,12 @@ class QATools:
                         raise
                     devices = [str(d) for d in getattr(e, "devices", None) or [device_name or "a simulator"]]
                 else:
+                    try:
+                        self._starting_row(sid)
+                    except BaseException:
+                        with contextlib.suppress(Exception):
+                            await dev.end()
+                        raise
                     device_locks.leave_line()
                     return dev
             device_locks.join_line(devices)
