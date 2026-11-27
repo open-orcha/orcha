@@ -85,3 +85,6 @@ export const proposeNextStep = async (cid: string, body: FindingScenarioDraft & 
 /** The session a Run check task will become, so it shows as queued from the first moment. */
 export const queueSession = (cid: string, body: { kind: string; platform: Platform; task_id: string; goal: string | null; budget_minutes: number | null; agent_id: string | null; draft_sources?: "code" | "exploration" | "both" | null; conditions?: Conditions | null; actor_agent_id: string | null }) =>
   sendJSON<QaSession>("POST", `/api/containers/${enc(cid)}/qa/sessions/queue`, body);
+
+export const continueSession = (sid: string, actor: string | null, minutes: number) =>
+  sendJSON<QaSession>("POST", `/api/qa/sessions/${enc(sid)}/continue`, { actor_agent_id: actor, minutes });

@@ -47,6 +47,7 @@ class QaRequestBuild(BaseModel):
 
 class QaRequestBody(BaseModel):
     actor_agent_id: Optional[str] = None
+    qa_task_id: Optional[str] = Field(default=None, description="Reuse this open QA run task for a replacement request")
     kind: Optional[Literal["map", "explore", "draft", "check", "triage"]] = Field(
         default=None, description="Default: check when the project has approved scenarios, else explore")
     finding_ids: list[str] = Field(default_factory=list, max_length=50, description="`triage`: the findings to diagnose")
@@ -54,7 +55,7 @@ class QaRequestBody(BaseModel):
     scenario_ids: list[str] = Field(default_factory=list, max_length=50)
     tags: list[Annotated[str, Field(max_length=60)]] = Field(default_factory=list, max_length=20)
     focus: Optional[str] = Field(default=None, max_length=2000)
-    minutes: Optional[int] = Field(default=None, ge=1, le=480)
+    minutes: Optional[int] = Field(default=None, ge=0, le=480, description="Minutes; 0 means no limit. Default: 20.")
     acceptance: list[Annotated[str, Field(max_length=1000)]] = Field(
         default_factory=list, max_length=30, description="Lines to prove; default the source task's definition of done")
     build: Optional[QaRequestBuild] = None
@@ -77,6 +78,44 @@ class QaOnDoneBody(BaseModel):
 
 class QaRequestCancelBody(BaseModel):
     actor_agent_id: Optional[str] = None
+
+
+class QaTimeLimitBody(BaseModel):
+    actor_agent_id: Optional[str] = None
+    minutes: int = Field(default=20, ge=0, le=480, description="Minutes; 0 means no limit")
+
+
+@app.put("/api/qa/requests/{rid}/time-limit")
+def approve_qa_time_limit(rid: str, body: QaTimeLimitBody, request: Request):
+    """A person chooses the time limit and approves a request before it starts."""
+    with db_cursor() as (conn, cur):
+        req = qa_handoff.load(cur, rid, lock=True)
+        cid = str(req["container_id"])
+        who = qs.human(cur, request, cid, body.actor_agent_id, "approve the QA time limit")
+        if req["status"] != "requested":
+            raise HTTPException(409, "Choose the time limit before the request starts. Use Continue after a time-limit stop.")
+        tid = req.get("qa_task_id")
+        if not tid or req.get("source_workflow_id"):
+            raise HTTPException(409, "Set a workflow step's time limit in the workflow.")
+        from portal_backend import sql
+        cur.execute("SELECT status, workflow_id FROM tasks WHERE id=%s" + sql.for_update(), (str(tid),))
+        task = cur.fetchone()
+        if not task or task["workflow_id"] or task["status"] not in ("pending", "ready", "in_progress"):
+            raise HTTPException(409, "Choose the time limit on an open QA task outside a workflow.")
+        cur.execute("""SELECT 1 AS hit FROM worker_runs WHERE status='running' AND
+                       (task_id=%s OR run_id IN (SELECT run_id FROM worker_run_tasks WHERE task_id=%s)) LIMIT 1""",
+                    (str(tid), str(tid)))
+        if cur.fetchone():
+            raise HTTPException(409, "Wait for the QA agent to stop before changing the time limit.")
+        cur.execute("UPDATE qa_requests SET minutes=%s, approved_by_agent_id=%s WHERE id=%s", (body.minutes, who["id"], rid))
+        req = qa_handoff.load(cur, rid)
+        _, description, dod = qa_handoff._task_texts(req, None, who["alias"])
+        cur.execute("UPDATE tasks SET description=%s, definition_of_done=%s WHERE id=%s", (description, dod, str(tid)))
+        qa_handoff.approve_plan(cur, str(tid), who["id"], qa_handoff.person_run_line(who["alias"]))
+        qa_handoff._changed(cur, cid, req)
+        out = qa_handoff.public(cur, req)
+        conn.commit()
+    return out
 
 
 class QaSettingsBody(BaseModel):

@@ -86,6 +86,7 @@ export interface QaRequest {
   scenario_ids: string[];
   tags: string[];
   focus: string | null;
+  minutes?: number | null;
   acceptance: string[];
   build: QaRequestBuild | null;
   on_fail: QaOnFail;
@@ -217,6 +218,7 @@ export function normalizeRequest(raw: unknown): QaRequest {
     scenario_ids: strings(r.scenario_ids),
     tags: strings(r.tags),
     focus: text(r.focus),
+    minutes: typeof r.minutes === "number" ? r.minutes : 20,
     acceptance,
     build: isObj(r.build) ? (r.build as QaRequestBuild) : null,
     on_fail: r.on_fail === "reopen" ? "reopen" : "report",
@@ -254,6 +256,7 @@ export function normalizeSettings(raw: unknown): QaSettings {
 
 /** The body of a handoff (`POST /api/tasks/{tid}/qa/requests`, `POST C/requests`). */
 export interface QaRequestInput {
+  minutes?: number;
   kind: QaRequestKind;
   platform: Platform | null;
   focus?: string | null;
@@ -318,3 +321,6 @@ export interface QaWorkflowBlock extends QaWorkflowPreset { tails?: string[]; cl
 /** The one catalogue. A whole-workflow preset is a Build step plus one of these. */
 export const listWorkflowBlocks = async (cid: string, signal?: AbortSignal): Promise<QaWorkflowBlock[]> =>
   listOf<QaWorkflowBlock>(await getJSON<unknown>(`${C(cid)}/workflow-blocks`, signal), "blocks");
+
+export const approveRequestTime = (rid: string, actor: string | null, minutes: number) =>
+  sendJSON<QaRequest>("PUT", `/api/qa/requests/${enc(rid)}/time-limit`, { actor_agent_id: actor, minutes });

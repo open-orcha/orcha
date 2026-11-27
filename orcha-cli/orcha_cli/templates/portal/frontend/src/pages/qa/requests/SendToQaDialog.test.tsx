@@ -37,3 +37,15 @@ it("sends only the approved scenarios a person picked", async () => {
   await waitFor(() => expect(sent).toHaveLength(1));
   expect(sent[0]).toMatchObject({ kind: "check", platform: "ios", scenario_ids: ["s2"] });
 });
+
+for (const minutes of [20, 60, 0]) {
+  it(`sends the chosen time limit (${minutes})`, async () => {
+    stub();
+    render(<MemoryRouter><SendToQaDialog task={{ id: "t1", title: "A task" }} onClose={() => {}} /></MemoryRouter>);
+    await screen.findByRole("group", { name: "Scenarios to check" });
+    fireEvent.change(screen.getByLabelText("Time limit"), { target: { value: String(minutes) } });
+    fireEvent.click(screen.getAllByRole("button", { name: "Send to QA" }).at(-1)!);
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0]).toMatchObject({ minutes });
+  });
+}

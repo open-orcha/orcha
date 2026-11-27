@@ -95,7 +95,7 @@ export function RunOptions({ cid, auth, kind, params, patch }: {
   const choice = picked ?? defaultDraftChoice({ hasRepo, explorations, hasTarget, now: openedAt });
   const timed = TIMED_KINDS.includes(kind) || (drafting && choice === "new");
   const mins = Number(minutes);
-  const minutesBad = timed && (!Number.isFinite(mins) || mins < 5 || mins > 240);
+  const minutesBad = timed && (!Number.isFinite(mins) || (mins !== 0 && mins < 1) || mins > 480);
   const sourcesBad = drafting && !canStartChoice(choice, { hasRepo, explorations, hasTarget });
   const canStart = auth.can && !!platform && !!agent && !minutesBad && !sourcesBad && !nothingToCheck && !blocked && !offPhoneBlock(conditions, platform, deviceRow) && !busy;
 
@@ -198,8 +198,9 @@ export function RunOptions({ cid, auth, kind, params, patch }: {
                   {timed ? (
                     <div className="qa-field">
                       <label className="qa-label" htmlFor={ids.minutes}>Minutes</label>
-                      <input id={ids.minutes} className="qa-input qa-num" type="number" inputMode="numeric" min={5} max={240} step={5} value={minutes} aria-invalid={minutesBad || undefined} onChange={(e) => setMinutes(e.target.value)} />
-                      {minutesBad ? <p className="qa-error" role="alert">Give it between 5 and 240 minutes.</p> : null}
+                      <input id={ids.minutes} className="qa-input qa-num" type="number" inputMode="numeric" min={1} max={480} step={1} disabled={mins === 0} value={minutes} aria-invalid={minutesBad || undefined} onChange={(e) => setMinutes(e.target.value)} />
+                      <label><input type="checkbox" checked={mins === 0} onChange={(e) => setMinutes(e.target.checked ? "0" : "20")} /> No limit</label>
+                      {minutesBad ? <p className="qa-error" role="alert">Give it between 1 and 480 minutes, or choose No limit.</p> : null}
                     </div>
                   ) : null}
                   <div className="qa-field">

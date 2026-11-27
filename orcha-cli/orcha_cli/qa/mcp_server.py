@@ -489,9 +489,13 @@ class QATools:
             return
         self._last_heartbeat = self.clock()
         try:
-            self.portal.patch_session(self.live.id, {"heartbeat": True})
+            self.portal.patch_session(self.live.id, self._heartbeat_body(self.live))
         except Exception:  # noqa: BLE001
             pass
+
+    @staticmethod
+    def _heartbeat_body(live: LiveSession) -> dict:
+        return {"heartbeat": True, **({"budget_used_seconds": live.budget.used_s} if live.budget else {})}
 
     # ----- the look -----
 
@@ -783,7 +787,7 @@ class QATools:
                 os._exit(0)
             self._last_heartbeat = self.clock()
             try:
-                row = await asyncio.to_thread(self.portal.patch_session, live.id, {"heartbeat": True})
+                row = await asyncio.to_thread(self.portal.patch_session, live.id, self._heartbeat_body(live))
             except Exception:  # noqa: BLE001 - the portal may be back at the next beat
                 continue
             if isinstance(row, dict) and row.get("status") not in (None, "running"):
@@ -1019,7 +1023,7 @@ class QATools:
         body = {
             "kind": kind, "platform": platform, "task_id": task_id or None, "agent_id": self.ident.agent_id,
             "app_id": app_id or None, "device_name": device_name, "status": "running",
-            "budget_minutes": max(1, int(round(minutes))) if minutes > 0 else None, "goal": goal or None,
+            "budget_minutes": max(1, int(round(minutes))) if minutes > 0 else 0, "goal": goal or None,
             "draft_sources": sources, "request_id": request_id or None,
         }
         key = (kind, platform, task_id or None, app_id, device_name, request_id or None)
@@ -1032,6 +1036,10 @@ class QATools:
         sid = _id(row, "id", "session_id") or _id((row or {}).get("session") if isinstance(row, dict) else None)
         if not sid:
             return f"error: the portal answered without a session id: {str(row)[:200]}"
+        if row.get("budget_minutes") is not None:
+            minutes = float(row["budget_minutes"])
+        if row.get("request_id") and not request:
+            request = self.portal.get_request(row["request_id"]) or {}
         dev = None
         shade: Optional[str] = None
         launch_timing: dict[str, Any] = {}
@@ -1074,9 +1082,14 @@ class QATools:
         self.live = LiveSession(
             id=sid, platform=platform, kind=kind, app_id=app_id, device=dev, device_name=device_name or "",
             task_id=task_id, request_id=_id(row, "request_id") or request_id or None, guard=step_guard_from_env(),
-            budget=ExplorationBudget(minutes, clock=self.clock) if minutes > 0 and kind in ("map", "explore") else None,
+            budget=ExplorationBudget(minutes, clock=self.clock) if minutes > 0 and (kind in ("map", "explore") or request) else None,
             device_appearance=shade, run_conditions=qa_conditions.normalize(conditions),
         )
+        if self.live.budget:
+            saved = row.get("result") or {}
+            if isinstance(saved, str):
+                saved = json.loads(saved)
+            self.live.budget.started -= float(saved.get("budget_offset_s") or 0)
         self._last_flush = self.clock()
         self._last_heartbeat = self.clock()
         self._beat_task = asyncio.ensure_future(self._keep_alive(self.live))
@@ -1628,6 +1641,9 @@ class QATools:
             "step_guard": {"limit": live.guard.limit, "reached_at": live.guard.reached_at} if guard_stop else None,
             "portal_errors": live.errors[-20:] or None,
         }
+        if budget and budget["left_s"] <= 0:
+            result["stop_reason"] = "time_limit"
+            result["reason"] = f"Stopped at the {budget['minutes']:g}-minute time limit."
         report = self._report_md(summary, result)
         self._ending = live
         self._stop_beat()
@@ -2512,7 +2528,9 @@ class QATools:
         self._stop_beat()
         try:
             self._flush_steps()
-            self.portal.patch_session(live.id, {"status": "abandoned", "result": {"steps": live.seq, "error": "The QA tools stopped before the session ended."}})
+            self.portal.patch_session(live.id, {"status": "abandoned", "result": {
+                "steps": live.seq, "error": "The QA tools stopped before the session ended.",
+                **({"budget": live.budget.summary(None)} if live.budget else {})}})
         except Exception:  # noqa: BLE001
             pass
         if live.device is not None:
@@ -2557,7 +2575,17 @@ def _request_lines(request_id: Optional[str], request: dict[str, Any]) -> list[s
     acceptance = request.get("acceptance") or []
     if acceptance:
         lines.append("acceptance lines (name each with verdict(acceptance_line=<n>)):")
-        lines += [f"  {i}. {text}" for i, text in enumerate(acceptance)]
+        latest = {l.get("index", l.get("line_index")): l for l in
+                  (request.get("line_verdicts") or request.get("live_lines") or (request.get("result") or {}).get("lines") or [])}
+        proven = {i for i, l in latest.items() if l.get("verdict") == "pass"}
+        lines += [f"  {i}. {text}" + (" [already proven; keep this verdict]" if i in proven else " [still to prove]")
+                  for i, text in enumerate(acceptance)]
+        if proven:
+            lines.append("Continue with the unproven lines. The earlier passes and their evidence are kept.")
+    criteria = {(v.get("scenario_id"), v.get("criterion_index"), v.get("example_row")): v for v in request.get("verdicts") or []}
+    for (scenario, criterion, example), v in criteria.items():
+        if v.get("verdict") == "pass":
+            lines.append(f"Keep the recorded pass: scenario {scenario}, criterion {criterion}, example {example}.")
     return lines
 
 
