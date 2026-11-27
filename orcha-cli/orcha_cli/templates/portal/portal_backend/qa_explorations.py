@@ -124,6 +124,9 @@ def queue_session(cur, cid: str, who: dict, *, kind: str, platform: str, task_id
         (sid, cid, kind, platform, task_id, agent_id, t.get("device_name"), t.get("app_id"), budget_minutes, goal, name,
          series_id or sid, previous_id, at, at, at, draft_sources),
     )
+    # A person queued new work. This is a fresh allowance, unlike a device wait
+    # or the automatic replacement of an interrupted worker.
+    cur.execute("UPDATE qa_sessions SET result=%s WHERE id=%s", (qs.dumps({"new_allowance": True}), sid))
     return qs.load_session(cur, sid)
 
 

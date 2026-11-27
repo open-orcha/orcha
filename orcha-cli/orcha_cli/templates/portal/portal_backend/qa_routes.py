@@ -718,10 +718,11 @@ def patch_qa_session(sid: str, body: SessionPatchBody, request: Request):
         if supplied_result and s["status"] == "running":
             body.result = qa_time.keep_clock(s, body.result)
         sets, args = ["last_seen_at=%s"], [qs.now()]
-        if body.budget_used_seconds is not None and s["status"] == "running" and s.get("budget_minutes"):
+        if body.budget_used_seconds is not None and s["status"] == "running" and s.get("budget_minutes") is not None:
             kept = body.result if body.result is not None else (qs._json(s.get("result"), {}) or {})
             body.result = {**kept, "budget": {"minutes": s["budget_minutes"], "used_s": body.budget_used_seconds,
-                                             "left_s": max(0, s["budget_minutes"] * 60 - body.budget_used_seconds)}}
+                                             "left_s": max(0, s["budget_minutes"] * 60 - body.budget_used_seconds)
+                                             if s["budget_minutes"] else None}}
         if body.status == "done" and s["status"] == "running":
             req = qa_handoff.load(cur, str(s["request_id"])) if s.get("request_id") else None
             lines = qa_handoff._line_results(cur, req) if req else []

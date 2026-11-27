@@ -251,3 +251,65 @@ async def test_replacement_without_available_agent_is_rejected(team, db):
         'actor_agent_id': team['human'], 'platform': 'web', 'kind': 'explore', 'qa_task_id': tid})
     assert r.status_code == 409, r.text
     assert db.execute('SELECT count(*) AS n FROM qa_requests')[0]['n'] == count
+
+
+@pytest.mark.parametrize('linked_task', [False, True])
+async def test_replacement_waits_for_previous_worker_to_stop(team, db, linked_task):
+    out, old = await timeout(team)
+    tid = out['qa_task_id']
+    run = db.execute("INSERT INTO worker_runs (agent_id, task_id, status) VALUES (%s,%s,'running') RETURNING run_id",
+                     (team['qa'], None if linked_task else tid))[0]['run_id']
+    if linked_task:
+        db.execute('INSERT INTO worker_run_tasks (run_id, task_id) VALUES (%s,%s)', (run, tid))
+    count = db.execute('SELECT count(*) AS n FROM qa_requests')[0]['n']
+    r = await team['client'].post(f"/api/tasks/{out['request']['source_task_id']}/qa/requests", json={
+        'actor_agent_id': team['human'], 'platform': 'web', 'kind': 'explore', 'qa_task_id': tid})
+    assert r.status_code == 409, r.text
+    assert db.execute('SELECT count(*) AS n FROM qa_requests')[0]['n'] == count
+    await done(team, tid, team['qa'], 'Previous timed-out attempt has finished')
+    db.execute("UPDATE worker_runs SET status='done', ended_at=now() WHERE run_id=%s", (run,))
+    replacement = await hand(team, out['request']['source_task_id'], qa_task_id=tid)
+    assert replacement['request']['status'] == 'requested'
+    assert replacement['qa_task_id'] == tid
+
+
+@pytest.mark.parametrize('status', ['abandoned', 'failed', 'running'])
+@pytest.mark.parametrize('minutes', [60, 0])
+async def test_portal_worker_replacement_keeps_time_choice_and_clock(team, db, status, minutes):
+    tid = await task(team, assignee='QAEngineer')
+    r = await team['client'].post(f"/api/containers/{team['cid']}/qa/sessions/queue", json={
+        'actor_agent_id': team['human'], 'kind': 'explore', 'platform': 'web', 'task_id': tid,
+        'agent_id': team['qa'], 'budget_minutes': minutes})
+    assert r.status_code == 201, r.text
+    first = await session(team, task_id=tid)
+    assert first['budget_minutes'] == minutes and not first.get('request_id')
+    r = await team['client'].patch(f"/api/qa/sessions/{first['id']}", json={
+        'actor_agent_id': team['qa'], 'status': status, 'budget_used_seconds': 1200})
+    assert r.status_code == 200, r.text
+    second = await session(team, task_id=tid)
+    assert second['budget_minutes'] == minutes
+    assert second['result']['budget_offset_s'] == 1200
+    assert db.execute('SELECT status FROM qa_sessions WHERE id=%s', (first['id'],))[0]['status'] != 'running'
+    third = await session(team, task_id=tid)
+    assert third['budget_minutes'] == minutes
+    assert third['result']['budget_offset_s'] == 1200
+
+
+@pytest.mark.parametrize('boundary', ['done', 'other_task', 'new_queue'])
+async def test_portal_clock_does_not_cross_a_new_run_boundary(team, boundary):
+    tid = await task(team, assignee='QAEngineer')
+    first = await session(team, task_id=tid, budget_minutes=60)
+    r = await team['client'].patch(f"/api/qa/sessions/{first['id']}", json={
+        'actor_agent_id': team['qa'], 'status': 'done' if boundary == 'done' else 'abandoned',
+        'budget_used_seconds': 1200})
+    assert r.status_code == 200, r.text
+    if boundary == 'other_task':
+        tid = await task(team, assignee='QAEngineer')
+    elif boundary == 'new_queue':
+        r = await team['client'].post(f"/api/containers/{team['cid']}/qa/sessions/queue", json={
+            'actor_agent_id': team['human'], 'kind': 'explore', 'platform': 'web', 'task_id': tid,
+            'agent_id': team['qa'], 'budget_minutes': 45})
+        assert r.status_code == 201, r.text
+    second = await session(team, task_id=tid, budget_minutes=45)
+    assert second['budget_minutes'] == 45
+    assert not (second.get('result') or {}).get('budget_offset_s')
