@@ -11,6 +11,14 @@ Python that runs this (`python -m playwright install chromium-headless-shell`).
   tool server (a lock file). Answers `status()`.
 - `waiting_text()` / `failed_text()`: what an agent's `start_session` answers meanwhile.
 
+No time limit for the whole download, so it finishes on a slow connection too. The limit is for a
+download that stops: when no new data arrives for `STALL_TIMEOUT_S` (5 minutes), the installer and
+everything it started are ended, the download is recorded as failed and the lock is released. New
+data means bytes on disk, not the output: the installer runs with its own temporary folder
+(`~/.orcha/tools/browser-download/`, Playwright downloads each file there before it unpacks it) and
+any change to that folder or to the browser folder counts, so does each new output line. Playwright
+prints a progress line only every 10%, which on a slow connection can be far apart.
+
 Progress goes to `~/.orcha/tools/browser-setup.json`. Standard library only.
 """
 
@@ -22,6 +30,7 @@ import json
 import os
 import pathlib
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -35,8 +44,11 @@ SIZE_WORDS = "about 100 MB"
 #: Playwright writes this file into a browser's folder once its download is complete.
 COMPLETE_MARKER = "INSTALLATION_COMPLETE"
 CHECK_TIMEOUT_S = 30.0
-INSTALL_TIMEOUT_S = 30 * 60.0
-TIMEOUT_WORDS = "The download took more than 30 minutes and was stopped. Check the internet connection, then try again."
+#: The download is ended when no new data arrives for this long (there is no limit for the whole download).
+STALL_TIMEOUT_S = 5 * 60.0
+#: How often the runner looks for new data.
+POLL_S = 2.0
+STALL_WORDS = "The download received no data for 5 minutes and was stopped. Check the internet connection, then try again."
 _PROGRESS = re.compile(r"(\d{1,3})%\s+of\s+([\d.]+\s*[KMG]i?B)")
 _LOCATION = re.compile(r"Install location:\s*(\S.*)$", re.MULTILINE)
 
@@ -55,6 +67,11 @@ def lock_path() -> pathlib.Path:
 
 def log_path() -> pathlib.Path:
     return tools_dir() / "browser-setup.log"
+
+
+def download_dir() -> pathlib.Path:
+    """The installer's temporary folder (its TMPDIR): Playwright downloads each file here first."""
+    return tools_dir() / "browser-download"
 
 
 def playwright_cmd(*args: str) -> list[str]:
@@ -79,10 +96,10 @@ def install_locations() -> Optional[list[pathlib.Path]]:
     return found if p.returncode == 0 and found else None
 
 
-def installed() -> bool:
+def installed(places: Optional[list[pathlib.Path]] = None) -> bool:
     if not playwright_available():
         return False
-    places = install_locations()
+    places = install_locations() if places is None else places
     return bool(places) and all((place / COMPLETE_MARKER).is_file() for place in places)
 
 
@@ -188,22 +205,57 @@ def _stop(proc: subprocess.Popen) -> None:
         proc.wait(timeout=5.0)
 
 
+def _on_disk(roots: list[pathlib.Path]) -> tuple[int, int, int]:
+    """Bytes, files and the newest change time under `roots`: any new data changes it."""
+    size = files = newest = 0
+    for root in roots:
+        for folder, _dirs, names in os.walk(root):
+            for name in names:
+                with contextlib.suppress(OSError):
+                    st = os.lstat(os.path.join(folder, name))
+                    size, files, newest = size + st.st_size, files + 1, max(newest, st.st_mtime_ns)
+    return size, files, newest
+
+
+class _Watch:
+    """Whether the installer still receives data: `stalled(now, lines)` is True once nothing changed
+    on disk under `roots` and no new output line came (`lines`, a running count) for `STALL_TIMEOUT_S`."""
+
+    def __init__(self, roots: list[pathlib.Path], now: float) -> None:
+        self.roots, self.last, self.lines, self.seen = roots, now, 0, _on_disk(roots)
+
+    def stalled(self, now: float, lines: int) -> bool:
+        seen = _on_disk(self.roots)
+        if seen != self.seen or lines != self.lines:
+            self.seen, self.lines, self.last = seen, lines, now
+            return False
+        return now - self.last >= STALL_TIMEOUT_S
+
+
 def run() -> int:
-    """The download itself (the process `start()` spawns): holds the lock, writes progress. The
-    installer gets `INSTALL_TIMEOUT_S` in all: silent, or with its output closed, it is still ended
-    then, the download recorded as failed and the lock released, so the next session tries again."""
+    """The download itself (the process `start()` spawns): holds the lock, writes progress. It runs
+    while data arrives, however long that takes. With no new data for `STALL_TIMEOUT_S` (silent, its
+    output closed, or a connection that stopped), the installer and its children are ended, the
+    download recorded as failed and the lock released, so the next session tries again."""
     with _lock() as mine:
         if not mine:
             return 0  # another download runs
-        if installed():
+        places = install_locations() or []
+        if installed(places):
             _write(state="ready", percent=100, error=None)
             return 0
         _write(state="downloading", percent=0, error=None)
+        temp = download_dir()
+        shutil.rmtree(temp, ignore_errors=True)  # a part file from a stopped download
+        temp.mkdir(parents=True, exist_ok=True)
         tail: list[str] = []
+        lines = [0]
         try:
             proc = subprocess.Popen(playwright_cmd("install", BROWSER), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                    stderr=subprocess.STDOUT, text=True, bufsize=1, start_new_session=True)
+                                    stderr=subprocess.STDOUT, text=True, bufsize=1, start_new_session=True,
+                                    env={**os.environ, "TMPDIR": str(temp)})
         except OSError as e:
+            shutil.rmtree(temp, ignore_errors=True)
             _write(state="failed", percent=None, error=plain_error(str(e)))
             return 1
 
@@ -214,6 +266,7 @@ def run() -> int:
             best = 0
             with contextlib.suppress(OSError, ValueError):
                 for line in proc.stdout:
+                    lines[0] += 1
                     tail[:] = (tail + [line.rstrip()])[-40:]
                     m = _PROGRESS.search(line)
                     if m and (pct := min(100, int(m.group(1)))) > best:
@@ -222,18 +275,26 @@ def run() -> int:
 
         reader = threading.Thread(target=read, name="browser-setup-output", daemon=True)
         reader.start()
+        watch = _Watch([temp, *places], time.monotonic())
+        code: Optional[int] = None
         try:
-            code: Optional[int] = proc.wait(timeout=INSTALL_TIMEOUT_S)
-        except subprocess.TimeoutExpired:
-            code = None
+            while True:
+                try:
+                    code = proc.wait(timeout=POLL_S)
+                    break
+                except subprocess.TimeoutExpired:
+                    if watch.stalled(time.monotonic(), lines[0]):
+                        code = proc.poll()  # None unless it ended just now
+                        break
         finally:
             if proc.poll() is None:
                 _stop(proc)
+            shutil.rmtree(temp, ignore_errors=True)
         reader.join(timeout=5.0)
         if code is None:
-            _write(state="failed", percent=None, error=TIMEOUT_WORDS)
+            _write(state="failed", percent=None, error=STALL_WORDS)
             return 1
-        if code == 0 and installed():
+        if code == 0 and installed(places or None):
             _write(state="ready", percent=100, error=None)
             return 0
         _write(state="failed", percent=None, error=plain_error("\n".join(tail)))
