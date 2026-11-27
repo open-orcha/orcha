@@ -432,6 +432,11 @@ def hand_off(cid: str, who: dict, spec: dict, *, source_task_id: Optional[str] =
         if reuse:
             from portal_backend import qa_explorations as qx
             reused_task = _replacement_task(cur, cid, reuse)
+            cur.execute("""SELECT 1 AS hit FROM worker_runs WHERE status='running' AND
+                           (task_id=%s OR run_id IN (SELECT run_id FROM worker_run_tasks WHERE task_id=%s)) LIMIT 1""",
+                        (reuse, reuse))
+            if cur.fetchone():
+                raise HTTPException(409, "Wait for the QA agent to stop before replacing this request.")
             if reused_task["status"] == "needs_verification" and who.get("kind") != "human":
                 raise HTTPException(409, "A person must restart a QA task that is waiting for review.")
             if not qx.active_assignee(cur, reuse) and not conf["agent_id"]:

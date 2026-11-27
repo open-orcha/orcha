@@ -18,28 +18,37 @@ def keep_clock(session: dict, result: dict) -> dict:
     """Progress and device updates cannot discard the allowance already consumed."""
     saved = qs._json(session.get("result"), {}) or {}
     result = dict(result)
-    for key in ("budget", "budget_offset_s", "continued_from_session_id"):
+    for key in ("budget", "budget_offset_s", "continued_from_session_id", "new_allowance"):
         if key in saved and key not in result:
             result[key] = saved[key]
     return result
 
 
 def carry_progress(cur, session: dict) -> dict:
-    """A replacement worker continues an interrupted request's clock, not a fresh allowance.
+    """A replacement worker continues the interrupted run's clock and time choice.
 
     Continue explicitly starts a fresh allowance. A device queue does not.
     Verdicts are already request-scoped.
     """
     result = qs._json(session.get("result"), {}) or {}
     used = elapsed(result)
-    if used and session.get("budget_minutes"):
+    if used:
         cur.execute("UPDATE qa_sessions SET result=%s WHERE id=%s",
                     (qs.dumps({**result, "budget_offset_s": used}), str(session["id"])))
         return qs.load_session(cur, str(session["id"]))
-    if not session.get("request_id") or result.get("continued_from_session_id"):
+    if result.get("continued_from_session_id") or result.get("new_allowance"):
         return session
-    cur.execute("""SELECT * FROM qa_sessions WHERE request_id=%s AND id<>%s
-                   ORDER BY started_at DESC LIMIT 1""", (str(session["request_id"]), str(session["id"])))
+    if session.get("request_id"):
+        cur.execute("""SELECT * FROM qa_sessions WHERE request_id=%s AND id<>%s
+                       ORDER BY started_at DESC LIMIT 1""", (str(session["request_id"]), str(session["id"])))
+    else:
+        # Portal runs can have no request. Restrict their clock to this task,
+        # agent and run type; a similar goal elsewhere is not the same work.
+        cur.execute("""SELECT * FROM qa_sessions WHERE task_id=%s AND agent_id=%s
+                       AND kind=%s AND platform=%s AND request_id IS NULL AND id<>%s
+                       ORDER BY started_at DESC LIMIT 1""",
+                    (str(session["task_id"]), str(session["agent_id"]), session["kind"],
+                     session["platform"], str(session["id"])))
     previous = cur.fetchone()
     if not previous:
         return session
@@ -55,13 +64,11 @@ def carry_progress(cur, session: dict) -> dict:
         qs.end_open_walks(cur, str(previous["id"]), qx.REPLACED_WORDS)
     elif previous["status"] not in ("abandoned", "failed"):
         return session
-    result = qs._json(previous.get("result"), {}) or {}
-    used = elapsed(result)
-    if used and session.get("budget_minutes"):
-        cur.execute("UPDATE qa_sessions SET result=%s WHERE id=%s",
-                    (qs.dumps({"budget_offset_s": used}), str(session["id"])))
-        return qs.load_session(cur, str(session["id"]))
-    return session
+    used = elapsed(qs._json(previous.get("result"), {}) or {})
+    budget = session.get("budget_minutes") if session.get("request_id") else previous.get("budget_minutes")
+    cur.execute("UPDATE qa_sessions SET budget_minutes=%s, result=%s WHERE id=%s",
+                (budget, qs.dumps({**result, "budget_offset_s": used}), str(session["id"])))
+    return qs.load_session(cur, str(session["id"]))
 
 
 def reached(session: dict) -> bool:
