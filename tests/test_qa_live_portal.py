@@ -98,17 +98,23 @@ async def test_the_tool_server_drops_the_frame_when_it_stops(client, container, 
     assert r.status_code == 204 and sid not in live._LIVE
 
 
-async def test_memory_stays_bounded(client, container, people, monkeypatch):
+async def test_memory_stays_bounded(client, container, people, monkeypatch, make_agent):
     monkeypatch.setattr(live, "MAX_LIVE_SESSIONS", 2)
-    bot = people["bot"]
-    sids = [await _session(client, container["id"], bot) for _ in range(3)]
-    for sid in sids:
-        await _put(client, sid, bot, jpeg())
+    # Independent workers keep three live tasks. Repeated sessions of one
+    # worker's task replace each other and cannot test the memory capacity.
+    bots = [people["bot"]]
+    for i in range(2):
+        bots.append((await make_agent(f"qa-memory-{i}"))["agent_id"])
+    sids = [await _session(client, container["id"], bot) for bot in bots]
+    for sid, bot in zip(sids, bots):
+        response = await _put(client, sid, bot, jpeg())
+        assert response.status_code == 200, response.text
     assert len(live._LIVE) == 2 and sids[0] not in live._LIVE
     now = [live._clock() + live.LIVE_FORGET_S + 1]
     monkeypatch.setattr(live, "_clock", lambda: now[0])
-    new = await _session(client, container["id"], bot)
-    await _put(client, new, bot, jpeg())
+    new = await _session(client, container["id"], bots[0])
+    response = await _put(client, new, bots[0], jpeg())
+    assert response.status_code == 200, response.text
     assert list(live._LIVE) == [new]
 
 
