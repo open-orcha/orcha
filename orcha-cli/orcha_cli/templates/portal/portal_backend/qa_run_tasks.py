@@ -19,7 +19,7 @@ from typing import Any, Optional
 
 from fastapi import HTTPException
 
-from portal_backend import evidence_pack, qa_explorations as qx, qa_final_decision as fd, qa_handoff, qa_store as qs, qa_triage, sql
+from portal_backend import evidence_pack, qa_explorations as qx, qa_final_decision as fd, qa_handoff, qa_store as qs, qa_time, qa_triage, sql
 from portal_backend.agent_status import log_event, recompute_agent_status
 from portal_backend.database import db_cursor
 from portal_backend.event_acknowledgement import _ack_events_handled
@@ -193,25 +193,31 @@ def run_result(cur, tid: str) -> Optional[dict]:
     """What the task page's Run result card shows, computed from the run records. None for a task
     that is no run task and has no session."""
     run = run_of(cur, tid)
-    cur.execute(f"SELECT * FROM qa_sessions WHERE task_id=%s AND {qs.STARTED_SQL} ORDER BY started_at DESC", (tid,))
-    sessions = [dict(r) for r in cur.fetchall()]
+    cur.execute(f"SELECT *, {qs.STARTED_SQL} AS has_started FROM qa_sessions WHERE task_id=%s ORDER BY started_at DESC", (tid,))
+    all_sessions = [dict(r) for r in cur.fetchall()]
+    sessions = [s for s in all_sessions if s["has_started"]]
     if run is None and not sessions:
         return None
     newest = sessions[0] if sessions else None
     # A replacement request can belong to this session before its task link is
     # repaired. The session is the authority for which attempt we are showing.
-    if newest and newest.get("request_id"):
-        cur.execute("SELECT * FROM qa_requests WHERE id=%s AND container_id=%s",
-                    (str(newest["request_id"]), str(newest["container_id"])))
+    if newest:
+        if newest.get("request_id"):
+            cur.execute("SELECT * FROM qa_requests WHERE id=%s AND container_id=%s",
+                        (str(newest["request_id"]), str(newest["container_id"])))
+            hit = cur.fetchone()
+        else:
+            hit = None
     else:
         cur.execute("SELECT * FROM qa_requests WHERE qa_task_id=%s ORDER BY created_at DESC LIMIT 1", (tid,))
-    hit = cur.fetchone()
+        hit = cur.fetchone()
     req = dict(hit) if hit else None
     if newest:
         # Multiple sessions of one request include a continuation. Other
         # requests are separate attempts, with their own findings and duration.
         sessions = ([s for s in sessions if str(s.get("request_id")) == str(req["id"])]
-                    if req and newest.get("request_id") else [newest])
+                    if req and newest.get("request_id")
+                    else [s for s in qa_time.portal_attempt(all_sessions, newest) if s["has_started"]])
     outcome, reason, result = _outcome(cur, req, sessions)
     newest = sessions[0] if sessions else None
     sids = [str(s["id"]) for s in sessions]

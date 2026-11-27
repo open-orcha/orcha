@@ -256,7 +256,10 @@ def continue_qa_session(sid: str, body: ContinueBody, request: Request):
                                                    "focus": s.get("goal"), "minutes": body.minutes},
                                     conf=qa_handoff.settings(cur, cid), origin="handoff", who_id=who["id"],
                                     source=None, source_agent=None, qa_task_id=tid, status="blocked", approved_by=who["id"])
-            cur.execute("UPDATE qa_sessions SET request_id=%s WHERE id=%s", (str(req["id"]), sid))
+            cur.execute("SELECT * FROM qa_sessions WHERE task_id=%s AND request_id IS NULL", (tid,))
+            attempt = qa_time.portal_attempt([dict(row) for row in cur.fetchall()], s)
+            cur.execute(f"UPDATE qa_sessions SET request_id=%s WHERE {sql.in_list('id')}",
+                        (str(req["id"]), sql.list_param([str(row["id"]) for row in attempt])))
         cur.execute("SELECT * FROM qa_sessions WHERE request_id=%s ORDER BY started_at DESC LIMIT 1", (str(req["id"]),))
         latest = dict(cur.fetchone())
         if str(latest["id"]) != sid:

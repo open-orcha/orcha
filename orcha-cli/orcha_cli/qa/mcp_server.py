@@ -1615,7 +1615,8 @@ class QATools:
         assert live is not None
         guard_stop = live.guard.reached_at is not None
         # A focused pass (`focus`) is done when its list is through, whatever time is left.
-        if live.budget is not None and not guard_stop and not (live.crawl is not None and live.crawl.finished):
+        if (live.budget is not None and live.kind in ("map", "explore") and not guard_stop
+                and not (live.crawl is not None and live.crawl.finished)):
             refused = live.budget.early_end_error(reason, force)
             if refused:
                 return refused
