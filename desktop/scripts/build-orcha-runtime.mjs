@@ -1,8 +1,11 @@
 // Builds the bundled Orcha runtime ("sidecar") that ships inside the app at
 // Contents/Resources/orcha-runtime (GH #258, plan D3 / PR 16): a relocatable
-// python-build-standalone interpreter + the orcha CLI and its dependencies, plus a
-// bin/orcha launcher. The app does not use it yet — this build exists to prove the
-// ~100 nested Mach-O files sign and notarize (plan risk R10).
+// python-build-standalone interpreter + the orcha CLI with its QA extra (orcha-cli[qa]:
+// mcp, fb-idb, uiautomator2, adbutils, pillow, playwright), plus a bin/orcha launcher
+// and the iOS simulator client idb_companion in libexec/idb-companion (without its REPL).
+// The app runs the CLI, the portal and the agents' QA tools from it. Not bundled: adb
+// (found in Android Studio's SDK at run time) and Chromium (downloaded the first time
+// someone tests a website, by the bundled Playwright).
 //
 //   node scripts/build-orcha-runtime.mjs            # build for arm64 (the only target so far)
 //   node scripts/build-orcha-runtime.mjs --dry-run  # print the pinned plan as JSON, touch nothing
@@ -37,6 +40,19 @@ export const PYTHON_BUILDS = {
   }
 }
 
+// Pinned iOS simulator client: facebook/idb release v1.6.8, the arm64 companion. Bump the
+// URL and the sha256 together (the sha256 is the release's .sha256 asset for this file).
+// The REPL parts (idb-repl and what only it loads) are left out: QA never runs them.
+export const IDB_COMPANION = {
+  version: '1.6.8',
+  url: 'https://github.com/facebook/idb/releases/download/v1.6.8/idb-companion.macos-arm64.tar.gz',
+  sha256: '3d8b47c62092249580db60f32239b3b892f3f9eb24dce8e0194aeb9258322543',
+  dest: path.join('libexec', 'idb-companion'),
+  strip: ['idb-repl', 'Resources/ReplHost.app', 'Resources/libRepl-iOS.dylib', 'Resources/libRepl-macOS.dylib']
+}
+// The extra the runtime installs the CLI with: the libraries the Quality tab's sessions need.
+export const CLI_EXTRA = 'qa'
+
 // The launcher the app (and a user's ~/.local/bin/orcha link, later) execs. It finds
 // the interpreter relative to itself, so the runtime works wherever the app lives.
 export const LAUNCHER = `#!/bin/sh
@@ -70,7 +86,16 @@ function parseArgs(argv) {
 export function buildPlan(arch = 'arm64') {
   const build = PYTHON_BUILDS[arch]
   if (!build) throw new Error(`no pinned python-build-standalone build for arch '${arch}'`)
-  return { arch, url: build.url, sha256: build.sha256, dest: RUNTIME_DIR, cli: CLI_DIR, launcher: LAUNCHER }
+  return {
+    arch,
+    url: build.url,
+    sha256: build.sha256,
+    dest: RUNTIME_DIR,
+    cli: CLI_DIR,
+    extra: CLI_EXTRA,
+    launcher: LAUNCHER,
+    idbCompanion: IDB_COMPANION
+  }
 }
 
 function log(msg) {
@@ -121,6 +146,20 @@ function removeBuildPathScripts(binDir, buildRoot) {
   }
 }
 
+// idb_companion finds its Resources/ and *.bundle folders next to itself, so the release
+// tarball is unpacked as it is into libexec/idb-companion, minus the REPL parts.
+async function installIdbCompanion(pin, root) {
+  const tarball = await download(pin.url, pin.sha256)
+  const dest = path.join(root, pin.dest)
+  log(`unpacking idb_companion ${pin.version} into ${dest}`)
+  await mkdir(dest, { recursive: true })
+  run('tar', ['-xzf', tarball, '-C', dest])
+  for (const rel of pin.strip) await rm(path.join(dest, rel), { recursive: true, force: true })
+  if (!existsSync(path.join(dest, 'idb_companion'))) {
+    throw new Error(`idb_companion missing from ${pin.url}`)
+  }
+}
+
 async function build(plan) {
   if (!existsSync(path.join(plan.cli, 'pyproject.toml'))) {
     throw new Error(`orcha-cli not found at ${plan.cli}`)
@@ -132,11 +171,12 @@ async function build(plan) {
     run('tar', ['-xzf', tarball, '-C', staging])
     const root = path.join(staging, 'python')
     const py = path.join(root, 'bin', 'python3')
-    log('installing orcha-cli and its dependencies')
+    log(`installing orcha-cli[${plan.extra}] and its dependencies`)
     run(py, [
       '-m', 'pip', 'install', '--no-compile', '--disable-pip-version-check',
-      '--no-warn-script-location', '--no-cache-dir', plan.cli
+      '--no-warn-script-location', '--no-cache-dir', `${plan.cli}[${plan.extra}]`
     ])
+    await installIdbCompanion(plan.idbCompanion, root)
     const stdlib = path.join(root, 'lib', `python${PYTHON_VERSION}`)
     for (const name of STDLIB_STRIP) await rm(path.join(stdlib, name), { recursive: true, force: true })
     for (const name of readdirSync(path.join(stdlib, 'lib-dynload'))) {

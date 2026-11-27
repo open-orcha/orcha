@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import io
 import logging
-import os
 import re
 import shlex
 import shutil
@@ -25,8 +24,9 @@ import subprocess
 import time
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any
+
+from orcha_cli.qa.device import tools
 
 log = logging.getLogger(__name__)
 
@@ -198,7 +198,7 @@ class UiAutomatorClient:
 
 
 def adb(serial: str, *args: str, timeout: float = ADB_TIMEOUT_S) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(["adb", "-s", serial, *args], capture_output=True, text=True, timeout=timeout)
+    return subprocess.run([tools.adb_path() or "adb", "-s", serial, *args], capture_output=True, text=True, timeout=timeout)
 
 
 def phone_facts(serial: str) -> dict[str, str | None]:
@@ -215,7 +215,7 @@ def phone_facts(serial: str) -> dict[str, str | None]:
 def adb_devices() -> list[tuple[str, str]]:
     """`adb devices`: `(serial, state)` for each entry (empty when adb is missing)."""
     try:
-        out = subprocess.run(["adb", "devices"], capture_output=True, text=True, timeout=10).stdout
+        out = subprocess.run([tools.adb_path() or "adb", "devices"], capture_output=True, text=True, timeout=10).stdout
     except (OSError, subprocess.SubprocessError):
         return []
     rows = []
@@ -241,9 +241,9 @@ def serial_named(name: str) -> str | None:
 
 def emulator_bin() -> str | None:
     """The Android SDK's `emulator`, or None."""
-    for root in (os.environ.get("ANDROID_HOME"), os.environ.get("ANDROID_SDK_ROOT"), str(Path.home() / "Library/Android/sdk")):
-        if root and (Path(root) / "emulator" / "emulator").is_file():
-            return str(Path(root) / "emulator" / "emulator")
+    for root in tools.android_sdk_roots():
+        if (root / "emulator" / "emulator").is_file():
+            return str(root / "emulator" / "emulator")
     return shutil.which("emulator")
 
 
@@ -302,7 +302,7 @@ def is_connected(serial: str) -> bool:
     rows = adb_devices()
     if not rows:
         try:
-            subprocess.run(["adb", "version"], capture_output=True, timeout=5)
+            subprocess.run([tools.adb_path() or "adb", "version"], capture_output=True, timeout=5)
         except (OSError, subprocess.SubprocessError):
             return True
     return any(s == serial and state == "device" for s, state in rows)

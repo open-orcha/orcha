@@ -217,6 +217,12 @@ async def app_version(dev: Any) -> Optional[str]:
 # ---------- the device layer (lazy) ----------
 
 
+def _browser_check() -> Optional[str]:
+    from . import browser_setup
+
+    return browser_setup.ensure_for_session()
+
+
 async def open_device(platform: str, app_id: str, device_name: Optional[str], **opts: Any) -> Any:
     """Start a device session and open the app fresh (`device/ios.py`, `device/android.py`,
     `device/web.py`). The device layer picks the device (iOS: a physical phone when `device_name`
@@ -340,10 +346,15 @@ class QATools:
         device_opener: Optional[Callable[[str, str, Optional[str]], Awaitable[Any]]] = None,
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        browser_check: Optional[Callable[[], Optional[str]]] = None,
     ) -> None:
         self.ident = identity if identity is not None else config_mod.resolve()
         self.portal = portal if portal is not None else PortalClient.from_identity(self.ident)
         self.device_opener = device_opener or open_device
+        #: Before a web session: None when the test browser is there, else what to answer while it
+        #: downloads (`browser_setup.ensure_for_session`). Only the real device layer needs it.
+        self.browser_check = browser_check if browser_check is not None else (
+            _browser_check if device_opener is None else (lambda: None))
         self.clock = clock
         self.sleep = sleep
         self.live: Optional[LiveSession] = None
@@ -993,6 +1004,9 @@ class QATools:
                     return f"error: the web target must be an http(s) URL, not {app_id!r}"
                 allowed = [o for o in allowed_origins(target.get("notes")) if o != origin_of(app_id)]
                 opts["allowed_origins"] = allowed
+                # The first web test downloads the browser: answer "waiting:" (no session, no budget).
+                if note := await asyncio.to_thread(self.browser_check):
+                    return note
         minutes = float(minutes or 0)
         if not task_id:  # every run is a task: the one this worker was woken for, else a new run task
             try:

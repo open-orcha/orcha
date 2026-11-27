@@ -39,11 +39,16 @@ def config_path(cwd: str | pathlib.Path) -> Optional[pathlib.Path]:
 
 
 def orcha_executable() -> str:
-    """The `orcha` that should serve the tools: the one on PATH, else this interpreter's."""
+    """The `orcha` that should serve the tools. Inside the Mac app (`ORCHA_SIDECAR=1`) it is the
+    app's own launcher next to this interpreter, so agents run the copy whose QA tools the Quality
+    tab checked, not another `orcha` that happens to be first on PATH. Elsewhere: the one on PATH,
+    else this interpreter's."""
+    candidate = pathlib.Path(sys.executable).with_name("orcha")
+    if os.environ.get("ORCHA_SIDECAR") == "1" and candidate.is_file():
+        return str(candidate)
     found = shutil.which("orcha")
     if found:
         return found
-    candidate = pathlib.Path(sys.executable).with_name("orcha")
     return str(candidate) if candidate.exists() else "orcha"
 
 

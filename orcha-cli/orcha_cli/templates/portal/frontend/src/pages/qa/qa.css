@@ -482,6 +482,13 @@ a.qa-taskqa-row:hover .qa-taskqa-t, a.qa-taskqa-t:hover { text-decoration: under
 .qa-finish { margin-block-start: var(--v2-space-3); padding-block-start: var(--v2-space-3); border-block-start: 1px solid var(--v2-border); }
 .qa-finish-k { margin-block: var(--v2-space-2) 2px; font-weight: var(--v2-fw-medium); }
 .qa-finish-list { margin: 0; padding-inline-start: 18px; }
+/* Ready to test: one line per platform (QaReadinessList). */
+.qa-readiness { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--v2-space-2); }
+.qa-readiness-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--v2-space-2); }
+.qa-readiness-name { min-inline-size: 64px; font-weight: var(--v2-fw-medium); }
+.qa-readiness-words { flex: 1 1 240px; }
+.qa-readiness-progress { inline-size: 120px; }
+.qa-readiness-words.qa-ok { color: var(--v2-ok); }
 
 /* "Send to Quality when finished" on a task: a switch, its words, Change. */
 .qa-on-done { flex-wrap: wrap; }

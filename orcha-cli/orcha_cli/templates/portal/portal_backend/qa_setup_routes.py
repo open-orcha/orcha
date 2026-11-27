@@ -9,11 +9,15 @@ the folder (a container) says so in a sentence.
   POST /api/containers/{cid}/qa/setup/tools  turn the tools on (a person), answering like setup
   POST /api/containers/{cid}/qa/setup/tools/off  take them away again (a person), answering like setup
   POST /api/containers/{cid}/qa/agent        add the QA agent, give it the waiting QA tasks (a person)
+  GET  /api/containers/{cid}/qa/setup/readiness  one row per platform: ready, or what is missing
+  POST /api/containers/{cid}/qa/setup/browser    download the web test browser now (a person)
 """
 
 from __future__ import annotations
 
 import importlib
+import threading
+import time
 from typing import Any, Optional
 
 from fastapi import HTTPException, Request
@@ -27,6 +31,9 @@ from portal_backend.schemas import AgentCreate
 NO_PACKAGE = ("This portal runs without the Orcha QA package, so it can't turn the QA tools on. "
               "Run `orcha qa enable` in the project folder instead.")
 NO_FOLDER = "This portal has no project folder. Run `orcha qa enable` in the project instead."
+NO_LIBRARIES = "This copy of Embodent is missing its QA tools ({missing}). Update or reinstall Embodent."
+#: Readiness reads simctl and adb: an open Quality tab polls, and a poll in between serves the last answer.
+READINESS_TTL_S = 5.0
 QA_ALIAS, QA_ROLE = "QA", "QA"
 #: The same words as the UI's Add a QA agent.
 QA_PROMPT = ("You are the project's QA agent. You test the app on a device or in a browser with the Orcha QA tools, and "
@@ -41,6 +48,34 @@ class QaAgentBody(BaseModel):
     actor_agent_id: Optional[str] = None
 
 
+class QaBrowserState(BaseModel):
+    """The web test browser (`orcha_cli.qa.browser_setup.status`). `state`: missing, downloading,
+    ready or failed; `percent` while downloading; `error` one plain sentence after a failure."""
+    installed: bool
+    state: str
+    percent: Optional[int] = None
+    size: Optional[str] = None
+    error: Optional[str] = None
+    message: Optional[str] = None
+
+
+class QaPlatformReadiness(BaseModel):
+    """Can a session run on this platform now. `words`: what is ready, or what is missing and how
+    to get it; `link`: a page that helps; `browser`: the web test browser (web only)."""
+    platform: str
+    ready: bool
+    words: str
+    link: Optional[str] = None
+    browser: Optional[QaBrowserState] = None
+
+
+class QaReadiness(BaseModel):
+    """`available` false: this portal cannot check (no QA package); `reason` says why."""
+    available: bool
+    reason: Optional[str] = None
+    platforms: list[QaPlatformReadiness] = []
+
+
 def _launch() -> Optional[Any]:
     """`orcha_cli.qa.launch` when this portal runs in the CLI's interpreter, else None."""
     try:
@@ -49,13 +84,51 @@ def _launch() -> Optional[Any]:
         return None
 
 
+def _qa_module(name: str) -> Optional[Any]:
+    try:
+        return importlib.import_module(f"orcha_cli.qa.{name}")
+    except ImportError:
+        return None
+
+
+def missing_libraries() -> list[str]:
+    """Inside the Mac app: the QA packages its runtime lacks (an old or broken install). Elsewhere
+    []: a source install's doctor names them, and the tools can still be turned on."""
+    tools, readiness = _qa_module("device.tools"), _qa_module("readiness")
+    if tools is None or readiness is None or not tools.in_app():
+        return []
+    return readiness.missing_libraries()
+
+
 def tools_state() -> dict[str, Any]:
     launch, root = _launch(), qa_onboarding.repo_dir()
     if launch is None:
         return {"tools_on": False, "can_enable": False, "reason": NO_PACKAGE}
     if root is None:
         return {"tools_on": False, "can_enable": False, "reason": NO_FOLDER}
-    return {"tools_on": launch.config_path(root) is not None, "can_enable": True, "reason": None}
+    on = launch.config_path(root) is not None
+    if missing := missing_libraries():
+        return {"tools_on": on, "can_enable": False, "reason": NO_LIBRARIES.format(missing=", ".join(missing))}
+    return {"tools_on": on, "can_enable": True, "reason": None}
+
+
+_readiness: dict[str, Any] = {"at": -READINESS_TTL_S, "rows": []}
+_readiness_guard = threading.Lock()
+
+
+def readiness_state() -> dict[str, Any]:
+    """The rows for the Quality tab; the device checks at most every `READINESS_TTL_S`, the web
+    browser's download progress fresh each time."""
+    readiness = _qa_module("readiness")
+    if readiness is None:
+        return {"available": False, "reason": NO_PACKAGE, "platforms": []}
+    with _readiness_guard:
+        if time.monotonic() - _readiness["at"] >= READINESS_TTL_S:
+            _readiness["rows"] = readiness.platforms()
+            _readiness["at"] = time.monotonic()
+        rows = list(_readiness["rows"])
+    fresh = readiness.web()
+    return {"available": True, "reason": None, "platforms": [fresh if r["platform"] == "web" else r for r in rows]}
 
 
 def _setup(cur, cid: str) -> dict[str, Any]:
@@ -119,6 +192,28 @@ def disable_qa_tools(cid: str, body: QaToolsBody, request: Request):
         raise HTTPException(409, f"Couldn't change the QA settings in the project folder: {e}. Run `orcha qa disable` there instead.") from e
     with db_cursor(readonly=True) as (_, cur):
         return _setup(cur, cid)
+
+
+@app.get("/api/containers/{cid}/qa/setup/readiness", response_model=QaReadiness)
+def get_qa_readiness(cid: str, request: Request):
+    """One row per platform (ios, android, web): can a Quality session run on it from this
+    install, and if not, what a person does. The same checks as `orcha qa doctor`."""
+    with db_cursor(readonly=True) as (_, cur):
+        qs.container_read(cur, request, cid)
+    return readiness_state()
+
+
+@app.post("/api/containers/{cid}/qa/setup/browser", response_model=QaBrowserState)
+def download_qa_browser(cid: str, body: QaToolsBody, request: Request):
+    """Start downloading the web test browser now (a person); a download already going is joined.
+    Answers its state; read progress from the readiness route."""
+    with db_cursor(readonly=True) as (_, cur):
+        qs.container_read(cur, request, cid)
+        qs.human(cur, request, cid, body.actor_agent_id, "download the test browser")
+    browser_setup = _qa_module("browser_setup")
+    if browser_setup is None:
+        raise HTTPException(409, NO_PACKAGE)
+    return browser_setup.start()
 
 
 @app.post("/api/containers/{cid}/qa/agent")

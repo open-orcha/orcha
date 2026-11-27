@@ -104,3 +104,18 @@ describe("Default when nothing runs", () => {
     expect(defaultDevicePick("ios", sims).noun).toBe("Boots iPhone 17 Pro");
   });
 });
+
+describe("a simulator this install cannot drive", () => {
+  const fix = { code: "ios_client_missing", title: "Can't drive simulators.", fix: "Embodent's iPhone simulator tool (idb_companion) is missing. Reinstall Embodent." };
+  it("reads as needing setup, with the fix, instead of looking usable", () => {
+    const [row] = pickerRows([{ device: { ...iphone, ready: false, setup: fix } }]);
+    expect(row.state).toBe("setup");
+    expect(row.setup).toEqual(fix);
+    expect(blockedWords(row)).toBe(`${fix.title} ${fix.fix}`);
+  });
+  it("a usable simulator is unchanged", () => {
+    const [row] = pickerRows([{ device: iphone }]);
+    expect(row.state).toBe("booted");
+    expect(row.setup).toBeNull();
+  });
+});

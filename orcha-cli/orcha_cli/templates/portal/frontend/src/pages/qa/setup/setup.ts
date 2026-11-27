@@ -1,12 +1,35 @@
 /** What a project needs before QA can run: an AI agent, and the QA tools on. */
 import { getJSON, sendJSON } from "../../../api/client";
 
-export interface QaSetup { tools_on: boolean; can_enable: boolean; ai_agents: number }
+export interface QaSetup { tools_on: boolean; can_enable: boolean; ai_agents: number; reason?: string | null }
+
+/** The web test browser: downloaded on first use, or now with Download now. */
+export interface QaBrowserState {
+  installed: boolean;
+  state: "missing" | "downloading" | "ready" | "failed" | string;
+  percent?: number | null;
+  size?: string | null;
+  error?: string | null;
+  message?: string | null;
+}
+
+/** Can a session run on this platform from this install: `words` says what is ready or missing. */
+export interface QaPlatformReadiness { platform: "ios" | "android" | "web" | string; ready: boolean; words: string; link?: string | null; browser?: QaBrowserState | null }
+
+export interface QaReadiness { available: boolean; reason?: string | null; platforms: QaPlatformReadiness[] }
 
 const enc = encodeURIComponent;
 const C = (cid: string) => `/api/containers/${enc(cid)}/qa`;
 
 export const getQaSetup = (cid: string, signal?: AbortSignal) => getJSON<QaSetup>(`${C(cid)}/setup`, signal);
+
+export const getQaReadiness = (cid: string, signal?: AbortSignal) => getJSON<QaReadiness>(`${C(cid)}/setup/readiness`, signal);
+
+export const downloadQaBrowser = (cid: string, actor: string | null) => sendJSON<QaBrowserState>("POST", `${C(cid)}/setup/browser`, { actor_agent_id: actor });
+
+/** Offer Download now: the browser is missing, or its download failed (then it reads Try again). */
+export const browserAction = (b: QaBrowserState | null | undefined): "download" | "retry" | null =>
+  !b || b.installed ? null : b.state === "failed" ? "retry" : b.state === "missing" ? "download" : null;
 
 export const enableQaTools = (cid: string, actor: string | null) => sendJSON<QaSetup>("POST", `${C(cid)}/setup/tools`, { actor_agent_id: actor });
 

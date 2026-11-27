@@ -16,6 +16,7 @@ import { AUTO_TRIAGE, ON_FAIL, TRIGGERS } from "./words";
 import { relTime } from "../../../lib/format";
 import { FINISH_ALONE_HINT, FINISH_ALONE_LABEL, FINISH_ALONE_STAYS } from "../runTask/finishing";
 import { disableQaTools, enableQaTools, getQaSetup } from "../setup/setup";
+import { QaReadinessList } from "../setup/QaReadinessList";
 
 /** Saved on its own, not by the card's Save: the comparison leaves it out. */
 const withoutFinish = (s: QaSettings) => ({ ...s, finish_when_proven: false, finish_enabled_by: null, finish_enabled_at: null });
@@ -163,7 +164,13 @@ export function QaSettingsCard({ cid, auth, nonce }: { cid: string; auth: QaAuth
           </div>
           <span className="qa-hint">{setup.data.tools_on ? "This project's agents can drive a device or a browser. Off takes effect from their next run." : "Off: this project's agents have no QA tools, and Run check asks you to turn them on first."}</span>
         </div>
+      ) : setup.data?.reason ? (
+        <div className="qa-field qa-finish" data-qa-tools-setting>
+          <span className="qa-label">QA tools</span>
+          <span className="qa-hint" data-qa-tools-reason>{setup.data.reason}</span>
+        </div>
       ) : null}
+      <QaReadinessList cid={cid} auth={auth} />
       <div className="qa-field qa-finish" data-finish-setting>
         <span className="qa-label">{FINISH_ALONE_LABEL}</span>
         <div>

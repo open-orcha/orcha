@@ -572,7 +572,10 @@ class WebSession(SessionBase):
 
                 self._playwright_factory = async_playwright
         except ImportError as e:
-            raise SessionError("playwright is not installed: install orcha-cli[qa], then run `playwright install chromium`") from e
+            from orcha_cli.qa.device import tools
+
+            raise SessionError("playwright is not installed: " + ("this copy of Embodent is missing its web test tools; "
+                               "update or reinstall Embodent" if tools.in_app() else "install orcha-cli[qa]")) from e
         self.playwright = await self._playwright_factory().start()
         try:
             await self._launch_browser()
@@ -600,7 +603,8 @@ class WebSession(SessionBase):
                 headless=self.headless, args=list(FAKE_MEDIA_ARGS) if self.auto_allow_permissions else [],
             )
         except Exception as e:  # noqa: BLE001
-            raise SessionError(f"chromium failed to launch (run `playwright install chromium`): {_first_line(e)}") from e
+            raise SessionError(f"the test browser failed to start: {_first_line(e)}. If it is not downloaded yet, start the "
+                               "session again: the first web session downloads it") from e
         self.context = await self.browser.new_context(
             viewport={"width": self.width, "height": self.height}, device_scale_factor=1,
             ignore_https_errors=True, color_scheme=DEFAULT_COLOR_SCHEME,
