@@ -1,5 +1,7 @@
 """QA time limits: zero means no limit; a missing choice keeps the 20 minute default."""
 
+import re
+
 from portal_backend import qa_store as qs
 
 
@@ -8,6 +10,16 @@ DEFAULT_MINUTES = 20
 
 def minutes(value):
     return DEFAULT_MINUTES if value is None else value
+
+
+def task_description(description: str | None, budget: int) -> str:
+    """Refresh generated time instructions without replacing the task's requirements."""
+    text = description or ""
+    note = "Time limit: none." if budget == 0 else f"Time limit: {budget} minutes."
+    text, count = re.subn(r"(?m)^Time limit: (?:none|[0-9]+ minutes)\.$", note, text)
+    text = re.sub(r"(?m)^(Run /orcha-qa-(?:map|explore) for this task on (?:ios|android|web) --minutes )[0-9]+\b",
+                  lambda match: match[1] + str(budget), text)
+    return text if count else text + ("\n\n" if text else "") + note
 
 
 def elapsed(result: dict) -> float:
