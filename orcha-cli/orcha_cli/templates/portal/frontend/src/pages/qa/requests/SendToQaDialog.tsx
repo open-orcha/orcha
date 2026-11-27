@@ -1,3 +1,4 @@
+import { QaTimeChoice } from "../QaTimeChoice";
 /**
  * Send to QA: the handoff from a task. Kind, platform, focus, the lines to prove (preloaded from the
  * task's definition of done) and what happens if it fails. Creates a request; its QA task goes to the
@@ -57,6 +58,7 @@ export function SendToQaDialog({ task, onClose }: { task: SendToQaTask; onClose:
   const scenarios = useLoad(cid && platform && kind === "check" ? (s) => listScenarios(cid, platform, s) : null, [cid, platform, kind]);
   const approved = (scenarios.data ?? []).filter((s) => s.status === "validated");
   const [picked, setPicked] = useState<string[]>([]);
+  const [minutes, setMinutes] = useState(20);
   const [focus, setFocus] = useState("");
   const [lines, setLines] = useState<string[]>(() => dodLines(task.definition_of_done));
   const [onFail, setOnFail] = useState<QaOnFail | null>(null);
@@ -79,7 +81,7 @@ export function SendToQaDialog({ task, onClose }: { task: SendToQaTask; onClose:
     setErr(null);
     try {
       const { request } = await sendTaskToQa(task.id, auth.human?.id ?? null, {
-        kind, platform, scenario_ids: kind === "check" ? picked : [], focus: focus.trim() || null, acceptance: kept, on_fail: failChoice, build: cleanBuild(build),
+        kind, platform, minutes, scenario_ids: kind === "check" ? picked : [], focus: focus.trim() || null, acceptance: kept, on_fail: failChoice, build: cleanBuild(build),
         conditions: cleanConditions(conditions),
       });
       requestsChanged();
@@ -135,6 +137,7 @@ export function SendToQaDialog({ task, onClose }: { task: SendToQaTask; onClose:
           <label className="qa-label" htmlFor={ids.focus}>Focus <span className="qa-muted">(optional)</span></label>
           <input id={ids.focus} className="qa-input" value={focus} maxLength={200} placeholder="What to look at first, e.g. sign-up and password reset" onChange={(e) => setFocus(e.target.value)} />
         </div>
+        <QaTimeChoice value={minutes} onChange={setMinutes} />
         <div className="qa-field" role="group" aria-label="Lines to prove">
           <span className="qa-label">Lines to prove <span className="qa-muted">{kept.length ? `(${plural(kept.length, "line")})` : "(optional)"}</span></span>
           {lines.length ? (

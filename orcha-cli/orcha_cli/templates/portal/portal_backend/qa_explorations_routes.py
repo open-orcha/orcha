@@ -49,6 +49,10 @@ class Actor(BaseModel):
     actor_agent_id: Optional[str] = None
 
 
+class ContinueBody(Actor):
+    minutes: int = Field(default=20, ge=0, le=480, description="Extra minutes; 0 means no limit")
+
+
 class KeepBody(Actor):
     name: Optional[str] = Field(default=None, max_length=120, description="Empty goes back to the computed name")
     notes: Optional[str] = Field(default=None, max_length=4000)
@@ -61,7 +65,7 @@ class QueueBody(Actor):
     platform: Platform
     task_id: str
     goal: Optional[str] = Field(default=None, max_length=4000)
-    budget_minutes: Optional[int] = Field(default=None, ge=1, le=480)
+    budget_minutes: Optional[int] = Field(default=None, ge=0, le=480, description="Minutes; 0 means no limit")
     agent_id: Optional[str] = None
     draft_sources: Optional[Literal["code", "exploration", "both"]] = None
     conditions: Optional[Conditions] = None
@@ -143,7 +147,7 @@ def keep_qa_session(sid: str, body: KeepBody, request: Request):
 def _repeat_description(s: dict) -> str:
     skill = SKILL[s["kind"]]
     cmd = f"Run /{skill} for this task on {s['platform']}"
-    if s["kind"] in TIMED and s.get("budget_minutes"):
+    if s["kind"] in TIMED and s.get("budget_minutes") is not None:
         cmd += f" --minutes {s['budget_minutes']}"
     goal = " ".join((s.get("goal") or "").split()).replace('"', "'")
     if goal and s["kind"] == "map":
@@ -215,6 +219,81 @@ def _repeat(sid: str, request: Request, actor_id: Optional[str], *, new_series: 
 @app.post("/api/qa/sessions/{sid}/again", status_code=201)
 def run_qa_session_again(sid: str, body: Actor, request: Request):
     return _repeat(sid, request, body.actor_agent_id, new_series=False)
+
+
+@app.post("/api/qa/sessions/{sid}/continue", status_code=201)
+def continue_qa_session(sid: str, body: ContinueBody, request: Request):
+    """Give a timed-out request more time on the same task. Recorded verdicts stay in place.
+
+    Ended sessions remain immutable. A retry returns the already queued continuation.
+    Workflow evidence and completed/cancelled tasks cannot be reopened through this route.
+    """
+    from portal_backend import qa_time, sql
+    with db_cursor() as (conn, cur):
+        s = qs.load_session(cur, sid)
+        cid = str(s["container_id"])
+        who = qs.human(cur, request, cid, body.actor_agent_id, "continue a QA run")
+        if s["status"] != "done" or not qa_time.reached(s):
+            raise HTTPException(409, "Continue needs a run that stopped at its time limit.")
+        req = qa_handoff.load(cur, str(s["request_id"]), lock=True) if s.get("request_id") else None
+        tid = str(req["qa_task_id"] if req else s["task_id"])
+        cur.execute("SELECT * FROM tasks WHERE id=%s" + sql.for_update(), (tid,))
+        task = dict(cur.fetchone())
+        if task["workflow_id"] or task["status"] in ("completed", "cancelled"):
+            raise HTTPException(409, "Continue needs an open QA task outside a workflow.")
+        if req:
+            cur.execute("SELECT id FROM qa_requests WHERE qa_task_id=%s ORDER BY created_at DESC LIMIT 1", (tid,))
+            newest_request = cur.fetchone()
+            if req["status"] == "cancelled" or not newest_request or str(newest_request["id"]) != str(req["id"]):
+                raise HTTPException(409, "This QA request was cancelled or replaced. Open the latest request.")
+        if req is None:
+            if qa_handoff.request_for_task(cur, tid):
+                raise HTTPException(409, "This task already has another open QA request.")
+            cur.execute("SELECT id FROM qa_sessions WHERE task_id=%s ORDER BY started_at DESC LIMIT 1", (tid,))
+            if str(cur.fetchone()["id"]) != sid:
+                raise HTTPException(409, "A newer session already exists. Open that session to continue.")
+            req = qa_handoff._insert(cur, cid, spec={"kind": s["kind"], "platform": s["platform"],
+                                                   "focus": s.get("goal"), "minutes": body.minutes},
+                                    conf=qa_handoff.settings(cur, cid), origin="handoff", who_id=who["id"],
+                                    source=None, source_agent=None, qa_task_id=tid, status="blocked", approved_by=who["id"])
+            cur.execute("UPDATE qa_sessions SET request_id=%s WHERE id=%s", (str(req["id"]), sid))
+        cur.execute("SELECT * FROM qa_sessions WHERE request_id=%s ORDER BY started_at DESC LIMIT 1", (str(req["id"]),))
+        latest = dict(cur.fetchone())
+        if str(latest["id"]) != sid:
+            if str(latest.get("previous_session_id")) == sid and latest["status"] == "running":
+                return qs.public(latest)
+            raise HTTPException(409, "A newer session already exists. Open that session to continue.")
+        if req["status"] not in qa_handoff.FINISHED:
+            raise HTTPException(409, "Wait for this QA request to finish before continuing.")
+        current = qa_handoff.request_for_task(cur, tid)
+        if current:
+            raise HTTPException(409, "This task already has another open QA request.")
+        cur.execute("""SELECT 1 AS hit FROM worker_runs WHERE status='running' AND
+                       (task_id=%s OR run_id IN (SELECT run_id FROM worker_run_tasks WHERE task_id=%s)) LIMIT 1""", (tid, tid))
+        if cur.fetchone():
+            raise HTTPException(409, "Wait for the QA agent to stop before continuing.")
+        lines = qa_handoff._line_results(cur, req)
+        unfinished = [l for l in lines if l["verdict"] != "pass"]
+        note = (f"Continue QA request {req['id']} with minutes={body.minutes}. "
+                "Keep the recorded verdicts. Work only on unproven checks.\n" +
+                "\n".join(f"Line {l['index']}: {l['text']}" for l in unfinished))
+        cur.execute("UPDATE qa_requests SET status='requested', minutes=%s, result=NULL, finished_at=NULL WHERE id=%s",
+                    (body.minutes, str(req["id"])))
+        cur.execute("UPDATE tasks SET status='in_progress' WHERE id=%s", (tid,))
+        cur.execute("INSERT INTO task_messages (task_id, author_id, body) VALUES (%s,%s,%s)", (tid, who["id"], note))
+        qa_handoff.approve_plan(cur, tid, who["id"], qa_handoff.person_run_line(who["alias"]))
+        q = qx.queue_session(cur, cid, who, kind=s["kind"], platform=s["platform"], task_id=tid, goal=s.get("goal"),
+                             budget_minutes=body.minutes, agent_id=s.get("agent_id"), series_id=str(s.get("series_id") or sid),
+                             previous_id=sid)
+        cur.execute("UPDATE qa_sessions SET request_id=%s WHERE id=%s", (str(req["id"]), str(q["id"])))
+        qa_conditions.store(cur, "qa_sessions", str(q["id"]), qs._json(s.get("conditions"), None))
+        qx.resume_task(cur, cid, tid, qx.again_plan(cur, cid, tid), who)
+        qa_handoff._changed(cur, cid, qa_handoff.load(cur, str(req["id"])))
+        log_event(cur, cid, "human", who["id"], "qa_session", str(q["id"]), "qa_session_continued",
+                  {"from": sid, "task_id": tid, "minutes": body.minutes})
+        out = qs.public(qs.load_session(cur, str(q["id"])))
+        conn.commit()
+    return out
 
 
 @app.post("/api/qa/sessions/{sid}/duplicate", status_code=201)

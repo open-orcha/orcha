@@ -429,8 +429,8 @@ describe("Quality tab", () => {
     // what Start will run is shown before it runs
     expect(document.querySelector("[data-run-preview]")?.textContent).toContain("Explore the iOS app");
     fireEvent.click(screen.getByRole("tab", { name: /Options/ }));
-    fireEvent.change(screen.getByLabelText("Minutes"), { target: { value: "3" } });
-    expect(screen.getByRole("alert")).toHaveTextContent("between 5 and 240 minutes");
+    fireEvent.change(screen.getByLabelText("Minutes"), { target: { value: "-1" } });
+    expect(screen.getByRole("alert")).toHaveTextContent("between 1 and 480 minutes");
     expect(start).toBeDisabled();
     fireEvent.change(screen.getByLabelText("Minutes"), { target: { value: "30" } });
     fireEvent.change(screen.getByLabelText("Focus"), { target: { value: "password reset" } });

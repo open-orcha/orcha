@@ -197,9 +197,21 @@ def run_result(cur, tid: str) -> Optional[dict]:
     sessions = [dict(r) for r in cur.fetchall()]
     if run is None and not sessions:
         return None
-    cur.execute("SELECT * FROM qa_requests WHERE qa_task_id=%s ORDER BY created_at DESC LIMIT 1", (tid,))
+    newest = sessions[0] if sessions else None
+    # A replacement request can belong to this session before its task link is
+    # repaired. The session is the authority for which attempt we are showing.
+    if newest and newest.get("request_id"):
+        cur.execute("SELECT * FROM qa_requests WHERE id=%s AND container_id=%s",
+                    (str(newest["request_id"]), str(newest["container_id"])))
+    else:
+        cur.execute("SELECT * FROM qa_requests WHERE qa_task_id=%s ORDER BY created_at DESC LIMIT 1", (tid,))
     hit = cur.fetchone()
     req = dict(hit) if hit else None
+    if newest:
+        # Multiple sessions of one request include a continuation. Other
+        # requests are separate attempts, with their own findings and duration.
+        sessions = ([s for s in sessions if str(s.get("request_id")) == str(req["id"])]
+                    if req and newest.get("request_id") else [newest])
     outcome, reason, result = _outcome(cur, req, sessions)
     newest = sessions[0] if sessions else None
     sids = [str(s["id"]) for s in sessions]
@@ -224,6 +236,7 @@ def run_result(cur, tid: str) -> Optional[dict]:
             "kind": (req or {}).get("kind") or (newest or {}).get("kind") or (run or {}).get("kind"),
             "platform": (newest or {}).get("platform") or (req or {}).get("platform") or (run or {}).get("platform"),
             "outcome": outcome, "reason": reason, "summary": result.get("summary"), "request_id": str(req["id"]) if req else None,
+            "stop_reason": result.get("stop_reason"), "unfinished_lines": result.get("unfinished_lines") or [],
             "scenarios": result.get("scenarios") or [], "lines": result.get("lines") or [], "findings": result.get("findings") or [],
             "diagnoses": result.get("diagnoses") or [], "drafts": drafts, "screens_reached": len(screens), "screens": screens[:50],
             "duration_seconds": sum(seconds) if seconds else None, "cost_usd": session_cost(runs),

@@ -339,6 +339,9 @@ def _task_texts(req: dict, source: Optional[dict], approved_by: Optional[str]) -
     lines.append(f"Run {SKILLS[kind]} for QA request {rid}{round_words}: pass request_id=\"{rid}\" to start_session.")
     if req.get("platform"):
         lines.append(f"Platform: {req['platform']}.")
+    from portal_backend.qa_time import minutes
+    budget = minutes(req.get("minutes"))
+    lines.append("Time limit: none." if budget == 0 else f"Time limit: {budget} minutes.")
     if source:
         lines.append(f"Source: task {source['id']} ({source['title']}).")
     if req.get("focus"):
@@ -425,6 +428,9 @@ def hand_off(cid: str, who: dict, spec: dict, *, source_task_id: Optional[str] =
         approved_by = who["id"]
     with db_cursor() as (conn, cur):
         conf = settings(cur, cid)
+        reuse = spec.get("qa_task_id")
+        if reuse:
+            _replacement_task(cur, cid, reuse)
         source = None
         if source_task_id:
             qs.require_task_in(cur, cid, source_task_id)
@@ -460,13 +466,13 @@ def hand_off(cid: str, who: dict, spec: dict, *, source_task_id: Optional[str] =
         req = _insert(cur, cid, spec=spec, conf=conf, origin=origin, who_id=who["id"], source=source, source_agent=source_agent,
                       previous=str(previous["id"]) if previous else None, finding_id=finding_id,
                       round_no=int(previous["round"]) + 1 if previous else 1,
-                      max_rounds=previous.get("max_rounds") if previous else None, approved_by=approved_by)
+                      max_rounds=previous.get("max_rounds") if previous else None, approved_by=approved_by, qa_task_id=reuse)
         title, description, dod = _task_texts(req, source, approver_alias)
         alias = conf["agent_alias"]
         conn.commit()
     rid = str(req["id"])
     try:
-        created = task_creation_routes.create_task(
+        created = {"task_id": reuse} if reuse else task_creation_routes.create_task(
             cid, TaskCreateBody(title=title, description=description, definition_of_done=dod,
                                 created_by_agent_id=who["id"], assignee_alias=alias,
                                 priority=(source or {}).get("priority") or 100),
@@ -480,6 +486,8 @@ def hand_off(cid: str, who: dict, spec: dict, *, source_task_id: Optional[str] =
     tid = str(created["task_id"])
     with db_cursor() as (conn, cur):
         cur.execute("UPDATE qa_requests SET qa_task_id=%s WHERE id=%s", (tid, rid))
+        if reuse:
+            cur.execute("UPDATE tasks SET description=%s, definition_of_done=%s WHERE id=%s", (description, dod, tid))
         from portal_backend import qa_run_tasks
 
         qa_run_tasks.mark(cur, cid, tid, "request", kind=spec["kind"], platform=spec["platform"])
@@ -688,6 +696,42 @@ def cancel(cid: str, rid: str, who: dict, request: Any) -> dict:
 
 # ---------------------------------------------------------------- sessions and verdicts
 
+def _replacement_task(cur, cid: str, tid: str) -> dict:
+    """Only an open, standalone QA run can receive a replacement request."""
+    qs.require_task_in(cur, cid, tid)
+    cur.execute("SELECT t.* FROM tasks t JOIN qa_runs q ON q.task_id=t.id WHERE t.id=%s", (tid,))
+    row = cur.fetchone()
+    if not row or row["workflow_id"] or row["status"] not in ("ready", "in_progress", "needs_verification"):
+        raise HTTPException(409, "A replacement request needs an open QA run task outside a workflow.")
+    if request_for_task(cur, tid):
+        raise HTTPException(409, "This QA task already has an open request.")
+    return dict(row)
+
+
+def _link_replacement_task(cur, s: dict, req: dict) -> None:
+    """Retire only a pristine unassigned duplicate, in the same transaction as the link.
+
+    Started or assigned work is never taken away. Callers can select qa_task_id
+    when filing a replacement, avoiding creation of a second task altogether.
+    """
+    tid, duplicate = s.get("task_id"), req.get("qa_task_id")
+    if not tid or not duplicate or str(tid) == str(duplicate):
+        return
+    cid = str(s["container_id"])
+    _replacement_task(cur, cid, str(tid))
+    cur.execute("SELECT * FROM tasks WHERE id=%s" + sql.for_update(), (str(duplicate),))
+    other = cur.fetchone()
+    if not other or other["status"] != "ready" or other["workflow_id"] or other["is_root"]:
+        raise HTTPException(409, "The request already has a QA task. Use that task for this session.")
+    for table, column in (("agent_tasks", "task_id"), ("qa_sessions", "task_id"), ("worker_runs", "task_id")):
+        cur.execute(f"SELECT 1 AS hit FROM {table} WHERE {column}=%s LIMIT 1", (str(duplicate),))
+        if cur.fetchone():
+            raise HTTPException(409, "The request's QA task already has work or an agent. Use that task for this session.")
+    cur.execute("UPDATE qa_requests SET qa_task_id=%s WHERE id=%s", (str(tid), str(req["id"])))
+    cur.execute("UPDATE tasks SET status='cancelled', completed_at=%s WHERE id=%s", (qs.now(), str(duplicate)))
+    log_event(cur, cid, "system", None, "task", str(duplicate), "status_changed",
+              {"to": "cancelled", "reason": "The replacement request uses the existing QA task.", "qa_task_id": str(tid)})
+
 def request_for_task(cur, tid: Optional[str]) -> Optional[dict]:
     """The open request this task works, if any."""
     if not tid:
@@ -711,6 +755,7 @@ def link_session(cur, s: dict, request_id: Optional[str]) -> dict:
         raise HTTPException(409, f"This QA request already ended ({req['status']}); ask for a new one.")
     if req.get("platform") and req["platform"] != s["platform"]:
         raise HTTPException(400, f"That QA request is for {req['platform']}, not {s['platform']}.")
+    _link_replacement_task(cur, s, req)
     rid = str(req["id"])
     cur.execute("UPDATE qa_sessions SET request_id=%s, task_id=COALESCE(task_id, %s) WHERE id=%s",
                 (rid, str(req["qa_task_id"]) if req.get("qa_task_id") else None, str(s["id"])))
@@ -817,7 +862,7 @@ def rollup(cur, req: dict, sessions: Optional[list[dict]] = None) -> tuple[str, 
     or inconclusive, a named scenario got no verdict, or a check recorded nothing that covers it.
     passed: everything else. Lines nobody judged stay unjudged: they prove nothing either way."""
     if sessions is None:
-        cur.execute("SELECT id, status FROM qa_sessions WHERE request_id=%s", (str(req["id"]),))
+        cur.execute("SELECT * FROM qa_sessions WHERE request_id=%s ORDER BY started_at DESC", (str(req["id"]),))
         sessions = cur.fetchall()
     sids = [str(s["id"]) for s in sessions]
     scenarios, scenario_failed = _scenario_results(cur, req, sids)
@@ -850,6 +895,14 @@ def rollup(cur, req: dict, sessions: Optional[list[dict]] = None) -> tuple[str, 
     result = {"lines": lines, "scenarios": scenarios, "finding_ids": [str(f["id"]) for f in findings], "draft_ids": drafts,
               "session_ids": sids, "findings": _finding_rows(findings), "failing_findings": len(serious)}
     result["summary"] = _summary(req, status, lines, scenarios, findings, finished)
+    from portal_backend import qa_time
+    newest = max(sessions, key=lambda s: str(s.get("started_at") or "")) if sessions else None
+    if newest and newest["status"] == "done" and qa_time.reached(dict(newest)):
+        timed = qa_time.stop_result(dict(newest), qs._json(newest.get("result"), {}) or {}, lines)
+        result.update({k: timed[k] for k in ("stop_reason", "reason", "unfinished_lines")})
+        if timed["unfinished_lines"] and status == "passed":
+            status = "blocked"
+        result["summary"] = timed["reason"] + " " + _summary(req, status, lines, scenarios, findings, finished)
     return status, result
 
 

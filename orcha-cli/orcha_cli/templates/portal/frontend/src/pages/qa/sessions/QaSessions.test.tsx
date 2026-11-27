@@ -37,6 +37,7 @@ beforeEach(() => {
       return jsonRes(detail);
     }
     if (path === "/api/qa/sessions/s1/keep") return jsonRes(detail);
+    if (path === "/api/qa/sessions/s1/continue") return jsonRes({ id: "s2", task_id: "t9" }, 201);
     if (path === "/api/qa/sessions/s1/again") return jsonRes({ id: "s2", task_id: "t9", session_id: "s2" }, 201);
     if (path === "/api/qa/sessions/s1") return jsonRes(detail);
     if (path === "/api/qa/sessions/s1/steps") return jsonRes({ steps });
@@ -206,4 +207,15 @@ describe("the other kinds", () => {
     fireEvent.click(screen.getByRole("button", { name: /Run what you accepted/ }));
     expect(runQa).toHaveBeenCalledWith("check", null, expect.objectContaining({ scenarioIds: expect.any(Array) }));
   });
+});
+
+it("explains the time limit and continues with no limit", async () => {
+  detail = { ...detail, status: "done", ended_at: "2026-11-04T10:20:00Z", stop_reason: "Stopped at the 20-minute time limit. Unfinished checks: Line 2: Receipt." };
+  const { set } = mount({ session: "s1" });
+  await page();
+  expect(screen.getByText(/Unfinished checks: Line 2: Receipt/)).toBeInTheDocument();
+  fireEvent.change(screen.getByLabelText("Time limit"), { target: { value: "0" } });
+  fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+  await waitFor(() => expect(set).toHaveBeenCalledWith({ session: "s2" }));
+  expect(calls.find((c) => c.url.endsWith("/continue"))).toMatchObject({ method: "POST", body: { actor_agent_id: "h1", minutes: 0 } });
 });

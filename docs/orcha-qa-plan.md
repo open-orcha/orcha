@@ -864,3 +864,36 @@ as it is. Brainstorming scenarios is the existing drafting and explorer experien
 built. Overview, Map, Screen atlas, Slowest screens, Triage, Apps and the Health and Coverage
 sub-tabs are removed from navigation and routes. Their source stays until the owner confirms
 deletion. Onboarding, workflows, handoff and run tasks are unchanged.
+
+### QA time limits and replacement attempts (GH #442)
+
+`QaRequestBody.minutes` and a session's `budget_minutes` accept 0 for **No limit**,
+with finite choices from 1 to 480 minutes. A missing request choice uses 20 minutes.
+The request's choice governs request-driven sessions; a queued portal session keeps
+its chosen limit when the worker claims it. The request dialog and Run check options
+expose the choice. Before a request starts, a person can also choose and approve its
+limit through `PUT /api/qa/requests/{rid}/time-limit`.
+
+When the tool consumes its allowance, the ended session records
+`result.stop_reason = "time_limit"`. The session page, task result card and result
+post explain the limit and name unfinished acceptance lines. This is not a product
+failure by itself; existing failing verdicts and findings retain their meaning.
+
+`POST /api/qa/sessions/{sid}/continue` is a person's action, with `minutes` for the
+additional allowance (0 for no limit). It queues a new session on the same open,
+standalone task and request, retaining prior verdicts and evidence. The tool lists
+already proven lines so the worker can focus on unproven checks. A repeated click
+returns the queued continuation. Completed and cancelled tasks, live workers, stale
+sessions and workflow tasks are refused; workflow evidence follows its existing
+review and repeat rules.
+
+A worker replacement does not grant a fresh allowance. The QA tool saves elapsed
+time in heartbeats and shutdown, and the next session of the interrupted request
+carries that clock forward. Worker caps, stop instructions, holds and continuation
+limits still apply independently. No limit removes the QA clock only.
+
+The task result reads the newest session's request. It includes only that request's
+sessions in its duration, so a continuation is cumulative and replacement attempts
+stay separate. A replacement request may supply `qa_task_id` to reuse an open QA
+run task. For a legacy mismatched link, only a pristine, unassigned duplicate task
+can be retired automatically. Assigned or started tasks are never taken away.

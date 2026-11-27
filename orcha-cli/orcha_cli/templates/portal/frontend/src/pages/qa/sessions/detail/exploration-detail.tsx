@@ -1,3 +1,4 @@
+import { QaTimeChoice } from "../../QaTimeChoice";
 import { useCallback, useMemo, useState, type ReactNode } from "react";
 import { Archive, ArchiveRestore, ArrowLeft, ArrowUpRight, Columns2, Copy, Pin, PinOff, RotateCcw, Square } from "../../map/kit/icons";
 import { Tooltip } from "../../../../components/primitives";
@@ -15,7 +16,7 @@ import { WorkPage, WorkSection } from "../work/work-done";
 import { WorkHeading, WorkEmpty, WorkLive } from "../work/work-live";
 import { explorationDoing, explorationPhase, explorationWorkStatus, fmtClock as clockLine, phasesFor, type WorkStatus } from "../work/words";
 import { frameKind, reproOf } from "../adapt";
-import { duplicateSession, keepSession, runSessionAgain, stopSession } from "../api";
+import { continueSession, duplicateSession, keepSession, runSessionAgain, stopSession } from "../api";
 import { runPlacement } from "../frames";
 import { CheckFace, checksBy } from "./check-face";
 import { ExploreCharter, FindingsRail, LiveScreen, liveFrameClass } from "./explore-face";
@@ -74,6 +75,7 @@ export function ExplorationDetail({ cid, id, nav, auth }: { cid: string; id: str
   const { toast } = useToast();
   const confirm = useConfirm();
   const router = useRouter();
+  const [extraMinutes, setExtraMinutes] = useState(20);
   const [busy, setBusy] = useState<string | null>(null);
   const session = detail?.session ?? null;
   const agent = useAgentAlias(session?.agent_id, session?.agent_alias);
@@ -323,6 +325,18 @@ export function ExplorationDetail({ cid, id, nav, auth }: { cid: string; id: str
     <FrameShapeProvider shape={shape}>
       <WorkPage data-exploration-detail={e.id} data-detail-face={face}>
         {back}
+        {session.status === "done" && session.stop_reason ? <section aria-label="Time limit reached" className="qa-form">
+          <p>{session.stop_reason}</p>
+          {<>
+            <QaTimeChoice value={extraMinutes} onChange={setExtraMinutes} disabled={!auth.can || busy === "continue"} />
+            <Button disabled={!auth.can} loading={busy === "continue"} onClick={async () => {
+              setBusy("continue");
+              try { const next = await continueSession(session.id, actor, extraMinutes); nav.refresh(); nav.set({ session: next.id }); }
+              catch (e) { toast({ title: "Could not continue", description: errText(e), variant: "error" }); }
+              finally { setBusy(null); }
+            }}>Continue</Button>
+          </>}
+        </section> : null}
         <WorkTitle
           name={<EditableName key={e.name} id={e.id} name={e.name} actor={actor} canRename={auth.can} onRenamed={(to) => setRenamed({ from: base.name, to })} />}
           status={status}

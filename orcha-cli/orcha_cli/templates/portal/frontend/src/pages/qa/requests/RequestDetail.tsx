@@ -1,3 +1,4 @@
+import { QaTimeChoice } from "../QaTimeChoice";
 /**
  * One request: what was asked (the lines to prove, the build), each line's verdict with its
  * screenshots, the findings, and links to the session and its run page. Cancel is a person's call.
@@ -12,7 +13,7 @@ import { Filmstrip, FrameShapeProvider, type FrameItem } from "../Frames";
 import { errText, Kv, QaSection, QaStatus, TaskLink, qaHref, useAgentAlias, useLoad } from "../parts";
 import type { Platform, QaFinding, Verdict } from "../qaApi";
 import { platformWord, severityTone, severityWord, verdictGlyph, verdictWord, findingStatusWord } from "../qaWords";
-import { cancelRequest, getRequest, type QaLineResult, type QaRequest } from "./api";
+import { approveRequestTime, cancelRequest, getRequest, type QaLineResult, type QaRequest } from "./api";
 import { linesOf } from "./lines";
 import { requestIdHref, runPageHref, sessionHref } from "./links";
 import { isOpenRequest } from "./model";
@@ -71,6 +72,7 @@ export function RequestDetail({ id, seed, auth, nonce, onClose, onChanged }: {
   const r = res.data ?? seed;
   const findings = requestFindings(r);
   const by = useAgentAlias(r?.requested_by_agent_id, r?.requested_by_alias);
+  const [minutes, setMinutes] = useState<number | null>(null);
   const [confirm, setConfirm] = useState(false);
   const [busy, setBusy] = useState(false);
 
@@ -111,6 +113,15 @@ export function RequestDetail({ id, seed, auth, nonce, onClose, onChanged }: {
             </div>
             <p className="qa-muted qa-gate">A QA result never verifies a task. A person still does.</p>
           </QaSection>
+          {r.status === "requested" && auth.can ? <QaSection title="Approve this run">
+            <QaTimeChoice value={minutes ?? r.minutes ?? 20} onChange={setMinutes} disabled={busy} />
+            <Button size="sm" busy={busy} onClick={async () => {
+              setBusy(true);
+              try { await approveRequestTime(r.id, auth.human?.id ?? null, minutes ?? r.minutes ?? 20); onChanged(); }
+              catch (e) { toast(errText(e), "danger"); }
+              finally { setBusy(false); }
+            }}>Approve time limit</Button>
+          </QaSection> : null}
           <QaSection title="What was asked">
             <Kv items={[
               ["Came from", <SourceLinks key="s" r={r} none="Quality" />],
@@ -119,6 +130,7 @@ export function RequestDetail({ id, seed, auth, nonce, onClose, onChanged }: {
               ["Kind", requestKindWord(r.kind)],
               ["Platform", r.platform ? platformWord(r.platform as Platform) : null],
               ["Focus", r.focus],
+              ["Time limit", r.minutes === 0 ? "No limit" : `${r.minutes ?? 20} minutes`],
               ["If it fails", onFailWord(r.on_fail)],
               ["QA task", r.qa_task_id ? <TaskLink key="q" id={r.qa_task_id} title={r.qa_task_title} /> : null],
               ["Plan approved by", r.approved_by_alias],

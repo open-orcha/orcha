@@ -76,3 +76,35 @@ def test_a_qa_steps_prompt_names_the_skill_and_asks_for_no_outcome():
     text = notifier_protocol._render_workflow(workflow)
     assert "/orcha-qa-check" in text and 'request_id="r1"' in text and "Do not report an outcome" in text
     assert "report exactly one outcome" not in text and "approval of your plan" in text
+
+
+def test_worker_replacement_restores_the_budget_and_keeps_proven_lines():
+    from test_qa_mcp import Clock
+    clock = Clock()
+    tools, portal, _, _ = make(clock=clock)
+    tools.portal.get_request = lambda rid: {**REQUEST, 'kind': 'explore', 'minutes': 60, 'line_verdicts': [
+        {'line_index': 0, 'verdict': 'pass'}]}
+    create = portal.create_session
+    portal.create_session = lambda body: {**create(body), 'result': {'budget_offset_s': 1200}}
+    out = run(tools.start_session(request_id='r1'))
+    assert tools.live.budget.used_s == 1200
+    assert 'already proven; keep this verdict' in out
+    clock.t += 600
+    run(tools.shutdown())
+    assert portal.sessions['sess-1']['result']['budget']['used_s'] == 1800
+    assert portal.sessions['sess-1']['status'] == 'abandoned'
+
+
+def test_time_limit_is_saved_by_the_tool_and_no_limit_has_no_clock():
+    from test_qa_mcp import Clock
+    clock = Clock()
+    tools, portal, _, _ = make(clock=clock)
+    tools.portal.get_request = lambda rid: {**REQUEST, 'minutes': 60}
+    run(tools.start_session(request_id='r1'))
+    clock.t += 3601
+    run(tools.end_session('Recorded progress'))
+    assert portal.sessions['sess-1']['result']['stop_reason'] == 'time_limit'
+    tools.portal.get_request = lambda rid: {**REQUEST, 'minutes': 0}
+    run(tools.start_session(request_id='r2'))
+    assert tools.live.budget is None
+    assert portal.sessions['sess-2']['budget_minutes'] == 0

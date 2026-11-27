@@ -98,7 +98,7 @@ def claim_queued(cur, cid: str, who: dict, *, kind: str, platform: str, task_id:
     cur.execute(
         """UPDATE qa_sessions SET claimed_at=%s, started_at=%s, last_seen_at=%s, agent_id=%s,
                   device_name=COALESCE(%s, device_name), device_udid=COALESCE(%s, device_udid),
-                  app_id=COALESCE(%s, app_id), budget_minutes=COALESCE(%s, budget_minutes),
+                  app_id=COALESCE(%s, app_id), budget_minutes=COALESCE(budget_minutes, %s),
                   goal=COALESCE(%s, goal), draft_sources=COALESCE(%s, draft_sources)
             WHERE id=%s""",
         (at, at, at, who["id"], device_name, device_udid, app_id, budget_minutes, goal, draft_sources, sid),
@@ -279,9 +279,11 @@ def sweep_all() -> None:
 
 def stop_reason(s: dict) -> Optional[str]:
     """Why a session ended short, in words; None while it runs and when it finished."""
+    result = qs._json(s.get("result"), None) or {}
+    if s.get("status") == "done" and result.get("stop_reason") == "time_limit":
+        return result.get("reason") or "Stopped at the time limit."
     if s.get("status") not in _STOP_DEFAULT:
         return None
-    result = qs._json(s.get("result"), None) or {}
     return result.get("error") or result.get("reason") or _STOP_DEFAULT[s["status"]]
 
 

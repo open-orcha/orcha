@@ -148,7 +148,7 @@ class SessionCreateBody(ActorBody):
     device_name: Optional[str] = Field(default=None, max_length=200)
     device_udid: Optional[str] = Field(default=None, max_length=100)
     app_id: Optional[str] = Field(default=None, max_length=300)
-    budget_minutes: Optional[int] = Field(default=None, ge=1, le=480)
+    budget_minutes: Optional[int] = Field(default=None, ge=0, le=480, description="Minutes; 0 means no limit. Default: 20.")
     goal: Optional[str] = Field(default=None, max_length=4000)
     draft_sources: Optional[Literal["code", "exploration", "both"]] = None
     request_id: Optional[str] = Field(default=None, description="The QA request this session works; a task's open "
@@ -176,6 +176,8 @@ class SessionPatchBody(ActorBody):
     result: Optional[dict] = None
     report_md: Optional[str] = Field(default=None, max_length=100_000)
     heartbeat: bool = False
+    budget_used_seconds: Optional[float] = Field(default=None, ge=0, le=1_000_000_000,
+                                                description="Saved elapsed QA time for worker replacement")
     device_name: Optional[str] = Field(default=None, max_length=200)
     device_udid: Optional[str] = Field(default=None, max_length=100)
     build_label: Optional[str] = Field(default=None, max_length=200)
@@ -633,10 +635,16 @@ def create_qa_session(cid: str, body: SessionCreateBody, request: Request):
         if not tid:
             raise HTTPException(400, "A QA session needs a task: every run is one.")
         tid = qs.require_task_in(cur, cid, str(tid))
+        from portal_backend import qa_time
+        req = qa_handoff.load(cur, body.request_id) if body.request_id else qa_handoff.request_for_task(cur, tid)
+        budget = body.budget_minutes
+        if req:
+            budget = 0 if req["kind"] == "triage" else qa_time.minutes(req.get("minutes"))
         s = qs.create_session(cur, cid, who, kind=body.kind, platform=body.platform, task_id=tid,
                               device_name=body.device_name, device_udid=body.device_udid, app_id=body.app_id,
-                              budget_minutes=body.budget_minutes, goal=body.goal, draft_sources=body.draft_sources)
+                              budget_minutes=budget, goal=body.goal, draft_sources=body.draft_sources)
         s = qa_handoff.link_session(cur, s, body.request_id)
+        s = qa_time.carry_progress(cur, s)
         asked = qa_conditions.clean(body.conditions)
         if not asked and s.get("request_id"):
             asked = qa_conditions.clean(qa_handoff.load(cur, str(s["request_id"])).get("conditions"))
@@ -705,7 +713,16 @@ def patch_qa_session(sid: str, body: SessionPatchBody, request: Request):
     stays ended; ending one abandons any walk still walking."""
     with db_cursor() as (conn, cur):
         s, who = _session_in(cur, request, sid, body.actor_agent_id)
+        if body.status == "done" and s["status"] == "running":
+            from portal_backend import qa_time
+            req = qa_handoff.load(cur, str(s["request_id"])) if s.get("request_id") else None
+            lines = qa_handoff._line_results(cur, req) if req else []
+            body.result = qa_time.stop_result(s, body.result or qs._json(s.get("result"), {}) or {}, lines)
         sets, args = ["last_seen_at=%s"], [qs.now()]
+        if body.budget_used_seconds is not None and s["status"] == "running" and s.get("budget_minutes"):
+            kept = body.result if body.result is not None else (qs._json(s.get("result"), {}) or {})
+            body.result = {**kept, "budget": {"minutes": s["budget_minutes"], "used_s": body.budget_used_seconds,
+                                             "left_s": max(0, s["budget_minutes"] * 60 - body.budget_used_seconds)}}
         if body.status is not None and body.status != s["status"]:
             if s["status"] != "running":
                 raise HTTPException(409, f"this QA session already ended ({s['status']})")

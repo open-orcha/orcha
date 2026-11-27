@@ -82,7 +82,7 @@ export function qaTaskBody(i: QaRunInput): QaTaskBody {
   const focus = (i.focus ?? "").trim();
   const sources = i.kind === "draft" ? (i.sources ?? null) : null;
   const timed = TIMED_KINDS.includes(i.kind) || sources === "new";
-  const minutes = timed ? Math.max(1, Math.round(i.minutes || DEFAULT_MINUTES)) : null;
+  const minutes = timed ? Math.max(0, Math.round(i.minutes ?? DEFAULT_MINUTES)) : null;
   const app = appWord(i.platform);
   const base = {
     map: `Map the ${app}`,
