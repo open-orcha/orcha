@@ -448,6 +448,73 @@ describe("Quality tab", () => {
     });
   });
 
+  it.each(["", "0", "-1", "1.5", "481"])("Run time: invalid Minutes %j stays editable and cannot submit", async (value) => {
+    mount("/qa?view=run&kind=explore&chose=1");
+    const start = await screen.findByRole("button", { name: "Start" });
+    await waitFor(() => expect(start).toBeEnabled());
+    fireEvent.click(screen.getByRole("tab", { name: /Options/ }));
+    const minutes = screen.getByLabelText("Minutes");
+    fireEvent.change(minutes, { target: { value } });
+    fireEvent.click(start);
+    expect(writes()).toHaveLength(0);
+    expect(minutes).toBeEnabled();
+    expect(minutes).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByRole("checkbox", { name: "No limit" })).not.toBeChecked();
+    expect(start).toBeDisabled();
+    fireEvent.change(minutes, { target: { value: "45" } });
+    expect(start).toBeEnabled();
+    fireEvent.click(start);
+    await waitFor(() => expect(writes()).toHaveLength(2));
+    expect(writes()[0].body.description).toContain("--minutes 45");
+    expect(writes()[1].body.budget_minutes).toBe(45);
+  });
+
+  it.each([20, 1, 480])("Run time: finite choice %i survives toggling No limit", async (value) => {
+    mount("/qa?view=run&kind=explore&chose=1");
+    const start = await screen.findByRole("button", { name: "Start" });
+    await waitFor(() => expect(start).toBeEnabled());
+    fireEvent.click(screen.getByRole("tab", { name: /Options/ }));
+    const minutes = screen.getByLabelText("Minutes");
+    const unlimited = screen.getByRole("checkbox", { name: "No limit" });
+    expect(minutes).toHaveValue(20);
+    expect(unlimited).not.toBeChecked();
+    fireEvent.change(minutes, { target: { value: String(value) } });
+    fireEvent.click(unlimited);
+    expect(minutes).toBeDisabled();
+    expect(unlimited).toBeChecked();
+    expect(start).toBeEnabled();
+    expect(within(screen.getByRole("region", { name: "What will run" })).getByText("No limit")).toBeInTheDocument();
+    fireEvent.click(unlimited);
+    expect(minutes).toBeEnabled();
+    expect(minutes).toHaveValue(value);
+    fireEvent.click(start);
+    await waitFor(() => expect(writes()).toHaveLength(2));
+    expect(writes()[0].body.description).toContain(`--minutes ${value}`);
+    expect(writes()[1].body.budget_minutes).toBe(value);
+  });
+
+  it("Run time: only explicit No limit allows unlimited work after clearing Minutes", async () => {
+    mount("/qa?view=run&kind=explore&chose=1");
+    const start = await screen.findByRole("button", { name: "Start" });
+    await waitFor(() => expect(start).toBeEnabled());
+    fireEvent.click(screen.getByRole("tab", { name: /Options/ }));
+    const minutes = screen.getByLabelText("Minutes");
+    const unlimited = screen.getByRole("checkbox", { name: "No limit" });
+    fireEvent.change(minutes, { target: { value: "" } });
+    expect(start).toBeDisabled();
+    fireEvent.click(unlimited);
+    expect(start).toBeEnabled();
+    fireEvent.click(unlimited);
+    expect(minutes).toBeEnabled();
+    expect(minutes).toHaveValue(null);
+    expect(start).toBeDisabled();
+    fireEvent.click(unlimited);
+    fireEvent.click(start);
+    await waitFor(() => expect(writes()).toHaveLength(2));
+    expect(writes()[0].body.description).toContain("--minutes 0");
+    expect(writes()[1].body.budget_minutes).toBe(0);
+  });
+
   it("Run check: no agent is one clear state, never a form with a disabled button", async () => {
     setup = { tools_on: true, can_enable: true, ai_agents: 0 };
     mount("/qa?view=run&kind=explore");
