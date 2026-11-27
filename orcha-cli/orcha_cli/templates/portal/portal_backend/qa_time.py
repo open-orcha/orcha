@@ -18,10 +18,26 @@ def keep_clock(session: dict, result: dict) -> dict:
     """Progress and device updates cannot discard the allowance already consumed."""
     saved = qs._json(session.get("result"), {}) or {}
     result = dict(result)
-    for key in ("budget", "budget_offset_s", "continued_from_session_id", "new_allowance"):
+    for key in ("budget", "budget_offset_s", "continued_from_session_id", "resumed_from_session_id", "new_allowance"):
         if key in saved and key not in result:
             result[key] = saved[key]
     return result
+
+
+def portal_attempt(sessions: list[dict], newest: dict) -> list[dict]:
+    """Follow automatic replacements, never a person's explicit new attempt."""
+    by_id = {str(s["id"]): s for s in sessions}
+    attempt, seen = [], set()
+    current = newest
+    while current and str(current["id"]) not in seen:
+        if any(str(current.get(k)) != str(newest.get(k))
+               for k in ("task_id", "agent_id", "kind", "platform", "request_id")):
+            break
+        attempt.append(current)
+        seen.add(str(current["id"]))
+        saved = qs._json(current.get("result"), {}) or {}
+        current = by_id.get(str(saved.get("resumed_from_session_id")))
+    return attempt
 
 
 def carry_progress(cur, session: dict) -> dict:
@@ -67,7 +83,8 @@ def carry_progress(cur, session: dict) -> dict:
     used = elapsed(qs._json(previous.get("result"), {}) or {})
     budget = session.get("budget_minutes") if session.get("request_id") else previous.get("budget_minutes")
     cur.execute("UPDATE qa_sessions SET budget_minutes=%s, result=%s WHERE id=%s",
-                (budget, qs.dumps({**result, "budget_offset_s": used}), str(session["id"])))
+                (budget, qs.dumps({**result, "budget_offset_s": used,
+                                   "resumed_from_session_id": str(previous["id"])}), str(session["id"])))
     return qs.load_session(cur, str(session["id"]))
 
 
