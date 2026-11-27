@@ -17,6 +17,8 @@ from typing import Any, Optional
 #: The QA libraries each platform's sessions import.
 LIBRARIES = {"ios": ("idb",), "android": ("uiautomator2", "adbutils"), "web": ("playwright",)}
 XCODE_WORDS = "Install Xcode from the App Store, then open it once."
+NO_SIMULATOR_WORDS = ("No iPhone simulator on this Mac yet: in Xcode, add the iOS platform (Settings > Components), "
+                      "then add a simulator (Window > Devices and Simulators).")
 NO_AVD_WORDS = "No Android emulator yet: create one in Android Studio's Device Manager."
 
 
@@ -64,7 +66,27 @@ def ios() -> dict[str, Any]:
     if sims:
         names = ", ".join(s["name"] for s in sims[:3])
         return _row("ios", True, f"Ready: {names} running.")
-    return _row("ios", True, "Ready. No simulator is running: one starts when a run starts.")
+    return _stopped_simulators()
+
+
+def _stopped_simulators() -> dict[str, Any]:
+    """Nothing booted: a run boots an existing simulator (the default one, or the one picked) and
+    never creates one, so this is ready only when this Mac has a simulator to boot."""
+    from .device import ios_idb
+    from .device.base import DEFAULT_IOS_DEVICES
+
+    try:
+        every = ios_idb.all_simulators()
+    except Exception as e:  # noqa: BLE001 - simctl missing, failing or slow reads as not ready
+        return _row("ios", False, f"Xcode's simulator tools don't answer ({type(e).__name__}). {XCODE_WORDS}")
+    if not every:
+        return _row("ios", False, NO_SIMULATOR_WORDS)
+    names = [d["name"] for d in every]
+    default = next((n for n in DEFAULT_IOS_DEVICES if n in names), None)
+    if default:
+        return _row("ios", True, f"Ready. No simulator is running: {default} starts when a run starts.")
+    some = ", ".join(dict.fromkeys(names[:3]))
+    return _row("ios", True, f"Ready. No simulator is running: pick one ({some}) in the device picker and it starts when a run starts.")
 
 
 def android() -> dict[str, Any]:

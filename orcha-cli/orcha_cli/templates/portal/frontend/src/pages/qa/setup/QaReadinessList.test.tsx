@@ -1,8 +1,8 @@
 /** The Quality tab's readiness list: one line per platform, Download now for the web test browser,
  * its progress while it downloads, and Try again after a failure. */
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { QaReadinessList } from "./QaReadinessList";
+import { IDLE_POLL_MS, QaReadinessList } from "./QaReadinessList";
 import { browserAction } from "./setup";
 
 const json = (body: unknown, status = 200) => ({ ok: status < 300, status, json: async () => body, text: async () => JSON.stringify(body) }) as unknown as Response;
@@ -32,7 +32,9 @@ function stub(...answers: object[]) {
   }) as unknown as typeof fetch;
 }
 
-afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); });
+
+const gets = () => (global.fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls.filter(([u]) => String(u).endsWith("/qa/setup/readiness")).length;
 
 describe("QaReadinessList", () => {
   it("shows one line per platform with the words and Google's link for adb", async () => {
@@ -52,6 +54,34 @@ describe("QaReadinessList", () => {
     await waitFor(() => expect(posts).toEqual([{ actor_agent_id: "h1" }]));
     const bar = await screen.findByRole("progressbar", { name: "Test browser download" });
     expect(bar.getAttribute("value")).toBe("40");
+  });
+
+  it("shows a download an agent started: it reads the list again while the page is visible", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    stub(rows(browser("missing")), rows(browser("downloading", { percent: 25 })), rows(browser("ready")));
+    render(<QaReadinessList cid="c1" auth={AUTH} />);
+    await screen.findByRole("button", { name: "Download now" });
+    expect(gets()).toBe(1);
+    await act(async () => { await vi.advanceTimersByTimeAsync(IDLE_POLL_MS); });
+    const bar = await screen.findByRole("progressbar", { name: "Test browser download" });
+    expect(bar.getAttribute("value")).toBe("25");
+    expect(screen.queryByRole("button", { name: "Download now" })).toBeNull();
+    await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
+    await waitFor(() => expect(screen.queryByRole("progressbar")).toBeNull());
+    expect(gets()).toBe(3);
+  });
+
+  it("does not read the list again while the page is hidden", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    stub(rows(browser("ready")));
+    const hidden = vi.spyOn(document, "hidden", "get").mockReturnValue(true);
+    render(<QaReadinessList cid="c1" auth={AUTH} />);
+    await screen.findByText("Ready: iPhone 17 Pro running.");
+    await act(async () => { await vi.advanceTimersByTimeAsync(IDLE_POLL_MS * 3); });
+    expect(gets()).toBe(1);
+    hidden.mockReturnValue(false);
+    await act(async () => { document.dispatchEvent(new Event("visibilitychange")); });
+    await waitFor(() => expect(gets()).toBe(2));
   });
 
   it("offers Try again after a failure", async () => {
