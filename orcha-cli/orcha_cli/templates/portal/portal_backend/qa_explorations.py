@@ -83,6 +83,7 @@ def claim_queued(cur, cid: str, who: dict, *, kind: str, platform: str, task_id:
     """The queued row an agent's new session takes, when one waits for its task."""
     if not task_id:
         return None
+    require_runnable_task(cur, cid, task_id)
     cur.execute(
         """SELECT * FROM qa_sessions
             WHERE container_id=%s AND task_id=%s AND kind=%s AND platform=%s AND status='running'
@@ -106,11 +107,41 @@ def claim_queued(cur, cid: str, who: dict, *, kind: str, platform: str, task_id:
     return qs.load_session(cur, sid)
 
 
+def require_runnable_task(cur, cid: str, task_id: str) -> None:
+    """Cancellation also fences a new worker when no queued session remains."""
+    cur.execute("SELECT status FROM tasks WHERE id=%s AND container_id=%s" + sql.for_update(), (task_id, cid))
+    task = cur.fetchone()
+    if not task:
+        raise HTTPException(404, "This QA task no longer exists.")
+    if task['status'] in ('cancelled', 'completed'):
+        raise HTTPException(409, "This QA task already ended. Start a new run from Quality.")
+
+
+def cancel_sessions(cur, sessions: list[dict], actor_id: Optional[str], why: str) -> None:
+    """End active sessions in the caller's cancellation transaction; keep saved evidence."""
+    from portal_backend.agent_status import log_event
+
+    for s in sessions:
+        if s['status'] != 'running':
+            continue
+        sid = str(s['id'])
+        kept = {k: v for k, v in (qs._json(s.get('result'), {}) or {}).items()
+                if k not in ('waiting', 'starting', 'since')}
+        cur.execute("UPDATE qa_sessions SET status='cancelled', ended_at=%s, result=%s WHERE id=%s AND status='running'",
+                    (qs.now(), qs.dumps({**kept, 'error': why}), sid))
+        if cur.rowcount:
+            qs.end_open_walks(cur, sid, why)
+            log_event(cur, str(s['container_id']), 'human' if actor_id else 'system', actor_id,
+                      'qa_session', sid, 'qa_session_ended', {'status': 'cancelled', 'kind': s['kind'], 'reason': why})
+
+
 def queue_session(cur, cid: str, who: dict, *, kind: str, platform: str, task_id: Optional[str], goal: Optional[str],
                   budget_minutes: Optional[int], agent_id: Optional[str], name: Optional[str] = None,
                   series_id: Optional[str] = None, previous_id: Optional[str] = None, new_series: bool = False,
                   draft_sources: Optional[str] = None) -> dict:
     """A session waiting for its agent. In its series unless `new_series`."""
+    if task_id:
+        require_runnable_task(cur, cid, task_id)
     t = qs.target(cur, cid, platform) or {}
     if not new_series and not series_id:
         series_id, previous_id = series_of(cur, cid, kind, platform, goal)
@@ -204,6 +235,16 @@ def _why_stopped(cur, s: dict) -> Optional[str]:
     waiting: that is the no-agent state, not a stop."""
     at = qs.now()
     start = _when(s.get("started_at"))
+    if s.get('task_id'):
+        cur.execute('SELECT status FROM tasks WHERE id=%s', (str(s['task_id']),))
+        task = cur.fetchone()
+        if task and task['status'] in ('cancelled', 'completed'):
+            return 'Its task already ended.'
+    if s.get('request_id'):
+        cur.execute('SELECT status FROM qa_requests WHERE id=%s', (str(s['request_id']),))
+        req = cur.fetchone()
+        if req and req['status'] not in ('requested', 'running'):
+            return 'Its QA request already ended.'
     if s.get("task_id") and s.get("agent_id"):
         # The worker died and a new one began the same run: this one can never finish.
         cur.execute("""SELECT 1 AS hit FROM qa_sessions
