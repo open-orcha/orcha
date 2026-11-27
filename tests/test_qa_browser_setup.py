@@ -1,6 +1,8 @@
 """The test browser's first-use download (`orcha_cli.qa.browser_setup`): with a fake Playwright
 command line (no network), progress lands in the status file, a failure reads as one plain
-sentence, a second caller joins the running download, and `start_session` answers "waiting:"."""
+sentence, a second caller joins the running download, and `start_session` answers "waiting:".
+A slow download runs as long as data arrives; one that receives no data is ended after the
+no-data limit (shortened here), and the next try works."""
 
 from __future__ import annotations
 
@@ -32,13 +34,43 @@ FAKE = textwrap.dedent('''
     if mode == "nospace":
         print("Error: ENOSPC: no space left on device, write")
         raise SystemExit(1)
-    if mode in ("silent", "closed"):
-        import os, subprocess, time
+    if mode.startswith("slow:"):
+        # Like Playwright on a slow connection: each file grows in a new folder under TMPDIR, one
+        # progress line per 10% (here: one line for the whole browser), the browser folder fills
+        # as it unpacks, then a second file (ffmpeg) downloads with no line at all.
+        import os, shutil, tempfile, time
+        step, browser_s, ffmpeg_s = (float(x) for x in mode.split(":")[1:])
+        where.parent.mkdir(parents=True, exist_ok=True)
+        (where.parent / "tmpdir").write_text(os.environ.get("TMPDIR", ""))
+        print("Downloading Chromium Headless Shell 140.0", flush=True)
+        print("|                                                                                | " + "  0% of 92.1 MiB", flush=True)
+        for name, seconds in (("chromium-headless-shell", browser_s), ("ffmpeg", ffmpeg_s)):
+            folder = pathlib.Path(tempfile.mkdtemp(prefix="playwright-download-"))
+            with open(folder / f"playwright-download-{name}-mac-arm64-1.zip", "ab") as part:
+                end = time.monotonic() + seconds
+                while time.monotonic() < end:
+                    part.write(b"x" * 4096)
+                    part.flush()
+                    time.sleep(step)
+            shutil.rmtree(folder)
+            where.mkdir(parents=True, exist_ok=True)
+            (where / f"{name}.bin").write_bytes(b"y" * 8192)
+        (where / "INSTALLATION_COMPLETE").write_text("")
+        raise SystemExit(0)
+    if mode in ("silent", "closed", "data_then_stall"):
+        import os, subprocess, tempfile, time
         # Like Playwright's Python entrypoint: it starts a child (Node) that does the download.
         child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
         (where.parent / "pids").parent.mkdir(parents=True, exist_ok=True)
         (where.parent / "pids").write_text(f"{os.getpid()} {child.pid}")
-        if mode == "closed":
+        if mode == "data_then_stall":  # some data, then the connection stops
+            folder = pathlib.Path(tempfile.mkdtemp(prefix="playwright-download-"))
+            with open(folder / "playwright-download-chromium-headless-shell-mac-arm64-1.zip", "ab") as part:
+                for _ in range(5):
+                    part.write(b"x" * 4096)
+                    part.flush()
+                    time.sleep(0.05)
+        if mode in ("closed", "data_then_stall"):
             os.close(1)
             os.close(2)
         time.sleep(60)
@@ -121,23 +153,85 @@ def _alive(pid: int) -> bool:
     return bool(out.strip()) and not out.strip().startswith("Z")
 
 
-@pytest.mark.parametrize("mode", ["silent", "closed"])
-def test_a_hung_installer_is_ended_at_the_deadline(fake, monkeypatch, mode):
-    """Silent, or with its output closed, the installer is still ended at the deadline (with the
-    child it started), the download recorded as failed and the lock released."""
+@pytest.fixture()
+def short_limit(monkeypatch):
+    """The no-data limit shortened to 0.8 s (5 minutes in the app); the old 30-minute total deadline,
+    if the code still had one, shortened the same way."""
+    # raising=False: the same test also runs against the code before this limit (it must fail there).
+    monkeypatch.setattr(bs, "STALL_TIMEOUT_S", 0.8, raising=False)
+    monkeypatch.setattr(bs, "POLL_S", 0.05, raising=False)
+    monkeypatch.setattr(bs, "INSTALL_TIMEOUT_S", 0.8, raising=False)
+    return 0.8
+
+
+def test_a_slow_download_runs_past_the_old_deadline(fake, short_limit):
+    """Data keeps arriving for 5x the limit, with output lines only at the start: the download completes. The
+    second file (ffmpeg) prints nothing at all and lasts 2x the limit."""
+    fake["state"]["mode"] = f"slow:0.1:{3 * short_limit}:{2 * short_limit}"
+    began = time.monotonic()
+    assert bs.run() == 0
+    assert time.monotonic() - began > 4 * short_limit
+    assert bs.status()["state"] == "ready" and bs.installed()
+    assert (fake["where"].parent / "tmpdir").read_text() == str(bs.download_dir())
+    assert not bs.download_dir().exists()  # the temporary folder is removed
+    assert not bs.downloading()
+
+
+def test_watch_keeps_a_download_with_sparse_progress_for_hours():
+    """Controlled clock: 2 hours of a few KB every 4 minutes and an output line every 40 minutes, then
+    the browser folder fills and a later file downloads. It never counts as stalled; once nothing
+    changes, it does after the limit."""
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as root:
+        temp, browser = pathlib.Path(root, "tmp"), pathlib.Path(root, "browser")
+        temp.mkdir()
+        watch = bs._Watch([temp, browser], now=0.0)
+        part = temp / "playwright-download-a" / "playwright-download-chromium-headless-shell-mac-arm64-1.zip"
+        part.parent.mkdir()
+        for minute in range(121):
+            if minute % 4 == 0:
+                with part.open("ab") as f:
+                    f.write(b"x" * 1024)
+            assert not watch.stalled(minute * 60.0, lines=minute // 40), minute
+        now = 121 * 60.0
+        part.unlink()  # unpacked: the part file goes, the browser folder fills
+        browser.mkdir()
+        (browser / "chrome-headless-shell").write_bytes(b"y" * 2048)
+        assert not watch.stalled(now + 240, lines=3)
+        later = temp / "playwright-download-b" / "playwright-download-ffmpeg-mac-arm64-1.zip"
+        later.parent.mkdir()
+        later.write_bytes(b"z" * 512)
+        assert not watch.stalled(now + 480, lines=3)
+        assert not watch.stalled(now + 480 + bs.STALL_TIMEOUT_S - 1, lines=3)
+        assert not watch.stalled(now + 480 + bs.STALL_TIMEOUT_S + 30, lines=4)  # a new line counts too
+        assert watch.stalled(now + 510 + 2 * bs.STALL_TIMEOUT_S, lines=4)
+
+
+@pytest.mark.parametrize("mode", ["silent", "closed", "data_then_stall"])
+def test_a_stalled_installer_is_ended_and_the_next_try_works(fake, short_limit, mode):
+    """With no new data for the limit (silent, its output closed, or after some data), the installer
+    is ended with the child it started, the download recorded as failed and the lock released. The
+    next try downloads again."""
     fake["state"]["mode"] = mode
-    monkeypatch.setattr(bs, "INSTALL_TIMEOUT_S", 1.0)
     began = time.monotonic()
     assert bs.run() == 1
-    assert time.monotonic() - began < 15
+    assert short_limit <= time.monotonic() - began < 15
     st = bs.status()
-    assert st["state"] == "failed" and st["error"] == bs.TIMEOUT_WORDS
+    assert st["state"] == "failed" and st["error"] == bs.STALL_WORDS
     assert not bs.downloading()
+    assert not bs.download_dir().exists()
     pids = [int(x) for x in (fake["where"].parent / "pids").read_text().split()]
     deadline = time.monotonic() + 5
     while any(_alive(pid) for pid in pids) and time.monotonic() < deadline:
         time.sleep(0.1)
     assert not any(_alive(pid) for pid in pids)
+
+    fake["state"]["mode"] = "ok"
+    assert bs.ensure_for_session().startswith("error: the test browser could not be downloaded: " + bs.STALL_WORDS)
+    assert bs.status()["state"] == "missing"
+    assert bs.run() == 0
+    assert bs.status()["state"] == "ready" and bs.installed()
 
 
 def test_a_second_caller_joins_the_running_download(fake, monkeypatch):
