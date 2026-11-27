@@ -108,6 +108,8 @@ def approve_qa_time_limit(rid: str, body: QaTimeLimitBody, request: Request):
         if cur.fetchone():
             raise HTTPException(409, "Wait for the QA agent to stop before changing the time limit.")
         cur.execute("UPDATE qa_requests SET minutes=%s, approved_by_agent_id=%s WHERE id=%s", (body.minutes, who["id"], rid))
+        cur.execute("""UPDATE qa_sessions SET budget_minutes=%s WHERE request_id=%s AND status='running'
+                       AND queued_at IS NOT NULL AND claimed_at IS NULL""", (body.minutes, rid))
         req = qa_handoff.load(cur, rid)
         _, description, dod = qa_handoff._task_texts(req, None, who["alias"])
         cur.execute("UPDATE tasks SET description=%s, definition_of_done=%s WHERE id=%s", (description, dod, str(tid)))

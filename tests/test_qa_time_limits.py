@@ -1,6 +1,6 @@
 """Time choices and continuing preserve evidence through the actual portal routes."""
 import pytest
-from test_qa_run_tasks import (team, inline, task, hand, session, verdict, finish, qa_of, thread)  # noqa: F401
+from test_qa_run_tasks import (team, inline, task, hand, session, verdict, finish, qa_of, thread, done)  # noqa: F401
 
 
 @pytest.mark.parametrize('minutes', [0, 65, 480, None])
@@ -162,3 +162,92 @@ async def test_continue_cannot_restart_cancelled_replaced_or_active_work(team, d
         'actor_agent_id': team['human'], 'minutes': 45})
     assert r.status_code == 409, r.text
     assert db.execute('SELECT count(*) AS n FROM qa_sessions')[0]['n'] == before
+
+
+async def test_replacement_reactivates_finished_assignment_and_wakes_qa(team, db):
+    out, old = await timeout(team)
+    tid = out['qa_task_id']
+    await done(team, tid, team['qa'], 'Timed out; one check remains')
+    assert db.execute('SELECT status FROM tasks WHERE id=%s', (tid,))[0]['status'] == 'needs_verification'
+    before = db.execute('SELECT count(*) AS n FROM tasks')[0]['n']
+    events = db.execute("SELECT count(*) AS n FROM agent_events WHERE event_key=%s AND event_name='task_assigned'", (team['qa'],))[0]['n']
+    replacement = await hand(team, out['request']['source_task_id'], qa_task_id=tid)
+    assert replacement['qa_task_id'] == tid
+    assert db.execute('SELECT count(*) AS n FROM tasks')[0]['n'] == before
+    assert db.execute('SELECT status FROM tasks WHERE id=%s', (tid,))[0]['status'] == 'in_progress'
+    assert db.execute('SELECT assignment_status FROM agent_tasks WHERE task_id=%s AND agent_id=%s', (tid, team['qa']))[0]['assignment_status'] == 'assigned'
+    assert db.execute("SELECT count(*) AS n FROM agent_events WHERE event_key=%s AND event_name='task_assigned'", (team['qa'],))[0]['n'] == events + 1
+
+
+@pytest.mark.parametrize('minutes', [0, 90])
+async def test_approved_time_updates_unclaimed_continuation(team, minutes):
+    out, old = await timeout(team)
+    r = await team['client'].post(f"/api/qa/sessions/{old['id']}/continue", json={
+        'actor_agent_id': team['human'], 'minutes': 45})
+    assert r.status_code == 201, r.text
+    queued = r.json()
+    r = await team['client'].put(f"/api/qa/requests/{out['request']['id']}/time-limit", json={
+        'actor_agent_id': team['human'], 'minutes': minutes})
+    assert r.status_code == 200, r.text
+    new = await session(team, request_id=out['request']['id'])
+    assert new['id'] == queued['id']
+    assert new['budget_minutes'] == minutes
+    assert not (new.get('result') or {}).get('budget_offset_s')
+
+
+@pytest.mark.parametrize('progress', [
+    {'waiting': {'device': 'iPhone', 'reason': 'The device is busy', 'position': 1}},
+    {'starting': 'Launching the app'},
+    {'starting': ''},
+    {'device_ready': True},
+    {'result': {'error': 'The device disconnected'}, 'status': 'failed'},
+])
+async def test_device_progress_preserves_replacement_clock(team, progress):
+    out = await hand(team, await task(team), minutes=60)
+    first = await session(team, request_id=out['request']['id'])
+    r = await team['client'].patch(f"/api/qa/sessions/{first['id']}", json={
+        'actor_agent_id': team['qa'], 'status': 'abandoned', 'budget_used_seconds': 1200})
+    assert r.status_code == 200, r.text
+    second = await session(team, request_id=out['request']['id'])
+    assert second['result']['budget_offset_s'] == 1200
+    r = await team['client'].patch(f"/api/qa/sessions/{second['id']}", json={
+        'actor_agent_id': team['qa'], **progress})
+    assert r.status_code == 200, r.text
+    third = await session(team, request_id=out['request']['id'])
+    assert (third.get('result') or {}).get('budget_offset_s') == 1200
+
+
+async def test_device_queue_claim_uses_latest_heartbeat_elapsed_time(team):
+    out = await hand(team, await task(team), minutes=60)
+    first = await session(team, request_id=out['request']['id'])
+    r = await team['client'].patch(f"/api/qa/sessions/{first['id']}", json={
+        'actor_agent_id': team['qa'], 'budget_used_seconds': 1300,
+        'waiting': {'device': 'iPhone', 'reason': 'The device is busy', 'position': 1}})
+    assert r.status_code == 200, r.text
+    second = await session(team, request_id=out['request']['id'])
+    assert second['id'] == first['id']
+    assert second['result']['budget_offset_s'] == 1300
+
+
+async def test_agent_cannot_restart_qa_awaiting_human_review(team, db):
+    out, old = await timeout(team)
+    tid = out['qa_task_id']
+    await done(team, tid, team['qa'])
+    count = db.execute('SELECT count(*) AS n FROM qa_requests')[0]['n']
+    r = await team['client'].post(f"/api/tasks/{out['request']['source_task_id']}/qa/requests", json={
+        'actor_agent_id': team['qa'], 'platform': 'web', 'kind': 'explore', 'qa_task_id': tid})
+    assert r.status_code == 409, r.text
+    assert db.execute('SELECT status FROM tasks WHERE id=%s', (tid,))[0]['status'] == 'needs_verification'
+    assert db.execute('SELECT count(*) AS n FROM qa_requests')[0]['n'] == count
+
+
+async def test_replacement_without_available_agent_is_rejected(team, db):
+    out, old = await timeout(team)
+    tid = out['qa_task_id']
+    await done(team, tid, team['qa'])
+    db.execute('UPDATE agents SET terminated_at=now() WHERE id=%s', (team['qa'],))
+    count = db.execute('SELECT count(*) AS n FROM qa_requests')[0]['n']
+    r = await team['client'].post(f"/api/tasks/{out['request']['source_task_id']}/qa/requests", json={
+        'actor_agent_id': team['human'], 'platform': 'web', 'kind': 'explore', 'qa_task_id': tid})
+    assert r.status_code == 409, r.text
+    assert db.execute('SELECT count(*) AS n FROM qa_requests')[0]['n'] == count
