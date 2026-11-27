@@ -78,7 +78,7 @@ export function QaTargets({ cid, nav, auth }: { cid: string; nav: QaNav; auth: Q
   return (
     <div className="qa-pad qa-targets">
       <div className="qa-apps-h">
-        <p className="qa-muted qa-lead">The app agents test on each platform. Mobile apps run on an already booted simulator or emulator — never a new one. Web apps open in a fresh browser for each session.</p>
+        <p className="qa-muted qa-lead">The app agents test on each platform. Mobile apps run on a simulator or emulator that is already on this Mac: a running one, or one that a run starts. A run never creates a new one. Web apps open in a fresh browser for each session.</p>
         {auth.can ? againBtn : <Tooltip label={auth.reason || "Only a person can run the onboarding"} placement="bottom">{againBtn}</Tooltip>}
       </div>
       <div className="qa-cards">
