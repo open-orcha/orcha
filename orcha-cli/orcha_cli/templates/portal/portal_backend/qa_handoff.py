@@ -667,9 +667,18 @@ def close_for_tasks(cur, task_ids: list[str], actor_id: Optional[str]) -> None:
                 (sql.list_param(ids),))
     for row in cur.fetchall():
         _cancel_row(cur, dict(row), actor_id, "Its task was stopped.")
+    # Run again and portal runs may have no request at all.
+    from portal_backend.qa_explorations import cancel_sessions
+    cur.execute(f"SELECT * FROM qa_sessions WHERE status='running' AND {sql.in_list('task_id')}",
+                (sql.list_param(ids),))
+    cancel_sessions(cur, [dict(row) for row in cur.fetchall()], actor_id, "Its task was stopped.")
 
 
 def _cancel_row(cur, req: dict, actor_id: Optional[str], why: str) -> dict:
+    from portal_backend.qa_explorations import cancel_sessions
+
+    cur.execute("SELECT * FROM qa_sessions WHERE request_id=%s AND status='running'", (str(req['id']),))
+    cancel_sessions(cur, [dict(row) for row in cur.fetchall()], actor_id, why)
     result = {"summary": why, "lines": [], "scenarios": [], "finding_ids": [], "draft_ids": [], "session_ids": []}
     cur.execute("UPDATE qa_requests SET status='cancelled', finished_at=%s, result=%s WHERE id=%s AND status IN ('requested','running')",
                 (qs.now(), qs.dumps(result), str(req["id"])))
@@ -759,7 +768,25 @@ def link_session(cur, s: dict, request_id: Optional[str]) -> dict:
     """Tie a new session to its request: the one named, else the open one its task works. Refused
     for a request of another project or one that ended. The session's result then counts."""
     cid = str(s["container_id"])
-    req = load(cur, request_id, lock=True) if request_id else request_for_task(cur, s.get("task_id"))
+    retained = s.get('request_id')
+    if retained and request_id and str(retained) != request_id:
+        raise HTTPException(409, "This queued run belongs to another QA request.")
+    rid = request_id or (str(retained) if retained else None)
+    req = load(cur, rid, lock=True) if rid else request_for_task(cur, s.get("task_id"))
+    if req is None and s.get('task_id') and not (qs._json(s.get('result'), {}) or {}).get('new_allowance'):
+        # An automatic replacement must not silently detach from an ended request.
+        # A person's explicit Run again has its own new_allowance marker.
+        cur.execute("""SELECT request_id FROM qa_sessions WHERE task_id=%s AND kind=%s AND platform=%s AND id<>%s
+                       ORDER BY started_at DESC LIMIT 1""",
+                    (str(s['task_id']), s['kind'], s['platform'], str(s['id'])))
+        previous = cur.fetchone()
+        if previous and previous['request_id']:
+            req = load(cur, str(previous['request_id']), lock=True)
+        elif previous is None:
+            cur.execute("SELECT * FROM qa_requests WHERE qa_task_id=%s ORDER BY created_at DESC LIMIT 1" + sql.for_update(),
+                        (str(s['task_id']),))
+            row = cur.fetchone()
+            req = dict(row) if row else None
     if req is None:
         return s
     if str(req["container_id"]) != cid:

@@ -277,12 +277,20 @@ def continue_qa_session(sid: str, body: ContinueBody, request: Request):
             raise HTTPException(409, "Wait for the QA agent to stop before continuing.")
         lines = qa_handoff._line_results(cur, req)
         unfinished = [l for l in lines if l["verdict"] != "pass"]
-        note = (f"Continue QA request {req['id']} with minutes={body.minutes}. "
+        time_choice = f"{body.minutes} more minutes" if body.minutes else "No limit"
+        note = (f"Continue QA with {time_choice}. "
                 "Keep the recorded verdicts. Work only on unproven checks.\n" +
-                "\n".join(f"Line {l['index']}: {l['text']}" for l in unfinished))
+                "\n".join(f"Line {l['index'] + 1}: {l['text']}" for l in unfinished))
         cur.execute("UPDATE qa_requests SET status='requested', minutes=%s, result=NULL, finished_at=NULL WHERE id=%s",
                     (body.minutes, str(req["id"])))
-        cur.execute("UPDATE tasks SET status='in_progress' WHERE id=%s", (tid,))
+        req = qa_handoff.load(cur, str(req['id']))
+        source = qs.require_task_in(cur, cid, str(req['source_task_id'])) if req.get('source_task_id') else None
+        if source:
+            cur.execute('SELECT * FROM tasks WHERE id=%s', (source,))
+            source = dict(cur.fetchone())
+        _, description, dod = qa_handoff._task_texts(req, source, who['alias'])
+        cur.execute("UPDATE tasks SET status='in_progress', description=%s, definition_of_done=%s WHERE id=%s",
+                    (description, dod, tid))
         cur.execute("INSERT INTO task_messages (task_id, author_id, body) VALUES (%s,%s,%s)", (tid, who["id"], note))
         qa_handoff.approve_plan(cur, tid, who["id"], qa_handoff.person_run_line(who["alias"]))
         q = qx.queue_session(cur, cid, who, kind=s["kind"], platform=s["platform"], task_id=tid, goal=s.get("goal"),
