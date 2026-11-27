@@ -466,6 +466,28 @@ def test_web_helpers():
     assert route_of("https://s.test/") == "/" and route_of(None) is None
 
 
+def test_first_web_session_waits_for_the_browser_download():
+    """The first web test downloads the browser: start_session answers "waiting:" and opens no
+    session until the download is done, then starts normally."""
+    tools, portal, dev, seen = make_web()
+    notes = ["waiting: downloading the test browser (40% done). Call start_session again in a minute.", None]
+    tools.browser_check = lambda: notes.pop(0)
+    out = run(tools.start_session("web", "explore", minutes=0))
+    assert out.startswith("waiting:") and "40% done" in out
+    assert seen == [] and tools.live is None
+    out = run(tools.start_session("web", "explore", minutes=0))
+    assert out.startswith("session started") and len(seen) == 1
+
+
+def test_browser_check_runs_only_with_the_real_device_layer():
+    tools, *_ = make_web()
+    assert tools.browser_check() is None  # a test opener never downloads a browser
+    from orcha_cli.qa import mcp_server
+
+    real = QATools(identity=Identity(), portal=FakePortal())
+    assert real.browser_check is mcp_server._browser_check
+
+
 def test_web_session_starts_with_viewport_and_allowed_origins():
     tools, portal, dev, seen = make_web()
     out = run(tools.start_session("web", "explore", minutes=0))
