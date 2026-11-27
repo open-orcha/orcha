@@ -26,6 +26,7 @@ ALL = {"mcp": True, "idb": True, "uiautomator2": True, "adbutils": True, "PIL": 
 def mac(monkeypatch):
     """A Mac with every tool, faked: tests switch one thing off at a time."""
     state = {"mods": dict(ALL), "idb": "/app/idb_companion", "xcrun": True, "sims": [{"name": "iPhone 17 Pro", "udid": "U", "runtime": "iOS-26"}],
+             "all": [{"udid": "U", "name": "iPhone 17 Pro", "runtime": "iOS 26.0", "state": "Shutdown"}],
              "adb": "/sdk/platform-tools/adb", "devs": [{"serial": "emulator-5554", "state": "device"}], "avds": ["Pixel_9"],
              "browser": {"installed": True, "state": "ready", "percent": 100, "size": None, "error": None, "message": None}}
     monkeypatch.delenv("ORCHA_SIDECAR", raising=False)
@@ -33,6 +34,14 @@ def mac(monkeypatch):
     monkeypatch.setattr(tools, "idb_companion_path", lambda: state["idb"])
     monkeypatch.setattr(readiness.shutil, "which", lambda name: "/usr/bin/xcrun" if name == "xcrun" and state["xcrun"] else None)
     monkeypatch.setattr(qa_cli, "booted_simulators", lambda: (state["sims"], "simctl failed" if state["sims"] is None else ""))
+    from orcha_cli.qa.device import ios_idb
+
+    def all_simulators():
+        if isinstance(state["all"], Exception):
+            raise state["all"]
+        return state["all"]
+
+    monkeypatch.setattr(ios_idb, "all_simulators", all_simulators)
     monkeypatch.setattr(tools, "adb_path", lambda: state["adb"])
     monkeypatch.setattr(qa_cli, "adb_devices", lambda: (state["devs"], ""))
     from orcha_cli.qa.device import android_u2
@@ -56,7 +65,7 @@ def test_everything_ready(mac):
 
 def test_ios_rows_say_what_is_missing(mac, monkeypatch):
     mac["sims"] = []
-    assert readiness.ios() == {"platform": "ios", "ready": True, "words": "Ready. No simulator is running: one starts when a run starts.",
+    assert readiness.ios() == {"platform": "ios", "ready": True, "words": "Ready. No simulator is running: iPhone 17 Pro starts when a run starts.",
                                "link": None, "browser": None}
     mac["xcrun"] = False
     assert readiness.ios()["words"] == readiness.XCODE_WORDS and not readiness.ios()["ready"]
@@ -65,6 +74,22 @@ def test_ios_rows_say_what_is_missing(mac, monkeypatch):
     assert readiness.ios()["words"] == tools.IDB_MISSING_APP
     mac["mods"]["idb"] = False
     assert readiness.ios()["words"] == "The iPhone simulator test tools are missing from this install. Update or reinstall Embodent."
+
+
+def test_ios_is_ready_only_with_a_simulator_to_boot(mac):
+    """Nothing booted: a run boots an existing simulator and never creates one, so iOS is ready only
+    when this Mac has one (the default, or one to pick); an empty inventory says how to add one."""
+    mac["sims"] = []
+    mac["all"] = [{"udid": "A", "name": "iPhone 16e", "runtime": "iOS 26.0", "state": "Shutdown"},
+                  {"udid": "B", "name": "iPad mini (A17 Pro)", "runtime": "iOS 26.0", "state": "Shutdown"}]
+    row = readiness.ios()
+    assert row["ready"] and row["words"] == ("Ready. No simulator is running: pick one (iPhone 16e, iPad mini (A17 Pro)) in the "
+                                             "device picker and it starts when a run starts.")
+    mac["all"] = []
+    assert readiness.ios() == {"platform": "ios", "ready": False, "words": readiness.NO_SIMULATOR_WORDS, "link": None, "browser": None}
+    mac["all"] = TimeoutError("simctl")
+    row = readiness.ios()
+    assert not row["ready"] and row["words"].startswith("Xcode's simulator tools don't answer (TimeoutError).")
 
 
 def test_android_rows_point_at_android_studio(mac, monkeypatch):

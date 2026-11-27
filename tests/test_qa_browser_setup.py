@@ -4,9 +4,12 @@ sentence, a second caller joins the running download, and `start_session` answer
 
 from __future__ import annotations
 
+import os
 import pathlib
+import subprocess
 import sys
 import textwrap
+import time
 
 import pytest
 
@@ -29,6 +32,16 @@ FAKE = textwrap.dedent('''
     if mode == "nospace":
         print("Error: ENOSPC: no space left on device, write")
         raise SystemExit(1)
+    if mode in ("silent", "closed"):
+        import os, subprocess, time
+        # Like Playwright's Python entrypoint: it starts a child (Node) that does the download.
+        child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+        (where.parent / "pids").parent.mkdir(parents=True, exist_ok=True)
+        (where.parent / "pids").write_text(f"{os.getpid()} {child.pid}")
+        if mode == "closed":
+            os.close(1)
+            os.close(2)
+        time.sleep(60)
     for pct in (10, 40, 100):
         print(f"|■■■■■■■■                | {pct:3d}% of 92.1 MiB", flush=True)
     where.mkdir(parents=True, exist_ok=True)
@@ -76,6 +89,37 @@ def test_failure_reads_as_one_plain_sentence(fake, mode, words):
     note = bs.ensure_for_session()  # the agent hears the failure once…
     assert note.startswith("error: the test browser could not be downloaded: " + words)
     assert bs.status()["state"] == "missing"  # …and its next call tries again
+
+
+def _alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    try:  # a zombie still answers kill(0); ps says whether it has ended
+        out = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True, check=False).stdout
+    except OSError:
+        return True
+    return bool(out.strip()) and not out.strip().startswith("Z")
+
+
+@pytest.mark.parametrize("mode", ["silent", "closed"])
+def test_a_hung_installer_is_ended_at_the_deadline(fake, monkeypatch, mode):
+    """Silent, or with its output closed, the installer is still ended at the deadline (with the
+    child it started), the download recorded as failed and the lock released."""
+    fake["state"]["mode"] = mode
+    monkeypatch.setattr(bs, "INSTALL_TIMEOUT_S", 1.0)
+    began = time.monotonic()
+    assert bs.run() == 1
+    assert time.monotonic() - began < 15
+    st = bs.status()
+    assert st["state"] == "failed" and st["error"] == bs.TIMEOUT_WORDS
+    assert not bs.downloading()
+    pids = [int(x) for x in (fake["where"].parent / "pids").read_text().split()]
+    deadline = time.monotonic() + 5
+    while any(_alive(pid) for pid in pids) and time.monotonic() < deadline:
+        time.sleep(0.1)
+    assert not any(_alive(pid) for pid in pids)
 
 
 def test_a_second_caller_joins_the_running_download(fake, monkeypatch):

@@ -22,9 +22,11 @@ import json
 import os
 import pathlib
 import re
+import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from typing import Any, Optional
 
@@ -34,6 +36,7 @@ SIZE_WORDS = "about 100 MB"
 COMPLETE_MARKER = "INSTALLATION_COMPLETE"
 CHECK_TIMEOUT_S = 30.0
 INSTALL_TIMEOUT_S = 30 * 60.0
+TIMEOUT_WORDS = "The download took more than 30 minutes and was stopped. Check the internet connection, then try again."
 _PROGRESS = re.compile(r"(\d{1,3})%\s+of\s+([\d.]+\s*[KMG]i?B)")
 _LOCATION = re.compile(r"Install location:\s*(\S.*)$", re.MULTILINE)
 
@@ -175,8 +178,20 @@ def _spawn_runner() -> None:
         subprocess.Popen(runner_cmd(), stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True, close_fds=True)
 
 
+def _stop(proc: subprocess.Popen) -> None:
+    """End the installer and everything it started (Playwright's Python entrypoint runs Node)."""
+    with contextlib.suppress(OSError):
+        os.killpg(proc.pid, signal.SIGKILL)
+    with contextlib.suppress(OSError):
+        proc.kill()
+    with contextlib.suppress(subprocess.TimeoutExpired):
+        proc.wait(timeout=5.0)
+
+
 def run() -> int:
-    """The download itself (the process `start()` spawns): holds the lock, writes progress."""
+    """The download itself (the process `start()` spawns): holds the lock, writes progress. The
+    installer gets `INSTALL_TIMEOUT_S` in all: silent, or with its output closed, it is still ended
+    then, the download recorded as failed and the lock released, so the next session tries again."""
     with _lock() as mine:
         if not mine:
             return 0  # another download runs
@@ -186,23 +201,34 @@ def run() -> int:
         _write(state="downloading", percent=0, error=None)
         tail: list[str] = []
         try:
-            proc = subprocess.Popen(playwright_cmd("install", BROWSER), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                    text=True, bufsize=1)
+            proc = subprocess.Popen(playwright_cmd("install", BROWSER), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                    stderr=subprocess.STDOUT, text=True, bufsize=1, start_new_session=True)
         except OSError as e:
             _write(state="failed", percent=None, error=plain_error(str(e)))
             return 1
-        started = time.monotonic()
-        assert proc.stdout is not None
-        for line in proc.stdout:
-            tail = (tail + [line.rstrip()])[-40:]
-            m = _PROGRESS.search(line)
-            if m:
-                _write(state="downloading", percent=min(100, int(m.group(1))), size=m.group(2))
-            if time.monotonic() - started > INSTALL_TIMEOUT_S:
-                proc.kill()
-                tail.append("timed out")
-                break
-        code = proc.wait()
+
+        def read() -> None:
+            assert proc.stdout is not None
+            with contextlib.suppress(OSError, ValueError):
+                for line in proc.stdout:
+                    tail[:] = (tail + [line.rstrip()])[-40:]
+                    m = _PROGRESS.search(line)
+                    if m:
+                        _write(state="downloading", percent=min(100, int(m.group(1))), size=m.group(2))
+
+        reader = threading.Thread(target=read, name="browser-setup-output", daemon=True)
+        reader.start()
+        try:
+            code: Optional[int] = proc.wait(timeout=INSTALL_TIMEOUT_S)
+        except subprocess.TimeoutExpired:
+            code = None
+        finally:
+            if proc.poll() is None:
+                _stop(proc)
+        reader.join(timeout=5.0)
+        if code is None:
+            _write(state="failed", percent=None, error=TIMEOUT_WORDS)
+            return 1
         if code == 0 and installed():
             _write(state="ready", percent=100, error=None)
             return 0
