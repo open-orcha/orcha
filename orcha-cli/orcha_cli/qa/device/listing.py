@@ -17,7 +17,7 @@ import threading
 import time
 from typing import Any, Optional
 
-from . import android_u2, ios_idb, ios_phone, locks
+from . import android_u2, ios_idb, ios_phone, locks, tools
 
 COMMAND_TIMEOUT_S = 5.0
 #: A phone's readiness takes two devicectl calls, and every open picker polls: it is read this
@@ -54,8 +54,22 @@ def available() -> list[dict[str, Any]]:
     return [{**d, "held_by": locks.holder(d["name"] if d["kind"] == "ios" else d["serial"])} for d in ios_devices() + android_devices()]
 
 
+def ios_client_setup() -> Optional[dict[str, Any]]:
+    """What stops every simulator session on this install (the fb-idb library or idb_companion
+    missing), as a picker row's `setup`; None when simulators can be driven."""
+    import importlib.util
+
+    if importlib.util.find_spec("idb") is None:
+        fix = "Update or reinstall Embodent." if tools.in_app() else "Install the QA extra: uv tool install './orcha-cli[qa]'."
+        return {"code": "ios_client_missing", "title": "Can't drive simulators.", "fix": f"The iPhone simulator test tools are missing. {fix}"}
+    if tools.idb_companion_path() is None:
+        return {"code": "ios_client_missing", "title": "Can't drive simulators.", "fix": tools.idb_companion_missing()}
+    return None
+
+
 def ios_inventory() -> list[dict[str, Any]]:
-    """The phones this Mac has paired, with what each needs, then every simulator."""
+    """The phones this Mac has paired, with what each needs, then every simulator; with
+    `ready: false` and the `setup` that fixes it when this install cannot drive simulators."""
     rows: list[dict[str, Any]] = []
     for phone in ios_phone.phones():
         state = ios_phone.readiness(phone["udid"]) if phone["connection"] else ios_phone.not_connected(phone["udid"], phone["name"], phone["model"])
@@ -65,7 +79,10 @@ def ios_inventory() -> list[dict[str, Any]]:
         sims = ios_idb.all_simulators()
     except (OSError, subprocess.SubprocessError, ValueError, KeyError, json.JSONDecodeError):
         sims = []
-    return rows + [{"kind": "ios", "name": s["name"], "udid": s["udid"], "runtime": s["runtime"], "state": s["state"].lower()} for s in sims]
+    blocked = ios_client_setup() if sims else None
+    extra: dict[str, Any] = {"ready": False, "setup": blocked} if blocked else {}
+    return rows + [{"kind": "ios", "name": s["name"], "udid": s["udid"], "runtime": s["runtime"], "state": s["state"].lower(), **extra}
+                   for s in sims]
 
 
 _ANDROID_SETUP = {
@@ -138,7 +155,7 @@ def _android_installed(app_id: str, name: Optional[str]) -> Optional[dict[str, A
     device = next((d for d in android_devices() if not name or d["name"] == name), None)
     if device is None:
         return None
-    got = subprocess.run(["adb", "-s", device["serial"], "shell", "dumpsys", "package", app_id], capture_output=True,
+    got = subprocess.run([tools.adb_path() or "adb", "-s", device["serial"], "shell", "dumpsys", "package", app_id], capture_output=True,
                          text=True, timeout=COMMAND_TIMEOUT_S, check=False)
     version = _ANDROID_VERSION.search(got.stdout or "")
     if got.returncode != 0 or version is None:

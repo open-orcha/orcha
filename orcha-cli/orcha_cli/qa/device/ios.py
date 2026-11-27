@@ -26,7 +26,6 @@ import json
 import logging
 import os
 import re
-import shutil
 import subprocess
 import sys
 import time
@@ -34,7 +33,7 @@ import unicodedata
 from collections.abc import Callable, Iterable, Sequence
 from typing import Any
 
-from orcha_cli.qa.device import ios_idb, locks
+from orcha_cli.qa.device import ios_idb, locks, tools
 from orcha_cli.qa.device.base import (
     DEFAULT_IOS_DEVICES,
     SessionBase,
@@ -846,8 +845,8 @@ class IosSession(SessionBase):
     async def start(self, app_id: str, launch: bool = True) -> Screen:
         """Attach to a booted simulator, claim its lock, start idb_companion, and (with `launch`)
         launch `app_id` fresh. Returns the first screen. Raises `SessionError` with what to do."""
-        if shutil.which("idb_companion") is None:
-            raise SessionError("idb_companion not found on PATH. Install with: brew tap facebook/fb && brew install facebook/fb/idb-companion")
+        if tools.idb_companion_path() is None:
+            raise SessionError(tools.idb_companion_missing())
         try:
             sims = await asyncio.to_thread(ios_idb.booted_simulators)
         except Exception as e:  # noqa: BLE001

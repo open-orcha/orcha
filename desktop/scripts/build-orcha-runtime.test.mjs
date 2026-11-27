@@ -6,7 +6,15 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from '
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { LAUNCHER, PYTHON_BUILDS, PYTHON_VERSION, RUNTIME_DIR, buildPlan } from './build-orcha-runtime.mjs'
+import {
+  CLI_EXTRA,
+  IDB_COMPANION,
+  LAUNCHER,
+  PYTHON_BUILDS,
+  PYTHON_VERSION,
+  RUNTIME_DIR,
+  buildPlan
+} from './build-orcha-runtime.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const desktopRoot = path.resolve(here, '..')
@@ -21,6 +29,25 @@ describe('build-orcha-runtime pinning', () => {
     )
     expect(url).toContain(`cpython-${PYTHON_VERSION}.`)
     expect(sha256).toMatch(/^[0-9a-f]{64}$/)
+  })
+
+  it('installs the CLI with the QA extra', () => {
+    expect(CLI_EXTRA).toBe('qa')
+    expect(buildPlan('arm64').extra).toBe('qa')
+  })
+
+  it('pins idb_companion by facebook/idb release + sha256 and leaves its REPL out', () => {
+    const { version, url, sha256, dest, strip } = IDB_COMPANION
+    expect(url).toBe(
+      `https://github.com/facebook/idb/releases/download/v${version}/idb-companion.macos-arm64.tar.gz`
+    )
+    expect(sha256).toMatch(/^[0-9a-f]{64}$/)
+    expect(dest).toBe(path.join('libexec', 'idb-companion'))
+    expect(strip).toContain('idb-repl')
+    expect(strip).toContain('Resources/ReplHost.app')
+    expect(strip.filter((s) => s.includes('libRepl'))).toHaveLength(2)
+    expect(strip).not.toContain('idb_companion')
+    expect(buildPlan('arm64').idbCompanion).toEqual(IDB_COMPANION)
   })
 
   it('refuses an arch with no pinned build instead of guessing', () => {
@@ -72,8 +99,8 @@ describe('packaging hooks', () => {
   const builderYml = readFileSync(path.join(desktopRoot, 'electron-builder.yml'), 'utf8')
 
   it('builds the runtime for the arm64 dist and clears it for the universal dist', () => {
-    expect(pkg.scripts['predist:mac:arm64']).toMatch(/node scripts\/build-orcha-runtime\.mjs$/)
-    expect(pkg.scripts['predist:mac']).toMatch(/node scripts\/build-orcha-runtime\.mjs --clean$/)
+    expect(pkg.scripts['predist:mac:arm64']).toMatch(/node scripts\/build-orcha-runtime\.mjs( &&|$)/)
+    expect(pkg.scripts['predist:mac']).toMatch(/node scripts\/build-orcha-runtime\.mjs --clean( &&|$)/)
   })
 
   it('ships the runtime at Contents/Resources/orcha-runtime', () => {

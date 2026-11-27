@@ -305,17 +305,26 @@ def test_targets_for_the_web_check_url_and_viewport(tmp_path, monkeypatch, capsy
 
 
 def test_doctor_checks_playwright_and_chromium(monkeypatch):
-    import importlib.util
+    from orcha_cli.qa import browser_setup
 
-    real = importlib.util.find_spec
-    monkeypatch.setattr(importlib.util, "find_spec", lambda name, *a: None if name == "playwright" else real(name, *a))
+    monkeypatch.delenv("ORCHA_SIDECAR", raising=False)
+    monkeypatch.setattr(browser_setup, "playwright_available", lambda: False)
     st = qa_cli.chromium_status()
-    assert not st["ok"] and "playwright install chromium" in st["detail"]
-    monkeypatch.setattr(importlib.util, "find_spec", real)
-    monkeypatch.setattr(qa_cli, "_run", lambda cmd, timeout=10.0: (0, "/nowhere/chromium\n"))
-    if real("playwright") is not None:
+    assert not st["ok"] and "playwright not installed" in st["detail"] and "uv tool install" in st["detail"]
+    monkeypatch.setattr(browser_setup, "playwright_available", lambda: True)
+    rows = {"missing": {"installed": False, "state": "missing", "percent": None, "error": None},
+            "downloading": {"installed": False, "state": "downloading", "percent": 40, "error": None},
+            "failed": {"installed": False, "state": "failed", "percent": None, "error": "No internet connection."},
+            "ready": {"installed": True, "state": "ready", "percent": 100, "error": None}}
+    for state, row in rows.items():
+        monkeypatch.setattr(browser_setup, "status", lambda row=row: row)
         st = qa_cli.chromium_status()
-        assert not st["ok"] and "playwright install chromium" in st["detail"]
-    monkeypatch.setattr(qa_cli, "_run", lambda cmd, timeout=10.0: (0, __file__ + "\n"))
-    if real("playwright") is not None:
-        assert qa_cli.chromium_status()["ok"]
+        assert st["state"] == state and st["ok"] is (state == "ready")
+    monkeypatch.setattr(browser_setup, "status", lambda: rows["downloading"])
+    assert "40% done" in qa_cli.chromium_status()["detail"]
+    monkeypatch.setattr(browser_setup, "status", lambda: rows["missing"])
+    assert "playwright install chromium-headless-shell" in qa_cli.chromium_status()["detail"]
+    monkeypatch.setenv("ORCHA_SIDECAR", "1")
+    assert "Download now in the Quality tab" in qa_cli.chromium_status()["detail"]
+    monkeypatch.setattr(browser_setup, "status", lambda: rows["failed"])
+    assert "No internet connection." in qa_cli.chromium_status()["detail"]

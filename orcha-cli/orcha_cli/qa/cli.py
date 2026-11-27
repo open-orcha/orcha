@@ -95,6 +95,9 @@ def register(sub: Any, handler: Callable[[Any], Any]) -> None:
 
 
 def cmd_qa(args: Any) -> None:
+    from .device import tools
+
+    tools.use_adb()  # Android Studio's adb first on PATH for this process and what it starts
     cmd = getattr(args, "qa_cmd", None)
     if cmd == "doctor":
         code = cmd_doctor(args)
@@ -156,9 +159,12 @@ def booted_simulators() -> tuple[Optional[list[dict[str, str]]], str]:
 
 
 def adb_devices() -> tuple[Optional[list[dict[str, str]]], str]:
-    if not shutil.which("adb"):
-        return None, "adb not found (Android platform-tools)"
-    code, out = _run(["adb", "devices"])
+    from .device import tools
+
+    adb = tools.adb_path()
+    if not adb:
+        return None, tools.adb_missing()
+    code, out = _run([adb, "devices"])
     if code != 0:
         return None, out.strip()[:200] or "adb devices failed"
     rows = []
@@ -170,17 +176,38 @@ def adb_devices() -> tuple[Optional[list[dict[str, str]]], str]:
 
 
 def chromium_status() -> dict[str, Any]:
-    """Whether the web platform can run: Playwright importable and its Chromium downloaded."""
-    if importlib.util.find_spec("playwright") is None:
-        return {"ok": False, "detail": "playwright not installed (it comes with the [qa] extra); then: playwright install chromium"}
-    code = ("from playwright.sync_api import sync_playwright\n"
-            "with sync_playwright() as p:\n    print(p.chromium.executable_path)")
-    rc, out = _run([sys.executable, "-c", code], timeout=30)
-    path = out.strip().splitlines()[-1] if rc == 0 and out.strip() else ""
-    if path and pathlib.Path(path).exists():
-        return {"ok": True, "detail": f"chromium at {path}"}
-    return {"ok": False, "detail": "Chromium is not downloaded: run `playwright install chromium`"
-            + (f" ({out.strip()[:160]})" if rc != 0 and out.strip() else "")}
+    """Whether the web platform can run: Playwright importable and its test browser (Chromium headless
+    shell, `browser_setup`) downloaded. A missing browser downloads on the first web session."""
+    from . import browser_setup
+
+    if not browser_setup.playwright_available():
+        return {"ok": False, "detail": f"playwright not installed ({_extra_fix()})", "state": "failed"}
+    st = browser_setup.status()
+    if st["installed"]:
+        return {"ok": True, "detail": "test browser downloaded", "state": "ready"}
+    if st["state"] == "downloading":
+        done = f", {st['percent']}% done" if st.get("percent") is not None else ""
+        return {"ok": False, "detail": f"downloading the test browser{done}", "state": "downloading", "percent": st.get("percent")}
+    how = ("press Download now in the Quality tab" if _in_app()
+           else f"or run: {sys.executable} -m playwright install {browser_setup.BROWSER}")
+    if st["state"] == "failed":
+        return {"ok": False, "detail": f"the test browser download failed: {st.get('error')} (try again: {how})", "state": "failed",
+                "error": st.get("error")}
+    return {"ok": False, "detail": f"the test browser ({browser_setup.SIZE_WORDS}) is not downloaded yet: it downloads the first "
+                                   f"time you test a website ({how})", "state": "missing"}
+
+
+def _in_app() -> bool:
+    from .device import tools
+
+    return tools.in_app()
+
+
+def _extra_fix() -> str:
+    """How to get the [qa] extra back: an app install updates the app, a source install reinstalls."""
+    if _in_app():
+        return "this copy of Embodent is missing its QA tools: update or reinstall Embodent"
+    return "uv tool install --force --reinstall --no-cache './orcha-cli[qa]'"
 
 
 def _extra_status() -> list[dict[str, Any]]:
@@ -220,7 +247,7 @@ def doctor_report(cwd: Optional[pathlib.Path] = None) -> dict[str, Any]:
     mcp_ok = next((e for e in extra if e["module"] == "mcp"), {}).get("installed")
     checks["python extra [qa]"] = {
         "ok": not missing,
-        "detail": "all installed" if not missing else f"missing: {', '.join(missing)} (uv tool install --force --reinstall --no-cache './orcha-cli[qa]')",
+        "detail": "all installed" if not missing else f"missing: {', '.join(missing)} ({_extra_fix()})",
         "modules": extra,
     }
     if mcp_ok:
@@ -232,8 +259,10 @@ def doctor_report(cwd: Optional[pathlib.Path] = None) -> dict[str, Any]:
         except ValueError:
             pass
 
-    idb = shutil.which("idb_companion")
-    checks["idb_companion"] = {"ok": bool(idb), "detail": idb or "not found (brew install facebook/fb/idb-companion)"}
+    from .device import tools
+
+    idb = tools.idb_companion_path()
+    checks["idb_companion"] = {"ok": bool(idb), "detail": idb or tools.idb_companion_missing()}
     code, out = _run(["xcrun", "simctl", "help"]) if shutil.which("xcrun") else (127, "xcrun not found")
     checks["xcrun simctl"] = {"ok": code == 0, "detail": "available" if code == 0 else out.strip()[:200]}
     sims, problem = booted_simulators()
@@ -260,8 +289,8 @@ def doctor_report(cwd: Optional[pathlib.Path] = None) -> dict[str, Any]:
             "detail": ", ".join(f"{s['name']} ({s['runtime']}){lock_of(s['name'])}" for s in sims) or "none booted (boot iPhone 17 Pro; never create one)",
         }
     checks["playwright + chromium"] = chromium_status()
-    adb = shutil.which("adb")
-    checks["adb"] = {"ok": bool(adb), "detail": adb or "not found (Android platform-tools; only needed for Android)"}
+    adb = tools.adb_path()
+    checks["adb"] = {"ok": bool(adb), "detail": adb or f"{tools.adb_missing()} (only needed for Android)"}
     devs, problem = adb_devices()
     if devs is None:
         checks["adb devices"] = {"ok": False, "detail": problem}

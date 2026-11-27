@@ -32,6 +32,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TypeVar
 
+from orcha_cli.qa.device import tools
+
 log = logging.getLogger(__name__)
 
 LOG_DIR = Path.home() / ".orcha" / "qa" / "logs"
@@ -340,9 +342,11 @@ class IdbClient:
             raise RuntimeError("idb client not connected; call init_companion() first")
         return self._client
 
-    async def init_companion(self, binary: str = "idb_companion", ready_timeout_s: float = COMPANION_READY_TIMEOUT_S, attempts: int = 3) -> bool:
+    async def init_companion(self, binary: str | None = None, ready_timeout_s: float = COMPANION_READY_TIMEOUT_S, attempts: int = 3) -> bool:
         """Start idb_companion and connect, making sure the companion behind the port is this
-        simulator's: on a port another session's companion already holds, retry on a new port."""
+        simulator's: on a port another session's companion already holds, retry on a new port.
+        `binary` defaults to `tools.idb_companion_path()` (the app's bundled copy first)."""
+        binary = binary or tools.idb_companion_path() or "idb_companion"
         for attempt in range(attempts):
             if attempt:
                 self.port = _free_port()
@@ -375,7 +379,7 @@ class IdbClient:
         try:
             self.companion_process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=self._stderr_file, text=True)
         except FileNotFoundError:
-            log.error("idb_companion not found on PATH (brew install facebook/fb/idb-companion)")
+            log.error("%s", tools.idb_companion_missing())
             self.companion_process = None
             return False
         deadline = time.monotonic() + ready_timeout_s

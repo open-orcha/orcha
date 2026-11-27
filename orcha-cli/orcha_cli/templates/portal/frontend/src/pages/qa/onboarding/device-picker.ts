@@ -115,6 +115,7 @@ function localState(d: WorkerDevice): DeviceState {
   if (d.kind === "web") return "running";
   if (heldWords(d)) return "busy";
   if (d.physical) return d.ready === false ? "setup" : "ready";
+  if (d.ready === false && d.setup) return "setup"; // a simulator this install cannot drive
   const s = (d.state ?? "").toLowerCase();
   if (s === "shutdown" || s === "stopped") return "stopped";
   return d.kind === "ios" ? "booted" : "running";
@@ -134,7 +135,7 @@ export function pickerRow(input: PickerInput): PickerRow {
   const title = d.kind === "android" && !physical ? prettyAvd(d.name) : d.name;
   const base = d.kind === "web" ? "Chromium" : physical ? physicalDetail(d) : d.kind === "ios" ? d.runtime || "Simulator" : "Emulator";
   const detail = heldWords(d) ?? (state === "stopped" ? `${base} · ${STOPPED_NOTE}` : base);
-  const setup = d.kind !== "web" && physical && d.ready === false ? d.setup ?? null : null;
+  const setup = d.kind !== "web" && d.ready === false ? d.setup ?? null : null;
   return {
     key,
     kind,

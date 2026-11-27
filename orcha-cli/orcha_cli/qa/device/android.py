@@ -25,7 +25,7 @@ import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from orcha_cli.qa.device import android_u2, locks
+from orcha_cli.qa.device import android_u2, locks, tools
 from orcha_cli.qa.device.base import DeviceBusy, SessionBase, SessionError, left, refusal
 from orcha_cli.qa.device.screen import (
     EMPTY_TREE_RETRY_S,
@@ -294,6 +294,8 @@ class AndroidSession(SessionBase):
     # ---------- lifecycle ----------
 
     async def start(self, app_id: str, launch: bool = True) -> Screen:
+        if tools.use_adb() is None:
+            raise SessionError(tools.adb_missing())
         serial = self._want_serial
         if not serial and self.device_name:
             # A named device: its serial ("emulator-5554") or its AVD name ("Pixel_9_Pro").
@@ -392,7 +394,7 @@ class AndroidSession(SessionBase):
         no larger than `LIVE_LONG_SIDE`. None when the capture failed or timed out."""
         try:
             proc = await asyncio.create_subprocess_exec(
-                "adb", "-s", self.serial, "exec-out", "screencap", "-p",
+                tools.adb_path() or "adb", "-s", self.serial, "exec-out", "screencap", "-p",
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
             )
         except (OSError, ValueError):
