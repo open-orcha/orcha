@@ -713,16 +713,19 @@ def patch_qa_session(sid: str, body: SessionPatchBody, request: Request):
     stays ended; ending one abandons any walk still walking."""
     with db_cursor() as (conn, cur):
         s, who = _session_in(cur, request, sid, body.actor_agent_id)
-        if body.status == "done" and s["status"] == "running":
-            from portal_backend import qa_time
-            req = qa_handoff.load(cur, str(s["request_id"])) if s.get("request_id") else None
-            lines = qa_handoff._line_results(cur, req) if req else []
-            body.result = qa_time.stop_result(s, body.result or qs._json(s.get("result"), {}) or {}, lines)
+        from portal_backend import qa_time
+        supplied_result = body.result is not None
+        if supplied_result and s["status"] == "running":
+            body.result = qa_time.keep_clock(s, body.result)
         sets, args = ["last_seen_at=%s"], [qs.now()]
         if body.budget_used_seconds is not None and s["status"] == "running" and s.get("budget_minutes"):
             kept = body.result if body.result is not None else (qs._json(s.get("result"), {}) or {})
             body.result = {**kept, "budget": {"minutes": s["budget_minutes"], "used_s": body.budget_used_seconds,
                                              "left_s": max(0, s["budget_minutes"] * 60 - body.budget_used_seconds)}}
+        if body.status == "done" and s["status"] == "running":
+            req = qa_handoff.load(cur, str(s["request_id"])) if s.get("request_id") else None
+            lines = qa_handoff._line_results(cur, req) if req else []
+            body.result = qa_time.stop_result(s, body.result or qs._json(s.get("result"), {}) or {}, lines)
         if body.status is not None and body.status != s["status"]:
             if s["status"] != "running":
                 raise HTTPException(409, f"this QA session already ended ({s['status']})")
@@ -737,9 +740,6 @@ def patch_qa_session(sid: str, body: SessionPatchBody, request: Request):
         if body.charter is not None:
             sets.append("charter=%s")
             args.append(qs.dumps(qs.validate_charter(body.charter)))
-        if body.result is not None:
-            sets.append("result=%s")
-            args.append(qs.dumps(body.result))
         if body.report_md is not None:
             sets.append("report_md=%s")
             args.append(body.report_md)
@@ -753,16 +753,26 @@ def patch_qa_session(sid: str, body: SessionPatchBody, request: Request):
         if body.waiting is not None:
             if s["status"] != "running":
                 raise HTTPException(409, f"this QA session already ended ({s['status']})")
-            sets += ["queued_at=COALESCE(queued_at, %s)", "claimed_at=NULL", "result=%s"]
-            args += [qs.now(), qs.dumps({"waiting": body.waiting.model_dump()})]
-        if body.starting is not None and body.result is None and not body.device_ready and s["status"] == "running":
-            sets.append("result=%s")
-            args.append(qs.dumps({"starting": body.starting, "since": qs.now()}) if body.starting else None)
+            sets += ["queued_at=COALESCE(queued_at, %s)", "claimed_at=NULL"]
+            args += [qs.now()]
+            body.result = {**qa_time.keep_clock(s, body.result or {}), "waiting": body.waiting.model_dump()}
+        if body.starting is not None and not supplied_result and not body.device_ready and s["status"] == "running":
+            body.result = qa_time.keep_clock(s, body.result or {})
+            body.result.pop("waiting", None)
+            body.result.pop("starting", None)
+            body.result.pop("since", None)
+            if body.starting:
+                body.result.update(starting=body.starting, since=qs.now())
         if body.device_ready and s["status"] == "running":
             sets += ["queued_at=COALESCE(queued_at, %s)", "claimed_at=%s", "started_at=%s"]
             args += [qs.now(), qs.now(), qs.now()]
-            if body.result is None:
-                sets.append("result=NULL")
+            if not supplied_result:
+                body.result = qa_time.keep_clock(s, body.result or {})
+                for key in ("waiting", "starting", "since"):
+                    body.result.pop(key, None)
+        if body.result is not None:
+            sets.append("result=%s")
+            args.append(qs.dumps(body.result) if body.result or supplied_result or body.status == "done" else None)
         cur.execute(f"UPDATE qa_sessions SET {', '.join(sets)} WHERE id=%s", (*args, sid))
         if body.briefing is not None:
             qa_explorations.snapshot_app_model(cur, str(s["container_id"]), s["platform"], "briefing", "The explorer's briefing")

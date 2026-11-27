@@ -430,7 +430,12 @@ def hand_off(cid: str, who: dict, spec: dict, *, source_task_id: Optional[str] =
         conf = settings(cur, cid)
         reuse = spec.get("qa_task_id")
         if reuse:
-            _replacement_task(cur, cid, reuse)
+            from portal_backend import qa_explorations as qx
+            reused_task = _replacement_task(cur, cid, reuse)
+            if reused_task["status"] == "needs_verification" and who.get("kind") != "human":
+                raise HTTPException(409, "A person must restart a QA task that is waiting for review.")
+            if not qx.active_assignee(cur, reuse) and not conf["agent_id"]:
+                raise HTTPException(409, "Assign a QA agent before replacing this request.")
         source = None
         if source_task_id:
             qs.require_task_in(cur, cid, source_task_id)
@@ -493,6 +498,9 @@ def hand_off(cid: str, who: dict, spec: dict, *, source_task_id: Optional[str] =
         qa_run_tasks.mark(cur, cid, tid, "request", kind=spec["kind"], platform=spec["platform"])
         if approved_by:
             approve_plan(cur, tid, approved_by, person_run_line(approver_alias or ""))
+        if reuse:
+            cur.execute("UPDATE tasks SET status='in_progress' WHERE id=%s AND status='needs_verification'", (tid,))
+            qx.resume_task(cur, cid, tid, qx.again_plan(cur, cid, tid), who)
         log_event(cur, cid, "human" if who.get("kind") == "human" else "ai", who["id"], "qa_request", rid,
                   "qa_request_created", {"kind": spec["kind"], "platform": spec["platform"], "origin": origin,
                                          "source_task_id": source_task_id, "qa_task_id": tid, "round": req["round"]})

@@ -285,7 +285,8 @@ def continue_qa_session(sid: str, body: ContinueBody, request: Request):
         q = qx.queue_session(cur, cid, who, kind=s["kind"], platform=s["platform"], task_id=tid, goal=s.get("goal"),
                              budget_minutes=body.minutes, agent_id=s.get("agent_id"), series_id=str(s.get("series_id") or sid),
                              previous_id=sid)
-        cur.execute("UPDATE qa_sessions SET request_id=%s WHERE id=%s", (str(req["id"]), str(q["id"])))
+        cur.execute("UPDATE qa_sessions SET request_id=%s, result=%s WHERE id=%s",
+                    (str(req["id"]), qs.dumps({"continued_from_session_id": sid}), str(q["id"])))
         qa_conditions.store(cur, "qa_sessions", str(q["id"]), qs._json(s.get("conditions"), None))
         qx.resume_task(cur, cid, tid, qx.again_plan(cur, cid, tid), who)
         qa_handoff._changed(cur, cid, qa_handoff.load(cur, str(req["id"])))
