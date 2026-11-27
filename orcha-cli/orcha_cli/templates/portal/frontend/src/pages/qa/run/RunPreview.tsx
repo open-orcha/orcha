@@ -99,7 +99,7 @@ export function RunPreview({ kind, platform, app, device, agent, scenarios, minu
             </ul>
           </Line>
         ) : null}
-        {minutes ? <Line icon={<Clock size={14} />} k="Time">About {minutes} min</Line> : null}
+        {minutes != null ? <Line icon={<Clock size={14} />} k="Time">{minutes === 0 ? "No limit" : <>About {minutes} min</>}</Line> : null}
         {focus.trim() ? <Line icon={<Target size={14} />} k="Focus">{focus.trim()}</Line> : null}
       </div>
       <div className="qa-rp-conds">

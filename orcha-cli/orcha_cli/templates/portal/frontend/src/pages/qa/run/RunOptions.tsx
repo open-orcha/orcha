@@ -69,6 +69,7 @@ export function RunOptions({ cid, auth, kind, params, patch }: {
     rememberDevice(cid, platform, key);
   };
   const [minutes, setMinutes] = useState(String(DEFAULT_MINUTES));
+  const [noLimit, setNoLimit] = useState(false);
   const [focus, setFocus] = useState(params.get("focus") ?? "");
   const [conditions, setConditions] = useState<Conditions | null>(() => parseConditions(params.get("conditions")));
   const [busy, setBusy] = useState(false);
@@ -94,8 +95,9 @@ export function RunOptions({ cid, auth, kind, params, patch }: {
   const drafting = kind === "draft";
   const choice = picked ?? defaultDraftChoice({ hasRepo, explorations, hasTarget, now: openedAt });
   const timed = TIMED_KINDS.includes(kind) || (drafting && choice === "new");
-  const mins = Number(minutes);
-  const minutesBad = timed && (!Number.isFinite(mins) || (mins !== 0 && mins < 1) || mins > 480);
+  const mins = noLimit ? 0 : Number(minutes);
+  const minutesBad = timed && !noLimit && (!Number.isInteger(mins) || mins < 1 || mins > 480);
+  const timeWords = noLimit ? "No limit" : minutesBad ? "Choose time" : `${minutes} min`;
   const sourcesBad = drafting && !canStartChoice(choice, { hasRepo, explorations, hasTarget });
   const canStart = auth.can && !!platform && !!agent && !minutesBad && !sourcesBad && !nothingToCheck && !blocked && !offPhoneBlock(conditions, platform, deviceRow) && !busy;
 
@@ -137,7 +139,7 @@ export function RunOptions({ cid, auth, kind, params, patch }: {
       : deviceRow.device.kind === "android" ? deviceRow.device.os ?? null : null,
   } : { title: defaultDevicePick(platform, rows).noun, state: "Default", physical: false, os: null };
   const target = (targets.data ?? []).find((t) => t.platform === platform);
-  const optionWords = [timed ? `${minutes} min` : null, drafting ? SOURCE_WORDS[choice] : null, focus.trim() ? `Focus: ${focus.trim()}` : null,
+  const optionWords = [timed ? timeWords : null, drafting ? SOURCE_WORDS[choice] : null, focus.trim() ? `Focus: ${focus.trim()}` : null,
     conditionSaid.length ? conditionSaid.join(", ") : null].filter(Boolean).join(" · ");
   return (
     <div className="qa-run-form qa-run-rise">
@@ -187,7 +189,7 @@ export function RunOptions({ cid, auth, kind, params, patch }: {
               tabs={[
                 ...(usesDevice ? [{ key: "device", label: "Device", icon: "phone", badge: <span className="qa-muted"> {previewDevice?.title}</span> },
                   { key: "conditions", label: "Conditions", icon: "sliders", count: conditionSaid.length || null }] : []),
-                { key: "options", label: "Options", icon: "gear", badge: optionWords ? <span className="qa-muted"> {timed ? `${minutes} min` : ""}</span> : undefined },
+                { key: "options", label: "Options", icon: "gear", badge: optionWords ? <span className="qa-muted"> {timed ? timeWords : ""}</span> : undefined },
               ]} />
             <div className="qa-run-tabpanel" id="qa-run-tabpanel" role="tabpanel">
               {usesDevice && platform && tab === "device" ? <DeviceField live={live} platform={platform} pickKey={deviceKey} onPick={pickDevice} rememberPick /> : null}
@@ -198,9 +200,9 @@ export function RunOptions({ cid, auth, kind, params, patch }: {
                   {timed ? (
                     <div className="qa-field">
                       <label className="qa-label" htmlFor={ids.minutes}>Minutes</label>
-                      <input id={ids.minutes} className="qa-input qa-num" type="number" inputMode="numeric" min={1} max={480} step={1} disabled={mins === 0} value={minutes} aria-invalid={minutesBad || undefined} onChange={(e) => setMinutes(e.target.value)} />
-                      <label><input type="checkbox" checked={mins === 0} onChange={(e) => setMinutes(e.target.checked ? "0" : "20")} /> No limit</label>
-                      {minutesBad ? <p className="qa-error" role="alert">Give it between 1 and 480 minutes, or choose No limit.</p> : null}
+                      <input id={ids.minutes} className="qa-input qa-num" type="number" inputMode="numeric" min={1} max={480} step={1} disabled={noLimit} value={minutes} aria-invalid={minutesBad || undefined} onChange={(e) => setMinutes(e.target.value)} />
+                      <label><input type="checkbox" checked={noLimit} onChange={(e) => setNoLimit(e.target.checked)} /> No limit</label>
+                      {minutesBad ? <p className="qa-error" role="alert">Give it between 1 and 480 minutes in whole numbers, or choose No limit.</p> : null}
                     </div>
                   ) : null}
                   <div className="qa-field">
